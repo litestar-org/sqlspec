@@ -6,12 +6,12 @@ including regular results and Apache Arrow format results.
 Components:
 - StatementResult: Abstract base class for SQL results
 - SQLResult: Main implementation for regular results
-- ArrowResult: Arrow-based results for high-performance data interchange
+- ArrowResult: Arrow-based results for data interchange
 
 Features:
 - Consistent interface across all result types
 - Support for both regular and Arrow format results
-- Comprehensive result metadata and statistics
+- Result metadata and statistics
 - Iterator support for result rows
 """
 
@@ -34,7 +34,7 @@ __all__ = ("ArrowResult", "SQLResult", "StatementResult")
 T = TypeVar("T")
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class StatementResult(ABC):
     """Base class for SQL statement execution results.
 
@@ -126,7 +126,7 @@ class StatementResult(ABC):
         return self.statement.operation_type
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SQLResult(StatementResult):
     """Result class for SQL operations that return rows or affect rows.
 
@@ -151,6 +151,8 @@ class SQLResult(StatementResult):
         "total_count",
         "total_statements",
     )
+
+    _operation_type: OperationType
 
     def __init__(
         self,
@@ -187,7 +189,6 @@ class SQLResult(StatementResult):
         self.operation_index = operation_index
         self.parameters = parameters
 
-        # Optimize list initialization to avoid unnecessary object creation
         self.column_names = column_names or []
         self.total_count = total_count
         self.has_more = has_more
@@ -197,16 +198,15 @@ class SQLResult(StatementResult):
         self.total_statements = total_statements
         self.successful_statements = successful_statements
 
-        # Optimize column name extraction and count calculation
         if not self.column_names and data and len(data) > 0:
             self.column_names = list(data[0].keys())
         if self.total_count is None:
             self.total_count = len(data) if data is not None else 0
 
     @property
-    def operation_type(self) -> "OperationType":
+    def operation_type(self) -> OperationType:
         """Get operation type for this result."""
-        return cast("OperationType", self._operation_type)  # type: ignore[redundant-cast]
+        return self._operation_type
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Get metadata value by key.
@@ -259,7 +259,6 @@ class SQLResult(StatementResult):
         """
         op_type_upper = self.operation_type.upper()
         if op_type_upper == "SCRIPT":
-            # Cache calculation to avoid redundant work
             failed_statements = self.total_statements - self.successful_statements
             return [
                 {
@@ -476,25 +475,13 @@ class SQLResult(StatementResult):
         return next(iter(row.values()))
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ArrowResult(StatementResult):
     """Result class for SQL operations that return Apache Arrow data.
 
     This class is used when database drivers support returning results as
-    Apache Arrow format for high-performance data interchange, especially
+    Apache Arrow format for data interchange, especially
     useful for analytics workloads and data science applications.
-
-    Performance Features:
-    - __slots__ optimization for memory efficiency
-    - Direct Arrow table access without intermediate copying
-    - Cached property evaluation for table metadata
-    - MyPyC compatibility for critical operations
-
-    Compatibility Features:
-    - Complete interface preservation with existing ArrowResult
-    - Same method signatures and behavior
-    - Same error handling and exceptions
-    - Identical Arrow table integration
 
     Args:
         statement: The original SQL statement that was executed.
@@ -514,7 +501,7 @@ class ArrowResult(StatementResult):
         metadata: Optional["dict[str, Any]"] = None,
         schema: Optional["dict[str, Any]"] = None,
     ) -> None:
-        """Initialize Arrow result with enhanced performance.
+        """Initialize Arrow result.
 
         Args:
             statement: The original SQL statement that was executed.

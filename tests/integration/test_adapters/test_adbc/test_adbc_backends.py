@@ -211,7 +211,7 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
 
     assert analytical_result.data is not None
     assert analytical_result.data[0]["array_len"] == 5
-    assert analytical_result.data[0]["numbers_sum"] == 15  # 1+2+3+4+5
+    assert analytical_result.data[0]["numbers_sum"] == 15
     assert analytical_result.data[0]["json_type"] == "test"
 
 
@@ -243,11 +243,10 @@ def test_sqlite_dialect_detection(sqlite_session: AdbcDriver) -> None:
 @xfail_if_driver_missing
 def test_duckdb_dialect_detection(duckdb_session: AdbcDriver) -> None:
     """Test DuckDB dialect detection in ADBC driver."""
-    # The driver should have detected DuckDB dialect
+
     assert hasattr(duckdb_session, "dialect")
     assert duckdb_session.dialect == "duckdb"
 
-    # Test DuckDB-specific parameter style (qmark)
     result = duckdb_session.execute("SELECT ? as param_value", ("duckdb_test",))
     assert isinstance(result, SQLResult)
     assert result.data is not None

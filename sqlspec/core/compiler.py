@@ -1,18 +1,18 @@
-"""SQL processor with integrated caching and compilation.
+"""SQL processor with compilation and caching.
 
 This module implements the core compilation system for SQL statements with
-integrated parameter processing and caching.
+parameter processing and caching.
 
 Components:
-- CompiledSQL: Immutable compilation result with complete information
-- SQLProcessor: Single-pass compiler with integrated caching
-- Integrated parameter processing via ParameterProcessor
+- CompiledSQL: Immutable compilation result
+- SQLProcessor: SQL compiler with caching
+- Parameter processing via ParameterProcessor
 
 Features:
-- Single SQLGlot parse for efficient processing
+- SQL parsing
 - AST-based operation type detection
-- Unified caching system with LRU eviction
-- Complete StatementConfig support
+- Caching system with LRU eviction
+- StatementConfig support
 """
 
 import hashlib
@@ -31,7 +31,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.core.statement import StatementConfig
 
-# Define OperationType here to avoid circular import
+
 OperationType = Literal[
     "SELECT",
     "INSERT",
@@ -52,18 +52,29 @@ __all__ = ("CompiledSQL", "OperationType", "SQLProcessor")
 
 logger = get_logger("sqlspec.core.compiler")
 
+OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
+    exp.Select: "SELECT",
+    exp.Insert: "INSERT",
+    exp.Update: "UPDATE",
+    exp.Delete: "DELETE",
+    exp.Pragma: "PRAGMA",
+    exp.Command: "EXECUTE",
+    exp.Create: "DDL",
+    exp.Drop: "DDL",
+    exp.Alter: "DDL",
+}
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+
+@mypyc_attr(allow_interpreted_subclasses=False)
 class CompiledSQL:
-    """Immutable compiled SQL result with complete information.
+    """Immutable compiled SQL result.
 
-    This class represents the result of SQL compilation, containing all
+    This class represents the result of SQL compilation, containing
     information needed for execution.
 
     Features:
     - Immutable design for safe sharing
-    - Cached hash for efficient dictionary operations
-    - Complete operation type detection
+    - Operation type detection
     - Parameter style and execution information
     - Support for execute_many operations
     """
@@ -77,6 +88,8 @@ class CompiledSQL:
         "parameter_style",
         "supports_many",
     )
+
+    operation_type: "OperationType"
 
     def __init__(
         self,
@@ -108,7 +121,6 @@ class CompiledSQL:
     def __hash__(self) -> int:
         """Cached hash value with optimization."""
         if self._hash is None:
-            # Optimize by avoiding str() conversion if possible
             param_str = str(self.execution_parameters)
             self._hash = hash((self.compiled_sql, param_str, self.operation_type, self.parameter_style))
         return self._hash
@@ -133,25 +145,25 @@ class CompiledSQL:
         )
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SQLProcessor:
-    """SQL processor with integrated caching and compilation.
+    """SQL processor with caching and compilation.
 
     This is the core compilation engine that processes SQL statements with
-    integrated parameter processing and caching.
+    parameter processing and caching.
 
     Processing Flow:
     1. Parameter detection and normalization (if needed)
-    2. Single SQLGlot parse
+    2. SQL parsing
     3. AST-based operation type detection
     4. Parameter conversion (if needed)
     5. Final SQL generation with execution parameters
 
     Features:
-    - LRU cache with O(1) operations
-    - Integrated parameter processing
-    - Cached compilation results
-    - Complete StatementConfig support
+    - LRU cache
+    - Parameter processing
+    - Compilation results
+    - StatementConfig support
     """
 
     __slots__ = ("_cache", "_cache_hits", "_cache_misses", "_config", "_max_cache_size", "_parameter_processor")
@@ -161,7 +173,7 @@ class SQLProcessor:
 
         Args:
             config: Statement configuration with parameter processing settings
-            max_cache_size: Maximum number of cached compilation results
+            max_cache_size: Maximum number of compilation results to cache
         """
         self._config = config
         self._cache: OrderedDict[str, CompiledSQL] = OrderedDict()
@@ -171,7 +183,7 @@ class SQLProcessor:
         self._cache_misses = 0
 
     def compile(self, sql: str, parameters: Any = None, is_many: bool = False) -> CompiledSQL:
-        """Compile SQL statement with integrated caching.
+        """Compile SQL statement with caching.
 
         Args:
             sql: Raw SQL string for compilation
@@ -179,7 +191,7 @@ class SQLProcessor:
             is_many: Whether this is for execute_many operation
 
         Returns:
-            CompiledSQL with all information for execution
+            CompiledSQL with information for execution
         """
         if not self._config.enable_caching:
             return self._compile_uncached(sql, parameters, is_many)
@@ -187,7 +199,6 @@ class SQLProcessor:
         cache_key = self._make_cache_key(sql, parameters)
 
         if cache_key in self._cache:
-            # Move to end for LRU behavior
             result = self._cache[cache_key]
             del self._cache[cache_key]
             self._cache[cache_key] = result
@@ -215,10 +226,8 @@ class SQLProcessor:
             CompiledSQL result
         """
         try:
-            # Cache dialect string to avoid repeated conversions
             dialect_str = str(self._config.dialect) if self._config.dialect else None
 
-            # Process parameters in single call
             processed_sql: str
             processed_params: Any
             processed_sql, processed_params = self._parameter_processor.process(
@@ -229,7 +238,6 @@ class SQLProcessor:
                 is_many=is_many,
             )
 
-            # Optimize static compilation path
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 sqlglot_sql = processed_sql
             else:
@@ -244,11 +252,9 @@ class SQLProcessor:
 
             if self._config.enable_parsing:
                 try:
-                    # Use copy=False for performance optimization
                     expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
                     operation_type = self._detect_operation_type(expression)
 
-                    # Handle AST transformation if configured
                     ast_transformer = self._config.parameter_config.ast_transformer
                     if ast_transformer:
                         expression, final_parameters = ast_transformer(expression, processed_params)
@@ -258,7 +264,6 @@ class SQLProcessor:
                     expression = None
                     operation_type = "EXECUTE"
 
-            # Optimize final SQL generation path
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
             elif ast_was_transformed and expression is not None:
@@ -300,12 +305,11 @@ class SQLProcessor:
         Returns:
             Cache key string
         """
-        # Optimize key generation by avoiding string conversion overhead
+
         param_repr = repr(parameters)
         dialect_str = str(self._config.dialect) if self._config.dialect else None
         param_style = self._config.parameter_config.default_parameter_style.value
 
-        # Use direct tuple construction for better performance
         hash_data = (
             sql,
             param_repr,
@@ -315,34 +319,25 @@ class SQLProcessor:
             self._config.enable_transformations,
         )
 
-        # Optimize hash computation
         hash_str = hashlib.sha256(str(hash_data).encode("utf-8")).hexdigest()[:16]
         return f"sql_{hash_str}"
 
     def _detect_operation_type(self, expression: "exp.Expression") -> "OperationType":
         """Detect operation type from AST.
 
-        Uses SQLGlot AST structure to determine operation type.
+        Uses AST structure to determine operation type.
 
         Args:
-            expression: SQLGlot AST expression
+            expression: AST expression
 
         Returns:
             Operation type literal
         """
-        # Use isinstance for compatibility with mocks and inheritance
-        if isinstance(expression, exp.Select):
-            return "SELECT"
-        if isinstance(expression, exp.Insert):
-            return "INSERT"
-        if isinstance(expression, exp.Update):
-            return "UPDATE"
-        if isinstance(expression, exp.Delete):
-            return "DELETE"
-        if isinstance(expression, exp.Pragma):
-            return "PRAGMA"
-        if isinstance(expression, exp.Command):
-            return "EXECUTE"
+
+        expr_type = type(expression)
+        if expr_type in OPERATION_TYPE_MAP:
+            return OPERATION_TYPE_MAP[expr_type]  # pyright: ignore
+
         if isinstance(expression, exp.Copy):
             copy_kind = expression.args.get("kind")
             if copy_kind is True:
@@ -350,8 +345,7 @@ class SQLProcessor:
             if copy_kind is False:
                 return "COPY_TO"
             return "COPY"
-        if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):
-            return "DDL"
+
         return "UNKNOWN"
 
     def _apply_final_transformations(

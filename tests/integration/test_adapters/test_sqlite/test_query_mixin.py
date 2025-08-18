@@ -98,13 +98,12 @@ def test_select_with_filter(sqlite_driver: SqliteDriver) -> None:
 
 def test_select_with_parameters(sqlite_driver: SqliteDriver) -> None:
     """Test select methods with parameterized queries."""
-    # Test with named parameters using SQL object
+
     result: dict[str, Any] = sqlite_driver.select_one(
         SQL("SELECT * FROM users WHERE email = :email", email="bob@example.com")
     )
     assert result["name"] == "Bob Johnson"
 
-    # Test with positional parameters using SQL object
     results: list[dict[str, Any]] = sqlite_driver.select(SQL("SELECT * FROM users WHERE age > ? ORDER BY age", 30))
     assert len(results) == 2
     assert results[0]["age"] == 32
@@ -113,7 +112,7 @@ def test_select_with_parameters(sqlite_driver: SqliteDriver) -> None:
 
 def test_complex_query_with_joins(sqlite_driver: SqliteDriver) -> None:
     """Test query methods with more complex SQL."""
-    # Create a related table
+
     sqlite_driver.execute_script("""
         CREATE TABLE orders (
             id INTEGER PRIMARY KEY,
@@ -129,59 +128,53 @@ def test_complex_query_with_joins(sqlite_driver: SqliteDriver) -> None:
             (3, 500.00);
     """)
 
-    # Test complex query with aggregation
     result = sqlite_driver.select_value("""
         SELECT COUNT(DISTINCT u.id)
         FROM users u
         INNER JOIN orders o ON u.id = o.user_id
         WHERE o.total > 100
     """)
-    assert result == 2  # Users 1 and 3 have orders > 100
+    assert result == 2
 
 
 def test_query_mixin_with_core_round_3_sql_object(sqlite_driver: SqliteDriver) -> None:
     """Test query mixin methods work properly with CORE_ROUND_3 SQL objects."""
-    # Test select_one with SQL object containing complex parameters
+
     sql_obj = SQL(
         "SELECT * FROM users WHERE age BETWEEN :min_age AND :max_age ORDER BY age LIMIT 1", min_age=25, max_age=32
     )
     result: dict[str, Any] = sqlite_driver.select_one(sql_obj)
-    assert result["name"] == "Jane Smith"  # Age 25, first in order
+    assert result["name"] == "Jane Smith"
     assert result["age"] == 25
 
 
 def test_query_mixin_error_handling_with_core_sql(sqlite_driver: SqliteDriver) -> None:
     """Test error handling in query mixin methods with CORE_ROUND_3 SQL objects."""
-    # Test select_one with SQL that returns no rows
+
     sql_no_rows = SQL("SELECT * FROM users WHERE age > :max_age", max_age=100)
     with pytest.raises(NotFoundError):
         sqlite_driver.select_one(sql_no_rows)
 
-    # Test select_one_or_none with no rows
     result = sqlite_driver.select_one_or_none(sql_no_rows)
     assert result is None
 
-    # Test select_value with no rows
     sql_no_value = SQL("SELECT name FROM users WHERE age > :max_age", max_age=100)
     with pytest.raises(NotFoundError):
         sqlite_driver.select_value(sql_no_value)
 
-    # Test select_value_or_none with no rows
     result = sqlite_driver.select_value_or_none(sql_no_value)
     assert result is None
 
 
 def test_query_mixin_with_aggregations(sqlite_driver: SqliteDriver) -> None:
     """Test query mixin methods with aggregation queries."""
-    # Test COUNT
+
     count_result = sqlite_driver.select_value("SELECT COUNT(*) FROM users WHERE age >= 30")
     assert count_result == 3
 
-    # Test AVG
     avg_result = sqlite_driver.select_value("SELECT AVG(age) FROM users")
-    assert avg_result == 30.0  # (30 + 25 + 35 + 28 + 32) / 5
+    assert avg_result == 30.0
 
-    # Test MIN/MAX in one query returning a row
     minmax_result: dict[str, Any] = sqlite_driver.select_one(
         "SELECT MIN(age) as min_age, MAX(age) as max_age FROM users"
     )
@@ -191,15 +184,13 @@ def test_query_mixin_with_aggregations(sqlite_driver: SqliteDriver) -> None:
 
 def test_query_mixin_with_sql_functions(sqlite_driver: SqliteDriver) -> None:
     """Test query mixin methods with SQLite-specific functions."""
-    # Test LENGTH function
-    result = sqlite_driver.select_value("SELECT LENGTH(name) FROM users WHERE id = 1")
-    assert result == 8  # "John Doe" has 8 characters
 
-    # Test UPPER function
+    result = sqlite_driver.select_value("SELECT LENGTH(name) FROM users WHERE id = 1")
+    assert result == 8
+
     result = sqlite_driver.select_value("SELECT UPPER(name) FROM users WHERE id = 2")
     assert result == "JANE SMITH"
 
-    # Test SUBSTR function with select_one
     result_row: dict[str, Any] = sqlite_driver.select_one(
         "SELECT name, SUBSTR(name, 1, 4) as name_prefix FROM users WHERE id = 3"
     )
@@ -211,8 +202,8 @@ def test_query_mixin_with_sql_functions(sqlite_driver: SqliteDriver) -> None:
     "query,expected_count",
     [
         ("SELECT * FROM users WHERE age > 30", 2),
-        ("SELECT * FROM users WHERE name LIKE '%o%'", 3),  # John Doe, Bob Johnson, Charlie Davis
-        ("SELECT * FROM users WHERE email LIKE '%.com'", 5),  # All users
+        ("SELECT * FROM users WHERE name LIKE '%o%'", 3),
+        ("SELECT * FROM users WHERE email LIKE '%.com'", 5),
     ],
 )
 def test_query_mixin_parameterized_patterns(sqlite_driver: SqliteDriver, query: str, expected_count: int) -> None:

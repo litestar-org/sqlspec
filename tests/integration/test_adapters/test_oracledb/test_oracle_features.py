@@ -9,18 +9,15 @@ from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
 
-# Note: Only apply asyncio mark to actual async tests, not all tests in the file
-
 
 @pytest.mark.xdist_group("oracle")
 def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> None:
     """Test PL/SQL block execution with variables and control structures."""
-    # Cleanup first
+
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_plsql_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
-    # Create test table
     oracle_sync_session.execute_script("""
         CREATE TABLE test_plsql_table (
             id NUMBER PRIMARY KEY,
@@ -29,7 +26,6 @@ def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> No
         )
     """)
 
-    # Execute a PL/SQL block with variables and control logic
     plsql_block = """
     DECLARE
         v_base_value NUMBER := 10;
@@ -62,18 +58,15 @@ def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> No
     result = oracle_sync_session.execute_script(plsql_block)
     assert isinstance(result, SQLResult)
 
-    # Verify the PL/SQL block executed correctly
     select_result = oracle_sync_session.execute("SELECT id, name, calculated_value FROM test_plsql_table ORDER BY id")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert len(select_result.data) == 4  # Records 1, 2, 3, 4 - 1 initial + 3 from loop (2..4)
+    assert len(select_result.data) == 4
 
-    # Check the calculated values
     first_row = select_result.data[0]
     assert first_row["NAME"] == "plsql_test"
-    assert first_row["CALCULATED_VALUE"] == 130  # 10 * 3 = 30, + 100 = 130
+    assert first_row["CALCULATED_VALUE"] == 130
 
-    # Cleanup
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_plsql_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
@@ -83,7 +76,7 @@ def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> No
 @pytest.mark.xdist_group("oracle")
 async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsyncDriver) -> None:
     """Test creation and execution of PL/SQL stored procedures."""
-    # Cleanup first
+
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_proc_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
@@ -91,7 +84,6 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
         "BEGIN EXECUTE IMMEDIATE 'DROP PROCEDURE test_procedure'; EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-942, -4043) THEN RAISE; END IF; END;"
     )
 
-    # Create test table
     await oracle_async_session.execute_script("""
         CREATE TABLE test_proc_table (
             id NUMBER PRIMARY KEY,
@@ -100,7 +92,6 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
         )
     """)
 
-    # Create a PL/SQL procedure
     procedure_sql = """
     CREATE OR REPLACE PROCEDURE test_procedure(
         p_input IN NUMBER,
@@ -120,7 +111,6 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
 
     await oracle_async_session.execute_script(procedure_sql)
 
-    # Call the procedure using PL/SQL block
     call_procedure = """
     DECLARE
         v_output NUMBER;
@@ -133,7 +123,6 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
     result = await oracle_async_session.execute_script(call_procedure)
     assert isinstance(result, SQLResult)
 
-    # Verify the procedure executed correctly
     select_result = await oracle_async_session.execute(
         "SELECT id, input_value, output_value FROM test_proc_table ORDER BY id"
     )
@@ -141,16 +130,14 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
     assert select_result.data is not None
     assert len(select_result.data) == 2
 
-    # Check calculated values
     first_row = select_result.data[0]
     assert first_row["INPUT_VALUE"] == 5
-    assert first_row["OUTPUT_VALUE"] == 20  # 5 * 2 + 10
+    assert first_row["OUTPUT_VALUE"] == 20
 
     second_row = select_result.data[1]
     assert second_row["INPUT_VALUE"] == 10
-    assert second_row["OUTPUT_VALUE"] == 30  # 10 * 2 + 10
+    assert second_row["OUTPUT_VALUE"] == 30
 
-    # Cleanup
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP PROCEDURE test_procedure'; EXCEPTION WHEN OTHERS THEN NULL; END;"
     )
@@ -162,12 +149,11 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
 @pytest.mark.xdist_group("oracle")
 def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
     """Test Oracle-specific data types (NUMBER, VARCHAR2, CLOB, DATE)."""
-    # Cleanup first
+
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_datatypes_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
-    # Create table with Oracle-specific data types
     oracle_sync_session.execute_script("""
         CREATE TABLE test_datatypes_table (
             id NUMBER(10) PRIMARY KEY,
@@ -179,7 +165,6 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
         )
     """)
 
-    # Insert data with various Oracle data types
     insert_sql = """
         INSERT INTO test_datatypes_table
         (id, name, description, price, created_date, is_active)
@@ -192,7 +177,6 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
-    # Query the data back
     select_result = oracle_sync_session.execute(
         "SELECT id, name, description, price, is_active FROM test_datatypes_table WHERE id = :1", (1,)
     )
@@ -203,13 +187,12 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
     row = select_result.data[0]
     assert row["ID"] == 1
     assert row["NAME"] == "Test Product"
-    # CLOB field - Oracle returns this as a LOB object, read it
+
     description_value = row["DESCRIPTION"].read() if hasattr(row["DESCRIPTION"], "read") else str(row["DESCRIPTION"])
-    assert len(description_value) > 100  # CLOB field
+    assert len(description_value) > 100
     assert row["PRICE"] == 99.99
     assert row["IS_ACTIVE"] == 1
 
-    # Cleanup
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_datatypes_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
@@ -219,12 +202,11 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
 @pytest.mark.xdist_group("oracle")
 async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle's analytic/window functions."""
-    # Cleanup first
+
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_analytics_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
-    # Create test table
     await oracle_async_session.execute_script("""
         CREATE TABLE test_analytics_table (
             id NUMBER PRIMARY KEY,
@@ -234,7 +216,6 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
         )
     """)
 
-    # Insert test data
     await oracle_async_session.execute_script("""
         INSERT ALL
             INTO test_analytics_table VALUES (1, 'SALES', 'John Doe', 50000)
@@ -246,7 +227,6 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
         SELECT * FROM dual
     """)
 
-    # Test analytic functions (ROW_NUMBER, RANK, SUM OVER)
     analytic_sql = """
         SELECT
             employee_name,
@@ -265,21 +245,17 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
     assert result.data is not None
     assert len(result.data) == 6
 
-    # Verify analytic results for IT department
     it_employees = [row for row in result.data if row["DEPARTMENT"] == "IT"]
     assert len(it_employees) == 3
 
-    # Check that ROW_NUMBER within IT department is correct
     it_sorted = sorted(it_employees, key=operator.itemgetter("SALARY"), reverse=True)
-    assert it_sorted[0]["DEPT_RANK"] == 1  # Highest paid in IT
+    assert it_sorted[0]["DEPT_RANK"] == 1
     assert it_sorted[1]["DEPT_RANK"] == 2
     assert it_sorted[2]["DEPT_RANK"] == 3
 
-    # Check department total salary
     for emp in it_employees:
-        assert emp["DEPT_TOTAL_SALARY"] == 183000  # 60000 + 65000 + 58000
+        assert emp["DEPT_TOTAL_SALARY"] == 183000
 
-    # Cleanup
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_analytics_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
@@ -288,10 +264,9 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
 @pytest.mark.xdist_group("oracle")
 def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncDriver) -> None:
     """Test that Oracle DDL script can be parsed and prepared for execution."""
-    # Load the Oracle DDL script if it exists
+
     _ = Path(__file__).parent.parent.parent.parent / "fixtures" / "oracle.ddl.sql"
 
-    # If fixture doesn't exist, create a sample Oracle DDL script
     sample_oracle_ddl = """
     -- Oracle DDL Script Test
     ALTER SESSION SET CONTAINER = PDB1;
@@ -311,19 +286,12 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncDriver) -> Non
     PARAMETERS ('type=IVF, neighbor_part=8');
     """
 
-    # Configure for Oracle dialect with parsing enabled
-    config = StatementConfig(
-        enable_parsing=True,
-        enable_validation=False,  # Disable validation to focus on script handling
-    )
+    config = StatementConfig(enable_parsing=True, enable_validation=False)
 
-    # Test that the script can be processed as a SQL object
     stmt = SQL(sample_oracle_ddl, config=config, dialect="oracle").as_script()
 
-    # Verify it's recognized as a script
     assert stmt.is_script is True
 
-    # Verify the SQL output contains key Oracle features
     sql_output = stmt.sql
     assert "ALTER SESSION SET CONTAINER" in sql_output
     assert "CREATE TABLE" in sql_output
@@ -332,26 +300,20 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncDriver) -> Non
     assert "INMEMORY PRIORITY HIGH" in sql_output
     assert "CREATE SEQUENCE" in sql_output
 
-    # Note: We don't actually execute the full DDL script in tests
-    # as it requires specific Oracle setup and permissions.
-    # The test verifies that the script can be parsed and prepared.
-
 
 @pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.xdist_group("oracle")
 async def test_async_oracle_exception_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle-specific exception handling in PL/SQL."""
-    # Cleanup first - ensure table doesn't exist
+
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_exception_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
-    # Create the table first (Oracle PL/SQL compiler needs to see the table at compile time)
     await oracle_async_session.execute_script(
         "CREATE TABLE test_exception_table (id NUMBER PRIMARY KEY, name VARCHAR2(50))"
     )
 
-    # Test exception handling in PL/SQL blocks
     exception_handling_block = """
     DECLARE
         v_count NUMBER;
@@ -385,20 +347,17 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
     result = await oracle_async_session.execute_script(exception_handling_block)
     assert isinstance(result, SQLResult)
 
-    # Verify exception was handled properly
     select_result = await oracle_async_session.execute("SELECT id, name FROM test_exception_table ORDER BY id")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 3
 
-    # Check that we have the expected records
     names = [row["NAME"] for row in select_result.data]
     assert "First Record" in names
-    assert "Exception Handled" in names  # This proves exception was caught and handled
+    assert "Exception Handled" in names
     assert "Final Record" in names
-    assert "Duplicate Record" not in names  # This should not exist
+    assert "Duplicate Record" not in names
 
-    # Cleanup
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_exception_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )

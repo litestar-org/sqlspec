@@ -35,7 +35,7 @@ def temp_workspace() -> Generator[Path, None, None]:
 @pytest.fixture
 def temp_workspace_with_migrations(tmp_path: Path) -> Path:
     """Create a temporary workspace with migrations directory for tests."""
-    # Create migrations directory in pytest's tmp_path
+
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
 
@@ -99,7 +99,6 @@ class MockMigrationRunner(BaseMigrationRunner):
         """Mock execute upgrade."""
         sql = self._get_migration_sql(migration, "up")
         if sql:
-            # Simulate execution
             self._executed_migrations.append({"version": migration["version"], "direction": "up", "sql": sql})
             return Mock(spec=ExecutionResult)
         raise ValueError(f"No upgrade SQL for migration {migration['version']}")
@@ -108,10 +107,9 @@ class MockMigrationRunner(BaseMigrationRunner):
         """Mock execute downgrade."""
         sql = self._get_migration_sql(migration, "down")
         if sql:
-            # Simulate execution
             self._executed_migrations.append({"version": migration["version"], "direction": "down", "sql": sql})
             return Mock(spec=ExecutionResult)
-        return Mock(spec=ExecutionResult)  # Return mock even if no SQL (warning case)
+        return Mock(spec=ExecutionResult)
 
     def load_all_migrations(self) -> None:
         """Mock load all migrations."""
@@ -184,7 +182,6 @@ def test_record_migration_sql_generation() -> None:
     assert "test_migrations" in stmt.sql
     assert "VALUES" in stmt.sql.upper()
 
-    # Check parameters are set
     params = stmt.parameters
     assert "0001" in str(params) or "0001" in stmt.sql
     assert "test migration" in str(params) or "test migration" in stmt.sql
@@ -208,7 +205,6 @@ def test_single_migration_upgrade_execution(temp_workspace_with_migrations: Path
     """Test execution of a single migration upgrade."""
     migrations_dir = temp_workspace_with_migrations / "migrations"
 
-    # Create migration file
     migration_file = migrations_dir / "0001_create_users.sql"
     migration_content = """
 -- name: migrate-0001-up
@@ -227,23 +223,21 @@ DROP TABLE users;
     MockMigrationTracker()
     mock_driver = Mock()
 
-    # Load migration metadata
-    with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+    with (
+        patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+        patch.object(type(runner.loader), "clear_cache"),
+        patch.object(type(runner.loader), "load_sql"),
+        patch.object(type(runner.loader), "has_query", return_value=True),
+    ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_get_loader.return_value = mock_loader
 
-        runner.loader.clear_cache = Mock()
-        runner.loader.load_sql = Mock()
-        runner.loader.has_query = Mock(return_value=True)
-
         migration = runner.load_migration(migration_file)
 
-    # Execute upgrade
     from unittest.mock import AsyncMock
 
     with patch.object(migration["loader"], "get_up_sql", new_callable=AsyncMock) as mock_get_up_sql:
-        # get_up_sql is async and should return the SQL statements
         mock_get_up_sql.return_value = [
             "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL);"
         ]
@@ -252,7 +246,6 @@ DROP TABLE users;
 
         assert result is not None
 
-        # Verify execution was recorded
         executed = runner.get_executed_migrations()
         assert len(executed) == 1
         assert executed[0]["version"] == "0001"
@@ -265,7 +258,6 @@ def test_single_migration_downgrade_execution(temp_workspace_with_migrations: Pa
 
     migrations_dir = temp_workspace_with_migrations / "migrations"
 
-    # Create migration file
     migration_file = migrations_dir / "0001_create_users.sql"
     migration_content = """
 -- name: migrate-0001-up
@@ -283,28 +275,25 @@ DROP TABLE users;
     runner = MockMigrationRunner(migrations_dir)
     mock_driver = Mock()
 
-    # Load migration metadata
-    with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+    with (
+        patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+        patch.object(type(runner.loader), "clear_cache"),
+        patch.object(type(runner.loader), "load_sql"),
+        patch.object(type(runner.loader), "has_query", return_value=True),
+    ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_get_loader.return_value = mock_loader
 
-        runner.loader.clear_cache = Mock()
-        runner.loader.load_sql = Mock()
-        runner.loader.has_query = Mock(return_value=True)
-
         migration = runner.load_migration(migration_file)
 
-    # Execute downgrade
     with patch.object(migration["loader"], "get_down_sql", new_callable=AsyncMock) as mock_get_down_sql:
-        # get_down_sql is async and should return the SQL statements
         mock_get_down_sql.return_value = ["DROP TABLE users;"]
 
         result = runner.execute_downgrade(mock_driver, migration)
 
         assert result is not None
 
-        # Verify execution was recorded
         executed = runner.get_executed_migrations()
         assert len(executed) == 1
         assert executed[0]["version"] == "0001"
@@ -317,7 +306,6 @@ def test_multiple_migrations_execution_order(temp_workspace_with_migrations: Pat
 
     migrations_dir = temp_workspace_with_migrations / "migrations"
 
-    # Create multiple migration files (in non-sequential creation order)
     migrations = [
         ("0003_add_indexes.sql", "CREATE INDEX idx_users_email ON users(email);", "DROP INDEX idx_users_email;"),
         (
@@ -347,42 +335,38 @@ def test_multiple_migrations_execution_order(temp_workspace_with_migrations: Pat
     runner = MockMigrationRunner(migrations_dir)
     mock_driver = Mock()
 
-    # Get all migration files (should be sorted by version)
     migration_files = runner.get_migration_files()
 
-    # Verify correct ordering
     assert len(migration_files) == 3
-    assert migration_files[0][0] == "0001"  # Users first
-    assert migration_files[1][0] == "0002"  # Products second
-    assert migration_files[2][0] == "0003"  # Indexes last
+    assert migration_files[0][0] == "0001"
+    assert migration_files[1][0] == "0002"
+    assert migration_files[2][0] == "0003"
 
-    # Execute all migrations in order
     with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_get_loader.return_value = mock_loader
 
-        runner.loader.clear_cache = Mock()
-        runner.loader.load_sql = Mock()
-        runner.loader.has_query = Mock(return_value=True)
+        # Use patch.object to mock methods due to __slots__
+        with (
+            patch.object(type(runner.loader), "clear_cache"),
+            patch.object(type(runner.loader), "load_sql"),
+            patch.object(type(runner.loader), "has_query", return_value=True),
+        ):
+            sql_statements = [
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);",
+                "CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, price REAL);",
+                "CREATE INDEX idx_users_email ON users(email);",
+            ]
 
-        # Mock different SQL for each migration
-        sql_statements = [
-            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);",
-            "CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, price REAL);",
-            "CREATE INDEX idx_users_email ON users(email);",
-        ]
+            for i, (version, file_path) in enumerate(migration_files):
+                migration = runner.load_migration(file_path)
 
-        for i, (version, file_path) in enumerate(migration_files):
-            migration = runner.load_migration(file_path)
+                with patch.object(migration["loader"], "get_up_sql", new_callable=AsyncMock) as mock_get_up_sql:
+                    mock_get_up_sql.return_value = [sql_statements[i]]
+                    result = runner.execute_upgrade(mock_driver, migration)
+                    assert result is not None
 
-            # Mock the get_up_sql method on the loader
-            with patch.object(migration["loader"], "get_up_sql", new_callable=AsyncMock) as mock_get_up_sql:
-                mock_get_up_sql.return_value = [sql_statements[i]]
-                result = runner.execute_upgrade(mock_driver, migration)
-                assert result is not None
-
-        # Verify execution order
         executed = runner.get_executed_migrations()
         assert len(executed) == 3
         assert executed[0]["version"] == "0001"
@@ -396,7 +380,6 @@ def test_migration_with_no_downgrade(temp_workspace_with_migrations: Path) -> No
 
     migrations_dir = temp_workspace_with_migrations / "migrations"
 
-    # Create migration file with only upgrade
     migration_file = migrations_dir / "0001_irreversible.sql"
     migration_content = """
 -- name: migrate-0001-up
@@ -408,25 +391,22 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
     runner = MockMigrationRunner(migrations_dir)
     mock_driver = Mock()
 
-    # Load migration metadata
     with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_get_loader.return_value = mock_loader
 
-        runner.loader.clear_cache = Mock()
-        runner.loader.load_sql = Mock()
-        # Only upgrade query exists
-        runner.loader.has_query = Mock(side_effect=lambda q: q.endswith("-up"))
+        with (
+            patch.object(type(runner.loader), "clear_cache"),
+            patch.object(type(runner.loader), "load_sql"),
+            patch.object(type(runner.loader), "has_query", side_effect=lambda q: q.endswith("-up")),
+        ):
+            migration = runner.load_migration(migration_file)
 
-        migration = runner.load_migration(migration_file)
+            assert migration["has_upgrade"] is True
+            assert migration["has_downgrade"] is False
 
-        assert migration["has_upgrade"] is True
-        assert migration["has_downgrade"] is False
-
-    # Execute upgrade should work
     with patch.object(migration["loader"], "get_up_sql", new_callable=AsyncMock) as mock_get_up_sql:
-        # get_up_sql is async and should return the SQL statements
         mock_get_up_sql.return_value = [
             "CREATE TABLE irreversible_data AS SELECT DISTINCT column1, column2 FROM legacy_table;"
         ]
@@ -434,17 +414,14 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
         result = runner.execute_upgrade(mock_driver, migration)
         assert result is not None
 
-    # Execute downgrade should handle gracefully
     with (
         patch.object(migration["loader"], "get_down_sql", new_callable=AsyncMock) as mock_get_down_sql,
         patch("sqlspec.migrations.base.logger"),
     ):
-        # Return empty list for no downgrade
         mock_get_down_sql.return_value = []
         result = runner.execute_downgrade(mock_driver, migration)
 
-        # Should not raise error, but may log warning
-        assert result is not None  # Mock returns something
+        assert result is not None
 
 
 def test_migration_state_recording() -> None:
@@ -452,12 +429,10 @@ def test_migration_state_recording() -> None:
     tracker = MockMigrationTracker()
     mock_driver = Mock()
 
-    # Record a migration
     tracker.record_migration(
         mock_driver, version="0001", description="create users table", execution_time_ms=150, checksum="abc123def456"
     )
 
-    # Verify recording
     applied_migrations = tracker.get_applied_migrations(mock_driver)
     assert len(applied_migrations) == 1
 
@@ -473,10 +448,8 @@ def test_current_version_tracking() -> None:
     tracker = MockMigrationTracker()
     mock_driver = Mock()
 
-    # Initially no version
     assert tracker.get_current_version(mock_driver) is None
 
-    # Record migrations in order
     migrations = [
         ("0001", "initial schema", 100, "hash1"),
         ("0002", "add users", 150, "hash2"),
@@ -486,7 +459,6 @@ def test_current_version_tracking() -> None:
     for version, desc, time_ms, checksum in migrations:
         tracker.record_migration(mock_driver, version, desc, time_ms, checksum)
 
-    # Current version should be the highest
     current = tracker.get_current_version(mock_driver)
     assert current == "0003"
 
@@ -496,7 +468,6 @@ def test_migration_removal() -> None:
     tracker = MockMigrationTracker()
     mock_driver = Mock()
 
-    # Record multiple migrations
     tracker.record_migration(mock_driver, "0001", "first", 100, "hash1")
     tracker.record_migration(mock_driver, "0002", "second", 150, "hash2")
     tracker.record_migration(mock_driver, "0003", "third", 75, "hash3")
@@ -504,13 +475,11 @@ def test_migration_removal() -> None:
     assert len(tracker.get_applied_migrations(mock_driver)) == 3
     assert tracker.get_current_version(mock_driver) == "0003"
 
-    # Remove the latest migration
     tracker.remove_migration(mock_driver, "0003")
 
     assert len(tracker.get_applied_migrations(mock_driver)) == 2
     assert tracker.get_current_version(mock_driver) == "0002"
 
-    # Remove a middle migration
     tracker.remove_migration(mock_driver, "0001")
 
     migrations = tracker.get_applied_migrations(mock_driver)
@@ -523,7 +492,6 @@ def test_applied_migrations_ordering() -> None:
     tracker = MockMigrationTracker()
     mock_driver = Mock()
 
-    # Record migrations out of order
     migrations_data = [("0003", "third migration"), ("0001", "first migration"), ("0002", "second migration")]
 
     for version, desc in migrations_data:
@@ -531,11 +499,8 @@ def test_applied_migrations_ordering() -> None:
 
     applied = tracker.get_applied_migrations(mock_driver)
 
-    # Should be ordered by version (depends on mock implementation)
-    # In this mock, they're stored as inserted, but real implementation should sort
     assert len(applied) == 3
 
-    # Verify all migrations are present
     versions = [m["version_num"] for m in applied]
     assert "0001" in versions
     assert "0002" in versions
@@ -546,7 +511,6 @@ def test_migration_execution_failure(temp_workspace_with_migrations: Path) -> No
     """Test handling of migration execution failures."""
     migrations_dir = temp_workspace_with_migrations / "migrations"
 
-    # Create migration file with invalid SQL
     migration_file = migrations_dir / "0001_broken.sql"
     migration_content = """
 -- name: migrate-0001-up
@@ -560,19 +524,19 @@ DROP TABLE IF EXISTS nonexistent_table;
     runner = MockMigrationRunner(migrations_dir)
     mock_driver = Mock()
 
-    # Load migration metadata
     with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_get_loader.return_value = mock_loader
 
-        runner.loader.clear_cache = Mock()
-        runner.loader.load_sql = Mock()
-        runner.loader.has_query = Mock(return_value=True)
+        # Use patch on class methods since __slots__ prevents instance attribute assignment
+        with (
+            patch.object(type(runner.loader), "clear_cache"),
+            patch.object(type(runner.loader), "load_sql"),
+            patch.object(type(runner.loader), "has_query", return_value=True),
+        ):
+            migration = runner.load_migration(migration_file)
 
-        migration = runner.load_migration(migration_file)
-
-    # Mock get_up_sql to raise exception for invalid SQL
     with patch.object(migration["loader"], "get_up_sql") as mock_get_up_sql:
 
         async def mock_get_up_error() -> None:
@@ -590,7 +554,6 @@ def test_missing_upgrade_migration(temp_workspace_with_migrations: Path) -> None
     """Test handling of missing upgrade migrations."""
     migrations_dir = temp_workspace_with_migrations / "migrations"
 
-    # Create migration file with only downgrade
     migration_file = migrations_dir / "0001_downgrade_only.sql"
     migration_content = """
 -- name: migrate-0001-down
@@ -601,23 +564,21 @@ DROP TABLE legacy_table;
     runner = MockMigrationRunner(migrations_dir)
     mock_driver = Mock()
 
-    # Load migration metadata
     with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_get_loader.return_value = mock_loader
 
-        runner.loader.clear_cache = Mock()
-        runner.loader.load_sql = Mock()
-        # Only downgrade query exists
-        runner.loader.has_query = Mock(side_effect=lambda q: q.endswith("-down"))
+        with (
+            patch.object(type(runner.loader), "clear_cache"),
+            patch.object(type(runner.loader), "load_sql"),
+            patch.object(type(runner.loader), "has_query", side_effect=lambda q: q.endswith("-down")),
+        ):
+            migration = runner.load_migration(migration_file)
 
-        migration = runner.load_migration(migration_file)
+            assert migration["has_upgrade"] is False
+            assert migration["has_downgrade"] is True
 
-        assert migration["has_upgrade"] is False
-        assert migration["has_downgrade"] is True
-
-    # Attempt to execute upgrade should raise error
     with pytest.raises(ValueError) as exc_info:
         runner.execute_upgrade(mock_driver, migration)
 
@@ -628,7 +589,6 @@ def test_corrupted_migration_file(temp_workspace_with_migrations: Path) -> None:
     """Test handling of corrupted migration files."""
     migrations_dir = temp_workspace_with_migrations / "migrations"
 
-    # Create corrupted migration file
     migration_file = migrations_dir / "0001_corrupted.sql"
     migration_content = """
 This is not a valid migration file format.
@@ -640,7 +600,6 @@ SELECT * FROM
 
     runner = MockMigrationRunner(migrations_dir)
 
-    # Loading should handle corruption gracefully
     with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file.side_effect = Exception("File validation failed")
@@ -654,7 +613,6 @@ def test_duplicate_version_detection(temp_workspace_with_migrations: Path) -> No
     """Test detection of duplicate migration versions."""
     migrations_dir = temp_workspace_with_migrations / "migrations"
 
-    # Create two files with same version
     file1 = migrations_dir / "0001_first.sql"
     file1.write_text("""
 -- name: migrate-0001-up
@@ -669,10 +627,7 @@ CREATE TABLE second (id INTEGER);
 
     runner = MockMigrationRunner(migrations_dir)
 
-    # Getting migration files should find both files with same version
     files = runner.get_migration_files()
 
-    # Both files should be found (the runner itself doesn't prevent duplicates)
-    # The validation logic would be in higher-level migration management
     versions = [version for version, _ in files]
     assert versions.count("0001") == 2

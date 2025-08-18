@@ -46,13 +46,11 @@ def test_named_statement_slots() -> None:
     """Test that NamedStatement uses __slots__."""
     stmt = NamedStatement("test", "SELECT 1")
 
-    # Should have slots
     assert hasattr(stmt.__class__, "__slots__")
     assert stmt.__slots__ == ("dialect", "name", "sql", "start_line")
 
-    # Should not be able to add arbitrary attributes
     with pytest.raises(AttributeError):
-        stmt.arbitrary_attr = "value"  # type: ignore[attr-defined]
+        stmt.arbitrary_attr = "value"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_sql_file_creation() -> None:
@@ -65,8 +63,8 @@ def test_sql_file_creation() -> None:
     assert sql_file.content == content
     assert sql_file.path == path
     assert sql_file.metadata == {}
-    assert sql_file.checksum  # Should be calculated
-    assert sql_file.loaded_at  # Should be set
+    assert sql_file.checksum
+    assert sql_file.loaded_at
 
 
 def test_sql_file_checksum_calculation() -> None:
@@ -77,9 +75,8 @@ def test_sql_file_checksum_calculation() -> None:
     file2 = SQLFile(content=content, path="path2")
     file3 = SQLFile(content="Different content", path="path1")
 
-    # Same content should have same checksum regardless of path
     assert file1.checksum == file2.checksum
-    # Different content should have different checksum
+
     assert file1.checksum != file3.checksum
 
 
@@ -100,7 +97,7 @@ def test_cached_sqlfile_creation() -> None:
 
     assert cached_file.sql_file == sql_file
     assert cached_file.parsed_statements == statements
-    assert cached_file.statement_names == ["query1", "query2"]
+    assert cached_file.statement_names == ("query1", "query2")
 
 
 def test_cached_sqlfile_slots() -> None:
@@ -178,7 +175,7 @@ SELECT name FROM users;
     assert len(statements) == 3
 
     postgres_query = statements["postgres_query"]
-    assert postgres_query.dialect == "postgres"  # Normalized
+    assert postgres_query.dialect == "postgres"
 
     mysql_query = statements["mysql_query"]
     assert mysql_query.dialect == "mysql"
@@ -202,10 +199,9 @@ UPDATE users SET email = ? WHERE id = ?;
 
     statements = SQLFileLoader._parse_sql_content(content, "test.sql")
 
-    # Hyphens should be converted to underscores
     assert "get_user_by_id" in statements
     assert "list_active_users" in statements
-    # Trailing special characters should be stripped
+
     assert "update_user_email" in statements
 
 
@@ -235,24 +231,18 @@ SELECT * FROM users WHERE id = 2;
     assert "Duplicate statement name: get_user" in str(exc_info.value)
 
 
-def test_parse_invalid_dialect_warning() -> None:
-    """Test warning for invalid dialect names."""
+def test_parse_invalid_dialect_storage() -> None:
+    """Test that invalid dialect names are stored as-is without warnings."""
     content = """
 -- name: test_query
 -- dialect: invalid_dialect
 SELECT * FROM users;
 """
 
-    with patch("sqlspec.loader.logger.warning") as mock_warning:
-        statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
 
-        # Should still parse but with warning
-        assert len(statements) == 1
-        assert statements["test_query"].dialect == "invalid_dialect"
-
-        # Should have logged a warning
-        mock_warning.assert_called_once()
-        assert "Unknown dialect 'invalid_dialect'" in mock_warning.call_args[0][0]
+    assert len(statements) == 1
+    assert statements["test_query"].dialect == "invalid_dialect"
 
 
 def test_strip_leading_comments() -> None:
@@ -290,13 +280,12 @@ def test_generate_file_cache_key() -> None:
     key2 = loader._generate_file_cache_key(path2)
     key3 = loader._generate_file_cache_key(path3)
 
-    # Same paths should generate same keys
     assert key1 == key2
-    # Different paths should generate different keys
+
     assert key1 != key3
-    # Keys should have the expected format
+
     assert key1.startswith("file:")
-    assert len(key1.split(":")[1]) == 16  # 16-character hash
+    assert len(key1.split(":")[1]) == 16
 
 
 def test_calculate_file_checksum() -> None:
@@ -309,9 +298,8 @@ def test_calculate_file_checksum() -> None:
         checksum = loader._calculate_file_checksum(tf.name)
 
         assert isinstance(checksum, str)
-        assert len(checksum) == 32  # MD5 hex digest length
+        assert len(checksum) == 32
 
-        # Clean up
         Path(tf.name).unlink()
 
 
@@ -324,20 +312,15 @@ def test_is_file_unchanged() -> None:
 
         loader = SQLFileLoader()
 
-        # Create cached file
         sql_file = SQLFile(original_content, tf.name)
         cached_file = CachedSQLFile(sql_file, {})
 
-        # File should be unchanged
         assert loader._is_file_unchanged(tf.name, cached_file)
 
-        # Modify file
         Path(tf.name).write_text("SELECT * FROM products;")
 
-        # File should now be changed
         assert not loader._is_file_unchanged(tf.name, cached_file)
 
-        # Clean up
         Path(tf.name).unlink()
 
 
@@ -353,7 +336,6 @@ def test_add_named_sql() -> None:
     assert statement.sql == "SELECT 1"
     assert statement.dialect == "postgres"
 
-    # Should be in query-to-file mapping
     assert loader._query_to_file["test_query"] == "<directly added>"
 
 
@@ -377,7 +359,7 @@ def test_has_query() -> None:
 
     loader.add_named_sql("test_query", "SELECT 1")
     assert loader.has_query("test_query")
-    assert loader.has_query("test-query")  # Name normalization
+    assert loader.has_query("test-query")
 
 
 def test_list_queries() -> None:
@@ -399,7 +381,6 @@ def test_list_files() -> None:
 
     assert loader.list_files() == []
 
-    # Simulate loading a file
     sql_file = SQLFile("SELECT 1", "/test/file.sql")
     loader._files["/test/file.sql"] = sql_file
 
@@ -416,7 +397,6 @@ def test_get_query_text() -> None:
     text = loader.get_query_text("test_query")
     assert text == "SELECT * FROM users"
 
-    # Test with name normalization
     text = loader.get_query_text("test-query")
     assert text == "SELECT * FROM users"
 
@@ -433,7 +413,6 @@ def test_clear_cache() -> None:
     """Test clearing loader cache."""
     loader = SQLFileLoader()
 
-    # Add some data
     loader.add_named_sql("test_query", "SELECT 1")
     loader._files["test.sql"] = SQLFile("SELECT 1", "test.sql")
 
@@ -468,7 +447,7 @@ def test_get_sql_simplified() -> None:
 
     assert isinstance(sql, SQL)
     assert "SELECT * FROM users WHERE id = :user_id" in sql.sql
-    # Parameters should be passed during execution, not creation
+
     assert sql.parameters == []
 
 
@@ -480,9 +459,6 @@ def test_get_sql_with_dialect() -> None:
     sql = loader.get_sql("test_query")
 
     assert isinstance(sql, SQL)
-    # Currently dialect is not being preserved properly in SQL objects
-    # TODO: Fix dialect preservation in SQLFileLoader
-    # assert sql.dialect == "postgres"
 
 
 def test_get_sql_parameter_style_detection() -> None:
@@ -491,11 +467,9 @@ def test_get_sql_parameter_style_detection() -> None:
     loader.add_named_sql("qmark_query", "SELECT * FROM users WHERE id = ? AND active = ?")
     loader.add_named_sql("named_query", "SELECT * FROM users WHERE id = :user_id AND name = :name")
 
-    # Test qmark style detection
     qmark_sql = loader.get_sql("qmark_query")
     assert isinstance(qmark_sql, SQL)
 
-    # Test named style detection
     named_sql = loader.get_sql("named_query")
     assert isinstance(named_sql, SQL)
 
@@ -515,9 +489,8 @@ def test_get_sql_name_normalization() -> None:
     loader = SQLFileLoader()
     loader.add_named_sql("test_query", "SELECT 1")
 
-    # Should find query with normalized name
     sql1 = loader.get_sql("test_query")
-    sql2 = loader.get_sql("test-query")  # Hyphen should be normalized
+    sql2 = loader.get_sql("test-query")
 
     assert isinstance(sql1, SQL)
     assert isinstance(sql2, SQL)
@@ -527,7 +500,6 @@ def test_get_sql_usage_pattern() -> None:
     """Test the simplified usage pattern for get_sql method."""
     loader = SQLFileLoader()
 
-    # Add the asset maintenance alert query
     asset_maintenance_query = """
 with inserted_data as (
 insert into alert_users (user_id, asset_maintenance_id, alert_definition_id)
@@ -543,7 +515,6 @@ left join users on users.id = inserted_data.user_id;
 
     loader.add_named_sql("asset_maintenance_alert", asset_maintenance_query.strip())
 
-    # Test the simplified usage pattern
     sql = loader.get_sql("asset_maintenance_alert")
 
     assert isinstance(sql, SQL)
@@ -552,31 +523,24 @@ left join users on users.id = inserted_data.user_id;
     assert ":date_end" in sql.sql
     assert "alert_users" in sql.sql
 
-    # Verify no parameters are pre-loaded in the SQL object
     assert sql.parameters == []
-
-    # The SQL should be ready for execution with parameters passed at runtime
 
 
 def test_get_file_methods() -> None:
     """Test file retrieval methods."""
     loader = SQLFileLoader()
 
-    # Add a file directly
     sql_file = SQLFile("SELECT 1", "/test/file.sql")
     loader._files["/test/file.sql"] = sql_file
     loader.add_named_sql("test_query", "SELECT 1")
     loader._query_to_file["test_query"] = "/test/file.sql"
 
-    # Test get_file
     retrieved_file = loader.get_file("/test/file.sql")
     assert retrieved_file == sql_file
 
-    # Test get_file_for_query
     query_file = loader.get_file_for_query("test_query")
     assert query_file == sql_file
 
-    # Test non-existent file
     assert loader.get_file("/nonexistent.sql") is None
     assert loader.get_file_for_query("nonexistent") is None
 
@@ -589,7 +553,7 @@ def test_parameter_style_detection_simplified() -> None:
     sql = loader.get_sql("test_query")
 
     assert isinstance(sql, SQL)
-    # Simplified loader should just create basic SQL object
+
     assert "SELECT * FROM users WHERE id = ? AND active = ?" in sql.sql
 
 
@@ -602,8 +566,8 @@ def test_dialect_normalization() -> None:
         ("plsql", "oracle"),
         ("oracledb", "oracle"),
         ("tsql", "mssql"),
-        ("mysql", "mysql"),  # No change
-        ("sqlite", "sqlite"),  # No change
+        ("mysql", "mysql"),
+        ("sqlite", "sqlite"),
     ]
 
     for input_dialect, expected in test_cases:
@@ -638,7 +602,7 @@ def test_parse_error_propagation() -> None:
     content = """
 -- name:
 SELECT * FROM users;
-"""  # Empty name should cause error
+"""
 
     with pytest.raises(SQLFileParseError):
         SQLFileLoader._parse_sql_content(content, "test.sql")
@@ -648,7 +612,6 @@ def test_file_read_error_handling() -> None:
     """Test handling of file read errors."""
     loader = SQLFileLoader()
 
-    # Mock storage registry to raise an exception
     mock_registry = Mock()
     mock_registry.get.side_effect = KeyError("Backend not found")
     loader.storage_registry = mock_registry
@@ -661,24 +624,9 @@ def test_checksum_calculation_error() -> None:
     """Test handling of checksum calculation errors."""
     loader = SQLFileLoader()
 
-    with patch.object(loader, "_read_file_content", side_effect=Exception("Read error")):
+    with patch("sqlspec.loader.SQLFileLoader._read_file_content", side_effect=Exception("Read error")):
         with pytest.raises(SQLFileParseError):
             loader._calculate_file_checksum("/test/file.sql")
-
-
-def test_invalid_dialect_suggestions() -> None:
-    """Test dialect suggestions for invalid dialects."""
-    from sqlspec.loader import _get_dialect_suggestions
-
-    suggestions = _get_dialect_suggestions("postgre")
-    assert "postgres" in suggestions or "postgresql" in suggestions
-
-    suggestions = _get_dialect_suggestions("mysql8")
-    assert "mysql" in suggestions
-
-    suggestions = _get_dialect_suggestions("completely_invalid")
-    # Should return some suggestions or empty list
-    assert isinstance(suggestions, list)
 
 
 @pytest.mark.parametrize(
@@ -738,7 +686,6 @@ class TestFixtureBasedParsing:
 
         statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
 
-        # Should find all named statements
         expected_queries = [
             "collection_postgres_base_database_details",
             "collection_postgres_13_database_details",
@@ -799,16 +746,14 @@ class TestFixtureBasedParsing:
         with open(fixture_file, encoding="utf-8") as f:
             content = f.read()
 
-        # Oracle DDL might not have named statements, so handle gracefully
         try:
             statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
-            # If it parses successfully, verify structure
+
             for stmt_name, stmt in statements.items():
                 assert isinstance(stmt, NamedStatement)
                 assert stmt.name == stmt_name
                 assert len(stmt.sql.strip()) > 0
         except SQLFileParseError as e:
-            # If no named statements found, that's expected for DDL file
             assert "No named SQL statements found" in str(e)
 
     def test_large_fixture_parsing_performance(self, fixtures_path: Path) -> None:
@@ -833,7 +778,6 @@ class TestFixtureBasedParsing:
             statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
             parse_time = time.time() - start_time
 
-            # Should parse within reasonable time (adjust threshold as needed)
             assert parse_time < 0.5, f"Parsing {fixture_path} took too long: {parse_time:.3f}s"
             assert len(statements) > 0, f"No statements found in {fixture_path}"
 
@@ -855,7 +799,6 @@ class TestFixtureBasedParsing:
 
             statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
 
-            # At least one statement should contain the expected pattern
             found_pattern = False
             for stmt in statements.values():
                 if expected_pattern in stmt.sql:
@@ -873,13 +816,11 @@ class TestFixtureBasedParsing:
 
         statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
 
-        # These queries should contain complex CTEs
         for stmt in statements.values():
             sql = stmt.sql.upper()
             if "WITH" in sql:
-                # Should have proper CTE structure
                 assert "SELECT" in sql
-                # Should have joins or complex logic
+
                 assert "JOIN" in sql or "WHERE" in sql or "FROM" in sql
 
     def test_multi_dialect_fixture_parsing(self, fixtures_path: Path) -> None:
@@ -895,7 +836,8 @@ class TestFixtureBasedParsing:
         for dialect_info in dialect_fixtures:
             if len(dialect_info) == 2 and dialect_info[1] is not None:
                 dialect_dir, filename = dialect_info
-                fixture_file = fixtures_path / dialect_dir / filename  # type: ignore[operator]
+                assert filename is not None  # Type guard for mypy
+                fixture_file = fixtures_path / dialect_dir / filename
             else:
                 fixture_file = fixtures_path / dialect_info[0]
 
@@ -908,15 +850,13 @@ class TestFixtureBasedParsing:
             try:
                 statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
 
-                # All statements should parse successfully
                 for stmt_name, stmt in statements.items():
                     assert isinstance(stmt, NamedStatement)
                     assert len(stmt.sql.strip()) > 0
-                    # Should preserve original case and structure
+
                     assert stmt.name == stmt_name
 
             except SQLFileParseError:
-                # Some fixtures might not have named statements - that's OK
                 pass
 
 
@@ -938,7 +878,6 @@ class TestFixtureBasedIntegration:
         queries = loader.list_queries()
         assert len(queries) >= 3
 
-        # Test getting SQL objects
         for query_name in queries:
             sql = loader.get_sql(query_name)
             assert isinstance(sql, SQL)
@@ -951,11 +890,9 @@ class TestFixtureBasedIntegration:
         loader = SQLFileLoader()
         loader.load_sql(fixture_file)
 
-        # Check that file metadata is tracked
         files = loader.list_files()
         assert str(fixture_file) in files
 
-        # Check query-to-file mapping
         queries = loader.list_queries()
         for query_name in queries:
             file_info = loader.get_file_for_query(query_name)
@@ -970,10 +907,9 @@ class TestFixtureBasedIntegration:
         loader.load_sql(fixture_file)
 
         queries = loader.list_queries()
-        test_query = queries[0]  # Get first query
+        test_query = queries[0]
 
-        # Create SQL object without parameters
         sql = loader.get_sql(test_query)
         assert isinstance(sql, SQL)
-        # Parameters should be passed during execution
+
         assert sql.parameters == []

@@ -46,7 +46,9 @@ def test_where_neq_uses_placeholder() -> None:
 
 def test_where_comparison_operators_use_placeholders() -> None:
     """Test all comparison WHERE methods use proper parameter binding."""
-    test_cases = [
+    from typing import Any, Callable
+
+    test_cases: list[tuple[str, Callable[[Any], Any], str]] = [
         ("where_lt", lambda q: q.where_lt("age", 18), "age"),
         ("where_lte", lambda q: q.where_lte("score", 100), "score"),
         ("where_gt", lambda q: q.where_gt("price", 50.0), "price"),
@@ -54,7 +56,7 @@ def test_where_comparison_operators_use_placeholders() -> None:
     ]
 
     for method_name, query_builder, column_name in test_cases:
-        query = query_builder(sql.select("*").from_("test_table"))  # type: ignore[no-untyped-call]
+        query = query_builder(sql.select("*").from_("test_table"))
         stmt = query.build()
 
         assert f":{column_name}" in stmt.sql, f"{method_name} should use :{column_name} placeholder"
@@ -202,7 +204,7 @@ def test_raw_expression_in_insert_values() -> None:
     assert "logs" in stmt.sql
     assert "message" in stmt.parameters
     assert stmt.parameters["message"] == "Test"
-    # The raw expression should be included directly, not as a parameter
+
     assert "NOW()" in stmt.sql
 
 
@@ -538,7 +540,6 @@ def test_parameter_values_preserved_correctly() -> None:
         assert column_name in stmt.parameters
         assert stmt.parameters[column_name] == expected_value
 
-    # Test None value separately - it creates a parameter with None value
     none_query = sql.select("*").from_("test").where_eq("none_col", None)
     none_stmt = none_query.build()
     assert "none_col" in none_stmt.parameters
@@ -647,7 +648,6 @@ def test_window_function_shortcuts() -> None:
     """Test window function shortcuts like sql.row_number_."""
     from sqlspec._sql import WindowFunctionBuilder
 
-    # Test that shortcuts return WindowFunctionBuilder instances
     assert isinstance(sql.row_number_, WindowFunctionBuilder)
     assert isinstance(sql.rank_, WindowFunctionBuilder)
     assert isinstance(sql.dense_rank_, WindowFunctionBuilder)
@@ -711,13 +711,12 @@ def test_window_function_multiple_partition_columns() -> None:
 
 def test_normal_column_access_preserved() -> None:
     """Test that normal column access still works after adding window functions."""
-    # This should still return a Column, not a WindowFunctionBuilder
+
     from sqlspec.builder._column import Column
 
     assert isinstance(sql.department, Column)
     assert isinstance(sql.some_normal_column, Column)
 
-    # But these should return WindowFunctionBuilder
     from sqlspec._sql import WindowFunctionBuilder
 
     assert isinstance(sql.row_number_, WindowFunctionBuilder)
@@ -728,7 +727,6 @@ def test_subquery_builders() -> None:
     """Test subquery builder shortcuts."""
     from sqlspec._sql import SubqueryBuilder
 
-    # Test that shortcuts return SubqueryBuilder instances
     assert isinstance(sql.exists_, SubqueryBuilder)
     assert isinstance(sql.in_, SubqueryBuilder)
     assert isinstance(sql.any_, SubqueryBuilder)
@@ -746,7 +744,6 @@ def test_exists_subquery() -> None:
     assert "EXISTS" in stmt.sql
     assert "SELECT" in stmt.sql
     assert "orders" in stmt.sql
-    # Note: The subquery parameters are embedded in the SQL structure
 
 
 def test_in_subquery() -> None:
@@ -754,7 +751,6 @@ def test_in_subquery() -> None:
     subquery = sql.select("category_id").from_("categories").where_eq("active", True)
     in_expr = sql.in_(subquery)
 
-    # Test that the expression is created correctly
     from sqlglot.expressions import In
 
     assert isinstance(in_expr, In)
@@ -784,7 +780,6 @@ def test_join_builders() -> None:
     """Test join builder shortcuts."""
     from sqlspec._sql import JoinBuilder
 
-    # Test that shortcuts return JoinBuilder instances
     assert isinstance(sql.left_join_, JoinBuilder)
     assert isinstance(sql.inner_join_, JoinBuilder)
     assert isinstance(sql.right_join_, JoinBuilder)
@@ -800,7 +795,6 @@ def test_left_join_builder() -> None:
 
     assert isinstance(join_expr, Join)
 
-    # Test in a complete query
     query = sql.select("users.name", "posts.title").from_("users").join(join_expr)
     stmt = query.build()
 
@@ -845,7 +839,7 @@ def test_full_join_builder() -> None:
 
 def test_cross_join_builder() -> None:
     """Test CROSS JOIN builder functionality."""
-    join_expr = sql.cross_join_("settings").on("1=1")  # ON condition ignored for CROSS JOIN
+    join_expr = sql.cross_join_("settings").on("1=1")
 
     query = sql.select("users.name", "settings.value").from_("users").join(join_expr)
     stmt = query.build()
@@ -870,37 +864,32 @@ def test_multiple_join_builders() -> None:
 
 def test_backward_compatibility_preserved() -> None:
     """Test that all existing functionality still works with new builders."""
-    # Original join methods should still work
+
     query1 = sql.select("u.name", "p.title").from_("users u").left_join("posts p", "u.id = p.user_id")
     stmt1 = query1.build()
     assert "LEFT JOIN" in stmt1.sql
 
-    # Original case syntax should still work
     case_expr = sql.case().when("status = 'active'", "Active").else_("Inactive").end()
     query2 = sql.select("name", case_expr).from_("users")
     stmt2 = query2.build()
     assert "CASE" in stmt2.sql
 
-    # New window functions work
     window_func = sql.row_number_.partition_by("department").order_by("salary").build()
     query3 = sql.select("name", window_func).from_("employees")
     stmt3 = query3.build()
     assert "ROW_NUMBER" in stmt3.sql
 
-    # Column access should still work
     from sqlspec.builder._column import Column
 
     assert isinstance(sql.users, Column)
     assert isinstance(sql.posts, Column)
 
 
-# Tests for type annotation fixes and SQL object compatibility
 def test_case_as_method_type_annotation_fix() -> None:
     """Test that sql.case().as_() method returns proper type without 'partially unknown' errors."""
-    # This test verifies the fix for the original user issue
+
     case_expr = sql.case().when("status = 'active'", "Active").else_("Inactive").as_("status_display")
 
-    # Should be able to use in select without type errors
     query = sql.select("id", "name", case_expr).from_("users")
     stmt = query.build()
 
@@ -909,7 +898,6 @@ def test_case_as_method_type_annotation_fix() -> None:
     assert "Active" in stmt.sql
     assert "Inactive" in stmt.sql
 
-    # Verify it's properly aliased
     assert " AS " in stmt.sql or "status_display" in stmt.sql
 
 
@@ -984,13 +972,11 @@ def test_multiple_sql_raw_objects_parameter_merging() -> None:
     query = sql.select("id", select_expr).from_("users").left_join("posts", join_condition).where(where_condition)
     stmt = query.build()
 
-    # All parameters should be merged
     assert len(stmt.parameters) == 3
     assert stmt.parameters["default_name"] == "Unknown"
     assert stmt.parameters["status"] == "published"
     assert stmt.parameters["min_date"] == "2023-01-01"
 
-    # All placeholders should be in SQL
     assert ":default_name" in stmt.sql
     assert ":status" in stmt.sql
     assert ":min_date" in stmt.sql
@@ -1014,12 +1000,11 @@ def test_mixed_sql_objects_and_regular_parameters() -> None:
     query = (
         sql.select("id", raw_expr)
         .from_("users")
-        .where_eq("status", "active")  # Regular parameter
-        .where(sql.raw("created_at > :min_date", min_date="2023-01-01"))  # SQL object parameter
+        .where_eq("status", "active")
+        .where(sql.raw("created_at > :min_date", min_date="2023-01-01"))
     )
     stmt = query.build()
 
-    # Should have both types of parameters
     assert "status" in stmt.parameters
     assert "min_date" in stmt.parameters
     assert stmt.parameters["status"] == "active"
@@ -1032,7 +1017,7 @@ def test_mixed_sql_objects_and_regular_parameters() -> None:
 
 def test_sql_raw_parameter_name_conflicts_handled() -> None:
     """Test that parameter name conflicts are detected when merging SQL objects."""
-    # Create two SQL objects with different parameter names (should work fine)
+
     raw_expr1 = sql.raw("COALESCE(name, :value)", value="default1")
     raw_expr2 = sql.raw("COALESCE(email, :other_value)", other_value="default2")
 
@@ -1044,7 +1029,6 @@ def test_sql_raw_parameter_name_conflicts_handled() -> None:
     assert stmt.parameters["value"] == "default1"
     assert stmt.parameters["other_value"] == "default2"
 
-    # Test that actual conflicts are detected
     raw_conflict1 = sql.raw("COALESCE(name, :conflict)", conflict="first")
     raw_conflict2 = sql.raw("COALESCE(email, :conflict)", conflict="second")
 
@@ -1054,18 +1038,16 @@ def test_sql_raw_parameter_name_conflicts_handled() -> None:
 
 def test_original_user_case_example_regression_test() -> None:
     """Regression test for the exact user example that was failing."""
-    # This was the original failing example
+
     case_expr = sql.case().when("password IS NOT NULL", True).else_(False).as_("has_password")
 
     query = sql.select("id", "name", case_expr).from_("users")
     stmt = query.build()
 
-    # Should work without type annotation errors
     assert "CASE" in stmt.sql
     assert "has_password" in stmt.sql
     assert "password" in stmt.sql and ("NULL" in stmt.sql or "IS" in stmt.sql)
 
-    # Should also work in UPDATE operations
     update_query = sql.update("users").set({"last_check": sql.raw("NOW()")}).where(case_expr)
     update_stmt = update_query.build()
 
@@ -1075,18 +1057,16 @@ def test_original_user_case_example_regression_test() -> None:
 
 def test_type_compatibility_across_all_operations() -> None:
     """Test that SQL objects work across all major SQL operations."""
-    # Test in various contexts to ensure type compatibility
+
     raw_condition = sql.raw("LENGTH(name) > :min_len", min_len=3)
     raw_value = sql.raw("UPPER(:new_name)", new_name="test")
     raw_select = sql.raw("COUNT(*) as total")
 
-    # SELECT with SQL objects
     select_query = sql.select("id", raw_select).from_("users").where(raw_condition)
     select_stmt = select_query.build()
     assert "COUNT(*)" in select_stmt.sql
     assert "min_len" in select_stmt.parameters
 
-    # UPDATE with SQL objects using kwargs
     update_query = sql.update("users").set(name=raw_value, status="updated").where(raw_condition)
     update_stmt = update_query.build()
     assert "UPDATE" in update_stmt.sql
@@ -1094,7 +1074,6 @@ def test_type_compatibility_across_all_operations() -> None:
     assert "new_name" in update_stmt.parameters
     assert "status" in update_stmt.parameters
 
-    # DELETE with SQL objects
     delete_query = sql.delete().from_("users").where(raw_condition)
     delete_stmt = delete_query.build()
     assert "DELETE" in delete_stmt.sql
@@ -1106,7 +1085,6 @@ def test_update_set_method_with_sql_objects() -> None:
     raw_timestamp = sql.raw("NOW()")
     raw_computed = sql.raw("UPPER(:value)", value="test")
 
-    # Test using kwargs with SQL objects
     query = (
         sql.update("users").set(name="John", last_updated=raw_timestamp, computed_field=raw_computed).where_eq("id", 1)
     )
@@ -1128,7 +1106,6 @@ def test_update_set_method_backward_compatibility() -> None:
     """Test that UPDATE.set_() method maintains backward compatibility with dict."""
     raw_timestamp = sql.raw("NOW()")
 
-    # Test using dict (original API)
     query1 = sql.update("users").set({"name": "John", "updated_at": raw_timestamp})
     stmt1 = query1.build()
 
@@ -1137,7 +1114,6 @@ def test_update_set_method_backward_compatibility() -> None:
     assert "name" in stmt1.parameters
     assert stmt1.parameters["name"] == "John"
 
-    # Test using positional args (column, value)
     query2 = sql.update("users").set("status", "active")
     stmt2 = query2.build()
 
@@ -1146,7 +1122,6 @@ def test_update_set_method_backward_compatibility() -> None:
     assert stmt2.parameters["status"] == "active"
 
 
-# Tests for ON CONFLICT functionality
 def test_on_conflict_do_nothing_basic() -> None:
     """Test basic ON CONFLICT DO NOTHING functionality."""
     query = sql.insert("users").columns("id", "name").values(1, "John").on_conflict("id").do_nothing()
@@ -1190,7 +1165,7 @@ def test_on_conflict_do_nothing_no_columns() -> None:
     assert "INSERT INTO" in stmt.sql
     assert "ON CONFLICT" in stmt.sql
     assert "DO NOTHING" in stmt.sql
-    # Should not have specific columns in conflict clause
+
     assert "ON CONFLICT(" not in stmt.sql
 
 
@@ -1205,7 +1180,7 @@ def test_on_conflict_do_update_basic() -> None:
     assert "SET" in stmt.sql
     assert "id" in stmt.parameters
     assert "name" in stmt.parameters
-    assert "name_1" in stmt.parameters  # The update parameter
+    assert "name_1" in stmt.parameters
     assert stmt.parameters["id"] == 1
     assert stmt.parameters["name"] == "John"
     assert stmt.parameters["name_1"] == "Updated John"
@@ -1317,7 +1292,7 @@ def test_on_conflict_with_insert_from_dict() -> None:
     assert "id" in stmt.parameters
     assert "name" in stmt.parameters
     assert "email" in stmt.parameters
-    assert "name_1" in stmt.parameters  # The update parameter
+    assert "name_1" in stmt.parameters
     assert stmt.parameters["name_1"] == "Updated John"
 
 
@@ -1329,7 +1304,7 @@ def test_on_conflict_with_multiple_rows() -> None:
     assert "INSERT INTO" in stmt.sql
     assert "ON CONFLICT" in stmt.sql
     assert "DO NOTHING" in stmt.sql
-    # Check that both rows are included
+
     assert "id" in stmt.parameters
     assert "name" in stmt.parameters
     assert "id_1" in stmt.parameters
@@ -1370,7 +1345,6 @@ def test_on_conflict_sql_generation_postgres_style() -> None:
     query = sql.insert("users").columns("id", "name").values(1, "John").on_conflict("id").do_update(name="Updated")
     stmt = query.build()
 
-    # Should generate proper PostgreSQL ON CONFLICT syntax
     assert "ON CONFLICT(" in stmt.sql or "ON CONFLICT (" in stmt.sql
     assert "DO UPDATE SET" in stmt.sql
     assert '"id"' in stmt.sql or "id" in stmt.sql
@@ -1378,26 +1352,22 @@ def test_on_conflict_sql_generation_postgres_style() -> None:
 
 def test_on_conflict_type_safety() -> None:
     """Test that ON CONFLICT methods return proper types for method chaining."""
-    # This test ensures the ConflictBuilder properly returns Insert builder
+
     query_builder = sql.insert("users").columns("id", "name").values(1, "John")
 
-    # on_conflict should return ConflictBuilder
     conflict_builder = query_builder.on_conflict("id")
     assert hasattr(conflict_builder, "do_nothing")
     assert hasattr(conflict_builder, "do_update")
 
-    # do_nothing should return Insert builder for further chaining
     final_builder = conflict_builder.do_nothing()
     assert hasattr(final_builder, "returning")
     assert hasattr(final_builder, "build")
 
-    # Should be able to continue chaining
     final_query = final_builder.returning("id")
     stmt = final_query.build()
     assert "RETURNING" in stmt.sql
 
 
-# Tests for MERGE kwargs functionality
 def test_merge_when_matched_then_update_with_kwargs() -> None:
     """Test MERGE when_matched_then_update with kwargs support."""
     query = (
@@ -1548,16 +1518,15 @@ def test_merge_comprehensive_example() -> None:
     assert "WHEN NOT MATCHED THEN INSERT" in stmt.sql
     assert "WHEN NOT MATCHED BY SOURCE THEN UPDATE" in stmt.sql
     assert "NOW()" in stmt.sql
-    assert len(stmt.parameters) >= 6  # Should have multiple parameters
+    assert len(stmt.parameters) >= 6
 
 
 def test_querybuilder_parameter_style_handling_regression() -> None:
     """Regression test for QueryBuilder parameter style handling fix."""
-    # Test the exact scenario that was failing: QueryBuilder with external parameters
+
     query = sql.select("id", "name", "price").from_("products").where("category = $1", "Electronics")
     stmt = query.build()
 
-    # Should successfully build without "Incorrect number of bindings supplied" error
     assert "WHERE" in stmt.sql
     assert "category" in stmt.sql
     assert len(stmt.parameters) == 1
@@ -1566,23 +1535,19 @@ def test_querybuilder_parameter_style_handling_regression() -> None:
 
 def test_querybuilder_handles_all_parameter_styles() -> None:
     """Test that QueryBuilder handles all parameter styles correctly."""
-    # Test different parameter styles work in QueryBuilder WHERE clauses with external parameters
 
-    # Test $1 style parameter
     query1 = sql.select("*").from_("test_table").where("category = $1", "Electronics")
     stmt1 = query1.build()
     assert "WHERE" in stmt1.sql
     assert len(stmt1.parameters) == 1
     assert "Electronics" in stmt1.parameters.values()
 
-    # Test named parameter style
     query2 = sql.select("*").from_("test_table").where("status = :status", status="active")
     stmt2 = query2.build()
     assert "WHERE" in stmt2.sql
     assert len(stmt2.parameters) == 1
     assert "active" in stmt2.parameters.values()
 
-    # Test ? style parameter
     query3 = sql.select("*").from_("test_table").where("name = ?", "John")
     stmt3 = query3.build()
     assert "WHERE" in stmt3.sql
@@ -1592,7 +1557,7 @@ def test_querybuilder_handles_all_parameter_styles() -> None:
 
 def test_querybuilder_parameter_conversion_preserves_functionality() -> None:
     """Test that parameter conversion in QueryBuilder preserves all functionality."""
-    # Test multiple parameters in same condition
+
     query = sql.select("*").from_("orders").where("total > $1 AND status = $2", 100.0, "pending")
     stmt = query.build()
 
@@ -1601,7 +1566,6 @@ def test_querybuilder_parameter_conversion_preserves_functionality() -> None:
     assert 100.0 in stmt.parameters.values()
     assert "pending" in stmt.parameters.values()
 
-    # Test with complex conditions
     complex_query = sql.select("*").from_("events").where("created_at > $1 AND type = $2", "2023-01-01", "click")
     complex_stmt = complex_query.build()
 

@@ -60,8 +60,6 @@ from sqlspec.utils.type_guards import (
     schema_dump,
 )
 
-# Test fixtures for different schema types
-
 
 @dataclass
 class SampleDataclass:
@@ -126,9 +124,6 @@ class MockValueWrapper:
 
     def __init__(self, value: Any) -> None:
         self.value = value
-
-
-# Dataclass Type Guard Tests
 
 
 def test_is_dataclass_instance_with_valid_dataclass() -> None:
@@ -202,9 +197,6 @@ def test_is_dataclass_without_field_non_dataclass() -> None:
     assert is_dataclass_without_field("not a dataclass", "any_field") is False
 
 
-# Dictionary Type Guard Tests
-
-
 def test_is_dict_with_dictionary() -> None:
     """Test is_dict returns True for dictionaries."""
     assert is_dict({}) is True
@@ -266,12 +258,9 @@ def test_is_dict_row_with_non_dictionary() -> None:
     assert is_dict_row(42) is False
 
 
-# Pydantic Model Tests (when available)
-
-
 def test_is_pydantic_model_when_not_installed() -> None:
     """Test is_pydantic_model returns False when pydantic not available."""
-    # This test assumes pydantic is not installed or mocked appropriately
+
     assert is_pydantic_model("not a model") is False
     assert is_pydantic_model({}) is False
 
@@ -284,9 +273,6 @@ def test_is_pydantic_model_with_field_when_not_installed() -> None:
 def test_is_pydantic_model_without_field_when_not_installed() -> None:
     """Test is_pydantic_model_without_field returns False when pydantic not available."""
     assert is_pydantic_model_without_field("not a model", "field") is False
-
-
-# MsgSpec Struct Tests (when available)
 
 
 def test_is_msgspec_struct_when_not_installed() -> None:
@@ -303,9 +289,6 @@ def test_is_msgspec_struct_with_field_when_not_installed() -> None:
 def test_is_msgspec_struct_without_field_when_not_installed() -> None:
     """Test is_msgspec_struct_without_field returns False when msgspec not available."""
     assert is_msgspec_struct_without_field("not a struct", "field") is False
-
-
-# Attrs Tests (when available)
 
 
 def test_is_attrs_instance_when_not_installed() -> None:
@@ -328,9 +311,6 @@ def test_is_attrs_instance_with_field_when_not_installed() -> None:
 def test_is_attrs_instance_without_field_when_not_installed() -> None:
     """Test is_attrs_instance_without_field returns False when attrs not available."""
     assert is_attrs_instance_without_field("not attrs", "field") is False
-
-
-# Schema Type Guards Tests
 
 
 def test_is_schema_with_dataclass() -> None:
@@ -366,19 +346,17 @@ def test_is_schema_or_dict_with_neither() -> None:
 def test_is_schema_with_field_with_dataclass() -> None:
     """Test is_schema_with_field works with dataclass fields."""
     instance = SampleDataclass(name="test", age=25)
-    # Note: is_schema_with_field only checks msgspec/pydantic, not dataclasses
-    # This is the current implementation behavior
-    assert is_schema_with_field(instance, "name") is False  # Expected behavior
+
+    assert is_schema_with_field(instance, "name") is False
     assert is_schema_with_field(instance, "nonexistent") is False
 
 
 def test_is_schema_without_field_with_dataclass() -> None:
     """Test is_schema_without_field works with dataclass fields."""
     instance = SampleDataclass(name="test", age=25)
-    # Note: is_schema_without_field only checks msgspec/pydantic, not dataclasses
-    # This is the current implementation behavior
-    assert is_schema_without_field(instance, "nonexistent") is True  # Doesn't have the field
-    assert is_schema_without_field(instance, "name") is True  # Still True since it's not msgspec/pydantic
+
+    assert is_schema_without_field(instance, "nonexistent") is True
+    assert is_schema_without_field(instance, "name") is True
 
 
 def test_is_schema_or_dict_with_field_combined() -> None:
@@ -386,9 +364,8 @@ def test_is_schema_or_dict_with_field_combined() -> None:
     instance = SampleDataclass(name="test", age=25)
     data = {"name": "test", "age": 25}
 
-    # Note: is_schema_or_dict_with_field only recognizes msgspec/pydantic as schemas, not dataclasses
-    assert is_schema_or_dict_with_field(instance, "name") is False  # Dataclass not recognized as schema
-    assert is_schema_or_dict_with_field(data, "name") is True  # Dict is recognized
+    assert is_schema_or_dict_with_field(instance, "name") is False
+    assert is_schema_or_dict_with_field(data, "name") is True
     assert is_schema_or_dict_with_field(instance, "nonexistent") is False
     assert is_schema_or_dict_with_field(data, "nonexistent") is False
 
@@ -398,14 +375,10 @@ def test_is_schema_or_dict_without_field_combined() -> None:
     instance = SampleDataclass(name="test", age=25)
     data = {"name": "test", "age": 25}
 
-    # Note: is_schema_or_dict_without_field only recognizes msgspec/pydantic as schemas, not dataclasses
-    assert is_schema_or_dict_without_field(instance, "nonexistent") is True  # Doesn't have the field
-    assert is_schema_or_dict_without_field(data, "nonexistent") is True  # Dict doesn't have field
-    assert is_schema_or_dict_without_field(instance, "name") is True  # Not recognized as schema with field
-    assert is_schema_or_dict_without_field(data, "name") is False  # Dict has the field
-
-
-# Iterable Parameters Tests
+    assert is_schema_or_dict_without_field(instance, "nonexistent") is True
+    assert is_schema_or_dict_without_field(data, "nonexistent") is True
+    assert is_schema_or_dict_without_field(instance, "name") is True
+    assert is_schema_or_dict_without_field(data, "name") is False
 
 
 def test_is_iterable_parameters_with_list() -> None:
@@ -444,23 +417,16 @@ def test_is_iterable_parameters_with_non_iterable() -> None:
     assert is_iterable_parameters(None) is False
 
 
-# DTO Data Tests
-
-
 def test_is_dto_data_when_litestar_not_installed() -> None:
     """Test is_dto_data returns False when litestar not available."""
     assert is_dto_data("not dto data") is False
     assert is_dto_data({}) is False
 
 
-# Expression Tests
-
-
 def test_is_expression_with_mock() -> None:
     """Test is_expression with mock SQLGlot expressions."""
     mock_expr = MockSQLGlotExpression()
-    # This will likely return False unless SQLGlot is installed and the mock inherits properly
-    # The test verifies the function doesn't crash with mock objects
+
     result = is_expression(mock_expr)
     assert isinstance(result, bool)
 
@@ -470,9 +436,6 @@ def test_is_expression_with_non_expression() -> None:
     assert is_expression("not an expression") is False
     assert is_expression(42) is False
     assert is_expression({}) is False
-
-
-# Protocol Helper Tests
 
 
 def test_has_attr_with_existing_attribute() -> None:
@@ -490,9 +453,6 @@ def test_has_attr_with_missing_attribute() -> None:
 def test_has_attr_with_none() -> None:
     """Test has_attr handles None gracefully."""
     assert has_attr(None, "any_attr") is False
-
-
-# SQLGlot Node Helper Tests
 
 
 def test_get_node_this_with_this_attribute() -> None:
@@ -572,9 +532,6 @@ def test_has_parent_attribute_without_attribute() -> None:
     assert has_parent_attribute(literal) is False
 
 
-# Literal Type Tests
-
-
 def test_is_string_literal_with_string_flag() -> None:
     """Test is_string_literal returns True when is_string is True."""
     literal = cast("exp.Literal", MockLiteral(is_string=True))
@@ -584,7 +541,7 @@ def test_is_string_literal_with_string_flag() -> None:
 def test_is_string_literal_without_string_flag() -> None:
     """Test is_string_literal handles missing is_string attribute."""
     literal = cast("exp.Literal", MockLiteral(this="string_value"))
-    # Should fall back to checking this attribute type
+
     assert is_string_literal(literal) is True
 
 
@@ -603,7 +560,7 @@ def test_is_number_literal_with_number_flag() -> None:
 def test_is_number_literal_without_number_flag() -> None:
     """Test is_number_literal handles missing is_number attribute."""
     literal = cast("exp.Literal", MockLiteral(this="123"))
-    # Should fall back to trying to convert to float
+
     assert is_number_literal(literal) is True
 
 
@@ -611,9 +568,6 @@ def test_is_number_literal_with_non_number_this() -> None:
     """Test is_number_literal returns False for non-numeric this."""
     literal = cast("exp.Literal", MockLiteral(this="not_a_number"))
     assert is_number_literal(literal) is False
-
-
-# Parameter Helper Tests
 
 
 def test_get_param_style_and_name_with_attributes() -> None:
@@ -642,9 +596,6 @@ def test_get_value_attribute_without_value() -> None:
     """Test get_value_attribute returns object when value missing."""
     obj = "no_value_attribute"
     assert get_value_attribute(obj) == "no_value_attribute"
-
-
-# Expression Context Tests
 
 
 def test_get_initial_expression_with_attribute() -> None:
@@ -684,11 +635,8 @@ def test_expression_has_limit_with_none() -> None:
 
 def test_expression_has_limit_without_args() -> None:
     """Test expression_has_limit handles missing args attribute."""
-    expr = cast("exp.Expression", object())  # type: ignore[arg-type]
+    expr = cast("exp.Expression", object())
     assert expression_has_limit(expr) is False
-
-
-# COPY Statement Tests
 
 
 def test_is_copy_statement_with_none() -> None:
@@ -700,9 +648,6 @@ def test_is_copy_statement_with_non_expression() -> None:
     """Test is_copy_statement returns False for non-expression objects."""
     assert is_copy_statement("not an expression") is False
     assert is_copy_statement(42) is False
-
-
-# Dataclass Utility Function Tests
 
 
 def test_extract_dataclass_fields_basic() -> None:
@@ -731,12 +676,10 @@ def test_extract_dataclass_fields_include_exclude() -> None:
     """Test extract_dataclass_fields respects include/exclude parameters."""
     instance = SampleDataclass(name="test", age=25)
 
-    # Test include
     fields = extract_dataclass_fields(instance, include={"name"})
     field_names = {field.name for field in fields}
     assert field_names == {"name"}
 
-    # Test exclude
     fields = extract_dataclass_fields(instance, exclude={"age"})
     field_names = {field.name for field in fields}
     assert "name" in field_names
@@ -809,10 +752,7 @@ def test_dataclass_to_dict_nested_disabled() -> None:
 
     result = dataclass_to_dict(outer, convert_nested=False)
 
-    assert result["inner"] is inner  # Should be the original object
-
-
-# Schema Dump Tests
+    assert result["inner"] is inner
 
 
 def test_schema_dump_with_dict() -> None:
@@ -836,8 +776,6 @@ def test_schema_dump_exclude_unset() -> None:
     instance = SampleDataclass(name="test", age=25, optional_field=None)
     result = schema_dump(instance, exclude_unset=True)
 
-    # For dataclass, exclude_unset maps to exclude_empty
-    # None values should still be included unless they are Empty
     expected = {"name": "test", "age": 25, "optional_field": None}
     assert result == expected
 
@@ -851,13 +789,10 @@ def test_schema_dump_with_dict_attribute() -> None:
             self.age = 25
 
     obj = ObjectWithDict()
-    result = schema_dump(cast("Any", obj))  # type: ignore[arg-type]
+    result = schema_dump(cast("Any", obj))
 
     expected = {"name": "test", "age": 25}
     assert result == expected
-
-
-# Performance Tests
 
 
 @pytest.mark.parametrize(
@@ -867,14 +802,14 @@ def test_schema_dump_with_dict_attribute() -> None:
         (is_dict, [], False),
         (is_dataclass_instance, SampleDataclass("test", 25), True),
         (is_dataclass_instance, {}, False),
-        (lambda obj: has_attr(obj, "value"), MockValueWrapper("test"), True),  # has 'value'
+        (lambda obj: has_attr(obj, "value"), MockValueWrapper("test"), True),
         (lambda obj: has_attr(obj, "nonexistent"), MockValueWrapper("test"), False),
     ],
     ids=["dict_true", "dict_false", "dataclass_true", "dataclass_false", "attr_true", "attr_false"],
 )
 def test_type_guard_performance(guard_func: Any, test_obj: Any, expected: bool) -> None:
     """Test that type guards perform efficiently and return expected results."""
-    # Test multiple calls to ensure consistent performance
+
     for _ in range(100):
         result = guard_func(test_obj)
         assert result == expected
@@ -884,15 +819,11 @@ def test_multiple_type_guards_chain() -> None:
     """Test chaining multiple type guards doesn't degrade performance."""
     instance = SampleDataclass(name="test", age=25)
 
-    # Chain multiple type guard checks
     for _ in range(50):
         assert is_schema_or_dict(instance) is True
         assert is_dataclass_with_field(instance, "name") is True
         assert is_dict_with_field({"key": "value"}, "key") is True
         assert is_iterable_parameters([1, 2, 3]) is True
-
-
-# Edge Cases
 
 
 def test_type_guards_with_none() -> None:
@@ -914,7 +845,7 @@ def test_type_guards_with_empty_containers() -> None:
 
 def test_sqlglot_helpers_with_invalid_objects() -> None:
     """Test SQLGlot helper functions handle invalid objects gracefully."""
-    invalid_obj = cast("exp.Expression", "not an expression")  # type: ignore[arg-type]
+    invalid_obj = cast("exp.Expression", "not an expression")
 
     assert get_node_this(invalid_obj) is None
     assert get_node_expressions(invalid_obj) is None

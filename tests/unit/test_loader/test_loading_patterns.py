@@ -28,13 +28,11 @@ def temp_directory_structure() -> Generator[Path, None, None]:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create nested directory structure
         (base_path / "queries").mkdir()
         (base_path / "queries" / "users").mkdir()
         (base_path / "queries" / "products").mkdir()
         (base_path / "migrations").mkdir()
 
-        # Create SQL files at different levels
         (base_path / "root_queries.sql").write_text("""
 -- name: global_health_check
 SELECT 'OK' as status;
@@ -64,7 +62,6 @@ SELECT id, name, price FROM products WHERE id = :product_id;
 SELECT * FROM products WHERE category_id = :category_id;
 """)
 
-        # Create non-SQL files that should be ignored
         (base_path / "README.md").write_text("# Test Documentation")
         (base_path / "config.json").write_text('{"setting": "value"}')
         (base_path / "queries" / ".gitkeep").write_text("")
@@ -93,14 +90,11 @@ def test_load_directory_recursive(temp_directory_structure: Path) -> None:
 
     queries = loader.list_queries()
 
-    # Root level queries (no namespace)
     assert "global_health_check" in queries
     assert "get_version" in queries
 
-    # First level namespace
     assert "queries.count_all_records" in queries
 
-    # Second level namespaces
     assert "queries.users.get_user_by_id" in queries
     assert "queries.users.list_active_users" in queries
     assert "queries.products.get_product_by_id" in queries
@@ -116,7 +110,6 @@ def test_load_subdirectory_directly(temp_directory_structure: Path) -> None:
 
     queries = loader.list_queries()
 
-    # When loading subdirectory directly, no namespace prefix
     assert "get_user_by_id" in queries
     assert "list_active_users" in queries
 
@@ -130,7 +123,6 @@ def test_load_parent_directory_with_namespaces(temp_directory_structure: Path) -
 
     queries = loader.list_queries()
 
-    # When loading parent directory, subdirectories become namespaces
     assert "users.get_user_by_id" in queries
     assert "users.list_active_users" in queries
     assert "products.get_product_by_id" in queries
@@ -145,7 +137,6 @@ def test_empty_directory_handling() -> None:
 
         loader = SQLFileLoader()
 
-        # Should not raise an error for empty directory
         loader.load_sql(empty_dir)
 
         assert loader.list_queries() == []
@@ -172,7 +163,6 @@ def test_mixed_file_and_directory_loading(temp_directory_structure: Path) -> Non
     """Test loading mix of files and directories."""
     loader = SQLFileLoader()
 
-    # Load a specific file and a directory
     root_file = temp_directory_structure / "root_queries.sql"
     users_dir = temp_directory_structure / "queries" / "users"
 
@@ -180,11 +170,10 @@ def test_mixed_file_and_directory_loading(temp_directory_structure: Path) -> Non
 
     queries = loader.list_queries()
 
-    # Should have queries from both sources
-    assert "global_health_check" in queries  # From file
-    assert "get_version" in queries  # From file
-    assert "get_user_by_id" in queries  # From directory (no namespace when loaded directly)
-    assert "list_active_users" in queries  # From directory (no namespace when loaded directly)
+    assert "global_health_check" in queries
+    assert "get_version" in queries
+    assert "get_user_by_id" in queries
+    assert "list_active_users" in queries
 
 
 def test_simple_namespace_generation() -> None:
@@ -210,7 +199,6 @@ def test_deep_namespace_generation() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create deep directory structure
         deep_path = base_path / "level1" / "level2" / "level3"
         deep_path.mkdir(parents=True)
 
@@ -231,7 +219,6 @@ def test_namespace_with_special_characters() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create directories with special characters
         (base_path / "user-analytics").mkdir()
         (base_path / "user-analytics" / "daily_reports.sql").write_text("""
 -- name: daily_user_count
@@ -242,7 +229,7 @@ SELECT COUNT(*) FROM users;
         loader.load_sql(base_path)
 
         queries = loader.list_queries()
-        # Namespace should preserve directory names as-is
+
         assert "user-analytics.daily_user_count" in queries
 
 
@@ -260,7 +247,7 @@ SELECT 'root' as level;
         loader.load_sql(base_path)
 
         queries = loader.list_queries()
-        # Should not have namespace prefix
+
         assert "root_level_query" in queries
         assert "root_level_query" not in [q for q in queries if "." in q]
 
@@ -270,7 +257,6 @@ def test_sql_extension_filtering() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create various file types
         (base_path / "valid.sql").write_text("""
 -- name: valid_query
 SELECT 1;
@@ -279,14 +265,14 @@ SELECT 1;
 -- name: invalid_query
 SELECT 2;
 """)
-        (base_path / "also_invalid.py").write_text("# Not SQL")
+        (base_path / "also_invalid.py").write_text("# Not a SQL file")
 
         loader = SQLFileLoader()
         loader.load_sql(base_path)
 
         queries = loader.list_queries()
         assert "valid_query" in queries
-        assert len(queries) == 1  # Only the .sql file should be processed
+        assert len(queries) == 1
 
 
 def test_hidden_file_inclusion() -> None:
@@ -294,7 +280,6 @@ def test_hidden_file_inclusion() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create visible and hidden SQL files
         (base_path / "visible.sql").write_text("""
 -- name: visible_query
 SELECT 1;
@@ -309,8 +294,7 @@ SELECT 2;
 
         queries = loader.list_queries()
         assert "visible_query" in queries
-        # Currently, SQLFileLoader includes hidden files
-        # TODO: Consider adding option to exclude hidden files in future
+
         assert "hidden_query" in queries
         assert len(queries) == 2
 
@@ -320,7 +304,6 @@ def test_recursive_pattern_matching() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create nested structure with mixed file types
         (base_path / "level1").mkdir()
         (base_path / "level1" / "level2").mkdir()
 
@@ -360,11 +343,9 @@ SELECT 'loaded from URI' as source;
         queries = loader.list_queries()
         assert "uri_query" in queries
 
-        # Verify content
         sql = loader.get_sql("uri_query")
         assert "loaded from URI" in sql.sql
 
-        # Clean up
         Path(tf.name).unlink()
 
 
@@ -373,14 +354,12 @@ def test_mixed_local_and_uri_loading() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create local file
         local_file = base_path / "local.sql"
         local_file.write_text("""
 -- name: local_query
 SELECT 'local' as source;
 """)
 
-        # Create another file for URI loading
         uri_file = base_path / "uri_file.sql"
         uri_file.write_text("""
 -- name: uri_query
@@ -389,7 +368,6 @@ SELECT 'uri' as source;
 
         loader = SQLFileLoader()
 
-        # Load both local file and URI
         file_uri = f"file://{uri_file}"
         loader.load_sql(local_file, file_uri)
 
@@ -403,7 +381,6 @@ def test_invalid_uri_handling() -> None:
     """Test handling of invalid URIs."""
     loader = SQLFileLoader()
 
-    # Mock storage registry to simulate URI handling failure
     mock_registry = Mock()
     mock_registry.get.side_effect = KeyError("Unsupported URI scheme")
     loader.storage_registry = mock_registry
@@ -416,10 +393,8 @@ def test_nonexistent_directory_error() -> None:
     """Test error handling for nonexistent directories."""
     loader = SQLFileLoader()
 
-    # Nonexistent directories are now handled gracefully (no exception)
     loader.load_sql("/nonexistent/directory")
 
-    # Should result in empty queries and files
     assert loader.list_queries() == []
     assert loader.list_files() == []
 
@@ -427,7 +402,6 @@ def test_nonexistent_directory_error() -> None:
 def test_corrupted_sql_file_error() -> None:
     """Test handling of corrupted or invalid SQL files."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
-        # Create file with invalid SQL structure (no named queries)
         tf.write("SELECT * FROM users; -- No name comment")
         tf.flush()
 
@@ -438,7 +412,6 @@ def test_corrupted_sql_file_error() -> None:
 
         assert "No named SQL statements found" in str(exc_info.value)
 
-        # Clean up
         Path(tf.name).unlink()
 
 
@@ -447,7 +420,6 @@ def test_duplicate_queries_across_files_error() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create two files with same query name
         file1 = base_path / "file1.sql"
         file1.write_text("""
 -- name: duplicate_query
@@ -462,10 +434,8 @@ SELECT 'from file2' as source;
 
         loader = SQLFileLoader()
 
-        # Load first file successfully
         loader.load_sql(file1)
 
-        # Loading second file should raise error due to duplicate name
         with pytest.raises(SQLFileParseError) as exc_info:
             loader.load_sql(file2)
 
@@ -475,25 +445,20 @@ SELECT 'from file2' as source;
 def test_encoding_error_handling() -> None:
     """Test handling of encoding errors."""
     with tempfile.NamedTemporaryFile(mode="wb", suffix=".sql", delete=False) as tf:
-        # Write non-UTF-8 content
         tf.write(b"\xff\xfe-- name: test\nSELECT 1;")
         tf.flush()
 
-        # Create loader with UTF-8 encoding
         loader = SQLFileLoader(encoding="utf-8")
 
-        # Should handle encoding error gracefully
         with pytest.raises(SQLFileParseError):
             loader.load_sql(tf.name)
 
-        # Clean up
         Path(tf.name).unlink()
 
 
 def test_large_file_handling() -> None:
     """Test handling of large SQL files."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
-        # Create a large file with many queries
         content = [
             f"""
 -- name: query_{i:03d}
@@ -510,18 +475,15 @@ LIMIT 1000;
 
         loader = SQLFileLoader()
 
-        # Should handle large file without issues
         loader.load_sql(tf.name)
 
         queries = loader.list_queries()
         assert len(queries) == 100
 
-        # Verify some queries
         assert "query_000" in queries
         assert "query_050" in queries
         assert "query_099" in queries
 
-        # Clean up
         Path(tf.name).unlink()
 
 
@@ -530,13 +492,11 @@ def test_deep_directory_structure_performance() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create deep nested structure (10 levels)
         current_path = base_path
         for i in range(10):
             current_path = current_path / f"level_{i}"
             current_path.mkdir()
 
-            # Add a SQL file at each level
             sql_file = current_path / f"queries_level_{i}.sql"
             sql_file.write_text(
                 f"""
@@ -547,13 +507,11 @@ SELECT {i} as level_number;
 
         loader = SQLFileLoader()
 
-        # Should handle deep structure efficiently
         loader.load_sql(base_path)
 
         queries = loader.list_queries()
         assert len(queries) == 10
 
-        # Verify namespace generation for deep structure
         deepest_query = (
             "level_0.level_1.level_2.level_3.level_4.level_5.level_6.level_7.level_8.level_9.query_at_level_9"
         )
@@ -565,7 +523,6 @@ def test_concurrent_loading_safety() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create multiple SQL files
         for i in range(5):
             sql_file = base_path / f"concurrent_{i}.sql"
             sql_file.write_text(
@@ -577,8 +534,6 @@ SELECT {i} as concurrent_id;
 
         loader = SQLFileLoader()
 
-        # Load all files - should work without issues
-        # In a real concurrent scenario, this would need threading
         for i in range(5):
             sql_file = base_path / f"concurrent_{i}.sql"
             loader.load_sql(sql_file)
@@ -595,7 +550,6 @@ def test_symlink_handling() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create original file
         original_file = base_path / "original.sql"
         original_file.write_text(
             """
@@ -604,12 +558,10 @@ SELECT 'original' as source;
 """
         )
 
-        # Create symbolic link (skip if not supported)
         symlink_file = base_path / "symlinked.sql"
         try:
             symlink_file.symlink_to(original_file)
         except OSError:
-            # Skip test if symlinks not supported
             pytest.skip("Symbolic links not supported on this system")
 
         loader = SQLFileLoader()
@@ -624,7 +576,6 @@ def test_case_sensitivity_handling() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create files with different cases
         (base_path / "Queries.SQL").write_text(
             """
 -- name: uppercase_extension_query
@@ -644,8 +595,6 @@ SELECT 'lowercase' as extension_type;
 
         queries = loader.list_queries()
 
-        # Should load both files (if file system is case-sensitive)
-        # or just one (if case-insensitive)
         assert len(queries) >= 1
         assert "lowercase_extension_query" in queries or "uppercase_extension_query" in queries
 
@@ -655,7 +604,6 @@ def test_unicode_filename_handling() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         base_path = Path(temp_dir)
 
-        # Create file with Unicode name
         unicode_file = base_path / "测试_файл_query.sql"
         try:
             unicode_file.write_text(
@@ -666,7 +614,6 @@ SELECT 'Unicode filename support' as message;
                 encoding="utf-8",
             )
         except OSError:
-            # Skip test if Unicode filenames not supported
             pytest.skip("Unicode filenames not supported on this system")
 
         loader = SQLFileLoader()
@@ -705,12 +652,10 @@ class TestFixturePerformanceTests:
 
             loader = SQLFileLoader()
 
-            # Measure loading time
             start_time = time.time()
             loader.load_sql(fixture_file)
             load_time = time.time() - start_time
 
-            # Record results
             queries = loader.list_queries()
             performance_results[fixture_path] = {
                 "load_time": load_time,
@@ -718,11 +663,9 @@ class TestFixturePerformanceTests:
                 "file_size": fixture_file.stat().st_size,
             }
 
-            # Performance assertions
             assert load_time < 2.0, f"Loading {fixture_path} took too long: {load_time:.3f}s"
             assert len(queries) > 0, f"No queries loaded from {fixture_path}"
 
-            # Test SQL object creation performance
             if queries:
                 test_query = queries[0]
                 sql_start = time.time()
@@ -743,26 +686,21 @@ class TestFixturePerformanceTests:
             fixtures_path / "postgres" / "collection-privileges.sql",
         ]
 
-        # Filter to existing files
         existing_files = [f for f in fixture_files if f.exists()]
         if len(existing_files) < 2:
             pytest.skip("Need at least 2 fixture files for batch loading test")
 
         loader = SQLFileLoader()
 
-        # Load all files at once
         start_time = time.time()
         loader.load_sql(*existing_files)
         total_load_time = time.time() - start_time
 
-        # Verify all queries loaded
         all_queries = loader.list_queries()
         assert len(all_queries) > 0
 
-        # Performance should be reasonable even for multiple files
         assert total_load_time < 3.0, f"Batch loading took too long: {total_load_time:.3f}s"
 
-        # Each file should be tracked
         loaded_files = loader.list_files()
         for fixture_file in existing_files:
             assert str(fixture_file) in loaded_files
@@ -786,17 +724,11 @@ class TestFixturePerformanceTests:
             queries = loader.list_queries()
             files = loader.list_files()
 
-            # Performance assertions
             assert scan_time < 5.0, f"Directory scanning took too long: {scan_time:.3f}s"
             assert len(queries) > 0, f"No queries found in {test_dir}"
             assert len(files) > 0, f"No files loaded from {test_dir}"
 
-            # Verify namespacing worked when loading from subdirectories
-            # Note: When loading the root "postgres" or "mysql" directories directly,
-            # the queries get namespaces based on the subdirectory structure within those dirs.
-            # Some fixtures may be at the root level of these directories without namespacing.
             if test_dir.name in ["postgres", "mysql"]:
-                # At least some queries should exist
                 assert len(queries) > 0, f"No queries found in {test_dir}"
 
     def test_fixture_cache_performance(self, fixtures_path: Path) -> None:
@@ -807,21 +739,17 @@ class TestFixturePerformanceTests:
         if not fixture_file.exists():
             pytest.skip("Large fixture file not available")
 
-        # First load - should populate cache
         loader1 = SQLFileLoader()
         start_time = time.time()
         loader1.load_sql(fixture_file)
         first_load_time = time.time() - start_time
 
-        # Second load - should benefit from cache (same loader)
         start_time = time.time()
-        loader1.load_sql(fixture_file)  # Load again
+        loader1.load_sql(fixture_file)
         cached_load_time = time.time() - start_time
 
-        # Cache should make second load faster
         assert cached_load_time <= first_load_time, "Cached load should not be slower than first load"
 
-        # Both loads should produce same results
         queries1 = loader1.list_queries()
         assert len(queries1) > 0
 
@@ -834,7 +762,6 @@ class TestFixturePerformanceTests:
         loaders = []
         load_times = []
 
-        # Simulate multiple loaders accessing same file
         for i in range(5):
             loader = SQLFileLoader()
 
@@ -845,14 +772,11 @@ class TestFixturePerformanceTests:
             loaders.append(loader)
             load_times.append(load_time)
 
-            # Each loader should work independently
             queries = loader.list_queries()
             assert len(queries) > 0
 
-            # Performance should remain consistent
             assert load_time < 1.0, f"Load {i + 1} took too long: {load_time:.3f}s"
 
-        # All loaders should have same queries
         base_queries = set(loaders[0].list_queries())
         for loader in loaders[1:]:
             assert set(loader.list_queries()) == base_queries
@@ -871,18 +795,14 @@ class TestFixturePerformanceTests:
 
             loader.load_sql(fixture_file)
 
-            # Verify memory structures are reasonable
             queries = loader.list_queries()
 
-            # Should have more queries after loading
             assert len(queries) > initial_query_count
 
-            # Each query should be accessible
-            for query_name in queries[:5]:  # Test first 5 to avoid long test
+            for query_name in queries[:5]:
                 sql_obj = loader.get_sql(query_name)
                 assert isinstance(sql_obj, SQL)
-                # SQL object should not be excessively large
-                assert len(str(sql_obj)) < 50000  # Reasonable limit
 
-            # Update baseline
+                assert len(str(sql_obj)) < 50000
+
             initial_query_count = len(queries)

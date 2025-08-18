@@ -1,22 +1,6 @@
-"""SQL statement with complete backward compatibility.
+"""SQL statement and configuration management."""
 
-This module implements the core SQL class and StatementConfig with complete
-backward compatibility while using an optimized processing pipeline.
-
-Components:
-- SQL class: SQL statement with identical external interface
-- StatementConfig: Complete backward compatibility for all driver requirements
-- ProcessedState: Cached processing results
-
-Features:
-- Lazy compilation: Only compile when needed
-- Cached properties: Avoid redundant computation
-- Complete StatementConfig compatibility
-- Integrated parameter processing and compilation caching
-"""
-
-import contextlib
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Final, Optional, Union
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -46,7 +30,10 @@ __all__ = (
 )
 logger = get_logger("sqlspec.core.statement")
 
-SQL_CONFIG_SLOTS = (
+RETURNS_ROWS_OPERATIONS: Final = {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA"}
+MODIFYING_OPERATIONS: Final = {"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"}
+
+SQL_CONFIG_SLOTS: Final = (
     "pre_process_steps",
     "post_process_steps",
     "dialect",
@@ -65,7 +52,7 @@ SQL_CONFIG_SLOTS = (
     "parameter_validator",
 )
 
-PROCESSED_STATE_SLOTS = (
+PROCESSED_STATE_SLOTS: Final = (
     "compiled_sql",
     "execution_parameters",
     "parsed_expression",
@@ -77,11 +64,7 @@ PROCESSED_STATE_SLOTS = (
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ProcessedState:
-    """Cached processing results for SQL statements.
-
-    Stores the results of processing to avoid redundant compilation,
-    parsing, and parameter processing.
-    """
+    """Processing results for SQL statements."""
 
     __slots__ = PROCESSED_STATE_SLOTS
     operation_type: "OperationType"
@@ -106,20 +89,9 @@ class ProcessedState:
         return hash((self.compiled_sql, str(self.execution_parameters), self.operation_type))
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SQL:
-    """SQL statement with complete backward compatibility.
-
-    Provides 100% backward compatibility while using an optimized
-    core processing pipeline.
-
-    Features:
-    - Lazy evaluation with cached properties
-    - Integrated parameter processing pipeline
-    - Complete StatementFilter and execution mode support
-    - Same parameter processing behavior
-    - Same result types and interfaces
-    """
+    """SQL statement with parameter and filter support."""
 
     __slots__ = (
         "_dialect",
@@ -152,9 +124,9 @@ class SQL:
             is_many: Mark as execute_many operation
             **kwargs: Additional parameters
         """
-        self._statement_config = statement_config or self._create_auto_config(statement, parameters, kwargs)
-
-        self._dialect = self._normalize_dialect(self._statement_config.dialect)
+        config = statement_config or self._create_auto_config(statement, parameters, kwargs)
+        self._statement_config = config
+        self._dialect = self._normalize_dialect(config.dialect)
         self._processed_state: Union[EmptyEnum, ProcessedState] = Empty
         self._hash: Optional[int] = None
         self._filters: list[StatementFilter] = []
@@ -170,7 +142,8 @@ class SQL:
             if isinstance(statement, str):
                 self._raw_sql = statement
             else:
-                self._raw_sql = statement.sql(dialect=str(self._dialect) if self._dialect else None)
+                dialect = self._dialect
+                self._raw_sql = statement.sql(dialect=str(dialect) if dialect else None)
 
             self._is_many = is_many if is_many is not None else self._should_auto_detect_many(parameters)
 
@@ -189,10 +162,7 @@ class SQL:
             return None
         if isinstance(dialect, str):
             return dialect
-        try:
-            return dialect.__class__.__name__.lower()
-        except AttributeError:
-            return str(dialect)
+        return dialect.__class__.__name__.lower()
 
     def _init_from_sql_object(self, sql_obj: "SQL") -> None:
         """Initialize from existing SQL object."""
@@ -209,8 +179,8 @@ class SQL:
         """Auto-detect execute_many from parameter structure."""
         if len(parameters) == 1 and isinstance(parameters[0], list):
             param_list = parameters[0]
-            if len(param_list) > 1 and all(isinstance(item, (tuple, list)) for item in param_list):
-                return True
+            if param_list and all(isinstance(item, (tuple, list)) for item in param_list):
+                return len(param_list) > 1
         return False
 
     def _process_parameters(self, *parameters: Any, dialect: Optional[str] = None, **kwargs: Any) -> None:
@@ -221,7 +191,6 @@ class SQL:
         if "is_script" in kwargs:
             self._is_script = bool(kwargs.pop("is_script"))
 
-        # Optimize parameter filtering with direct iteration
         filters: list[StatementFilter] = []
         actual_params: list[Any] = []
         for p in parameters:
@@ -250,7 +219,6 @@ class SQL:
 
         self._named_parameters.update(kwargs)
 
-    # PRESERVED PROPERTIES - Exact same interface as existing SQL class
     @property
     def sql(self) -> str:
         """Get the raw SQL string - no compilation triggered."""
@@ -278,8 +246,6 @@ class SQL:
     @property
     def expression(self) -> "Optional[exp.Expression]":
         """SQLGlot expression - only available after explicit compilation."""
-        # This property should only be accessed after compilation
-        # If not compiled yet, return None
         if self._processed_state is not Empty:
             return self._processed_state.parsed_expression
         return None
@@ -323,11 +289,21 @@ class SQL:
 
     def returns_rows(self) -> bool:
         """Check if statement returns rows."""
-        sql_upper = self._raw_sql.strip().upper()
-        if any(sql_upper.startswith(op) for op in ("SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA")):
+        if self._processed_state is Empty:
+            self.compile()
+            if self._processed_state is Empty:
+                return False
+
+        op_type = self._processed_state.operation_type
+        if op_type in RETURNS_ROWS_OPERATIONS:
             return True
 
-        return "RETURNING" in sql_upper
+        if self._processed_state.parsed_expression:
+            expr = self._processed_state.parsed_expression
+            if isinstance(expr, (exp.Insert, exp.Update, exp.Delete)) and expr.args.get("returning"):
+                return True
+
+        return False
 
     def is_modifying_operation(self) -> bool:
         """Check if the SQL statement is a modifying operation.
@@ -335,29 +311,33 @@ class SQL:
         Returns:
             True if the operation modifies data (INSERT/UPDATE/DELETE)
         """
-        expression = self.expression
-        if expression and isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
+        if self._processed_state is Empty:
+            return False
+
+        op_type = self._processed_state.operation_type
+        if op_type in MODIFYING_OPERATIONS:
             return True
 
-        sql_upper = self.sql.strip().upper()
-        modifying_operations = ("INSERT", "UPDATE", "DELETE")
-        return any(sql_upper.startswith(op) for op in modifying_operations)
+        if self._processed_state.parsed_expression:
+            return isinstance(self._processed_state.parsed_expression, (exp.Insert, exp.Update, exp.Delete, exp.Merge))
+
+        return False
 
     def compile(self) -> tuple[str, Any]:
         """Explicitly compile the SQL statement."""
         if self._processed_state is Empty:
             try:
-                # Avoid unnecessary variable assignment
-                processor = SQLProcessor(self._statement_config)
-                compiled_result = processor.compile(
-                    self._raw_sql, self._named_parameters or self._positional_parameters, is_many=self._is_many
-                )
+                config = self._statement_config
+                raw_sql = self._raw_sql
+                params = self._named_parameters or self._positional_parameters
+                is_many = self._is_many
+                compiled_result = SQLProcessor(config).compile(raw_sql, params, is_many=is_many)
 
                 self._processed_state = ProcessedState(
                     compiled_sql=compiled_result.compiled_sql,
                     execution_parameters=compiled_result.execution_parameters,
                     parsed_expression=compiled_result.expression,
-                    operation_type=compiled_result.operation_type,  # pyright: ignore[reportArgumentType]
+                    operation_type=compiled_result.operation_type,
                     validation_errors=[],
                     is_many=self._is_many,
                 )
@@ -366,7 +346,7 @@ class SQL:
                 self._processed_state = ProcessedState(
                     compiled_sql=self._raw_sql,
                     execution_parameters=self._named_parameters or self._positional_parameters,
-                    operation_type="UNKNOWN",  # pyright: ignore[reportArgumentType]
+                    operation_type="UNKNOWN",
                     is_many=self._is_many,
                 )
 
@@ -374,10 +354,10 @@ class SQL:
 
     def as_script(self) -> "SQL":
         """Mark as script execution."""
-        new_sql = SQL(
-            self._raw_sql, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
-        )
-        # Preserve accumulated parameters when marking as script
+        original_params = self._original_parameters
+        config = self._statement_config
+        is_many = self._is_many
+        new_sql = SQL(self._raw_sql, *original_params, statement_config=config, is_many=is_many)
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
@@ -395,7 +375,6 @@ class SQL:
             is_many=self._is_many,
             **kwargs,
         )
-        # Only preserve accumulated parameters when no explicit parameters are provided
         if parameters is None:
             new_sql._named_parameters.update(self._named_parameters)
             new_sql._positional_parameters = self._positional_parameters.copy()
@@ -412,9 +391,10 @@ class SQL:
         Returns:
             New SQL instance with the added parameter
         """
-        new_sql = SQL(
-            self._raw_sql, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
-        )
+        original_params = self._original_parameters
+        config = self._statement_config
+        is_many = self._is_many
+        new_sql = SQL(self._raw_sql, *original_params, statement_config=config, is_many=is_many)
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._named_parameters[name] = value
         new_sql._positional_parameters = self._positional_parameters.copy()
@@ -430,20 +410,12 @@ class SQL:
         Returns:
             New SQL instance with the WHERE condition applied
         """
-        # Parse current SQL with copy=False optimization
-        current_expr = None
-        with contextlib.suppress(ParseError):
+        try:
             current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+        except ParseError:
+            subquery_sql = f"SELECT * FROM ({self._raw_sql}) AS subquery"
+            current_expr = sqlglot.parse_one(subquery_sql, dialect=self._dialect)
 
-        if current_expr is None:
-            try:
-                current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
-            except ParseError:
-                # Use f-string optimization and copy=False
-                subquery_sql = f"SELECT * FROM ({self._raw_sql}) AS subquery"
-                current_expr = sqlglot.parse_one(subquery_sql, dialect=self._dialect)
-
-        # Parse condition with copy=False optimization
         condition_expr: exp.Expression
         if isinstance(condition, str):
             try:
@@ -453,19 +425,16 @@ class SQL:
         else:
             condition_expr = condition
 
-        # Apply WHERE clause
         if isinstance(current_expr, exp.Select) or supports_where(current_expr):
             new_expr = current_expr.where(condition_expr, copy=False)
         else:
             new_expr = exp.Select().from_(current_expr).where(condition_expr, copy=False)
 
-        # Generate SQL and create new instance
-        new_sql_text = new_expr.sql(dialect=self._dialect)
-        new_sql = SQL(
-            new_sql_text, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
-        )
+        original_params = self._original_parameters
+        config = self._statement_config
+        is_many = self._is_many
+        new_sql = SQL(new_expr, *original_params, statement_config=config, is_many=is_many)
 
-        # Preserve state efficiently
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
@@ -474,11 +443,12 @@ class SQL:
     def __hash__(self) -> int:
         """Hash value with optimized computation."""
         if self._hash is None:
-            # Pre-compute tuple components to avoid multiple tuple() calls
             positional_tuple = tuple(self._positional_parameters)
             named_tuple = tuple(sorted(self._named_parameters.items())) if self._named_parameters else ()
-
-            self._hash = hash((self._raw_sql, positional_tuple, named_tuple, self._is_many, self._is_script))
+            raw_sql = self._raw_sql
+            is_many = self._is_many
+            is_script = self._is_script
+            self._hash = hash((raw_sql, positional_tuple, named_tuple, is_many, is_script))
         return self._hash
 
     def __eq__(self, other: object) -> bool:
@@ -495,11 +465,12 @@ class SQL:
 
     def __repr__(self) -> str:
         """String representation."""
-        params_str = ""
+        params_parts = []
+        if self._positional_parameters:
+            params_parts.append(f"params={self._positional_parameters}")
         if self._named_parameters:
-            params_str = f", named_params={self._named_parameters}"
-        elif self._positional_parameters:
-            params_str = f", params={self._positional_parameters}"
+            params_parts.append(f"named_params={self._named_parameters}")
+        params_str = f", {', '.join(params_parts)}" if params_parts else ""
 
         flags = []
         if self._is_many:
@@ -511,18 +482,9 @@ class SQL:
         return f"SQL({self._raw_sql!r}{params_str}{flags_str})"
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class StatementConfig:
-    """Configuration for SQL statement processing.
-
-    Provides all attributes that drivers expect for SQL processing.
-
-    Features:
-    - Complete parameter processing configuration
-    - Caching and execution mode interfaces
-    - Support for various database-specific operations
-    - Immutable updates via replace() method
-    """
+    """Configuration for SQL statement processing."""
 
     __slots__ = SQL_CONFIG_SLOTS
 
@@ -549,16 +511,16 @@ class StatementConfig:
 
         Args:
             parameter_config: Parameter style configuration
-            enable_parsing: Enable SQL parsing using sqlglot
-            enable_validation: Run SQL validators to check for safety issues
+            enable_parsing: Enable SQL parsing
+            enable_validation: Run SQL validators
             enable_transformations: Apply SQL transformers
-            enable_analysis: Run SQL analyzers for metadata extraction
+            enable_analysis: Run SQL analyzers
             enable_expression_simplification: Apply expression simplification
             enable_parameter_type_wrapping: Wrap parameters with type information
             enable_caching: Cache processed SQL statements
             parameter_converter: Handles parameter style conversions
             parameter_validator: Validates parameter usage and styles
-            dialect: SQL dialect for parsing and generation
+            dialect: SQL dialect
             pre_process_steps: Optional list of preprocessing steps
             post_process_steps: Optional list of postprocessing steps
             execution_mode: Special execution mode
@@ -599,7 +561,24 @@ class StatementConfig:
                 msg = f"{key!r} is not a field in {type(self).__name__}"
                 raise TypeError(msg)
 
-        current_kwargs = {slot: getattr(self, slot) for slot in SQL_CONFIG_SLOTS}
+        current_kwargs: dict[str, Any] = {
+            "parameter_config": self.parameter_config,
+            "enable_parsing": self.enable_parsing,
+            "enable_validation": self.enable_validation,
+            "enable_transformations": self.enable_transformations,
+            "enable_analysis": self.enable_analysis,
+            "enable_expression_simplification": self.enable_expression_simplification,
+            "enable_parameter_type_wrapping": self.enable_parameter_type_wrapping,
+            "enable_caching": self.enable_caching,
+            "parameter_converter": self.parameter_converter,
+            "parameter_validator": self.parameter_validator,
+            "dialect": self.dialect,
+            "pre_process_steps": self.pre_process_steps,
+            "post_process_steps": self.post_process_steps,
+            "execution_mode": self.execution_mode,
+            "execution_args": self.execution_args,
+            "output_transformer": self.output_transformer,
+        }
         current_kwargs.update(kwargs)
         return type(self)(**current_kwargs)
 
@@ -620,10 +599,24 @@ class StatementConfig:
 
     def __repr__(self) -> str:
         """String representation of the StatementConfig instance."""
-        field_strs = []
-        for slot in SQL_CONFIG_SLOTS:
-            value = getattr(self, slot)
-            field_strs.append(f"{slot}={value!r}")
+        field_strs = [
+            f"parameter_config={self.parameter_config!r}",
+            f"enable_parsing={self.enable_parsing!r}",
+            f"enable_validation={self.enable_validation!r}",
+            f"enable_transformations={self.enable_transformations!r}",
+            f"enable_analysis={self.enable_analysis!r}",
+            f"enable_expression_simplification={self.enable_expression_simplification!r}",
+            f"enable_parameter_type_wrapping={self.enable_parameter_type_wrapping!r}",
+            f"enable_caching={self.enable_caching!r}",
+            f"parameter_converter={self.parameter_converter!r}",
+            f"parameter_validator={self.parameter_validator!r}",
+            f"dialect={self.dialect!r}",
+            f"pre_process_steps={self.pre_process_steps!r}",
+            f"post_process_steps={self.post_process_steps!r}",
+            f"execution_mode={self.execution_mode!r}",
+            f"execution_args={self.execution_args!r}",
+            f"output_transformer={self.output_transformer!r}",
+        ]
         return f"{self.__class__.__name__}({', '.join(field_strs)})"
 
     def __eq__(self, other: object) -> bool:
@@ -631,35 +624,32 @@ class StatementConfig:
         if not isinstance(other, type(self)):
             return False
 
-        for slot in SQL_CONFIG_SLOTS:
-            self_val = getattr(self, slot)
-            other_val = getattr(other, slot)
+        if not self._compare_parameter_configs(self.parameter_config, other.parameter_config):
+            return False
 
-            if hasattr(self_val, "__class__") and hasattr(other_val, "__class__"):
-                if self_val.__class__ != other_val.__class__:
-                    return False
-                if slot == "parameter_config":
-                    if not self._compare_parameter_configs(self_val, other_val):
-                        return False
-                elif slot in {"parameter_converter", "parameter_validator"}:
-                    continue
-                elif self_val != other_val:
-                    return False
-            elif self_val != other_val:
-                return False
-        return True
+        return (
+            self.enable_parsing == other.enable_parsing
+            and self.enable_validation == other.enable_validation
+            and self.enable_transformations == other.enable_transformations
+            and self.enable_analysis == other.enable_analysis
+            and self.enable_expression_simplification == other.enable_expression_simplification
+            and self.enable_parameter_type_wrapping == other.enable_parameter_type_wrapping
+            and self.enable_caching == other.enable_caching
+            and self.dialect == other.dialect
+            and self.pre_process_steps == other.pre_process_steps
+            and self.post_process_steps == other.post_process_steps
+            and self.execution_mode == other.execution_mode
+            and self.execution_args == other.execution_args
+            and self.output_transformer == other.output_transformer
+        )
 
     def _compare_parameter_configs(self, config1: Any, config2: Any) -> bool:
         """Compare parameter configs by key attributes."""
-        try:
-            return (
-                config1.default_parameter_style == config2.default_parameter_style
-                and config1.supported_parameter_styles == config2.supported_parameter_styles
-                and getattr(config1, "supported_execution_parameter_styles", None)
-                == getattr(config2, "supported_execution_parameter_styles", None)
-            )
-        except AttributeError:
-            return False
+        return bool(
+            config1.default_parameter_style == config2.default_parameter_style
+            and config1.supported_parameter_styles == config2.supported_parameter_styles
+            and config1.supported_execution_parameter_styles == config2.supported_execution_parameter_styles
+        )
 
 
 def get_default_config() -> StatementConfig:

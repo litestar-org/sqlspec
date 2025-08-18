@@ -27,8 +27,6 @@ from sqlspec.core.parameters import (
     wrap_with_type,
 )
 
-# ParameterStyle function-based tests
-
 
 @pytest.mark.parametrize(
     "style,expected_value",
@@ -48,11 +46,8 @@ from sqlspec.core.parameters import (
 def test_parameter_style_values(style: ParameterStyle, expected_value: str) -> None:
     """Test ParameterStyle enum values match expected strings."""
     assert style.value == expected_value
-    # ParameterStyle inherits from str, so should behave like a string
+
     assert style == expected_value
-
-
-# TypedParameter function-based tests
 
 
 def test_typed_parameter_basic() -> None:
@@ -79,14 +74,11 @@ def test_typed_parameter_hash_equality() -> None:
     param2 = TypedParameter(True, bool, "active")
     param3 = TypedParameter(False, bool, "active")
 
-    # Same parameters should be equal and have same hash
     assert param1 == param2
     assert hash(param1) == hash(param2)
 
-    # Different values should not be equal
     assert param1 != param3
 
-    # Hash should be cached
     first_hash = hash(param1)
     second_hash = hash(param1)
     assert first_hash == second_hash
@@ -124,12 +116,9 @@ def test_typed_parameter_with_different_types(value: Any, expected_type: type) -
     assert param.value == value
 
 
-# Type wrapping function-based tests
-
-
 def test_wrap_with_type_basic_types() -> None:
     """Test type wrapping for basic Python types."""
-    # Types that need wrapping
+
     bool_result = wrap_with_type(True, "is_active")
     assert isinstance(bool_result, TypedParameter)
     assert bool_result.value is True
@@ -159,14 +148,11 @@ def test_wrap_with_type_datetime_types() -> None:
 
 def test_wrap_with_type_no_wrapping_needed() -> None:
     """Test types that don't need wrapping are returned unchanged."""
-    # Strings, integers (small), floats don't need wrapping
+
     assert wrap_with_type("test") == "test"
     assert wrap_with_type(42) == 42
     assert wrap_with_type(math.pi) == math.pi
     assert wrap_with_type(None) is None
-
-
-# ParameterInfo function-based tests
 
 
 @pytest.mark.parametrize(
@@ -202,15 +188,12 @@ def test_mixed_named_and_numeric_parameters() -> None:
     sql = "SELECT :name::text as name, $2::int as age"
     parameters = {"name": "Mixed", "age": 25}
 
-    # Create converter
     converter = ParameterConverter()
 
-    # Convert to numeric style (like psqlpy)
     converted_sql, converted_params = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.NUMERIC, is_many=False
     )
 
-    # Should convert to two numeric parameters in correct order
     assert converted_sql == "SELECT $1::text as name, $2::int as age"
     assert converted_params == ("Mixed", 25)
     assert len(converted_params) == 2
@@ -221,13 +204,12 @@ def test_mixed_parameter_style_with_processor() -> None:
     sql = "SELECT :name::text as name, $2::int as age"
     parameters = {"name": "Test", "age": 30}
 
-    # Create processor with psqlpy-like config
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,
         supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        allow_mixed_parameter_styles=False,  # psqlpy setting
+        allow_mixed_parameter_styles=False,
         preserve_parameter_format=True,
     )
 
@@ -236,7 +218,6 @@ def test_mixed_parameter_style_with_processor() -> None:
         sql=sql, parameters=parameters, config=config, dialect="postgres", is_many=False
     )
 
-    # Should produce correct number of parameters
     assert processed_sql == "SELECT $1::text as name, $2::int as age"
     assert processed_params == ("Test", 30)
     assert len(processed_params) == 2
@@ -244,7 +225,7 @@ def test_mixed_parameter_style_with_processor() -> None:
 
 def test_mixed_parameters_order_sensitivity() -> None:
     """Test that mixed parameters maintain correct order mapping."""
-    # Test case where order matters
+
     sql = "SELECT $1::text as first, :middle::text as mid, $3::int as last"
     parameters = {"first": "A", "middle": "B", "last": "C"}
 
@@ -253,9 +234,8 @@ def test_mixed_parameters_order_sensitivity() -> None:
         sql, parameters, ParameterStyle.NUMERIC, is_many=False
     )
 
-    # Should maintain correct positional mapping
     assert converted_sql == "SELECT $1::text as first, $2::text as mid, $3::int as last"
-    # Parameters should be mapped by ordinal position: first, middle, last
+
     assert converted_params == ("A", "B", "C")
     assert len(converted_params) == 3
 
@@ -270,7 +250,6 @@ def test_mixed_parameters_with_repeated_numeric() -> None:
         sql, parameters, ParameterStyle.NUMERIC, is_many=False
     )
 
-    # Should handle repeated $2 parameter correctly
     assert converted_sql == "SELECT $1::text as name, $2::int as age, $2::int as age2"
     assert converted_params == ("User", 25)
     assert len(converted_params) == 2
@@ -286,7 +265,6 @@ def test_edge_case_all_numeric_parameters() -> None:
         sql, parameters, ParameterStyle.NUMERIC, is_many=False
     )
 
-    # Should pass through unchanged for pure numeric
     assert converted_sql == "SELECT $1::text as name, $2::int as age"
     assert converted_params == ("Alice", 30)
 
@@ -301,7 +279,6 @@ def test_edge_case_all_named_parameters() -> None:
         sql, parameters, ParameterStyle.NUMERIC, is_many=False
     )
 
-    # Should convert all to numeric style
     assert converted_sql == "SELECT $1::text as name, $2::int as age"
     assert converted_params == ("Bob", 35)
 
@@ -313,11 +290,8 @@ def test_parameter_info_repr() -> None:
 
     assert "ParameterInfo" in repr_str
     assert "test_param" in repr_str
-    assert "ParameterStyle.NAMED_COLON" in repr_str  # Enum representation includes class name
+    assert "ParameterStyle.NAMED_COLON" in repr_str
     assert "10" in repr_str
-
-
-# ParameterStyleConfig function-based tests
 
 
 def test_parameter_style_config_basic() -> None:
@@ -371,14 +345,9 @@ def test_parameter_style_config_hash() -> None:
     config2 = ParameterStyleConfig(ParameterStyle.QMARK)
     config3 = ParameterStyleConfig(ParameterStyle.NAMED_COLON)
 
-    # Same configurations should have same hash
     assert config1.hash() == config2.hash()
 
-    # Different configurations should have different hash
     assert config1.hash() != config3.hash()
-
-
-# ParameterValidator function-based tests
 
 
 @pytest.fixture
@@ -402,7 +371,7 @@ def validator() -> ParameterValidator:
         ("SELECT * FROM users WHERE id = %(id)s", 1, [ParameterStyle.NAMED_PYFORMAT]),
         ("SELECT * FROM users WHERE name = %s", 1, [ParameterStyle.POSITIONAL_PYFORMAT]),
         ("SELECT * FROM users WHERE id = @id", 1, [ParameterStyle.NAMED_AT]),
-        ("SELECT * FROM users WHERE id = $1", 1, [ParameterStyle.NUMERIC]),  # PostgreSQL numeric parameter style
+        ("SELECT * FROM users WHERE id = $1", 1, [ParameterStyle.NUMERIC]),
         ("SELECT * FROM users WHERE name = $name", 1, [ParameterStyle.NAMED_DOLLAR]),
         ("SELECT * FROM users WHERE id = :1", 1, [ParameterStyle.POSITIONAL_COLON]),
     ],
@@ -426,10 +395,10 @@ def test_extract_parameters(
         ("SELECT $tag$content with ? and :param$tag$", True),
         ("SELECT * FROM test -- comment with ? and :param", True),
         ("SELECT * FROM test /* comment with ? and :param */", True),
-        ("SELECT * FROM json WHERE data ?? 'key'", True),  # PostgreSQL JSON operator
-        ("SELECT * FROM json WHERE data ?| array['key']", True),  # PostgreSQL JSON operator
-        ("SELECT * FROM json WHERE data ?& array['key']", True),  # PostgreSQL JSON operator
-        ("SELECT * FROM users WHERE id::int = 5", False),  # PostgreSQL cast operator
+        ("SELECT * FROM json WHERE data ?? 'key'", True),
+        ("SELECT * FROM json WHERE data ?| array['key']", True),
+        ("SELECT * FROM json WHERE data ?& array['key']", True),
+        ("SELECT * FROM users WHERE id::int = 5", False),
     ],
 )
 def test_extract_parameters_ignores_special_cases(
@@ -441,7 +410,6 @@ def test_extract_parameters_ignores_special_cases(
     if should_be_ignored:
         assert len(parameters) == 0
     else:
-        # Should not mistake cast operator for parameter
         assert all(p.placeholder_text != "::int" for p in parameters)
 
 
@@ -452,7 +420,6 @@ def test_extract_parameters_caching(validator: ParameterValidator) -> None:
     parameters1 = validator.extract_parameters(sql)
     parameters2 = validator.extract_parameters(sql)
 
-    # Should return the same cached list
     assert parameters1 is parameters2
 
 
@@ -476,7 +443,7 @@ def test_extract_parameters_complex_sql(validator: ParameterValidator) -> None:
     assert ParameterStyle.NAMED_PYFORMAT in styles
     assert ParameterStyle.QMARK in styles
     assert ParameterStyle.NAMED_AT in styles
-    # $1 is correctly treated as NUMERIC in PostgreSQL
+
     assert ParameterStyle.NUMERIC in styles
 
 
@@ -519,16 +486,10 @@ def test_get_sqlglot_incompatible_styles(
     assert incompatible == expected_incompatible
 
 
-# ParameterConverter function-based tests
-
-
 @pytest.fixture
 def converter() -> ParameterConverter:
     """Create a ParameterConverter instance."""
     return ParameterConverter()
-
-
-# Phase 1 SQLGlot normalization function-based tests
 
 
 @pytest.mark.parametrize(
@@ -536,10 +497,10 @@ def converter() -> ParameterConverter:
     [
         ("SELECT * FROM users WHERE id = ?", "postgres", False),
         ("SELECT * FROM users WHERE id = :name", "postgres", False),
-        ("SELECT * FROM users WHERE id = %s", "postgres", False),  # postgres handles %s
-        ("SELECT * FROM users WHERE id = %s", "mysql", True),  # mysql has modulo conflict
+        ("SELECT * FROM users WHERE id = %s", "postgres", False),
+        ("SELECT * FROM users WHERE id = %s", "mysql", True),
         ("SELECT * FROM users WHERE id = %(name)s", "mysql", True),
-        ("SELECT * FROM users WHERE id = :1", "postgres", True),  # positional colon incompatible
+        ("SELECT * FROM users WHERE id = :1", "postgres", True),
         ("SELECT * FROM users WHERE id = :1", "oracle", True),
     ],
 )
@@ -551,12 +512,11 @@ def test_normalize_sql_for_parsing(
 
     if expected_needs_conversion:
         assert normalized_sql != sql
-        # Should contain canonical :param_N format
+
         assert ":param_" in normalized_sql
     else:
         assert normalized_sql == sql
 
-    # Original parameter info should be preserved
     assert len(param_info) > 0
 
 
@@ -565,13 +525,11 @@ def test_normalize_sql_pyformat_conversion(converter: ParameterConverter) -> Non
     sql = "SELECT * FROM users WHERE name = %s AND id = %(user_id)s"
     normalized_sql, param_info = converter.normalize_sql_for_parsing(sql, "mysql")
 
-    # Should convert to canonical format
     assert "%s" not in normalized_sql
     assert "%(user_id)s" not in normalized_sql
     assert ":param_0" in normalized_sql
     assert ":param_1" in normalized_sql
 
-    # Original parameter info preserved
     assert len(param_info) == 2
     assert param_info[0].style == ParameterStyle.POSITIONAL_PYFORMAT
     assert param_info[1].style == ParameterStyle.NAMED_PYFORMAT
@@ -583,35 +541,24 @@ def test_normalize_sql_positional_colon_conversion(converter: ParameterConverter
     sql = "SELECT * FROM users WHERE id = :1 AND name = :2"
     normalized_sql, param_info = converter.normalize_sql_for_parsing(sql, "oracle")
 
-    # Should convert to canonical format with ordinal-based names
     assert ":1" not in normalized_sql
     assert ":2" not in normalized_sql
-    assert ":param_0" in normalized_sql  # Uses ordinal numbering
+    assert ":param_0" in normalized_sql
     assert ":param_1" in normalized_sql
 
-    # Original parameter info preserved
     assert len(param_info) == 2
     assert param_info[0].style == ParameterStyle.POSITIONAL_COLON
     assert param_info[1].style == ParameterStyle.POSITIONAL_COLON
 
 
-# Phase 2 execution format conversion function-based tests
-
-
 @pytest.mark.parametrize(
     "sql,parameters,target_style,expected_sql_pattern,expected_param_format",
     [
-        # Convert to qmark
         ("SELECT * FROM users WHERE name = :param_0", ["john"], ParameterStyle.QMARK, "?", list),
-        # Convert to numeric
         ("SELECT * FROM users WHERE name = :param_0", ["john"], ParameterStyle.NUMERIC, "$1", list),
-        # Convert to pyformat
         ("SELECT * FROM users WHERE name = :param_0", ["john"], ParameterStyle.POSITIONAL_PYFORMAT, "%s", list),
-        # Convert to named colon (generic parameter name)
         ("SELECT * FROM users WHERE id = ?", {"id": 123}, ParameterStyle.NAMED_COLON, ":param_0", dict),
-        # Convert to named pyformat (generic parameter name)
         ("SELECT * FROM users WHERE id = ?", {"id": 123}, ParameterStyle.NAMED_PYFORMAT, "%(param_0)s", dict),
-        # Convert to named at (generic parameter name)
         ("SELECT * FROM users WHERE id = ?", {"id": 123}, ParameterStyle.NAMED_AT, "@param_0", dict),
     ],
 )
@@ -637,27 +584,24 @@ def test_convert_static_embedding(converter: ParameterConverter) -> None:
 
     converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
 
-    # Parameters should be embedded in SQL
     assert "123" in converted_sql
     assert "TRUE" in converted_sql
     assert "?" not in converted_sql
-    assert converted_params is None  # No parameters needed for static
+    assert converted_params is None
 
 
 def test_convert_static_embedding_parameter_reuse(converter: ParameterConverter) -> None:
     """Test STATIC style parameter embedding with parameter reuse."""
-    # Test numeric parameter reuse
+
     sql = "SELECT $1, $2, $1, $3, $1"
     parameters = [100, 200, 300]
 
     converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
 
-    # Parameters should be embedded with correct reuse
     expected = "SELECT 100, 200, 100, 300, 100"
     assert converted_sql == expected
     assert converted_params is None
 
-    # Test named parameter reuse
     sql_named = "SELECT :value, :other, :value"
     params_named = {"value": "hello", "other": 42}
 
@@ -674,10 +618,9 @@ def test_convert_parameter_format_preservation(converter: ParameterConverter) ->
     """Test parameter format preservation (list vs tuple vs dict)."""
     sql = "SELECT * FROM users WHERE id = ? AND name = ?"
 
-    # Test tuple preservation
     tuple_params = (123, "john")
     _, converted_params = converter.convert_placeholder_style(sql, tuple_params, ParameterStyle.QMARK)
-    # Note: Current implementation converts to list, but tests format conversion logic
+
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 2
 
@@ -691,12 +634,8 @@ def test_convert_executemany_handling(converter: ParameterConverter) -> None:
         sql, many_parameters, ParameterStyle.QMARK, is_many=True
     )
 
-    # SQL should be converted but parameters preserved for executemany
     assert "?" in converted_sql
     assert converted_params == many_parameters
-
-
-# ParameterProcessor function-based tests
 
 
 @pytest.fixture
@@ -736,14 +675,12 @@ def test_process_no_parameters(processor: ParameterProcessor, basic_config: Para
 def test_process_type_wrapping(processor: ParameterProcessor, basic_config: ParameterStyleConfig) -> None:
     """Test type wrapping in parameter processing."""
     sql = "SELECT * FROM users WHERE active = ?"
-    parameters = [True]  # Boolean that needs wrapping
+    parameters = [True]
 
     final_sql, final_params = processor.process(sql, parameters, basic_config)
 
-    # Should wrap boolean value
-    assert final_sql == sql  # No SQL conversion needed
+    assert final_sql == sql
     assert len(final_params) == 1
-    # Note: Type wrapping happens internally, final output may be unwrapped
 
 
 def test_process_type_coercion(processor: ParameterProcessor, advanced_config: ParameterStyleConfig) -> None:
@@ -753,17 +690,14 @@ def test_process_type_coercion(processor: ParameterProcessor, advanced_config: P
 
     _, final_params = processor.process(sql, parameters, advanced_config, "postgres")
 
-    # Boolean should be coerced to integer (1) or wrapped in TypedParameter
-    # Result might be in different format (tuple vs dict) depending on conversion
     if isinstance(final_params, dict):
         value = final_params["active"]
-        # Value might be coerced directly or wrapped in TypedParameter
+
         if hasattr(value, "value"):
-            assert value.value == 1 or value.value is True  # Boolean coercion
+            assert value.value == 1 or value.value is True
         else:
             assert value == 1 or value is True
     elif isinstance(final_params, (list, tuple)):
-        # Check if any value is 1 or True (possibly wrapped)
         found_coerced = False
         for param in final_params:
             if hasattr(param, "value"):
@@ -783,11 +717,9 @@ def test_process_output_transformation(processor: ParameterProcessor, advanced_c
 
     final_sql, final_params = processor.process(sql, parameters, advanced_config, "postgres")
 
-    # SQL should be upper-cased by output transformer
     assert final_sql.isupper()
     assert "SELECT" in final_sql
 
-    # Parameters might be in different format after conversion
     if isinstance(final_params, dict):
         assert final_params["id"] == 123
     elif isinstance(final_params, (list, tuple)):
@@ -796,7 +728,7 @@ def test_process_output_transformation(processor: ParameterProcessor, advanced_c
 
 def test_process_full_pipeline(processor: ParameterProcessor) -> None:
     """Test complete processing pipeline with complex scenario."""
-    # Complex config that requires multiple processing phases
+
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_PYFORMAT,
         default_execution_parameter_style=ParameterStyle.QMARK,
@@ -808,27 +740,18 @@ def test_process_full_pipeline(processor: ParameterProcessor) -> None:
 
     final_sql, final_params = processor.process(sql, parameters, config, "mysql")
 
-    # Should convert from pyformat to qmark
     assert "?" in final_sql
     assert "%(active)s" not in final_sql
     assert "%(total)s" not in final_sql
 
-    # Should apply coercions regardless of final format
-    # Parameters might be empty if no conversion is actually performed
     if final_params is None or (isinstance(final_params, dict) and len(final_params) == 0):
-        # No parameters processed - this might be valid for some conversion paths
         pass
     elif isinstance(final_params, list):
-        # Check for coerced values (might be wrapped in TypedParameter)
         assert len(final_params) > 0
     elif isinstance(final_params, dict):
-        # Check for coerced values in dictionary
         assert len(final_params) > 0
     elif isinstance(final_params, tuple):
         assert len(final_params) > 0
-
-
-# Parameter container type preservation function-based tests
 
 
 def test_list_parameter_preservation(converter: ParameterConverter) -> None:
@@ -849,7 +772,6 @@ def test_tuple_parameter_handling(converter: ParameterConverter) -> None:
 
     _, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
 
-    # Should maintain sequence type
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 2
 
@@ -865,23 +787,14 @@ def test_dict_parameter_handling(converter: ParameterConverter) -> None:
     assert converted_params == parameters
 
 
-# Multi-database parameter styles function-based tests
-
-
 @pytest.mark.parametrize(
     "database,input_style,output_style,sql_pattern,param_pattern",
     [
-        # SQLite: qmark style
         ("sqlite", ParameterStyle.NAMED_COLON, ParameterStyle.QMARK, "?", list),
-        # PostgreSQL: numeric style
         ("postgresql", ParameterStyle.QMARK, ParameterStyle.NUMERIC, "$1", list),
-        # MySQL: pyformat style
         ("mysql", ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT, "%s", list),
-        # Oracle: positional colon style
         ("oracle", ParameterStyle.QMARK, ParameterStyle.POSITIONAL_COLON, ":1", dict),
-        # SQL Server: named at style
         ("sqlserver", ParameterStyle.QMARK, ParameterStyle.NAMED_AT, "@param", dict),
-        # Named dollar (PostgreSQL)
         ("postgresql", ParameterStyle.QMARK, ParameterStyle.NAMED_DOLLAR, "$param", dict),
     ],
 )
@@ -894,27 +807,21 @@ def test_database_specific_parameter_conversion(
     param_pattern: type,
 ) -> None:
     """Test parameter conversion for specific database requirements."""
-    # Ensure parameters are used to avoid unused variable warnings
+
     assert database is not None
     assert param_pattern is not None
 
-    sql = "SELECT * FROM users WHERE id = :id"  # Start with named colon
+    sql = "SELECT * FROM users WHERE id = :id"
     parameters = {"id": 123}
 
-    # First convert to input style if needed
     if input_style != ParameterStyle.NAMED_COLON:
         sql, parameters = converter.convert_placeholder_style(sql, parameters, input_style)
 
-    # Then convert to target output style
     final_sql, final_params = converter.convert_placeholder_style(sql, parameters, output_style)
 
     assert sql_pattern in final_sql
-    # Parameter format might be different than expected due to conversion logic
-    # Just check that conversion happened and parameters are preserved
+
     assert final_params is not None
-
-
-# Mixed parameter styles function-based tests
 
 
 def test_mixed_style_detection(validator: ParameterValidator) -> None:
@@ -936,14 +843,10 @@ def test_mixed_style_normalization() -> None:
 
     normalized_sql, _ = converter.normalize_sql_for_parsing(sql, "mysql")
 
-    # Should normalize problematic styles
-    assert "?" in normalized_sql  # Qmark should remain
-    assert ":name" in normalized_sql  # Named colon should remain for mysql
-    assert "%(status)s" not in normalized_sql  # Should be normalized
-    assert ":param_" in normalized_sql  # Canonical format
-
-
-# Performance optimizations function-based tests
+    assert "?" in normalized_sql
+    assert ":name" in normalized_sql
+    assert "%(status)s" not in normalized_sql
+    assert ":param_" in normalized_sql
 
 
 def test_parameter_caching() -> None:
@@ -951,28 +854,23 @@ def test_parameter_caching() -> None:
     validator = ParameterValidator()
     sql = "SELECT * FROM users WHERE id = ? AND name = :name"
 
-    # First call populates cache
     params1 = validator.extract_parameters(sql)
 
-    # Second call should return cached result
     params2 = validator.extract_parameters(sql)
 
-    # Should be the same object (cached)
     assert params1 is params2
 
 
 def test_singledispatch_type_wrapping_performance() -> None:
     """Test that singledispatch provides efficient type-based dispatch."""
-    # Test that different types are handled by appropriate registered functions
+
     bool_result = wrap_with_type(True)
     decimal_result = wrap_with_type(Decimal("123.45"))
     string_result = wrap_with_type("test")
 
-    # Boolean and Decimal should be wrapped
     assert isinstance(bool_result, TypedParameter)
     assert isinstance(decimal_result, TypedParameter)
 
-    # String should not be wrapped (default case)
     assert string_result == "test"
     assert not isinstance(string_result, TypedParameter)
 
@@ -981,7 +879,6 @@ def test_hash_map_placeholder_generation() -> None:
     """Test that placeholder generation uses O(1) hash map lookups."""
     converter = ParameterConverter()
 
-    # Test that all supported styles can be converted
     supported_styles = [
         ParameterStyle.QMARK,
         ParameterStyle.NUMERIC,
@@ -995,15 +892,10 @@ def test_hash_map_placeholder_generation() -> None:
         sql = "SELECT * FROM users WHERE id = :param_0"
         parameters = ["test_value"]
 
-        # Should not raise KeyError - uses the convert_placeholder_style method
         converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, style)
 
-        # Conversion should have occurred for most styles (some might be no-op)
         assert converted_sql is not None
         assert converted_params is not None
-
-
-# Edge cases and validation function-based tests
 
 
 def test_empty_sql_handling(validator: ParameterValidator) -> None:
@@ -1040,7 +932,7 @@ def test_complex_data_types(converter: ParameterConverter) -> None:
 
     assert isinstance(converted_params, list)
     assert len(converted_params) == 1
-    # Complex data should be preserved
+
     assert converted_params[0] == complex_data
 
 
@@ -1057,14 +949,13 @@ def test_parameter_ordinal_assignment(validator: ParameterValidator) -> None:
 
 def test_large_parameter_count(validator: ParameterValidator) -> None:
     """Test handling of SQL with many parameters."""
-    # Generate SQL with many parameters
+
     placeholders = ", ".join("?" for _ in range(50))
     sql = f"INSERT INTO test_table (col1, col2, ...) VALUES ({placeholders})"
 
     parameters = validator.extract_parameters(sql)
     assert len(parameters) == 50
 
-    # Ordinals should be correctly assigned
     for i, param in enumerate(parameters):
         assert param.ordinal == i
 
@@ -1075,11 +966,11 @@ def test_large_parameter_count(validator: ParameterValidator) -> None:
         ([1, 2, 3], True),
         ((1, 2, 3), True),
         ({1, 2, 3}, True),
-        ({"a": 1}, False),  # Mapping, not iterable parameters
-        ("string", False),  # String, not iterable parameters
-        (b"bytes", False),  # Bytes, not iterable parameters
-        (123, False),  # Not iterable
-        (None, False),  # Not iterable
+        ({"a": 1}, False),
+        ("string", False),
+        (b"bytes", False),
+        (123, False),
+        (None, False),
     ],
 )
 def test_is_iterable_parameters(obj: Any, expected: bool) -> None:
@@ -1087,13 +978,9 @@ def test_is_iterable_parameters(obj: Any, expected: bool) -> None:
     assert is_iterable_parameters(obj) == expected
 
 
-# Parameter style compatibility matrix function-based tests
-
-
 def test_sqlite_compatibility(validator: ParameterValidator) -> None:
     """Test SQLite parameter style compatibility."""
-    # SQLite supports: qmark, named_colon
-    # SQLGlot incompatible: positional_colon
+
     incompatible = validator.get_sqlglot_incompatible_styles("sqlite")
     assert ParameterStyle.POSITIONAL_COLON in incompatible
     assert ParameterStyle.QMARK not in incompatible
@@ -1102,15 +989,14 @@ def test_sqlite_compatibility(validator: ParameterValidator) -> None:
 
 def test_postgresql_compatibility(validator: ParameterValidator) -> None:
     """Test PostgreSQL parameter style compatibility."""
-    # PostgreSQL supports: numeric, named_colon, pyformat styles
-    # SQLGlot incompatible: positional_colon
+
     incompatible = validator.get_sqlglot_incompatible_styles("postgres")
     assert incompatible == {ParameterStyle.POSITIONAL_COLON}
 
 
 def test_mysql_compatibility(validator: ParameterValidator) -> None:
     """Test MySQL parameter style compatibility."""
-    # MySQL has modulo operator conflict with %s
+
     incompatible = validator.get_sqlglot_incompatible_styles("mysql")
     assert ParameterStyle.POSITIONAL_PYFORMAT in incompatible
     assert ParameterStyle.NAMED_PYFORMAT in incompatible
@@ -1119,14 +1005,11 @@ def test_mysql_compatibility(validator: ParameterValidator) -> None:
 
 def test_oracle_compatibility(validator: ParameterValidator) -> None:
     """Test Oracle parameter style compatibility."""
-    # Oracle uses positional_colon natively but SQLGlot can't parse it
+
     incompatible = validator.get_sqlglot_incompatible_styles("oracle")
     assert ParameterStyle.POSITIONAL_COLON in incompatible
     assert ParameterStyle.POSITIONAL_PYFORMAT in incompatible
     assert ParameterStyle.NAMED_PYFORMAT in incompatible
-
-
-# Regression cases function-based tests
 
 
 def test_dollar_numeric_vs_named_disambiguation() -> None:
@@ -1137,11 +1020,9 @@ def test_dollar_numeric_vs_named_disambiguation() -> None:
 
     assert len(parameters) == 2
 
-    # Find the two dollar parameters
     dollar_1_param = next(p for p in parameters if p.placeholder_text == "$1")
     dollar_username_param = next(p for p in parameters if p.placeholder_text == "$username")
 
-    # The regex correctly distinguishes NUMERIC ($1) from NAMED_DOLLAR ($username)
     assert dollar_1_param.style == ParameterStyle.NUMERIC
     assert dollar_username_param.style == ParameterStyle.NAMED_DOLLAR
     assert dollar_1_param.name == "1"
@@ -1169,7 +1050,6 @@ def test_preserve_parameter_names_in_conversion(converter: ParameterConverter) -
     sql = "SELECT * FROM users WHERE name = :user_name AND email = :user_email"
     parameters = {"user_name": "alice", "user_email": "alice@example.com"}
 
-    # Convert to pyformat while preserving names
     converted_sql, converted_params = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.NAMED_PYFORMAT
     )

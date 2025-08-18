@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import pytest
 
-# Import core modules for fixtures
 from sqlspec.core.cache import UnifiedCache
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig, TypedParameter
 from sqlspec.core.statement import SQL, StatementConfig
@@ -26,7 +25,6 @@ __all__ = (
     "MockAsyncConnection",
     "MockAsyncCursor",
     "MockAsyncDriver",
-    # Mock database fixtures
     "MockSyncConnection",
     "MockSyncCursor",
     "MockSyncDriver",
@@ -43,15 +41,12 @@ __all__ = (
     "mock_bigquery_connection",
     "mock_mysql_connection",
     "mock_postgres_connection",
-    # Database-specific mock fixtures
     "mock_sqlite_connection",
     "mock_sync_connection",
     "mock_sync_driver",
-    # Cache fixtures
     "mock_unified_cache",
     "parameter_style_config_advanced",
     "parameter_style_config_basic",
-    # Performance fixtures
     "performance_timer",
     "reset_cache_state",
     "reset_global_state",
@@ -60,22 +55,14 @@ __all__ = (
     "sample_parameters_mixed",
     "sample_parameters_named",
     "sample_parameters_positional",
-    # SQL fixtures
     "sample_select_sql",
     "sample_update_sql",
     "sql_with_typed_parameters",
     "statement_config_mysql",
     "statement_config_postgres",
-    # Configuration fixtures
     "statement_config_sqlite",
-    # Cleanup fixtures
     "test_isolation",
 )
-
-
-# =============================================================================
-# 1. CONFIGURATION FIXTURES - Mock StatementConfig, CacheConfig, and database configurations
-# =============================================================================
 
 
 @pytest.fixture
@@ -104,7 +91,7 @@ def parameter_style_config_advanced() -> ParameterStyleConfig:
         return float(value)
 
     def list_coercion(value: list[Any]) -> str:
-        return f"{{{','.join(str(v) for v in value)}}}"  # PostgreSQL array format
+        return f"{{{','.join(str(v) for v in value)}}}"
 
     return ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_COLON,
@@ -190,21 +177,13 @@ def cache_config_disabled() -> dict[str, Any]:
     }
 
 
-# =============================================================================
-# 2. CACHE FIXTURES - Mock cache instances and cache statistics
-# =============================================================================
-
-
 @pytest.fixture
 def mock_unified_cache() -> UnifiedCache:
     """Mock unified cache for testing cache behavior."""
-    # Create cache using the actual factory method
+
     from sqlspec.core.cache import get_default_cache
 
     return get_default_cache()
-
-    # Note: The actual UnifiedCache may have different methods
-    # This will need to be updated based on the actual implementation
 
 
 @pytest.fixture
@@ -216,17 +195,8 @@ def cache_statistics_tracker() -> dict[str, Any]:
 @pytest.fixture(autouse=True)
 def reset_cache_state() -> "Generator[None, None, None]":
     """Auto-use fixture to reset global cache state before each test."""
-    # Store original cache state
 
     yield
-
-    # Reset any global cache instances to prevent test pollution
-    # This would be expanded based on actual global cache instances in the codebase
-
-
-# =============================================================================
-# 3. SQL FIXTURES - Sample SQL statements, parameters, and test data
-# =============================================================================
 
 
 @pytest.fixture
@@ -307,11 +277,6 @@ def sql_with_typed_parameters(statement_config_sqlite: StatementConfig) -> SQL:
         TypedParameter(["electronics", "gadgets"], list, "categories"),
     ]
     return SQL(sql, *params, statement_config=statement_config_sqlite)
-
-
-# =============================================================================
-# 4. MOCK DATABASE FIXTURES - Mock connections, cursors, and drivers
-# =============================================================================
 
 
 class MockSyncConnection:
@@ -442,7 +407,6 @@ class MockSyncCursor:
         self.connection.last_sql = sql
         self.connection.last_parameters = parameters
 
-        # Generate realistic results based on SQL type
         sql_upper = sql.upper().strip()
         if sql_upper.startswith("SELECT"):
             self.description = [("id", "INTEGER"), ("name", "TEXT"), ("email", "TEXT")]
@@ -458,7 +422,7 @@ class MockSyncCursor:
             self.description = None
             self.fetchall_result = []
             self.fetchone_result = None
-            self.rowcount = 2  # Mock affected rows
+            self.rowcount = 2
         elif sql_upper.startswith("DELETE"):
             self.description = None
             self.fetchall_result = []
@@ -521,7 +485,6 @@ class MockAsyncCursor:
         self.connection.last_sql = sql
         self.connection.last_parameters = parameters
 
-        # Generate realistic results based on SQL type
         sql_upper = sql.upper().strip()
         if sql_upper.startswith("SELECT"):
             self.description = [("id", "INTEGER"), ("name", "TEXT"), ("email", "TEXT")]
@@ -537,7 +500,7 @@ class MockAsyncCursor:
             self.description = None
             self.fetchall_result = []
             self.fetchone_result = None
-            self.rowcount = 2  # Mock affected rows
+            self.rowcount = 2
         elif sql_upper.startswith("DELETE"):
             self.description = None
             self.fetchall_result = []
@@ -603,9 +566,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
                 default_execution_parameter_style=ParameterStyle.QMARK,
             )
             statement_config = StatementConfig(
-                dialect="sqlite",
-                parameter_config=parameter_config,
-                enable_caching=False,  # Disable caching to avoid hash issues in tests
+                dialect="sqlite", parameter_config=parameter_config, enable_caching=False
             )
         super().__init__(connection, statement_config, driver_features)
 
@@ -705,9 +666,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
                 default_execution_parameter_style=ParameterStyle.QMARK,
             )
             statement_config = StatementConfig(
-                dialect="sqlite",
-                parameter_config=parameter_config,
-                enable_caching=False,  # Disable caching to avoid hash issues in tests
+                dialect="sqlite", parameter_config=parameter_config, enable_caching=False
             )
         super().__init__(connection, statement_config, driver_features)
 
@@ -786,7 +745,6 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         await self.connection.commit()
 
 
-# Mock connection fixtures
 @pytest.fixture
 def mock_sync_connection() -> MockSyncConnection:
     """Fixture for basic mock sync connection."""
@@ -811,7 +769,6 @@ def mock_async_driver(mock_async_connection: MockAsyncConnection) -> MockAsyncDr
     return MockAsyncDriver(mock_async_connection)
 
 
-# Database-specific mock fixtures
 @pytest.fixture
 def mock_sqlite_connection() -> MockSyncConnection:
     """Mock SQLite connection with SQLite-specific behavior."""
@@ -849,20 +806,11 @@ def mock_bigquery_connection() -> MockSyncConnection:
     return conn
 
 
-# =============================================================================
-# 5. CLEANUP FIXTURES - Test isolation and cleanup functions
-# =============================================================================
-
-
 @pytest.fixture(autouse=True)
 def test_isolation() -> "Generator[None, None, None]":
     """Auto-use fixture to ensure test isolation by resetting global state."""
-    # Store original state
 
     yield
-
-    # Clean up any test modifications to global state
-    # This prevents test pollution between test runs
 
 
 @pytest.fixture
@@ -876,26 +824,18 @@ def cleanup_test_state() -> "Generator[Callable[[Callable[[], None]], None], Non
 
     yield register_cleanup
 
-    # Execute all registered cleanup functions
     for cleanup_func in reversed(cleanup_functions):
         try:
             cleanup_func()
         except Exception:
-            # Log cleanup errors but don't fail the test
             pass
 
 
 @pytest.fixture(scope="session", autouse=True)
 def reset_global_state() -> "Generator[None, None, None]":
     """Session-scoped fixture to reset global state before and after test session."""
-    # Reset any global singletons or cached state before tests
+
     yield
-    # Final cleanup after all tests complete
-
-
-# =============================================================================
-# 6. PERFORMANCE FIXTURES - Timing and benchmark utilities
-# =============================================================================
 
 
 @pytest.fixture
@@ -911,7 +851,7 @@ def performance_timer() -> "Generator[Any, None, None]":
         end_time = time.perf_counter()
         times[operation_name] = end_time - start_time
 
-    timer.times = times  # type: ignore[attr-defined]
+    timer.times = times  # pyright: ignore[reportFunctionMemberAccess]
     yield timer
 
 
@@ -941,16 +881,12 @@ def memory_profiler() -> "Generator[Callable[[], dict[str, Any]], None, None]":
         def get_memory_usage() -> dict[str, Any]:
             """Get current memory usage statistics."""
             memory_info = process.memory_info()
-            return {
-                "rss": memory_info.rss,  # Resident Set Size
-                "vms": memory_info.vms,  # Virtual Memory Size
-                "percent": process.memory_percent(),
-            }
+            return {"rss": memory_info.rss, "vms": memory_info.vms, "percent": process.memory_percent()}
 
         yield get_memory_usage
 
     except ImportError:
-        # Fallback if psutil is not available
+
         def get_memory_usage() -> dict[str, Any]:
             return {"rss": 0, "vms": 0, "percent": 0.0}
 
@@ -982,13 +918,8 @@ def compilation_metrics() -> "Generator[Any, None, None]":
         metrics["transform_times"].append(transform_time)
         metrics["total_compilation_times"].append(total_time)
 
-    record_compilation.metrics = metrics  # type: ignore[attr-defined]
+    record_compilation.metrics = metrics  # pyright: ignore[reportFunctionMemberAccess]
     yield record_compilation
-
-
-# =============================================================================
-# PYTEST CONFIGURATION AND MARKERS
-# =============================================================================
 
 
 def pytest_configure(config: Any) -> None:
@@ -1004,7 +935,6 @@ def pytest_configure(config: Any) -> None:
     config.addinivalue_line("markers", "integration: Integration tests with multiple components")
 
 
-# Additional helper functions for test utilities
 def create_test_sql_statement(sql: str, *params: Any, **kwargs: Any) -> SQL:
     """Helper function to create SQL statements for testing."""
     return SQL(sql, *params, **kwargs)

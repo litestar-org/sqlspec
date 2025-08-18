@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from enum import Enum
 from re import Pattern
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Final, Optional, Union, cast
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeAlias
@@ -45,11 +45,11 @@ __all__ = (
 
 logger = get_logger("sqlspec.core.splitter")
 
-DEFAULT_PATTERN_CACHE_SIZE = 1000  # Compiled regex patterns
-DEFAULT_RESULT_CACHE_SIZE = 5000  # Split results
-DEFAULT_CACHE_TTL = 3600  # 1 hour TTL
+DEFAULT_PATTERN_CACHE_SIZE: Final = 1000
+DEFAULT_RESULT_CACHE_SIZE: Final = 5000
+DEFAULT_CACHE_TTL: Final = 3600
 
-DIALECT_CONFIG_SLOTS = (
+DIALECT_CONFIG_SLOTS: Final = (
     "_block_starters",
     "_block_enders",
     "_statement_terminators",
@@ -59,9 +59,9 @@ DIALECT_CONFIG_SLOTS = (
     "_name",
 )
 
-TOKEN_SLOTS = ("type", "value", "line", "column", "position")
+TOKEN_SLOTS: Final = ("type", "value", "line", "column", "position")
 
-SPLITTER_SLOTS = (
+SPLITTER_SLOTS: Final = (
     "_dialect",
     "_strip_trailing_semicolon",
     "_token_patterns",
@@ -86,7 +86,7 @@ class TokenType(Enum):
     OTHER = "OTHER"
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Token:
     """SQL token with metadata."""
 
@@ -108,7 +108,7 @@ TokenPattern: TypeAlias = Union[str, TokenHandler]
 CompiledTokenPattern: TypeAlias = Union[Pattern[str], TokenHandler]
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class DialectConfig(ABC):
     """Abstract base class for SQL dialect configurations."""
 
@@ -542,32 +542,28 @@ class BigQueryDialectConfig(DialectConfig):
         return self._statement_terminators
 
 
-_pattern_cache: Optional[UnifiedCache[list[tuple[TokenType, CompiledTokenPattern]]]] = None
-_result_cache: Optional[UnifiedCache[list[str]]] = None
+_pattern_cache: Optional[UnifiedCache] = None
+_result_cache: Optional[UnifiedCache] = None
 _cache_lock = threading.Lock()
 
 
-def _get_pattern_cache() -> UnifiedCache[list[tuple[TokenType, CompiledTokenPattern]]]:
+def _get_pattern_cache() -> UnifiedCache:
     """Get or create the pattern compilation cache."""
     global _pattern_cache
     if _pattern_cache is None:
         with _cache_lock:
             if _pattern_cache is None:
-                _pattern_cache = UnifiedCache[list[tuple[TokenType, CompiledTokenPattern]]](
-                    max_size=DEFAULT_PATTERN_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL
-                )
+                _pattern_cache = UnifiedCache(max_size=DEFAULT_PATTERN_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
     return _pattern_cache
 
 
-def _get_result_cache() -> UnifiedCache[list[str]]:
+def _get_result_cache() -> UnifiedCache:
     """Get or create the result cache."""
     global _result_cache
     if _result_cache is None:
         with _cache_lock:
             if _result_cache is None:
-                _result_cache = UnifiedCache[list[str]](
-                    max_size=DEFAULT_RESULT_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL
-                )
+                _result_cache = UnifiedCache(max_size=DEFAULT_RESULT_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
     return _result_cache
 
 
@@ -596,7 +592,7 @@ class StatementSplitter:
 
         cached_patterns = self._pattern_cache.get(cache_key)
         if cached_patterns is not None:
-            return cached_patterns
+            return cast("list[tuple[TokenType, CompiledTokenPattern]]", cached_patterns)
 
         compiled: list[tuple[TokenType, CompiledTokenPattern]] = []
         for token_type, pattern in self._token_patterns:
@@ -660,7 +656,7 @@ class StatementSplitter:
 
         cached_result = self._result_cache.get(cache_key)
         if cached_result is not None:
-            return cached_result
+            return cast("list[str]", cached_result)
 
         statements = self._do_split(sql)
 

@@ -5,11 +5,16 @@ Covers all hashing functions with edge cases, performance considerations, and ci
 """
 
 import math
+from typing import TYPE_CHECKING, Any
 from unittest.mock import Mock
 
 import pytest
 from sqlglot import exp, parse_one
 
+from sqlspec.core.filters import StatementFilter
+
+if TYPE_CHECKING:
+    from sqlspec.core.statement import SQL
 from sqlspec.core.hashing import (
     _hash_value,
     hash_expression,
@@ -19,8 +24,6 @@ from sqlspec.core.hashing import (
     hash_parameters,
     hash_sql_statement,
 )
-
-# Test hash_expression function
 
 
 def test_hash_expression_none() -> None:
@@ -35,7 +38,6 @@ def test_hash_expression_basic() -> None:
     result = hash_expression(expr)
     assert isinstance(result, int)
 
-    # Same expression should produce same hash
     expr2 = parse_one("SELECT 1")
     result2 = hash_expression(expr2)
     assert result == result2
@@ -58,7 +60,6 @@ def test_hash_expression_complex_sql() -> None:
     result = hash_expression(expr)
     assert isinstance(result, int)
 
-    # Parsing the same complex SQL should produce same hash
     expr2 = parse_one("SELECT u.id, u.name FROM users u WHERE u.age > 18 AND u.status = 'active' ORDER BY u.name")
     result2 = hash_expression(expr2)
     assert result == result2
@@ -66,12 +67,11 @@ def test_hash_expression_complex_sql() -> None:
 
 def test_hash_expression_circular_reference() -> None:
     """Test hash_expression handles circular references correctly."""
-    # Create a mock expression with circular reference
+
     expr = Mock(spec=exp.Expression)
-    expr.args = {"child": expr}  # Self-reference
+    expr.args = {"child": expr}
     type(expr).__name__ = "MockExpression"
 
-    # Should not raise exception and should return a hash
     result = hash_expression(expr)
     assert isinstance(result, int)
 
@@ -81,9 +81,6 @@ def test_hash_expression_nested_structure() -> None:
     expr = parse_one("SELECT (SELECT COUNT(*) FROM orders WHERE user_id = users.id) FROM users")
     result = hash_expression(expr)
     assert isinstance(result, int)
-
-
-# Test _hash_value function
 
 
 def test_hash_value_expression() -> None:
@@ -101,7 +98,6 @@ def test_hash_value_list() -> None:
     result = _hash_value(test_list, seen)
     assert isinstance(result, int)
 
-    # Same list should produce same hash
     result2 = _hash_value(test_list, seen)
     assert result == result2
 
@@ -139,9 +135,6 @@ def test_hash_value_nested_structures() -> None:
     seen: set[int] = set()
     result = _hash_value(nested, seen)
     assert isinstance(result, int)
-
-
-# Test hash_parameters function
 
 
 def test_hash_parameters_no_parameters() -> None:
@@ -205,9 +198,6 @@ def test_hash_parameters_large_parameter_sets() -> None:
     assert isinstance(result, int)
 
 
-# Test hash_filters function
-
-
 def test_hash_filters_no_filters() -> None:
     """Test hash_filters with no filters."""
     result = hash_filters()
@@ -220,27 +210,44 @@ def test_hash_filters_no_filters() -> None:
 def test_hash_filters_with_filters() -> None:
     """Test hash_filters with test filter objects."""
 
-    # Create test filter classes
-    class TestFilter1:
+    class TestFilter1(StatementFilter):
         def __init__(self) -> None:
             self.attr1 = "value1"
             self.attr2 = 42
 
-    class TestFilter2:
+        def apply(self, query: str) -> str:
+            return query
+
+        def append_to_statement(self, statement: "SQL") -> "SQL":
+            return statement
+
+        def get_cache_key(self) -> tuple[Any, ...]:
+            return ("test_filter1",)
+
+    class TestFilter2(StatementFilter):
         def __init__(self) -> None:
             self.attr3 = "value3"
 
+        def apply(self, query: str) -> str:
+            return query
+
+        def append_to_statement(self, statement: "SQL") -> "SQL":
+            return statement
+
+        def get_cache_key(self) -> tuple[Any, ...]:
+            return ("test_filter2",)
+
     filters = [TestFilter1(), TestFilter2()]
-    result = hash_filters(filters)  # type: ignore[arg-type]
+    result = hash_filters(filters)
     assert isinstance(result, int)
 
 
 def test_hash_filters_no_dict_attribute() -> None:
     """Test hash_filters with filters that don't have __dict__."""
-    # Create a filter without __dict__
+
     filter_obj = Mock()
     filter_obj.__class__.__name__ = "SimpleFilter"
-    del filter_obj.__dict__  # Remove __dict__ attribute
+    del filter_obj.__dict__
 
     filters = [filter_obj]
     result = hash_filters(filters)  # type: ignore[arg-type]
@@ -250,22 +257,28 @@ def test_hash_filters_no_dict_attribute() -> None:
 def test_hash_filters_unhashable_attributes() -> None:
     """Test hash_filters with filters having unhashable attributes."""
 
-    class FilterWithUnhashable:
+    class FilterWithUnhashable(StatementFilter):
         def __init__(self) -> None:
             self.list_attr = [1, 2, 3]
             self.dict_attr = {"key": "value"}
+
+        def apply(self, query: str) -> str:
+            return query
+
+        def append_to_statement(self, statement: "SQL") -> "SQL":
+            return statement
+
+        def get_cache_key(self) -> tuple[Any, ...]:
+            return ("filter_unhashable",)
 
     filters = [FilterWithUnhashable()]
     result = hash_filters(filters)  # type: ignore[arg-type]
     assert isinstance(result, int)
 
 
-# Test hash_sql_statement function
-
-
 def test_hash_sql_statement_basic() -> None:
     """Test hash_sql_statement with basic SQL statement."""
-    # Create a mock SQL statement
+
     statement = Mock()
     statement._statement = parse_one("SELECT 1")
     statement._raw_sql = "SELECT 1"
@@ -303,7 +316,7 @@ def test_hash_sql_statement_with_parameters() -> None:
 def test_hash_sql_statement_raw_sql_fallback() -> None:
     """Test hash_sql_statement falls back to raw SQL when expression not available."""
     statement = Mock()
-    statement._statement = "SELECT 1"  # String instead of Expression
+    statement._statement = "SELECT 1"
     statement._raw_sql = "SELECT 1"
     statement._positional_parameters = None
     statement._named_parameters = None
@@ -313,15 +326,11 @@ def test_hash_sql_statement_raw_sql_fallback() -> None:
     statement._is_many = False
     statement._is_script = False
 
-    # Mock is_expression to return False
     with pytest.MonkeyPatch().context() as m:
         m.setattr("sqlspec.utils.type_guards.is_expression", lambda x: False)
         result = hash_sql_statement(statement)
         assert isinstance(result, str)
         assert result.startswith("sql:")
-
-
-# Test hash_expression_node function
 
 
 def test_hash_expression_node_with_children() -> None:
@@ -355,11 +364,7 @@ def test_hash_expression_node_different_modes() -> None:
     hash_with_children = hash_expression_node(node, include_children=True)
     hash_shallow = hash_expression_node(node, include_children=False)
 
-    # Different modes should produce different hashes for complex nodes
     assert hash_with_children != hash_shallow
-
-
-# Test hash_optimized_expression function
 
 
 def test_hash_optimized_expression_basic() -> None:
@@ -408,7 +413,6 @@ def test_hash_optimized_expression_consistency() -> None:
     schema = {"users": {"id": "int"}}
     settings = {"optimize": True}
 
-    # Same inputs should produce same hash
     hash1 = hash_optimized_expression(expr, dialect, schema, settings)
     hash2 = hash_optimized_expression(expr, dialect, schema, settings)
     assert hash1 == hash2
@@ -422,7 +426,6 @@ def test_hash_optimized_expression_different_contexts() -> None:
     hash2 = hash_optimized_expression(expr, "mysql")
     hash3 = hash_optimized_expression(expr, "postgres", schema={"users": {}})
 
-    # Different contexts should produce different hashes
     assert hash1 != hash2
     assert hash1 != hash3
     assert hash2 != hash3
@@ -446,20 +449,15 @@ def test_hash_optimized_expression_invalid_schema_values() -> None:
     assert result.startswith("opt:")
 
 
-# Edge cases and performance tests
-
-
 def test_hash_consistency_across_calls() -> None:
     """Test that hash functions produce consistent results across multiple calls."""
     expr = parse_one("SELECT u.id, u.name FROM users u WHERE u.active = true")
     params = ["param1", 42, True]
 
-    # Expression hashing should be consistent
     hash1 = hash_expression(expr)
     hash2 = hash_expression(expr)
     assert hash1 == hash2
 
-    # Parameter hashing should be consistent
     param_hash1 = hash_parameters(positional_parameters=params)
     param_hash2 = hash_parameters(positional_parameters=params)
     assert param_hash1 == param_hash2
@@ -467,7 +465,7 @@ def test_hash_consistency_across_calls() -> None:
 
 def test_hash_functions_performance() -> None:
     """Test that hash functions handle reasonably complex inputs efficiently."""
-    # Create a complex expression
+
     complex_sql = """
     SELECT
         u.id,
@@ -489,7 +487,6 @@ def test_hash_functions_performance() -> None:
     expr = parse_one(complex_sql)
     complex_params = [f"param_{i}" for i in range(100)]
 
-    # Should complete without errors
     expr_hash = hash_expression(expr)
     param_hash = hash_parameters(positional_parameters=complex_params)
 
@@ -499,7 +496,7 @@ def test_hash_functions_performance() -> None:
 
 def test_hash_with_special_sql_constructs() -> None:
     """Test hashing with various SQL constructs."""
-    # Test different SQL statement types
+
     constructs = [
         "INSERT INTO users (name, email) VALUES ('John', 'john@example.com')",
         "UPDATE users SET active = false WHERE last_login < '2023-01-01'",
@@ -515,13 +512,12 @@ def test_hash_with_special_sql_constructs() -> None:
         hashes.append(hash_val)
         assert isinstance(hash_val, int)
 
-    # All hashes should be different
     assert len(set(hashes)) == len(hashes)
 
 
 def test_error_handling() -> None:
     """Test error handling in hash functions."""
-    # Test with malformed mock objects
+
     malformed_statement = Mock()
     malformed_statement._positional_parameters = None
     malformed_statement._named_parameters = None
@@ -530,25 +526,20 @@ def test_error_handling() -> None:
     malformed_statement._dialect = "sqlite"
     malformed_statement._is_many = False
     malformed_statement._is_script = False
-    # Missing _statement and _raw_sql - should handle gracefully
+
     try:
         hash_sql_statement(malformed_statement)
     except AttributeError:
-        # Expected behavior - missing attributes
         pass
 
 
 def test_memory_efficiency() -> None:
     """Test that hash functions are memory efficient with large data sets."""
-    # Create large parameter set for execute_many scenario
+
     large_params = [(f"name_{i}", f"email_{i}@example.com", i) for i in range(10000)]
 
-    # Should handle large parameter sets efficiently
     result = hash_parameters(original_parameters=large_params)
     assert isinstance(result, int)
-
-    # The hashing should use sampling for large sets, not hash every item
-    # This is tested by ensuring the function completes reasonably quickly
 
 
 @pytest.mark.parametrize("dialect", ["postgres", "mysql", "sqlite", "oracle", "bigquery"])
@@ -564,14 +555,12 @@ def test_hash_parameters_edge_cases() -> None:
     """Test hash_parameters with various edge cases."""
     from sqlspec.core.parameters import TypedParameter
 
-    # Test with TypedParameter containing unhashable values
     typed_param_with_list = TypedParameter([1, 2, 3], list, "list_param")
     typed_param_with_dict = TypedParameter({"key": "value"}, dict, "dict_param")
 
     result = hash_parameters(positional_parameters=[typed_param_with_list, typed_param_with_dict])
     assert isinstance(result, int)
 
-    # Test named parameters with complex TypedParameter
     named_with_typed = {"complex": typed_param_with_dict}
     result = hash_parameters(named_parameters=named_with_typed)
     assert isinstance(result, int)

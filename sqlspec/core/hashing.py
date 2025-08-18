@@ -47,7 +47,6 @@ def hash_expression(expr: Optional[exp.Expression], _seen: Optional[set[int]] = 
 
     _seen.add(expr_id)
 
-    # Build hash from type and args
     components: list[Any] = [type(expr).__name__]
 
     for key, value in sorted(expr.args.items()):
@@ -75,7 +74,7 @@ def _hash_value(value: Any, _seen: set[int]) -> int:
         return hash(tuple(items))
     if isinstance(value, tuple):
         return hash(tuple(_hash_value(v, _seen) for v in value))
-    # Primitives: str, int, bool, None, etc.
+
     return hash(value)
 
 
@@ -96,7 +95,6 @@ def hash_parameters(
     """
     param_hash = 0
 
-    # Hash positional parameters
     if positional_parameters:
         from sqlspec.core.parameters import TypedParameter
 
@@ -108,25 +106,20 @@ def hash_parameters(
                 else:
                     hashable_parameters.append((param.value, param.original_type))
             elif isinstance(param, (list, dict)):
-                # Convert unhashable types to hashable representations
                 hashable_parameters.append((repr(param), "unhashable"))
             else:
-                # Check if param itself contains unhashable types
                 try:
                     hash(param)
                     hashable_parameters.append((param, "primitive"))
                 except TypeError:
-                    # If unhashable, convert to string representation
                     hashable_parameters.append((repr(param), "unhashable_repr"))
 
         param_hash ^= hash(tuple(hashable_parameters))
 
     if named_parameters:
-        # Handle unhashable types in named parameters
         hashable_items = []
         for key, value in sorted(named_parameters.items()):
             if is_typed_parameter(value):
-                # For TypedParameter, hash its value with type info
                 if isinstance(value.value, (list, dict)):
                     hashable_items.append((key, (repr(value.value), value.original_type)))
                 else:
@@ -137,13 +130,10 @@ def hash_parameters(
                 hashable_items.append((key, (value, "primitive")))
         param_hash ^= hash(tuple(hashable_items))
 
-    # Hash original parameters (important for execute_many)
     if original_parameters is not None:
         if isinstance(original_parameters, list):
-            # For execute_many, hash the count and first few items to avoid
             param_hash ^= hash(("original_count", len(original_parameters)))
             if original_parameters:
-                # Hash first 3 items as representatives
                 sample_size = min(3, len(original_parameters))
                 sample_hash = hash(repr(original_parameters[:sample_size]))
                 param_hash ^= hash(("original_sample", sample_hash))
@@ -172,14 +162,10 @@ def hash_filters(filters: Optional[list["StatementFilter"]] = None) -> int:
     if not filters:
         return 0
 
-    # Use class names and any hashable attributes
     filter_components = []
     for f in filters:
-        # Use class name as primary identifier
         components: list[Any] = [f.__class__.__name__]
 
-        # Add any hashable attributes if available
-        # Use getattr with default instead of hasattr for mypyc compatibility
         filter_dict = getattr(f, "__dict__", None)
         if filter_dict is not None:
             for key, value in sorted(filter_dict.items()):
@@ -204,23 +190,19 @@ def hash_sql_statement(statement: "SQL") -> str:
     """
     from sqlspec.utils.type_guards import is_expression
 
-    # Hash the expression or raw SQL
     if is_expression(statement._statement):
         expr_hash = hash_expression(statement._statement)
     else:
         expr_hash = hash(statement._raw_sql)
 
-    # Hash all parameters
     param_hash = hash_parameters(
         positional_parameters=statement._positional_parameters,
         named_parameters=statement._named_parameters,
         original_parameters=statement._original_parameters,
     )
 
-    # Hash filters
     filter_hash = hash_filters(statement._filters)
 
-    # Combine with other state
     state_components = [
         expr_hash,
         param_hash,
@@ -248,14 +230,11 @@ def hash_expression_node(node: exp.Expression, include_children: bool = True, di
         Cache key string for the expression node
     """
     if include_children:
-        # Full structural hash including all children
         node_hash = hash_expression(node)
     else:
-        # Shallow hash - just the node type and immediate args
         components: list[Any] = [type(node).__name__]
         for key, value in sorted(node.args.items()):
             if not isinstance(value, (list, exp.Expression)):
-                # Only include primitive values, not child expressions
                 components.extend((key, hash(value)))
         node_hash = hash(tuple(components))
 
@@ -284,13 +263,11 @@ def hash_optimized_expression(
     Returns:
         Cache key string for the optimized expression
     """
-    # Base expression hash
+
     expr_hash = hash_expression(expr)
 
-    # Schema hash - simplified representation
     schema_hash = 0
     if schema:
-        # Hash table names and column counts to avoid deep schema hashing
         schema_items = []
         for table_name, table_schema in sorted(schema.items()):
             if isinstance(table_schema, dict):
@@ -299,12 +276,10 @@ def hash_optimized_expression(
                 schema_items.append((table_name, hash("unknown")))
         schema_hash = hash(tuple(schema_items))
 
-    # Optimizer settings hash
     settings_hash = 0
     if optimizer_settings:
         settings_items = sorted(optimizer_settings.items())
         settings_hash = hash(tuple(settings_items))
 
-    # Combine all components
     components = (expr_hash, dialect, schema_hash, settings_hash)
     return f"opt:{hash(components)}"

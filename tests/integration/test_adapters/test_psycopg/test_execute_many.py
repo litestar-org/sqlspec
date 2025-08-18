@@ -20,14 +20,13 @@ def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[Psyco
             "user": postgres_service.user,
             "password": postgres_service.password,
             "dbname": postgres_service.database,
-            "autocommit": True,  # Enable autocommit for tests
+            "autocommit": True,
         },
         statement_config=psycopg_statement_config,
     )
 
     try:
         with config.provide_session() as session:
-            # Create test table
             session.execute_script("""
                 CREATE TABLE IF NOT EXISTS test_batch (
                     id SERIAL PRIMARY KEY,
@@ -36,14 +35,13 @@ def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[Psyco
                     category TEXT
                 )
             """)
-            # Clear any existing data
+
             session.execute_script("TRUNCATE TABLE test_batch RESTART IDENTITY")
 
             yield session
-            # Cleanup
+
             session.execute_script("DROP TABLE IF EXISTS test_batch")
     finally:
-        # Ensure pool is closed properly to avoid "cannot join current thread" warnings
         config.close_pool()
 
 
@@ -63,10 +61,9 @@ def test_psycopg_execute_many_basic(psycopg_batch_session: PsycopgSyncDriver) ->
     )
 
     assert isinstance(result, SQLResult)
-    # Psycopg should report the number of rows affected
+
     assert result.rows_affected == 5
 
-    # Verify data was inserted
     count_result = psycopg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
     assert count_result.data[0]["count"] == 5
 
@@ -74,13 +71,12 @@ def test_psycopg_execute_many_basic(psycopg_batch_session: PsycopgSyncDriver) ->
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many for UPDATE operations with Psycopg."""
-    # First insert some data
+
     psycopg_batch_session.execute_many(
         "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
         [("Update 1", 10, "X"), ("Update 2", 20, "Y"), ("Update 3", 30, "Z")],
     )
 
-    # Now update with execute_many
     update_parameters = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
     result = psycopg_batch_session.execute_many("UPDATE test_batch SET value = %s WHERE name = %s", update_parameters)
@@ -88,7 +84,6 @@ def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgSyncDriver) -
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 
-    # Verify updates
     check_result = psycopg_batch_session.execute("SELECT name, value FROM test_batch ORDER BY name")
     assert len(check_result.data) == 3
     assert all(row["value"] in (100, 200, 300) for row in check_result.data)
@@ -104,7 +99,6 @@ def test_psycopg_execute_many_empty(psycopg_batch_session: PsycopgSyncDriver) ->
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 0
 
-    # Verify no data was inserted
     count_result = psycopg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
     assert count_result.data[0]["count"] == 0
 
@@ -114,7 +108,7 @@ def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgSyncDriv
     """Test execute_many with mixed parameter types on Psycopg."""
     parameters = [
         ("String Item", 123, "CAT1"),
-        ("Another Item", 456, None),  # NULL category
+        ("Another Item", 456, None),
         ("Third Item", 0, "CAT2"),
         ("Negative Item", -50, "CAT3"),
     ]
@@ -126,12 +120,10 @@ def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgSyncDriv
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 4
 
-    # Verify data including NULL
     null_result = psycopg_batch_session.execute("SELECT * FROM test_batch WHERE category IS NULL")
     assert len(null_result.data) == 1
     assert null_result.data[0]["name"] == "Another Item"
 
-    # Verify negative value
     negative_result = psycopg_batch_session.execute("SELECT * FROM test_batch WHERE value < 0")
     assert len(negative_result.data) == 1
     assert negative_result.data[0]["value"] == -50
@@ -140,7 +132,7 @@ def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgSyncDriv
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many for DELETE operations with Psycopg."""
-    # First insert test data
+
     psycopg_batch_session.execute_many(
         "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
         [
@@ -152,7 +144,6 @@ def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -
         ],
     )
 
-    # Delete specific items by name
     delete_parameters = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
     result = psycopg_batch_session.execute_many("DELETE FROM test_batch WHERE name = %s", delete_parameters)
@@ -160,11 +151,9 @@ def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 
-    # Verify remaining data
     remaining_result = psycopg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
     assert remaining_result.data[0]["count"] == 2
 
-    # Verify specific remaining items
     names_result = psycopg_batch_session.execute("SELECT name FROM test_batch ORDER BY name")
     remaining_names = [row["name"] for row in names_result.data]
     assert remaining_names == ["Delete 3", "Keep 1"]
@@ -173,7 +162,7 @@ def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with large batch size on Psycopg."""
-    # Create a large batch of parameters
+
     large_batch = [(f"Item {i}", i * 10, f"CAT{i % 3}") for i in range(1000)]
 
     result = psycopg_batch_session.execute_many(
@@ -183,18 +172,16 @@ def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriv
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1000
 
-    # Verify count
     count_result = psycopg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
     assert count_result.data[0]["count"] == 1000
 
-    # Verify some specific values using ANY for efficient querying
     sample_result = psycopg_batch_session.execute(
         "SELECT * FROM test_batch WHERE name = ANY(%s) ORDER BY value", (["Item 100", "Item 500", "Item 999"],)
     )
     assert len(sample_result.data) == 3
-    assert sample_result.data[0]["value"] == 1000  # Item 100
-    assert sample_result.data[1]["value"] == 5000  # Item 500
-    assert sample_result.data[2]["value"] == 9990  # Item 999
+    assert sample_result.data[0]["value"] == 1000
+    assert sample_result.data[1]["value"] == 5000
+    assert sample_result.data[2]["value"] == 9990
 
 
 @pytest.mark.xdist_group("postgres")
@@ -211,7 +198,6 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSync
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 
-    # Verify data
     check_result = psycopg_batch_session.execute(
         "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("SOB",)
     )
@@ -223,8 +209,6 @@ def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncD
     """Test execute_many with RETURNING clause on Psycopg."""
     parameters = [("Return 1", 111, "RET"), ("Return 2", 222, "RET"), ("Return 3", 333, "RET")]
 
-    # Note: execute_many with RETURNING may not work the same as single execute
-    # This test verifies the behavior
     try:
         result = psycopg_batch_session.execute_many(
             "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s) RETURNING id, name", parameters
@@ -232,13 +216,10 @@ def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncD
 
         assert isinstance(result, SQLResult)
 
-        # If RETURNING works with execute_many, verify the data
         if hasattr(result, "data") and result.data:
             assert len(result.data) >= 3
 
     except Exception:
-        # execute_many with RETURNING might not be supported
-        # Fall back to regular insert and verify
         psycopg_batch_session.execute_many(
             "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", parameters
         )
@@ -252,7 +233,7 @@ def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncD
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with PostgreSQL array types on Psycopg."""
-    # Drop and recreate table to ensure clean state
+
     psycopg_batch_session.execute_script("""
         DROP TABLE IF EXISTS test_arrays;
         CREATE TABLE test_arrays (
@@ -276,14 +257,13 @@ def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgSyncDriv
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 
-    # Verify array data
     check_result = psycopg_batch_session.execute(
         "SELECT name, array_length(tags, 1) as tag_count, array_length(scores, 1) as score_count FROM test_arrays ORDER BY name"
     )
     assert len(check_result.data) == 3
-    assert check_result.data[0]["tag_count"] == 2  # Array 1
-    assert check_result.data[1]["tag_count"] == 1  # Array 2
-    assert check_result.data[2]["tag_count"] == 3  # Array 3
+    assert check_result.data[0]["tag_count"] == 2
+    assert check_result.data[1]["tag_count"] == 1
+    assert check_result.data[2]["tag_count"] == 3
 
 
 @pytest.mark.xdist_group("postgres")
@@ -291,7 +271,6 @@ def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver
     """Test execute_many with JSON data on Psycopg."""
     import json
 
-    # Drop and recreate table to ensure clean state
     psycopg_batch_session.execute_script("""
         DROP TABLE IF EXISTS test_json;
         CREATE TABLE test_json (
@@ -312,21 +291,20 @@ def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 
-    # Verify JSON data
     check_result = psycopg_batch_session.execute(
         "SELECT name, metadata->>'type' as type, (metadata->>'value')::INTEGER as value FROM test_json ORDER BY name"
     )
     assert len(check_result.data) == 3
-    assert check_result.data[0]["type"] == "test"  # JSON 1
+    assert check_result.data[0]["type"] == "test"
     assert check_result.data[0]["value"] == 100
-    assert check_result.data[1]["type"] == "prod"  # JSON 2
+    assert check_result.data[1]["type"] == "prod"
     assert check_result.data[1]["value"] == 200
 
 
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with PostgreSQL UPSERT (ON CONFLICT) on Psycopg."""
-    # Create table with unique constraint
+
     psycopg_batch_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_upsert (
             id INTEGER PRIMARY KEY,
@@ -335,17 +313,11 @@ def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriv
         )
     """)
 
-    # First batch - initial inserts
     initial_parameters = [(1, "Item 1"), (2, "Item 2"), (3, "Item 3")]
 
     psycopg_batch_session.execute_many("INSERT INTO test_upsert (id, name) VALUES (%s, %s)", initial_parameters)
 
-    # Second batch - with conflicts using ON CONFLICT
-    conflict_parameters = [
-        (1, "Updated Item 1", 1),  # Conflict - increment counter by 1
-        (2, "Updated Item 2", 1),  # Conflict - increment counter by 1
-        (4, "Item 4", 1),  # New - increment value (unused for new rows)
-    ]
+    conflict_parameters = [(1, "Updated Item 1", 1), (2, "Updated Item 2", 1), (4, "Item 4", 1)]
 
     result = psycopg_batch_session.execute_many(
         "INSERT INTO test_upsert (id, name) VALUES (%s, %s) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, counter = test_upsert.counter + %s",
@@ -355,10 +327,8 @@ def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriv
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 
-    # Verify the behavior
     check_result = psycopg_batch_session.execute("SELECT id, name, counter FROM test_upsert ORDER BY id")
     assert len(check_result.data) == 4
 
-    # Check that conflicts were handled
     updated_items = [row for row in check_result.data if row["counter"] > 1]
-    assert len(updated_items) == 2  # Items 1 and 2 should be updated
+    assert len(updated_items) == 2

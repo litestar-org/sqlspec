@@ -16,7 +16,6 @@ def duckdb_parameters_session() -> "Generator[DuckDBDriver, None, None]":
     config = DuckDBConfig(pool_config={"database": ":memory:"})
 
     with config.provide_session() as session:
-        # Create test table
         session.execute_script("""
             CREATE TABLE IF NOT EXISTS test_parameters (
                 id INTEGER PRIMARY KEY,
@@ -26,7 +25,7 @@ def duckdb_parameters_session() -> "Generator[DuckDBDriver, None, None]":
             );
             TRUNCATE TABLE test_parameters;
         """)
-        # Insert test data
+
         session.execute(
             "INSERT INTO test_parameters (id, name, value, description) VALUES (?, ?, ?, ?)",
             (1, "test1", 100, "First test"),
@@ -37,17 +36,11 @@ def duckdb_parameters_session() -> "Generator[DuckDBDriver, None, None]":
         )
         session.execute(
             "INSERT INTO test_parameters (id, name, value, description) VALUES (?, ?, ?, ?)", (3, "test3", 300, None)
-        )  # NULL description
+        )
         yield session
 
 
-@pytest.mark.parametrize(
-    "parameters,expected_count",
-    [
-        (("test1"), 1),  # Tuple parameter
-        (["test1"], 1),  # List parameter
-    ],
-)
+@pytest.mark.parametrize("parameters,expected_count", [(("test1"), 1), (["test1"], 1)])
 def test_duckdb_qmark_parameter_types(
     duckdb_parameters_session: DuckDBDriver, parameters: Any, expected_count: int
 ) -> None:
@@ -106,7 +99,7 @@ def test_duckdb_multiple_parameters_numeric(duckdb_parameters_session: DuckDBDri
 
 def test_duckdb_null_parameters(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test handling of NULL parameters on DuckDB."""
-    # Query for NULL values
+
     result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE description IS NULL")
 
     assert isinstance(result, SQLResult)
@@ -115,7 +108,6 @@ def test_duckdb_null_parameters(duckdb_parameters_session: DuckDBDriver) -> None
     assert result.data[0]["name"] == "test3"
     assert result.data[0]["description"] is None
 
-    # Test inserting NULL with parameters
     duckdb_parameters_session.execute(
         "INSERT INTO test_parameters (id, name, value, description) VALUES (?, ?, ?, ?)",
         (4, "null_param_test", 400, None),
@@ -128,18 +120,17 @@ def test_duckdb_null_parameters(duckdb_parameters_session: DuckDBDriver) -> None
 
 def test_duckdb_parameter_escaping(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test parameter escaping prevents SQL injection."""
-    # This should safely search for a literal string with quotes
+
     malicious_input = "'; DROP TABLE test_parameters; --"
 
     result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name = ?", (malicious_input))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 0  # No matches, but table should still exist
+    assert len(result.data) == 0
 
-    # Verify table still exists by counting all records
     count_result = duckdb_parameters_session.execute("SELECT COUNT(*) as count FROM test_parameters")
-    assert count_result.data[0]["count"] >= 3  # Our test data should still be there
+    assert count_result.data[0]["count"] >= 3
 
 
 def test_duckdb_parameter_with_like(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -148,9 +139,8 @@ def test_duckdb_parameter_with_like(duckdb_parameters_session: DuckDBDriver) -> 
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) >= 3  # test1, test2, test3
+    assert len(result.data) >= 3
 
-    # Test with numeric parameter style
     numeric_result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name LIKE $1", ("test1%"))
     assert len(numeric_result.data) == 1
     assert numeric_result.data[0]["name"] == "test1"
@@ -158,13 +148,12 @@ def test_duckdb_parameter_with_like(duckdb_parameters_session: DuckDBDriver) -> 
 
 def test_duckdb_parameter_with_in_clause(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test parameters with IN clause."""
-    # Insert additional test data
+
     duckdb_parameters_session.execute_many(
         "INSERT INTO test_parameters (id, name, value, description) VALUES (?, ?, ?, ?)",
         [(5, "alpha", 10, "Alpha test"), (6, "beta", 20, "Beta test"), (7, "gamma", 30, "Gamma test")],
     )
 
-    # Test IN clause with multiple values
     result = duckdb_parameters_session.execute(
         "SELECT * FROM test_parameters WHERE name IN (?, ?, ?) ORDER BY name", ("alpha", "beta", "test1")
     )
@@ -181,7 +170,6 @@ def test_duckdb_parameter_with_sql_object(duckdb_parameters_session: DuckDBDrive
     """Test parameters with SQL object."""
     from sqlspec.core.statement import SQL
 
-    # Test with qmark style
     sql_obj = SQL("SELECT * FROM test_parameters WHERE value > ?", [150])
     result = duckdb_parameters_session.execute(sql_obj)
 
@@ -190,7 +178,6 @@ def test_duckdb_parameter_with_sql_object(duckdb_parameters_session: DuckDBDrive
     assert len(result.data) >= 1
     assert all(row["value"] > 150 for row in result.data)
 
-    # Test with numeric style
     numeric_sql = SQL("SELECT * FROM test_parameters WHERE value < $1", [150])
     numeric_result = duckdb_parameters_session.execute(numeric_sql)
 
@@ -202,7 +189,7 @@ def test_duckdb_parameter_with_sql_object(duckdb_parameters_session: DuckDBDrive
 
 def test_duckdb_parameter_data_types(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test different parameter data types with DuckDB."""
-    # Create table for different data types
+
     duckdb_parameters_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_types (
             id INTEGER PRIMARY KEY,
@@ -214,7 +201,6 @@ def test_duckdb_parameter_data_types(duckdb_parameters_session: DuckDBDriver) ->
         )
     """)
 
-    # Test different data types
     test_data = [
         (1, 42, math.pi, "hello", True, [1, 2, 3]),
         (2, -100, -2.5, "world", False, [4, 5, 6]),
@@ -227,21 +213,19 @@ def test_duckdb_parameter_data_types(duckdb_parameters_session: DuckDBDriver) ->
             data,
         )
 
-    # Verify data with parameters
-    # This test is about parameter data types working correctly, not floating point precision
     result = duckdb_parameters_session.execute("SELECT * FROM test_types WHERE int_val = ?", (42))
 
     assert len(result.data) == 1
     assert result.data[0]["text_val"] == "hello"
     assert result.data[0]["bool_val"] is True
     assert result.data[0]["list_val"] == [1, 2, 3]
-    # Also verify the float was stored (even if not exactly 3.14)
+
     assert 3.13 < result.data[0]["real_val"] < 3.15
 
 
 def test_duckdb_parameter_edge_cases(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test edge cases for DuckDB parameters."""
-    # Empty string parameter
+
     duckdb_parameters_session.execute(
         "INSERT INTO test_parameters (id, name, value, description) VALUES (?, ?, ?, ?)",
         (8, "", 999, "Empty name test"),
@@ -251,7 +235,6 @@ def test_duckdb_parameter_edge_cases(duckdb_parameters_session: DuckDBDriver) ->
     assert len(empty_result.data) == 1
     assert empty_result.data[0]["value"] == 999
 
-    # Very long string parameter
     long_string = "x" * 1000
     duckdb_parameters_session.execute(
         "INSERT INTO test_parameters (id, name, value, description) VALUES (?, ?, ?, ?)",
@@ -267,7 +250,7 @@ def test_duckdb_parameter_edge_cases(duckdb_parameters_session: DuckDBDriver) ->
 
 def test_duckdb_parameter_with_analytics_functions(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB analytics functions."""
-    # Insert time series data for analytics
+
     duckdb_parameters_session.execute_many(
         "INSERT INTO test_parameters (id, name, value, description) VALUES (?, ?, ?, ?)",
         [
@@ -279,7 +262,6 @@ def test_duckdb_parameter_with_analytics_functions(duckdb_parameters_session: Du
         ],
     )
 
-    # Test with window functions and parameters
     result = duckdb_parameters_session.execute(
         """
         SELECT
@@ -295,14 +277,14 @@ def test_duckdb_parameter_with_analytics_functions(duckdb_parameters_session: Du
     )
 
     assert len(result.data) >= 4
-    # Check that analytics function worked
+
     non_null_diffs = [row for row in result.data if row["diff"] is not None]
     assert len(non_null_diffs) >= 3
 
 
 def test_duckdb_parameter_with_array_functions(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB array/list functions."""
-    # Create table with array data
+
     duckdb_parameters_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_arrays (
             id INTEGER PRIMARY KEY,
@@ -312,7 +294,6 @@ def test_duckdb_parameter_with_array_functions(duckdb_parameters_session: DuckDB
         )
     """)
 
-    # Insert array data with parameters
     array_data = [
         (1, "Array 1", [1, 2, 3, 4, 5], ["tag1", "tag2"]),
         (2, "Array 2", [10, 20, 30], ["tag3"]),
@@ -322,25 +303,20 @@ def test_duckdb_parameter_with_array_functions(duckdb_parameters_session: DuckDB
     for data in array_data:
         duckdb_parameters_session.execute("INSERT INTO test_arrays (id, name, numbers, tags) VALUES (?, ?, ?, ?)", data)
 
-    # Test array functions with parameters
     result = duckdb_parameters_session.execute(
         "SELECT name, len(numbers) as num_count, len(tags) as tag_count FROM test_arrays WHERE len(numbers) >= ?", (3)
     )
 
-    assert len(result.data) == 2  # Array 1 and Array 2
+    assert len(result.data) == 2
     assert all(row["num_count"] >= 3 for row in result.data)
 
-    # Test array element access with parameters
-    element_result = duckdb_parameters_session.execute(
-        "SELECT name FROM test_arrays WHERE numbers[?] > ?",
-        (1, 5),  # First element > 5
-    )
+    element_result = duckdb_parameters_session.execute("SELECT name FROM test_arrays WHERE numbers[?] > ?", (1, 5))
     assert len(element_result.data) >= 1
 
 
 def test_duckdb_parameter_with_json_functions(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB JSON functions."""
-    # Create table with JSON data
+
     duckdb_parameters_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_json (
             id INTEGER PRIMARY KEY,
@@ -351,7 +327,6 @@ def test_duckdb_parameter_with_json_functions(duckdb_parameters_session: DuckDBD
 
     import json
 
-    # Insert JSON data with parameters
     json_data = [
         (1, "JSON 1", json.dumps({"type": "test", "value": 100, "active": True})),
         (2, "JSON 2", json.dumps({"type": "prod", "value": 200, "active": False})),
@@ -361,17 +336,15 @@ def test_duckdb_parameter_with_json_functions(duckdb_parameters_session: DuckDBD
     for data in json_data:
         duckdb_parameters_session.execute("INSERT INTO test_json (id, name, metadata) VALUES (?, ?, ?)", data)
 
-    # Test JSON extraction with parameters
     try:
         result = duckdb_parameters_session.execute(
             "SELECT name, json_extract_string(metadata, '$.type') as type FROM test_json WHERE json_extract_string(metadata, '$.type') = ?",
             ("test"),
         )
-        assert len(result.data) == 2  # JSON 1 and JSON 3
+        assert len(result.data) == 2
         assert all(row["type"] == "test" for row in result.data)
 
     except Exception:
-        # JSON functions might not be available, test simpler string operations
         result = duckdb_parameters_session.execute(
             "SELECT name FROM test_json WHERE metadata LIKE ?", ('%"type":"test"%')
         )
@@ -380,7 +353,7 @@ def test_duckdb_parameter_with_json_functions(duckdb_parameters_session: DuckDBD
 
 def test_duckdb_parameter_with_date_functions(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB date/time functions."""
-    # Create table with date data
+
     duckdb_parameters_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_dates (
             id INTEGER PRIMARY KEY,
@@ -390,7 +363,6 @@ def test_duckdb_parameter_with_date_functions(duckdb_parameters_session: DuckDBD
         )
     """)
 
-    # Insert date data with parameters
     date_data = [
         (1, "Date 1", "2023-01-01", "2023-01-01 10:00:00"),
         (2, "Date 2", "2023-06-15", "2023-06-15 14:30:00"),
@@ -402,15 +374,13 @@ def test_duckdb_parameter_with_date_functions(duckdb_parameters_session: DuckDBD
             "INSERT INTO test_dates (id, name, created_date, created_timestamp) VALUES (?, ?, ?, ?)", data
         )
 
-    # Test date functions with parameters
     result = duckdb_parameters_session.execute(
         "SELECT name, EXTRACT(month FROM created_date) as month FROM test_dates WHERE created_date >= ?", ("2023-06-01")
     )
 
-    assert len(result.data) == 2  # Date 2 and Date 3
+    assert len(result.data) == 2
     assert all(row["month"] >= 6 for row in result.data)
 
-    # Test timestamp functions with parameters
     timestamp_result = duckdb_parameters_session.execute(
         "SELECT name FROM test_dates WHERE EXTRACT(hour FROM created_timestamp) >= ?", (14)
     )
@@ -419,17 +389,16 @@ def test_duckdb_parameter_with_date_functions(duckdb_parameters_session: DuckDBD
 
 def test_duckdb_parameter_with_string_functions(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB string functions."""
-    # Test with string functions
+
     result = duckdb_parameters_session.execute(
         "SELECT * FROM test_parameters WHERE LENGTH(name) > ? AND UPPER(name) LIKE ?", (4, "TEST%")
     )
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    # Should find test1, test2, test3 (all have length > 4 and start with "test")
+
     assert len(result.data) >= 3
 
-    # Test with string manipulation and parameters
     manipulation_result = duckdb_parameters_session.execute(
         "SELECT name, CONCAT(name, ?) as extended_name FROM test_parameters WHERE POSITION(? IN name) > 0",
         ("_suffix", "test"),
@@ -441,7 +410,7 @@ def test_duckdb_parameter_with_string_functions(duckdb_parameters_session: DuckD
 
 def test_duckdb_parameter_with_math_functions(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB mathematical functions."""
-    # Test with math functions
+
     math_result = duckdb_parameters_session.execute(
         "SELECT name, value, ROUND(value * ?, 2) as multiplied, POW(value, ?) as powered FROM test_parameters WHERE value >= ?",
         (1.5, 2, 100),
@@ -457,7 +426,7 @@ def test_duckdb_parameter_with_math_functions(duckdb_parameters_session: DuckDBD
 
 def test_duckdb_parameter_with_aggregate_functions(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB aggregate functions."""
-    # Insert more test data for aggregation
+
     duckdb_parameters_session.execute_many(
         "INSERT INTO test_parameters (id, name, value, description) VALUES (?, ?, ?, ?)",
         [
@@ -468,7 +437,6 @@ def test_duckdb_parameter_with_aggregate_functions(duckdb_parameters_session: Du
         ],
     )
 
-    # Test aggregate functions with parameters
     result = duckdb_parameters_session.execute(
         """
         SELECT
@@ -485,7 +453,7 @@ def test_duckdb_parameter_with_aggregate_functions(duckdb_parameters_session: Du
         (10, 2),
     )
 
-    assert len(result.data) == 2  # Group A and Group B
+    assert len(result.data) == 2
     for row in result.data:
         assert row["count"] >= 2
         assert row["avg_value"] is not None
@@ -496,7 +464,6 @@ def test_duckdb_parameter_performance(duckdb_parameters_session: DuckDBDriver) -
     """Test parameter performance with DuckDB."""
     import time
 
-    # Create larger dataset for performance testing
     batch_data = [(i + 19, f"Perf Item {i}", i, f"PERF{i % 5}") for i in range(1000)]
 
     start_time = time.time()
@@ -508,7 +475,6 @@ def test_duckdb_parameter_performance(duckdb_parameters_session: DuckDBDriver) -
     insert_time = end_time - start_time
     assert insert_time < 2.0, f"Batch insert took too long: {insert_time:.2f} seconds"
 
-    # Test query performance with parameters
     start_time = time.time()
     result = duckdb_parameters_session.execute(
         "SELECT COUNT(*) as count FROM test_parameters WHERE value >= ? AND value <= ?", (100, 900)
@@ -517,4 +483,4 @@ def test_duckdb_parameter_performance(duckdb_parameters_session: DuckDBDriver) -
 
     query_time = end_time - start_time
     assert query_time < 1.0, f"Query took too long: {query_time:.2f} seconds"
-    assert result.data[0]["count"] >= 800  # Should find many records in range
+    assert result.data[0]["count"] >= 800

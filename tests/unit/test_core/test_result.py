@@ -19,7 +19,6 @@ def test_sql_result_basic_iteration() -> None:
 
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=3)
 
-    # Test basic iteration
     rows = list(result)
     assert len(rows) == 3
     assert rows[0]["name"] == "Alice"
@@ -31,12 +30,10 @@ def test_sql_result_iteration_with_empty_data() -> None:
     """Test iteration when SQLResult has no data."""
     sql_stmt = SQL("SELECT * FROM empty_table")
 
-    # Test with None data
     result = SQLResult(statement=sql_stmt, data=None, rows_affected=0)
     rows = list(result)
     assert len(rows) == 0
 
-    # Test with empty list
     result = SQLResult(statement=sql_stmt, data=[], rows_affected=0)
     rows = list(result)
     assert len(rows) == 0
@@ -53,7 +50,6 @@ def test_sql_result_iteration_with_list_comprehension() -> None:
 
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=3)
 
-    # Test list comprehension
     names = [row["name"] for row in result]
     assert names == ["Alice", "Bob", "Charlie"]
 
@@ -72,7 +68,6 @@ def test_sql_result_iteration_with_filtering() -> None:
 
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=3)
 
-    # Test filtering during iteration
     active_users = [row for row in result if row["active"]]
     assert len(active_users) == 2
     assert active_users[0]["name"] == "Alice"
@@ -86,7 +81,6 @@ def test_sql_result_iteration_preserves_existing_functionality() -> None:
 
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
 
-    # Test that existing methods still work after adding iteration
     assert len(result) == 2
     assert result[0]["name"] == "Alice"
     assert result[1]["name"] == "Bob"
@@ -96,7 +90,6 @@ def test_sql_result_iteration_preserves_existing_functionality() -> None:
     assert first["name"] == "Alice"
     assert not result.is_empty()
 
-    # Test that iteration works alongside existing methods
     for i, row in enumerate(result):
         assert row == result[i]
 
@@ -108,11 +101,9 @@ def test_sql_result_iteration_multiple_times() -> None:
 
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
 
-    # First iteration
     first_iteration = list(result)
     assert len(first_iteration) == 2
 
-    # Second iteration should work the same
     second_iteration = list(result)
     assert len(second_iteration) == 2
     assert first_iteration == second_iteration
@@ -125,15 +116,12 @@ def test_sql_result_iterator_protocol() -> None:
 
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=1)
 
-    # Test that iter() returns an iterator
     iterator = iter(result)
     assert hasattr(iterator, "__next__")
 
-    # Test that we can get items from the iterator
     first_item = next(iterator)
     assert first_item == {"id": 1, "name": "Alice"}
 
-    # Test that StopIteration is raised when no more items
     with pytest.raises(StopIteration):
         next(iterator)
 
@@ -145,7 +133,6 @@ def test_create_sql_result_iteration() -> None:
 
     result = create_sql_result(statement=sql_stmt, data=test_data, rows_affected=1)
 
-    # Test that factory function creates properly iterable result
     rows = list(result)
     assert len(rows) == 1
     assert rows[0]["name"] == "Alice"

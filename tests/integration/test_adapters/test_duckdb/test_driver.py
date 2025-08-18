@@ -30,11 +30,10 @@ def duckdb_session() -> Generator[DuckDBDriver, None, None]:
             """
             session.execute_script(create_table_sql)
             yield session
-            # Clean up
+
             session.execute_script("DROP TABLE IF EXISTS test_table")
             session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq")
     finally:
-        # Ensure pool is closed properly to avoid threading issues during test shutdown
         adapter.close_pool()
 
 
@@ -57,7 +56,6 @@ def test_insert(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
-    # Verify insertion
     select_result = duckdb_session.execute("SELECT name, id FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -78,7 +76,7 @@ def test_insert(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle
 @pytest.mark.xdist_group("duckdb")
 def test_select(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test selecting data with different parameter styles."""
-    # Insert test record
+
     if style == "tuple_binds":
         insert_sql = "INSERT INTO test_table (name, id) VALUES (?, ?)"
     else:
@@ -88,7 +86,6 @@ def test_select(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
-    # Test select
     select_result = duckdb_session.execute("SELECT name, id FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -96,7 +93,6 @@ def test_select(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle
     assert select_result.data[0]["name"] == "test_name"
     assert select_result.data[0]["id"] == 1
 
-    # Test select with a WHERE clause
     if style == "tuple_binds":
         select_where_sql = "SELECT id FROM test_table WHERE name = ?"
         where_parameters = "test_name"
@@ -123,7 +119,7 @@ def test_select(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle
 @pytest.mark.xdist_group("duckdb")
 def test_select_value(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test select value with different parameter styles."""
-    # Insert test record
+
     if style == "tuple_binds":
         insert_sql = "INSERT INTO test_table (name, id) VALUES (?, ?)"
     else:
@@ -133,7 +129,6 @@ def test_select_value(duckdb_session: DuckDBDriver, parameters: Any, style: Para
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
-    # Test select value
     if style == "tuple_binds":
         value_sql = "SELECT name FROM test_table WHERE id = ?"
         value_parameters = 1
@@ -147,7 +142,6 @@ def test_select_value(duckdb_session: DuckDBDriver, parameters: Any, style: Para
     assert len(value_result.data) == 1
     assert value_result.column_names is not None
 
-    # Extract single value using column name
     value = value_result.data[0][value_result.column_names[0]]
     assert value == "test_name"
 
@@ -164,7 +158,6 @@ def test_execute_many_insert(duckdb_session: DuckDBDriver) -> None:
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(parameters_list)
 
-    # Verify all records were inserted
     select_result = duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -182,7 +175,6 @@ def test_execute_script(duckdb_session: DuckDBDriver) -> None:
     result = duckdb_session.execute_script(script)
     assert isinstance(result, SQLResult)
 
-    # Verify script executed successfully
     select_result = duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -192,17 +184,15 @@ def test_execute_script(duckdb_session: DuckDBDriver) -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_update_operation(duckdb_session: DuckDBDriver) -> None:
     """Test UPDATE operations."""
-    # Insert a record first
+
     insert_result = duckdb_session.execute("INSERT INTO test_table (name, id) VALUES (?, ?)", ("original_name", 42))
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
-    # Update the record
     update_result = duckdb_session.execute("UPDATE test_table SET name = ? WHERE id = ?", ("updated_name", 42))
     assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1
 
-    # Verify the update
     select_result = duckdb_session.execute("SELECT name FROM test_table WHERE id = ?", (42))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -212,17 +202,15 @@ def test_update_operation(duckdb_session: DuckDBDriver) -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_delete_operation(duckdb_session: DuckDBDriver) -> None:
     """Test DELETE operations."""
-    # Insert a record first
+
     insert_result = duckdb_session.execute("INSERT INTO test_table (name, id) VALUES (?, ?)", ("to_delete", 99))
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
-    # Delete the record
     delete_result = duckdb_session.execute("DELETE FROM test_table WHERE id = ?", (99))
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
-    # Verify the deletion
     select_result = duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -232,7 +220,7 @@ def test_delete_operation(duckdb_session: DuckDBDriver) -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB-specific data types and functionality."""
-    # Create table with various DuckDB data types
+
     duckdb_session.execute_script("""
         CREATE TABLE data_types_test (
             id INTEGER,
@@ -246,7 +234,6 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
         )
     """)
 
-    # Insert test data with DuckDB-specific types
     insert_sql = """
         INSERT INTO data_types_test VALUES (
             1,
@@ -262,7 +249,6 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     result = duckdb_session.execute(insert_sql)
     assert result.rows_affected == 1
 
-    # Query and verify data types
     select_result = duckdb_session.execute("SELECT * FROM data_types_test")
     assert len(select_result.data) == 1
     row = select_result.data[0]
@@ -270,18 +256,17 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     assert row["id"] == 1
     assert row["text_col"] == "test_text"
     assert row["boolean_col"] is True
-    # Array and JSON handling may vary based on DuckDB version
+
     assert row["array_col"] is not None
     assert row["json_col"] is not None
 
-    # Clean up
     duckdb_session.execute_script("DROP TABLE data_types_test")
 
 
 @pytest.mark.xdist_group("duckdb")
 def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:
     """Test complex SQL queries with DuckDB."""
-    # Create additional tables for complex queries
+
     duckdb_session.execute_script("""
         CREATE TABLE departments (
             dept_id INTEGER PRIMARY KEY,
@@ -304,7 +289,6 @@ def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:
             (5, 'Eve', 3, 60000.00);
     """)
 
-    # Test complex JOIN query with aggregation
     complex_query = """
         SELECT
             d.dept_name,
@@ -320,12 +304,10 @@ def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:
     result = duckdb_session.execute(complex_query)
     assert result.total_count == 3
 
-    # Engineering should have highest average salary
     engineering_row = next(row for row in result.data if row["dept_name"] == "Engineering")
     assert engineering_row["employee_count"] == 2
     assert engineering_row["avg_salary"] == 77500.0
 
-    # Test subquery
     subquery = """
         SELECT emp_name, salary
         FROM employees
@@ -334,16 +316,15 @@ def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:
     """
 
     subquery_result = duckdb_session.execute(subquery)
-    assert len(subquery_result.data) >= 1  # At least one employee above average
+    assert len(subquery_result.data) >= 1
 
-    # Clean up
     duckdb_session.execute_script("DROP TABLE employees; DROP TABLE departments;")
 
 
 @pytest.mark.xdist_group("duckdb")
 def test_duckdb_window_functions(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB window functions."""
-    # Create test data for window functions
+
     duckdb_session.execute_script("""
         CREATE TABLE sales_data (
             id INTEGER,
@@ -360,7 +341,6 @@ def test_duckdb_window_functions(duckdb_session: DuckDBDriver) -> None:
             (5, 'Product B', 1800.00, '2024-01-05');
     """)
 
-    # Test window function with ranking
     window_query = """
         SELECT
             product,
@@ -375,19 +355,17 @@ def test_duckdb_window_functions(duckdb_session: DuckDBDriver) -> None:
     result = duckdb_session.execute(window_query)
     assert result.total_count == 5
 
-    # Verify window function results
     product_a_rows = [row for row in result.data if row["product"] == "Product A"]
     assert len(product_a_rows) == 2
-    assert product_a_rows[0]["rank_in_product"] == 1  # Highest sales amount ranked 1
+    assert product_a_rows[0]["rank_in_product"] == 1
 
-    # Clean up
     duckdb_session.execute_script("DROP TABLE sales_data")
 
 
 @pytest.mark.xdist_group("duckdb")
 def test_duckdb_schema_operations(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB schema operations (DDL)."""
-    # Test CREATE TABLE
+
     create_result = duckdb_session.execute("""
         CREATE TABLE schema_test (
             id INTEGER PRIMARY KEY,
@@ -397,15 +375,12 @@ def test_duckdb_schema_operations(duckdb_session: DuckDBDriver) -> None:
     """)
     assert isinstance(create_result, SQLResult)
 
-    # Test ALTER TABLE
     alter_result = duckdb_session.execute("ALTER TABLE schema_test ADD COLUMN email TEXT")
     assert isinstance(alter_result, SQLResult)
 
-    # Test CREATE INDEX
     index_result = duckdb_session.execute("CREATE INDEX idx_schema_test_name ON schema_test(name)")
     assert isinstance(index_result, SQLResult)
 
-    # Verify table structure by inserting and querying
     insert_result = duckdb_session.execute(
         "INSERT INTO schema_test (id, name, email) VALUES (?, ?, ?)", [1, "Test User", "test@example.com"]
     )
@@ -416,7 +391,6 @@ def test_duckdb_schema_operations(duckdb_session: DuckDBDriver) -> None:
     assert select_result.data[0]["name"] == "Test User"
     assert select_result.data[0]["email"] == "test@example.com"
 
-    # Test DROP operations
     duckdb_session.execute("DROP INDEX idx_schema_test_name")
     duckdb_session.execute("DROP TABLE schema_test")
 
@@ -424,7 +398,7 @@ def test_duckdb_schema_operations(duckdb_session: DuckDBDriver) -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_duckdb_performance_bulk_operations(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB performance with bulk operations."""
-    # Create table for bulk testing
+
     duckdb_session.execute_script("""
         CREATE TABLE bulk_test (
             id INTEGER,
@@ -433,19 +407,15 @@ def test_duckdb_performance_bulk_operations(duckdb_session: DuckDBDriver) -> Non
         )
     """)
 
-    # Generate bulk data (100 records)
     bulk_data = [(i, f"value_{i}", float(i * 10.5)) for i in range(1, 101)]
 
-    # Test bulk insert
     bulk_insert_sql = "INSERT INTO bulk_test (id, value, number) VALUES (?, ?, ?)"
     bulk_result = duckdb_session.execute_many(bulk_insert_sql, bulk_data)
     assert bulk_result.rows_affected == 100
 
-    # Test bulk query performance
     bulk_select_result = duckdb_session.execute("SELECT COUNT(*) as total FROM bulk_test")
     assert bulk_select_result.data[0]["total"] == 100
 
-    # Test aggregation on bulk data
     agg_result = duckdb_session.execute("""
         SELECT
             COUNT(*) as count,
@@ -460,18 +430,16 @@ def test_duckdb_performance_bulk_operations(duckdb_session: DuckDBDriver) -> Non
     assert agg_result.data[0]["min_number"] == 10.5
     assert agg_result.data[0]["max_number"] == 1050.0
 
-    # Clean up
     duckdb_session.execute_script("DROP TABLE bulk_test")
 
 
 @pytest.mark.xdist_group("duckdb")
 def test_duckdb_error_handling_and_edge_cases(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB error handling and edge cases."""
-    # Test invalid SQL
+
     with pytest.raises(Exception):
         duckdb_session.execute("INVALID SQL STATEMENT")
 
-    # Test constraint violation
     duckdb_session.execute_script("""
         CREATE TABLE constraint_test (
             id INTEGER PRIMARY KEY,
@@ -479,26 +447,22 @@ def test_duckdb_error_handling_and_edge_cases(duckdb_session: DuckDBDriver) -> N
         )
     """)
 
-    # Test NOT NULL constraint violation
     with pytest.raises(Exception):
         duckdb_session.execute("INSERT INTO constraint_test (id) VALUES (1)")
 
-    # Test valid insert after constraint error
     valid_result = duckdb_session.execute("INSERT INTO constraint_test (id, name) VALUES (?, ?)", [1, "Valid Name"])
     assert valid_result.rows_affected == 1
 
-    # Test duplicate primary key
     with pytest.raises(Exception):
         duckdb_session.execute("INSERT INTO constraint_test (id, name) VALUES (?, ?)", [1, "Duplicate ID"])
 
-    # Clean up
     duckdb_session.execute_script("DROP TABLE constraint_test")
 
 
 @pytest.mark.xdist_group("duckdb")
 def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> None:
     """Test comprehensive SQLResult methods."""
-    # Test SQLResult methods
+
     duckdb_session.execute_script("""
         CREATE TABLE result_methods_test (
             id INTEGER,
@@ -513,37 +477,29 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
             (4, 'C', 40);
     """)
 
-    # Test SQLResult methods
     select_result = duckdb_session.execute("SELECT * FROM result_methods_test ORDER BY id")
 
-    # Test get_count()
     assert select_result.get_count() == 4
 
-    # Test get_first()
     first_row = select_result.get_first()
     assert first_row is not None
     assert first_row["id"] == 1
 
-    # Test is_empty()
     assert not select_result.is_empty()
 
-    # Test empty result
     empty_result = duckdb_session.execute("SELECT * FROM result_methods_test WHERE id > 100")
     assert empty_result.is_empty()
     assert empty_result.get_count() == 0
     assert empty_result.get_first() is None
 
-    # Test SQLResult methods
     update_result = duckdb_session.execute("UPDATE result_methods_test SET value = value * 2 WHERE category = 'A'")
 
-    # Test SQLResult methods
     assert isinstance(update_result, SQLResult)
     assert update_result.get_affected_count() == 2
     assert update_result.was_updated()
     assert not update_result.was_inserted()
     assert not update_result.was_deleted()
 
-    # Test INSERT result
     insert_result = duckdb_session.execute(
         "INSERT INTO result_methods_test (id, category, value) VALUES (?, ?, ?)", [5, "D", 50]
     )
@@ -551,11 +507,9 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
     assert insert_result.was_inserted()
     assert insert_result.get_affected_count() == 1
 
-    # Test DELETE result
     delete_result = duckdb_session.execute("DELETE FROM result_methods_test WHERE category = 'C'")
     assert isinstance(delete_result, SQLResult)
     assert delete_result.was_deleted()
     assert delete_result.get_affected_count() == 1
 
-    # Clean up
     duckdb_session.execute_script("DROP TABLE result_methods_test")

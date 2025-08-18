@@ -60,10 +60,8 @@ def test_correlation_id_context_isolation_between_threads() -> None:
     thread_results = {}
 
     def thread_worker(thread_id: int) -> None:
-        # Each thread should start with None
         thread_results[f"initial_{thread_id}"] = get_correlation_id()
 
-        # Set thread-specific ID
         thread_specific_id = f"thread-{thread_id}"
         set_correlation_id(thread_specific_id)
         thread_results[f"after_set_{thread_id}"] = get_correlation_id()
@@ -76,10 +74,8 @@ def test_correlation_id_context_isolation_between_threads() -> None:
     for thread in threads:
         thread.join()
 
-    # Main thread should still have its ID
     assert get_correlation_id() == main_id
 
-    # Each thread should have started with None and maintained its own ID
     for i in range(3):
         assert thread_results[f"initial_{i}"] is None
         assert thread_results[f"after_set_{i}"] == f"thread-{i}"
@@ -92,20 +88,16 @@ def test_correlation_id_context_variable_copy() -> None:
     def task_in_copied_context() -> str | None:
         return get_correlation_id()
 
-    # Create a copy of the current context
     ctx = copy_context()
 
-    # The copied context should have the same correlation ID
     result = ctx.run(task_in_copied_context)
     assert result == "original"
 
-    # Changes in copied context shouldn't affect original
     def modify_in_copy() -> None:
         set_correlation_id("modified")
 
     ctx.run(modify_in_copy)
 
-    # Original context should be unchanged
     assert get_correlation_id() == "original"
 
 
@@ -128,10 +120,8 @@ def test_structured_formatter_basic_log_formatting() -> None:
 
     result = formatter.format(record)
 
-    # Should be valid JSON
     parsed = json.loads(result)
 
-    # Check required fields
     assert "timestamp" in parsed
     assert parsed["level"] == "INFO"
     assert parsed["logger"] == "test.logger"
@@ -264,7 +254,6 @@ def test_structured_formatter_custom_date_format() -> None:
     result = formatter.format(record)
     parsed = json.loads(result)
 
-    # Should use custom date format (YYYY-MM-DD)
     import re
 
     assert re.match(r"\d{4}-\d{2}-\d{2}", parsed["timestamp"])
@@ -286,7 +275,6 @@ def test_correlation_id_filter_adds_correlation_id() -> None:
         exc_info=None,
     )
 
-    # Filter should return True and add correlation_id
     result = filter_obj.filter(record)
 
     assert result is True
@@ -309,7 +297,6 @@ def test_correlation_id_filter_without_correlation_id() -> None:
         exc_info=None,
     )
 
-    # Filter should still return True but not add correlation_id
     result = filter_obj.filter(record)
 
     assert result is True
@@ -320,12 +307,10 @@ def test_correlation_id_filter_always_returns_true() -> None:
     """Test that filter always passes records through."""
     filter_obj = CorrelationIDFilter()
 
-    # Test with correlation ID
     set_correlation_id("test-id")
     record1 = logging.LogRecord("test", logging.INFO, "/path", 1, "msg", (), None)
     assert filter_obj.filter(record1) is True
 
-    # Test without correlation ID
     correlation_id_var.set(None)
     record2 = logging.LogRecord("test", logging.ERROR, "/path", 2, "msg", (), None)
     assert filter_obj.filter(record2) is True
@@ -355,7 +340,6 @@ def test_get_logger_has_correlation_filter() -> None:
     """Test that returned logger has CorrelationIDFilter added."""
     logger = get_logger("test.filtered")
 
-    # Should have at least one CorrelationIDFilter
     correlation_filters = [f for f in logger.filters if isinstance(f, CorrelationIDFilter)]
     assert len(correlation_filters) >= 1
 
@@ -365,11 +349,11 @@ def test_get_logger_filter_not_duplicated() -> None:
     logger1 = get_logger("test.no.duplicate")
     initial_filter_count = len([f for f in logger1.filters if isinstance(f, CorrelationIDFilter)])
 
-    logger2 = get_logger("test.no.duplicate")  # Same logger
+    logger2 = get_logger("test.no.duplicate")
     final_filter_count = len([f for f in logger2.filters if isinstance(f, CorrelationIDFilter)])
 
-    assert logger1 is logger2  # Should be same logger instance
-    assert initial_filter_count == final_filter_count  # Filter count shouldn't increase
+    assert logger1 is logger2
+    assert initial_filter_count == final_filter_count
 
 
 def test_get_logger_different_loggers_independent() -> None:
@@ -389,10 +373,8 @@ class TestLogWithContext:
         self.logger = logging.getLogger("test_context_logger")
         self.logger.setLevel(logging.DEBUG)
 
-        # Clear existing handlers
         self.logger.handlers.clear()
 
-        # Add string stream handler to capture output
         self.log_stream = StringIO()
         self.handler = logging.StreamHandler(self.log_stream)
         self.handler.setFormatter(StructuredFormatter())
@@ -468,7 +450,7 @@ class TestIntegrationScenarios:
 
     def test_complete_structured_logging_flow(self) -> None:
         """Test complete structured logging workflow."""
-        # Set up logger with structured formatter
+
         logger = logging.getLogger("integration_test")
         logger.setLevel(logging.INFO)
 
@@ -478,41 +460,32 @@ class TestIntegrationScenarios:
         logger.addHandler(handler)
 
         try:
-            # Set correlation ID
             set_correlation_id("integration-flow-123")
 
-            # Log various messages
             logger.info("Starting operation")
 
             log_with_context(logger, logging.INFO, "Processing user data", user_id=456, operation="update")
 
-            # Simulate error
             try:
                 raise ValueError("Simulated error")
             except ValueError:
                 logger.error("Operation failed", exc_info=True)
 
-            # Get all log output
             log_output = log_stream.getvalue()
             log_lines = [line.strip() for line in log_output.strip().split("\n") if line.strip()]
 
-            # Should have 3 log entries
             assert len(log_lines) == 3
 
-            # Parse and verify each log entry
             logs = [json.loads(line) for line in log_lines]
 
-            # First log: basic info with correlation ID
             assert logs[0]["message"] == "Starting operation"
             assert logs[0]["correlation_id"] == "integration-flow-123"
 
-            # Second log: with extra context
             assert logs[1]["message"] == "Processing user data"
             assert logs[1]["correlation_id"] == "integration-flow-123"
             assert logs[1]["user_id"] == 456
             assert logs[1]["operation"] == "update"
 
-            # Third log: error with exception
             assert logs[2]["message"] == "Operation failed"
             assert logs[2]["correlation_id"] == "integration-flow-123"
             assert "exception" in logs[2]
@@ -523,11 +496,10 @@ class TestIntegrationScenarios:
 
     def test_logger_hierarchy_and_filtering(self) -> None:
         """Test logger hierarchy with correlation filtering."""
-        # Create parent and child loggers
+
         parent_logger = get_logger("parent")
         child_logger = get_logger("parent.child")
 
-        # Both should have correlation filters
         parent_filters = [f for f in parent_logger.filters if isinstance(f, CorrelationIDFilter)]
         child_filters = [f for f in child_logger.filters if isinstance(f, CorrelationIDFilter)]
 
@@ -547,29 +519,23 @@ class TestIntegrationScenarios:
         logger.addHandler(handler)
 
         def worker_task(worker_id: int) -> None:
-            # Each worker sets its own correlation ID
             set_correlation_id(f"worker-{worker_id}")
 
-            # Log a message
             log_with_context(
                 logger, logging.INFO, f"Worker {worker_id} processing", worker_id=worker_id, task="concurrent_test"
             )
 
         try:
-            # Run multiple workers concurrently
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 futures = [executor.submit(worker_task, i) for i in range(10)]
 
-                # Wait for all to complete
                 for future in concurrent.futures.as_completed(futures):
                     future.result()
 
-            # Parse all log output
             log_output = log_stream.getvalue()
             log_lines = [line.strip() for line in log_output.strip().split("\n") if line.strip()]
             logs = [json.loads(line) for line in log_lines if line]
 
-            # Should have 10 log entries, each with correct correlation ID
             assert len(logs) == 10
 
             for log_entry in logs:
@@ -601,7 +567,6 @@ class TestEdgeCases:
         record.module = None  # pyright: ignore
         record.funcName = None  # pyright: ignore
 
-        # Should not raise exception
         result = formatter.format(record)
         parsed = json.loads(result)
 
@@ -613,21 +578,19 @@ class TestEdgeCases:
         """Test filter handles malformed log records."""
         filter_obj = CorrelationIDFilter()
 
-        # Create minimal record
         record = Mock()
 
-        # Should not raise exception and should return True
         result = filter_obj.filter(record)
         assert result is True
 
     def test_get_logger_with_empty_name(self) -> None:
         """Test get_logger with empty string name."""
         logger = get_logger("")
-        assert logger.name == "sqlspec."  # Should still add prefix
+        assert logger.name == "sqlspec."
 
     def test_correlation_id_with_special_characters(self) -> None:
         """Test correlation ID with special characters."""
-        special_id = "test-id-with-special!@#$%^&*()chars"
+        special_id = "test-id-with-special!@#$%"
         set_correlation_id(special_id)
 
         formatter = StructuredFormatter()
@@ -673,21 +636,13 @@ def test_module_exports() -> None:
 
 @pytest.mark.parametrize(
     "correlation_id",
-    [
-        "simple-id",
-        "complex-id-with-many-parts-123",
-        "special!@#$%^&*()chars",
-        "unicode-café-test",
-        "",  # Empty string
-        "a" * 1000,  # Very long string
-    ],
+    ["simple-id", "complex-id-with-many-parts-123", "special!@#$%^&*", "unicode-café-test", "", "a" * 1000],
 )
 def test_correlation_id_formats(correlation_id: str) -> None:
     """Test various correlation ID formats are handled correctly."""
     set_correlation_id(correlation_id)
     assert get_correlation_id() == correlation_id
 
-    # Test with formatter
     formatter = StructuredFormatter()
     record = logging.LogRecord("test", logging.INFO, "/path", 1, "msg", (), None)
     record.module = "test"
@@ -696,7 +651,7 @@ def test_correlation_id_formats(correlation_id: str) -> None:
     result = formatter.format(record)
     parsed = json.loads(result)
 
-    if correlation_id:  # Non-empty
+    if correlation_id:
         assert parsed["correlation_id"] == correlation_id
-    else:  # Empty string case
+    else:
         assert parsed.get("correlation_id") is None

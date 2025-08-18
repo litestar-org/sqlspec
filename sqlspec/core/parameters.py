@@ -9,14 +9,13 @@ Components:
 - ParameterInfo: Tracks parameter metadata
 - ParameterValidator: Extracts and validates parameters
 - ParameterConverter: Handles parameter style conversions
-- ParameterProcessor: High-level coordinator with caching
+- ParameterProcessor: Parameter processing coordinator
 - ParameterStyleConfig: Configuration for parameter processing
 
 Features:
-- Two-phase processing: SQLGlot compatibility and execution format
+- Two-phase processing: compatibility and execution format
 - Type-specific parameter wrapping
 - Parameter style conversions
-- Caching system for parameter extraction and conversion
 - Support for multiple parameter styles and database adapters
 """
 
@@ -93,15 +92,15 @@ class ParameterStyle(str, Enum):
     POSITIONAL_PYFORMAT = "pyformat_positional"
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class TypedParameter:
     """Parameter wrapper that preserves type information.
 
-    Maintains type information through SQLGlot parsing and execution
+    Maintains type information through parsing and execution
     format conversion.
 
     Use Cases:
-    - Preserve boolean values through SQLGlot parsing
+    - Preserve boolean values through parsing
     - Maintain Decimal precision
     - Handle date/datetime formatting
     - Preserve array/list structures
@@ -126,7 +125,6 @@ class TypedParameter:
     def __hash__(self) -> int:
         """Cached hash value with optimization."""
         if self._hash is None:
-            # Optimize by avoiding tuple creation for common case
             value_id = id(self.value)
             self._hash = hash((value_id, self.original_type, self.semantic_name))
         return self._hash
@@ -340,10 +338,10 @@ class ParameterValidator:
     """Parameter validation and extraction.
 
     Extracts parameter information from SQL strings and determines
-    SQLGlot compatibility.
+    compatibility.
 
     Features:
-    - Cached parameter extraction results
+    - Parameter extraction results
     - Regex-based parameter detection
     - Dialect-specific compatibility checking
     """
@@ -353,6 +351,42 @@ class ParameterValidator:
     def __init__(self) -> None:
         """Initialize validator with parameter cache."""
         self._parameter_cache: dict[str, list[ParameterInfo]] = {}
+
+    def _extract_parameter_style(self, match: "re.Match[str]") -> "tuple[Optional[ParameterStyle], Optional[str]]":
+        """Extract parameter style and name from regex match.
+
+        Args:
+            match: Regex match object
+
+        Returns:
+            Tuple of (style, name) or (None, None) if not a parameter
+        """
+
+        if match.group("qmark"):
+            return ParameterStyle.QMARK, None
+
+        if match.group("named_colon"):
+            return ParameterStyle.NAMED_COLON, match.group("colon_name")
+
+        if match.group("numeric"):
+            return ParameterStyle.NUMERIC, match.group("numeric_num")
+
+        if match.group("named_at"):
+            return ParameterStyle.NAMED_AT, match.group("at_name")
+
+        if match.group("pyformat_named"):
+            return ParameterStyle.NAMED_PYFORMAT, match.group("pyformat_name")
+
+        if match.group("pyformat_pos"):
+            return ParameterStyle.POSITIONAL_PYFORMAT, None
+
+        if match.group("positional_colon"):
+            return ParameterStyle.POSITIONAL_COLON, match.group("colon_num")
+
+        if match.group("named_dollar_param"):
+            return ParameterStyle.NAMED_DOLLAR, match.group("dollar_param_name")
+
+        return None, None
 
     def extract_parameters(self, sql: str) -> "list[ParameterInfo]":
         """Extract all parameters from SQL.
@@ -370,65 +404,26 @@ class ParameterValidator:
         parameters: list[ParameterInfo] = []
         ordinal = 0
 
+        skip_groups = (
+            "dquote",
+            "squote",
+            "dollar_quoted_string",
+            "line_comment",
+            "block_comment",
+            "pg_q_operator",
+            "pg_cast",
+        )
+
         for match in _PARAMETER_REGEX.finditer(sql):
-            # Fast rejection of comments and quotes
-            if (
-                match.group("dquote")
-                or match.group("squote")
-                or match.group("dollar_quoted_string")
-                or match.group("line_comment")
-                or match.group("block_comment")
-                or match.group("pg_q_operator")
-                or match.group("pg_cast")
-            ):
+            if any(match.group(g) for g in skip_groups):
                 continue
 
-            position = match.start()
-            placeholder_text = match.group(0)
-            name: Optional[str] = None
-            style: Optional[ParameterStyle] = None
-
-            # Optimize with elif chain for better branch prediction
-            pyformat_named = match.group("pyformat_named")
-            if pyformat_named:
-                style = ParameterStyle.NAMED_PYFORMAT
-                name = match.group("pyformat_name")
-            else:
-                pyformat_pos = match.group("pyformat_pos")
-                if pyformat_pos:
-                    style = ParameterStyle.POSITIONAL_PYFORMAT
-                else:
-                    positional_colon = match.group("positional_colon")
-                    if positional_colon:
-                        style = ParameterStyle.POSITIONAL_COLON
-                        name = match.group("colon_num")
-                    else:
-                        named_colon = match.group("named_colon")
-                        if named_colon:
-                            style = ParameterStyle.NAMED_COLON
-                            name = match.group("colon_name")
-                        else:
-                            named_at = match.group("named_at")
-                            if named_at:
-                                style = ParameterStyle.NAMED_AT
-                                name = match.group("at_name")
-                            else:
-                                numeric = match.group("numeric")
-                                if numeric:
-                                    style = ParameterStyle.NUMERIC
-                                    name = match.group("numeric_num")
-                                else:
-                                    named_dollar_param = match.group("named_dollar_param")
-                                    if named_dollar_param:
-                                        style = ParameterStyle.NAMED_DOLLAR
-                                        name = match.group("dollar_param_name")
-                                    elif match.group("qmark"):
-                                        style = ParameterStyle.QMARK
+            style, name = self._extract_parameter_style(match)
 
             if style is not None:
                 parameters.append(
                     ParameterInfo(
-                        name=name, style=style, position=position, ordinal=ordinal, placeholder_text=placeholder_text
+                        name=name, style=style, position=match.start(), ordinal=ordinal, placeholder_text=match.group(0)
                     )
                 )
                 ordinal += 1
@@ -446,9 +441,9 @@ class ParameterValidator:
             Set of parameter styles incompatible with SQLGlot
         """
         base_incompatible = {
-            ParameterStyle.POSITIONAL_PYFORMAT,  # %s, %d - modulo operator conflict
-            ParameterStyle.NAMED_PYFORMAT,  # %(name)s - complex format string
-            ParameterStyle.POSITIONAL_COLON,  # :1, :2 - numbered colon parameters
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            ParameterStyle.NAMED_PYFORMAT,
+            ParameterStyle.POSITIONAL_COLON,
         }
 
         if dialect and dialect.lower() in {"mysql", "mariadb"}:
@@ -467,12 +462,12 @@ class ParameterConverter:
     """Parameter style conversion.
 
     Handles two-phase parameter processing:
-    - Phase 1: SQLGlot compatibility normalization
+    - Phase 1: Compatibility normalization
     - Phase 2: Execution format conversion
 
     Features:
     - Converts incompatible styles to canonical format
-    - Enables SQLGlot parsing of problematic parameter styles
+    - Enables parsing of problematic parameter styles
     - Handles parameter format changes (list ↔ dict, positional ↔ named)
     """
 
@@ -489,7 +484,7 @@ class ParameterConverter:
             ParameterStyle.QMARK: self._convert_to_positional_format,
             ParameterStyle.NUMERIC: self._convert_to_positional_format,
             ParameterStyle.POSITIONAL_PYFORMAT: self._convert_to_positional_format,
-            ParameterStyle.NAMED_AT: self._convert_to_named_colon_format,  # Same logic as colon
+            ParameterStyle.NAMED_AT: self._convert_to_named_colon_format,
             ParameterStyle.NAMED_DOLLAR: self._convert_to_named_colon_format,
         }
 
@@ -505,10 +500,10 @@ class ParameterConverter:
         }
 
     def normalize_sql_for_parsing(self, sql: str, dialect: Optional[str] = None) -> "tuple[str, list[ParameterInfo]]":
-        """Convert SQL to SQLGlot-parsable format.
+        """Convert SQL to parsable format.
 
         Takes raw SQL with potentially incompatible parameter styles and converts
-        them to a canonical format that SQLGlot can parse.
+        them to a canonical format for parsing.
 
         Args:
             sql: Raw SQL string with any parameter style
@@ -586,13 +581,11 @@ class ParameterConverter:
             msg = f"Unsupported target parameter style: {target_style}"
             raise ValueError(msg)
 
-        # Optimize parameter style detection
         param_styles = {p.style for p in param_info}
         use_sequential_for_qmark = (
             len(param_styles) == 1 and ParameterStyle.QMARK in param_styles and target_style == ParameterStyle.NUMERIC
         )
 
-        # Build unique parameters mapping efficiently
         unique_params: dict[str, int] = {}
         for param in param_info:
             param_key = (
@@ -604,17 +597,14 @@ class ParameterConverter:
             if param_key not in unique_params:
                 unique_params[param_key] = len(unique_params)
 
-        # Convert SQL with optimized string operations
         converted_sql = sql
         placeholder_text_len_cache: dict[str, int] = {}
 
         for param in reversed(param_info):
-            # Cache placeholder text length to avoid recalculation
             if param.placeholder_text not in placeholder_text_len_cache:
                 placeholder_text_len_cache[param.placeholder_text] = len(param.placeholder_text)
             text_len = placeholder_text_len_cache[param.placeholder_text]
 
-            # Generate new placeholder based on target style
             if target_style in {
                 ParameterStyle.QMARK,
                 ParameterStyle.NUMERIC,
@@ -627,18 +617,112 @@ class ParameterConverter:
                     else param.placeholder_text
                 )
                 new_placeholder = generator(unique_params[param_key])
-            else:  # Named styles
+            else:
                 param_name = param.name or f"param_{param.ordinal}"
                 new_placeholder = generator(param_name)
 
-            # Optimized string replacement
             converted_sql = (
                 converted_sql[: param.position] + new_placeholder + converted_sql[param.position + text_len :]
             )
 
         return converted_sql
 
-    def _convert_parameter_format(  # noqa: C901
+    def _convert_sequence_to_dict(self, parameters: Sequence, param_info: "list[ParameterInfo]") -> "dict[str, Any]":
+        """Convert sequence parameters to dictionary for named styles.
+
+        Args:
+            parameters: Sequence of parameter values
+            param_info: Parameter information from SQL
+
+        Returns:
+            Dictionary mapping parameter names to values
+        """
+        param_dict = {}
+        for i, param in enumerate(param_info):
+            if i < len(parameters):
+                name = param.name or f"param_{param.ordinal}"
+                param_dict[name] = parameters[i]
+        return param_dict
+
+    def _extract_param_value_mixed_styles(
+        self, param: ParameterInfo, parameters: Mapping, param_keys: "list[str]"
+    ) -> "tuple[Any, bool]":
+        """Extract parameter value for mixed style parameters.
+
+        Args:
+            param: Parameter information
+            parameters: Parameter mapping
+            param_keys: List of parameter keys
+
+        Returns:
+            Tuple of (value, found_flag)
+        """
+        if param.name and param.name in parameters:
+            return parameters[param.name], True
+
+        if (
+            param.style == ParameterStyle.NUMERIC
+            and param.name
+            and param.name.isdigit()
+            and param.ordinal < len(param_keys)
+        ):
+            key_to_use = param_keys[param.ordinal]
+            return parameters[key_to_use], True
+
+        if f"param_{param.ordinal}" in parameters:
+            return parameters[f"param_{param.ordinal}"], True
+
+        ordinal_key = str(param.ordinal + 1)
+        if ordinal_key in parameters:
+            return parameters[ordinal_key], True
+
+        return None, False
+
+    def _extract_param_value_single_style(self, param: ParameterInfo, parameters: Mapping) -> Any:
+        """Extract parameter value for single style parameters.
+
+        Args:
+            param: Parameter information
+            parameters: Parameter mapping
+
+        Returns:
+            Parameter value or None if not found
+        """
+        if param.name and param.name in parameters:
+            return parameters[param.name]
+        if f"param_{param.ordinal}" in parameters:
+            return parameters[f"param_{param.ordinal}"]
+
+        ordinal_key = str(param.ordinal + 1)
+        if ordinal_key in parameters:
+            return parameters[ordinal_key]
+
+        return None
+
+    def _preserve_original_format(self, param_values: "list[Any]", original_parameters: Any) -> Any:
+        """Preserve the original parameter container format.
+
+        Args:
+            param_values: List of parameter values
+            original_parameters: Original parameter container
+
+        Returns:
+            Parameters in original format
+        """
+        if isinstance(original_parameters, tuple):
+            return tuple(param_values)
+        if isinstance(original_parameters, list):
+            return param_values
+
+        if hasattr(original_parameters, "__class__") and callable(original_parameters.__class__):
+            try:
+                return original_parameters.__class__(param_values)
+            except (TypeError, ValueError):
+                return tuple(param_values)
+
+        return param_values
+
+    def _convert_parameter_format(
         self,
         parameters: Any,
         param_info: "list[ParameterInfo]",
@@ -658,7 +742,6 @@ class ParameterConverter:
         if not parameters or not param_info:
             return parameters
 
-        # Determine if target style expects named or positional parameters
         is_named_style = target_style in {
             ParameterStyle.NAMED_COLON,
             ParameterStyle.NAMED_AT,
@@ -667,82 +750,34 @@ class ParameterConverter:
         }
 
         if is_named_style:
-            # Convert to dict format if needed
             if isinstance(parameters, Mapping):
-                return parameters  # Already in correct format
+                return parameters
             if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-                # Convert positional to named
-                param_dict = {}
-                for i, param in enumerate(param_info):
-                    if i < len(parameters):
-                        name = param.name or f"param_{param.ordinal}"
-                        param_dict[name] = parameters[i]
-                return param_dict
-        # Convert to list/tuple format if needed
-        elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            return parameters  # Already in correct format
-        elif isinstance(parameters, Mapping):
-            # Convert named to positional
-            param_values = []
+                return self._convert_sequence_to_dict(parameters, param_info)
 
-            # Handle mixed parameter styles by creating a comprehensive parameter mapping
+        elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+            return parameters
+
+        elif isinstance(parameters, Mapping):
+            param_values = []
             parameter_styles = {p.style for p in param_info}
             has_mixed_styles = len(parameter_styles) > 1
 
             if has_mixed_styles:
-                # For mixed styles, we need to create a mapping that handles both named and positional parameters
-                # Strategy: Map parameters based on their ordinal position in the SQL
                 param_keys = list(parameters.keys())
-
                 for param in param_info:
-                    value_found = False
-
-                    # First, try direct name mapping for named parameters
-                    if param.name and param.name in parameters:
-                        param_values.append(parameters[param.name])
-                        value_found = True
-                    # For numeric parameters like $1, $2, map by ordinal position
-                    elif param.style == ParameterStyle.NUMERIC and param.name and param.name.isdigit():
-                        # $2 means the second parameter - use ordinal position to find corresponding key
-                        if param.ordinal < len(param_keys):
-                            key_to_use = param_keys[param.ordinal]
-                            param_values.append(parameters[key_to_use])
-                            value_found = True
-
-                    # Fallback to original logic if no value found yet
-                    if not value_found:
-                        if f"param_{param.ordinal}" in parameters:
-                            param_values.append(parameters[f"param_{param.ordinal}"])
-                        elif str(param.ordinal + 1) in parameters:  # 1-based for some styles
-                            param_values.append(parameters[str(param.ordinal + 1)])
+                    value, found = self._extract_param_value_mixed_styles(param, parameters, param_keys)
+                    if found:
+                        param_values.append(value)
             else:
-                # Original logic for single parameter style
                 for param in param_info:
-                    if param.name and param.name in parameters:
-                        param_values.append(parameters[param.name])
-                    elif f"param_{param.ordinal}" in parameters:
-                        param_values.append(parameters[f"param_{param.ordinal}"])
-                    else:
-                        # Try to match by ordinal key
-                        ordinal_key = str(param.ordinal + 1)  # 1-based for some styles
-                        if ordinal_key in parameters:
-                            param_values.append(parameters[ordinal_key])
+                    value = self._extract_param_value_single_style(param, parameters)
+                    if value is not None:
+                        param_values.append(value)
 
-            # Preserve original container type if preserve_parameter_format=True and we have the original
             if preserve_parameter_format and original_parameters is not None:
-                if isinstance(original_parameters, tuple):
-                    return tuple(param_values)
-                if isinstance(original_parameters, list):
-                    return param_values
-                # For other sequence types, try to construct the same type
-                if hasattr(original_parameters, "__class__") and callable(original_parameters.__class__):
-                    try:
-                        return original_parameters.__class__(param_values)
-                    except (TypeError, ValueError):
-                        # Fallback to tuple if construction fails
-                        return tuple(param_values)
+                return self._preserve_original_format(param_values, original_parameters)
 
-            # Default to list for backward compatibility
             return param_values
 
         return parameters
@@ -754,23 +789,13 @@ class ParameterConverter:
         if not param_info:
             return sql, None
 
-        # Build a mapping of unique parameters to their ordinals
-        # This handles repeated parameters like $1, $2, $1 correctly, but not
-        # sequential positional parameters like ?, ? which should use different values
         unique_params: dict[str, int] = {}
         for param in param_info:
-            # Create a unique key for each parameter based on what makes it distinct
             if param.style in {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}:
-                # For sequential positional parameters, each occurrence gets its own value
                 param_key = f"{param.placeholder_text}_{param.ordinal}"
-            elif param.style == ParameterStyle.NUMERIC and param.name:
-                # For numeric parameters like $1, $2, $1, reuse based on the number
-                param_key = param.placeholder_text  # e.g., "$1", "$2", "$1"
-            elif param.name:
-                # For named parameters like :name, :other, :name, reuse based on name
-                param_key = param.placeholder_text  # e.g., ":name", ":other", ":name"
+            elif (param.style == ParameterStyle.NUMERIC and param.name) or param.name:
+                param_key = param.placeholder_text
             else:
-                # Fallback: treat each occurrence as unique
                 param_key = f"{param.placeholder_text}_{param.ordinal}"
 
             if param_key not in unique_params:
@@ -778,14 +803,11 @@ class ParameterConverter:
 
         static_sql = sql
         for param in reversed(param_info):
-            # Get parameter value using unique parameter mapping
             param_value = self._get_parameter_value_with_reuse(parameters, param, unique_params)
 
-            # Convert to SQL literal
             if param_value is None:
                 literal = "NULL"
             elif isinstance(param_value, str):
-                # Escape single quotes
                 escaped = param_value.replace("'", "''")
                 literal = f"'{escaped}'"
             elif isinstance(param_value, bool):
@@ -793,25 +815,22 @@ class ParameterConverter:
             elif isinstance(param_value, (int, float)):
                 literal = str(param_value)
             else:
-                # Convert to string and quote
                 literal = f"'{param_value!s}'"
 
-            # Replace placeholder with literal value
             static_sql = (
                 static_sql[: param.position] + literal + static_sql[param.position + len(param.placeholder_text) :]
             )
 
-        return static_sql, None  # No parameters needed for static SQL
+        return static_sql, None
 
     def _get_parameter_value(self, parameters: Any, param: ParameterInfo) -> Any:
         """Extract parameter value based on parameter info and format."""
         if isinstance(parameters, Mapping):
-            # Try by name first, then by ordinal key
             if param.name and param.name in parameters:
                 return parameters[param.name]
             if f"param_{param.ordinal}" in parameters:
                 return parameters[f"param_{param.ordinal}"]
-            if str(param.ordinal + 1) in parameters:  # 1-based ordinal
+            if str(param.ordinal + 1) in parameters:
                 return parameters[str(param.ordinal + 1)]
         elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             if param.ordinal < len(parameters):
@@ -832,41 +851,31 @@ class ParameterConverter:
         Returns:
             Parameter value, correctly handling reused parameters
         """
-        # Build the parameter key using the same logic as in _embed_static_parameters
+
         if param.style in {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}:
-            # For sequential positional parameters, each occurrence gets its own value
             param_key = f"{param.placeholder_text}_{param.ordinal}"
-        elif param.style == ParameterStyle.NUMERIC and param.name:
-            # For numeric parameters like $1, $2, $1, reuse based on the number
-            param_key = param.placeholder_text  # e.g., "$1", "$2", "$1"
-        elif param.name:
-            # For named parameters like :name, :other, :name, reuse based on name
-            param_key = param.placeholder_text  # e.g., ":name", ":other", ":name"
+        elif (param.style == ParameterStyle.NUMERIC and param.name) or param.name:
+            param_key = param.placeholder_text
         else:
-            # Fallback: treat each occurrence as unique
             param_key = f"{param.placeholder_text}_{param.ordinal}"
 
-        # Get the unique ordinal for this parameter key
         unique_ordinal = unique_params.get(param_key)
         if unique_ordinal is None:
             return None
 
         if isinstance(parameters, Mapping):
-            # For named parameters, try different key formats
             if param.name and param.name in parameters:
                 return parameters[param.name]
             if f"param_{unique_ordinal}" in parameters:
                 return parameters[f"param_{unique_ordinal}"]
-            if str(unique_ordinal + 1) in parameters:  # 1-based ordinal
+            if str(unique_ordinal + 1) in parameters:
                 return parameters[str(unique_ordinal + 1)]
         elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            # Use the unique ordinal to get the correct parameter value
             if unique_ordinal < len(parameters):
                 return parameters[unique_ordinal]
 
         return None
 
-    # Format converter methods for different parameter styles
     def _convert_to_positional_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to positional format (list/tuple)."""
         return self._convert_parameter_format(
@@ -882,9 +891,8 @@ class ParameterConverter:
     def _convert_to_positional_colon_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to positional colon format with 1-based keys."""
         if isinstance(parameters, Mapping):
-            return parameters  # Already dict format
+            return parameters
 
-        # Convert to 1-based ordinal keys for Oracle
         param_dict = {}
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             for i, value in enumerate(parameters):
@@ -901,36 +909,89 @@ class ParameterConverter:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterProcessor:
-    """HIGH-LEVEL parameter processing engine with complete pipeline.
+    """Parameter processing engine.
 
-    This is the main entry point for the complete parameter pre-processing system
-    that coordinates Phase 1 (SQLGlot compatibility) and Phase 2 (execution format).
+    This is the main entry point for the parameter processing system
+    that coordinates Phase 1 (compatibility) and Phase 2 (execution format).
 
     Processing Pipeline:
-    1. Type wrapping for SQLGlot compatibility (TypedParameter)
+    1. Type wrapping for compatibility (TypedParameter)
     2. Driver-specific type coercions (type_coercion_map)
-    3. Phase 1: SQLGlot normalization if needed
+    3. Phase 1: Normalization if needed
     4. Phase 2: Execution format conversion if needed
     5. Final output transformation (output_transformer)
-
-    Performance:
-    - Fast path for no parameters or no conversion needed
-    - Cached processing results for repeated SQL patterns
-    - Minimal overhead when no processing required
     """
 
     __slots__ = ("_cache", "_cache_size", "_converter", "_validator")
 
-    # Class-level constants
     DEFAULT_CACHE_SIZE = 1000
 
     def __init__(self) -> None:
-        """Initialize processor with caching and component coordination."""
+        """Initialize processor with component coordination."""
         self._cache: dict[str, tuple[str, Any]] = {}
         self._cache_size = 0
         self._validator = ParameterValidator()
         self._converter = ParameterConverter()
-        # Cache size is a class-level constant
+
+    def _handle_static_embedding(
+        self, sql: str, parameters: Any, config: ParameterStyleConfig, is_many: bool, cache_key: str
+    ) -> "tuple[str, Any]":
+        """Handle static parameter embedding for script compilation.
+
+        Args:
+            sql: SQL string
+            parameters: Parameter values
+            config: Parameter configuration
+            is_many: Whether this is for execute_many
+            cache_key: Cache key for result
+
+        Returns:
+            Tuple of (static_sql, static_params)
+        """
+        coerced_params = parameters
+        if config.type_coercion_map and parameters:
+            coerced_params = self._apply_type_coercions(parameters, config.type_coercion_map, is_many)
+
+        static_sql, static_params = self._converter.convert_placeholder_style(
+            sql, coerced_params, ParameterStyle.STATIC, is_many
+        )
+        self._cache[cache_key] = (static_sql, static_params)
+        return static_sql, static_params
+
+    def _process_parameters_conversion(
+        self,
+        sql: str,
+        parameters: Any,
+        config: ParameterStyleConfig,
+        original_styles: "set[ParameterStyle]",
+        needs_execution_conversion: bool,
+        needs_sqlglot_normalization: bool,
+        is_many: bool,
+    ) -> "tuple[str, Any]":
+        """Process parameter conversion phase.
+
+        Args:
+            sql: Processed SQL string
+            parameters: Processed parameters
+            config: Parameter configuration
+            original_styles: Original parameter styles detected
+            needs_execution_conversion: Whether execution conversion is needed
+            needs_sqlglot_normalization: Whether SQLGlot normalization is needed
+            is_many: Whether this is for execute_many
+
+        Returns:
+            Tuple of (processed_sql, processed_parameters)
+        """
+        if not (needs_execution_conversion or needs_sqlglot_normalization):
+            return sql, parameters
+
+        if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
+            target_style = self._determine_target_execution_style(original_styles, config)
+            processed_sql, _ = self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)
+            return processed_sql, parameters
+
+        target_style = self._determine_target_execution_style(original_styles, config)
+        return self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)
 
     def process(
         self,
@@ -942,9 +1003,9 @@ class ParameterProcessor:
     ) -> "tuple[str, Any]":
         """Complete parameter processing pipeline.
 
-        This method coordinates the entire parameter pre-processing workflow:
-        1. Type wrapping for SQLGlot compatibility
-        2. Phase 1: SQLGlot normalization if needed
+        This method coordinates the entire parameter processing workflow:
+        1. Type wrapping for compatibility
+        2. Phase 1: Normalization if needed
         3. Phase 2: Execution format conversion
         4. Driver-specific type coercions
         5. Final output transformation
@@ -959,37 +1020,20 @@ class ParameterProcessor:
         Returns:
             Tuple of (final_sql, execution_parameters)
         """
-        # 1. Cache lookup for processed results
         cache_key = f"{sql}:{hash(repr(parameters))}:{config.default_parameter_style}:{is_many}:{dialect}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        # 2. Determine what transformations are needed
         param_info = self._validator.extract_parameters(sql)
         original_styles = {p.style for p in param_info} if param_info else set()
         needs_sqlglot_normalization = self._needs_sqlglot_normalization(param_info, dialect)
         needs_execution_conversion = self._needs_execution_conversion(param_info, config)
 
-        # Check for static script compilation (embed parameters directly in SQL)
-        # IMPORTANT: Do NOT embed parameters for execute_many operations - they need separate parameter sets
-        needs_static_embedding = (
-            config.needs_static_script_compilation and param_info and parameters and not is_many
-        )  # Disable static embedding for execute_many
+        needs_static_embedding = config.needs_static_script_compilation and param_info and parameters and not is_many
 
         if needs_static_embedding:
-            # For static script compilation, embed parameters directly and return
-            # Apply type coercion first if configured
-            coerced_params = parameters
-            if config.type_coercion_map and parameters:
-                coerced_params = self._apply_type_coercions(parameters, config.type_coercion_map, is_many)
+            return self._handle_static_embedding(sql, parameters, config, is_many, cache_key)
 
-            static_sql, static_params = self._converter.convert_placeholder_style(
-                sql, coerced_params, ParameterStyle.STATIC, is_many
-            )
-            self._cache[cache_key] = (static_sql, static_params)
-            return static_sql, static_params
-
-        # 3. Fast path: Skip processing if no transformation needed
         if (
             not needs_sqlglot_normalization
             and not needs_execution_conversion
@@ -998,47 +1042,30 @@ class ParameterProcessor:
         ):
             return sql, parameters
 
-        # 4. Progressive transformation pipeline
         processed_sql, processed_parameters = sql, parameters
 
-        # Phase A: Type wrapping for SQLGlot compatibility
         if processed_parameters:
             processed_parameters = self._apply_type_wrapping(processed_parameters)
 
-        # Phase B: Phase 1 - SQLGlot normalization if needed
         if needs_sqlglot_normalization:
             processed_sql, _ = self._converter.normalize_sql_for_parsing(processed_sql, dialect)
 
-        # Phase C: NULL parameter removal moved to compiler where AST is available
-
-        # Phase D: Type coercion (database-specific)
         if config.type_coercion_map and processed_parameters:
             processed_parameters = self._apply_type_coercions(processed_parameters, config.type_coercion_map, is_many)
 
-        # Phase E: Phase 2 - Execution format conversion
-        if needs_execution_conversion or needs_sqlglot_normalization:
-            # Check if we should preserve original parameters for execute_many
-            if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
-                # For execute_many with preserve flag, keep original parameter list
-                # but still convert the SQL placeholders to the target style
-                target_style = self._determine_target_execution_style(original_styles, config)
-                processed_sql, _ = self._converter.convert_placeholder_style(
-                    processed_sql, processed_parameters, target_style, is_many
-                )
-                # Keep the original parameter list for drivers that need it (like BigQuery)
-                processed_parameters = parameters
-            else:
-                # Normal execution format conversion
-                target_style = self._determine_target_execution_style(original_styles, config)
-                processed_sql, processed_parameters = self._converter.convert_placeholder_style(
-                    processed_sql, processed_parameters, target_style, is_many
-                )
+        processed_sql, processed_parameters = self._process_parameters_conversion(
+            processed_sql,
+            processed_parameters,
+            config,
+            original_styles,
+            needs_execution_conversion,
+            needs_sqlglot_normalization,
+            is_many,
+        )
 
-        # Phase F: Output transformation (custom hooks)
         if config.output_transformer:
             processed_sql, processed_parameters = config.output_transformer(processed_sql, processed_parameters)
 
-        # 5. Cache result and return
         if self._cache_size < self.DEFAULT_CACHE_SIZE:
             self._cache[cache_key] = (processed_sql, processed_parameters)
             self._cache_size += 1
@@ -1048,10 +1075,10 @@ class ParameterProcessor:
     def _get_sqlglot_compatible_sql(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, dialect: Optional[str] = None
     ) -> "tuple[str, Any]":
-        """Get SQL normalized for SQLGlot parsing only (Phase 1 only).
+        """Get SQL normalized for parsing only (Phase 1 only).
 
         This method performs only Phase 1 normalization to make SQL compatible
-        with SQLGlot parsing, without converting to execution format.
+        with parsing, without converting to execution format.
 
         Args:
             sql: Raw SQL string
@@ -1060,17 +1087,15 @@ class ParameterProcessor:
             dialect: SQL dialect for compatibility
 
         Returns:
-            Tuple of (sqlglot_compatible_sql, parameters)
+            Tuple of (compatible_sql, parameters)
         """
-        # 1. Determine if Phase 1 normalization is needed
+
         param_info = self._validator.extract_parameters(sql)
 
-        # 2. Apply only Phase 1 normalization if needed
         if self._needs_sqlglot_normalization(param_info, dialect):
             normalized_sql, _ = self._converter.normalize_sql_for_parsing(sql, dialect)
             return normalized_sql, parameters
 
-        # 3. No normalization needed - return original SQL
         return sql, parameters
 
     def _needs_execution_conversion(self, param_info: "list[ParameterInfo]", config: ParameterStyleConfig) -> bool:
@@ -1084,7 +1109,6 @@ class ParameterProcessor:
 
         current_styles = {p.style for p in param_info}
 
-        # Check if mixed styles are explicitly allowed AND the execution environment supports multiple styles
         if (
             config.allow_mixed_parameter_styles
             and len(current_styles) > 1
@@ -1094,19 +1118,16 @@ class ParameterProcessor:
         ):
             return False
 
-        # Check for mixed styles - if not allowed, force conversion to single style
         if len(current_styles) > 1:
             return True
 
-        # If we have a single current style and it's supported by the execution environment, preserve it
         if len(current_styles) == 1:
             current_style = next(iter(current_styles))
             supported_styles = config.supported_execution_parameter_styles
             if supported_styles is None:
-                return True  # No supported styles defined, need conversion
+                return True
             return current_style not in supported_styles
 
-        # Multiple styles detected - transformation needed
         return True
 
     def _needs_sqlglot_normalization(self, param_info: "list[ParameterInfo]", dialect: Optional[str] = None) -> bool:
@@ -1127,22 +1148,19 @@ class ParameterProcessor:
         This preserves the original parameter style when possible, only converting
         when necessary for execution compatibility.
         """
-        # If we have a single original style that's supported for execution, preserve it
+
         if len(original_styles) == 1 and config.supported_execution_parameter_styles is not None:
             original_style = next(iter(original_styles))
             if original_style in config.supported_execution_parameter_styles:
                 return original_style
 
-        # Otherwise use the configured execution style or fallback to default parameter style
         return config.default_execution_parameter_style or config.default_parameter_style
 
     def _apply_type_wrapping(self, parameters: Any) -> Any:
         """Apply type wrapping using singledispatch for performance."""
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            # Optimize with direct iteration instead of list comprehension for better memory usage
             return [_wrap_parameter_by_type(p) for p in parameters]
         if isinstance(parameters, Mapping):
-            # Optimize dict comprehension with items() iteration
             wrapped_dict = {}
             for k, v in parameters.items():
                 wrapped_dict[k] = _wrap_parameter_by_type(v)
@@ -1161,13 +1179,12 @@ class ParameterProcessor:
         """
 
         def coerce_value(value: Any) -> Any:
-            # Handle TypedParameter objects - use the wrapped value and original type
             if isinstance(value, TypedParameter):
                 wrapped_value = value.value
                 original_type = value.original_type
                 if original_type in type_coercion_map:
                     coerced = type_coercion_map[original_type](wrapped_value)
-                    # Recursively apply coercion to elements in the coerced result if it's a sequence
+
                     if isinstance(coerced, (list, tuple)) and not isinstance(coerced, (str, bytes)):
                         coerced = [coerce_value(item) for item in coerced]
                     elif isinstance(coerced, dict):
@@ -1175,11 +1192,10 @@ class ParameterProcessor:
                     return coerced
                 return wrapped_value
 
-            # Handle regular values
             value_type = type(value)
             if value_type in type_coercion_map:
                 coerced = type_coercion_map[value_type](value)
-                # Recursively apply coercion to elements in the coerced result if it's a sequence
+
                 if isinstance(coerced, (list, tuple)) and not isinstance(coerced, (str, bytes)):
                     coerced = [coerce_value(item) for item in coerced]
                 elif isinstance(coerced, dict):
@@ -1195,12 +1211,9 @@ class ParameterProcessor:
                 return {k: coerce_value(v) for k, v in param_set.items()}
             return coerce_value(param_set)
 
-        # Handle execute_many case specially - apply coercions to individual parameter values,
-        # not to the parameter set tuples/lists themselves
         if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             return [coerce_parameter_set(param_set) for param_set in parameters]
 
-        # Regular single execution - apply coercions to all parameters
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             return [coerce_value(p) for p in parameters]
         if isinstance(parameters, Mapping):
@@ -1208,7 +1221,6 @@ class ParameterProcessor:
         return coerce_value(parameters)
 
 
-# Helper functions for parameter processing
 def is_iterable_parameters(obj: Any) -> bool:
     """Check if object is iterable parameters (not string/bytes).
 
@@ -1223,7 +1235,6 @@ def is_iterable_parameters(obj: Any) -> bool:
     )
 
 
-# Public API functions that preserve exact current interfaces
 def wrap_with_type(value: Any, semantic_name: Optional[str] = None) -> Any:
     """Public API for type wrapping - preserves current interface.
 

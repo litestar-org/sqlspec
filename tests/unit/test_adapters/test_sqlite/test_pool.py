@@ -83,11 +83,7 @@ def test_pool_initialization_with_disabled_optimizations(basic_connection_params
 def test_pool_initialization_with_pool_kwargs(basic_connection_params: "dict[str, Any]") -> None:
     """Test that pool initialization ignores pool parameters for compatibility."""
     pool = SqliteConnectionPool(
-        basic_connection_params,
-        enable_optimizations=True,
-        pool_size=10,  # Should be ignored
-        max_overflow=5,  # Should be ignored
-        timeout=30,  # Should be ignored
+        basic_connection_params, enable_optimizations=True, pool_size=10, max_overflow=5, timeout=30
     )
 
     assert pool._connection_parameters == basic_connection_params
@@ -105,7 +101,6 @@ def test_create_connection_memory_database(mock_connect: MagicMock, basic_connec
     mock_connect.assert_called_once_with(**basic_connection_params)
     assert connection == _cast_mock_connection(mock_connection)
 
-    # Memory database should have limited optimizations
     expected_pragmas = ["PRAGMA foreign_keys = ON", "PRAGMA synchronous = NORMAL"]
 
     for pragma in expected_pragmas:
@@ -124,7 +119,6 @@ def test_create_connection_file_database(mock_connect: MagicMock, file_connectio
     mock_connect.assert_called_once_with(**file_connection_params)
     assert connection == _cast_mock_connection(mock_connection)
 
-    # File database should have full optimizations
     expected_pragmas = [
         "PRAGMA journal_mode = WAL",
         "PRAGMA busy_timeout = 5000",
@@ -147,7 +141,6 @@ def test_create_connection_shared_memory_database(mock_connect: MagicMock) -> No
     pool = SqliteConnectionPool(connection_params, enable_optimizations=True)
     pool._create_connection()
 
-    # Shared memory should be treated as memory database
     expected_pragmas = ["PRAGMA foreign_keys = ON", "PRAGMA synchronous = NORMAL"]
 
     for pragma in expected_pragmas:
@@ -163,7 +156,6 @@ def test_create_connection_no_optimizations(mock_connect: MagicMock, basic_conne
     pool = SqliteConnectionPool(basic_connection_params, enable_optimizations=False)
     pool._create_connection()
 
-    # No pragmas should be executed when optimizations are disabled
     assert len(mock_connection.execute_calls) == 0
 
 
@@ -172,7 +164,6 @@ def test_thread_local_connection_isolation() -> None:
     connection_params = {"database": ":memory:"}
     pool = SqliteConnectionPool(connection_params)
 
-    # Storage for connections from different threads
     connections: dict[int, Any] = {}
 
     def get_connection_in_thread(thread_id: int) -> None:
@@ -181,21 +172,18 @@ def test_thread_local_connection_isolation() -> None:
             mock_connect.return_value = MockConnection(f"thread_{thread_id}")
             connections[thread_id] = pool._get_thread_connection()
 
-    # Create connections in different threads
     threads = []
     for i in range(3):
         thread = threading.Thread(target=get_connection_in_thread, args=(i,))
         threads.append(thread)
         thread.start()
 
-    # Wait for all threads to complete
     for thread in threads:
         thread.join()
 
-    # Each thread should have a different connection
     assert len(connections) == 3
     connection_ids = [id(conn) for conn in connections.values()]
-    assert len(set(connection_ids)) == 3  # All different objects
+    assert len(set(connection_ids)) == 3
 
 
 def test_thread_local_connection_reuse() -> None:
@@ -206,13 +194,11 @@ def test_thread_local_connection_reuse() -> None:
     with patch("sqlspec.adapters.sqlite.pool.sqlite3.connect") as mock_connect:
         mock_connect.return_value = MockConnection()
 
-        # Get connection twice in the same thread
         conn1 = pool._get_thread_connection()
         conn2 = pool._get_thread_connection()
 
-        # Should be the same connection object
         assert conn1 is conn2
-        # sqlite3.connect should only be called once
+
         assert mock_connect.call_count == 1
 
 
@@ -227,7 +213,6 @@ def test_get_connection_context_manager(mock_connect: MagicMock, basic_connectio
     with pool.get_connection() as connection:
         assert connection == _cast_mock_connection(mock_connection)
 
-    # Connection should not be closed by context manager (thread-local)
     assert not mock_connection.closed
 
 
@@ -239,14 +224,11 @@ def test_acquire_and_release(mock_connect: MagicMock, basic_connection_params: "
 
     pool = SqliteConnectionPool(basic_connection_params)
 
-    # Acquire connection
     connection = pool.acquire()
     assert connection == _cast_mock_connection(mock_connection)
 
-    # Release is a no-op for thread-local connections
     pool.release(connection)
 
-    # Connection should still be available and the same
     connection2 = pool.acquire()
     assert connection2 is connection
 
@@ -259,15 +241,12 @@ def test_close_thread_connection(mock_connect: MagicMock, basic_connection_param
 
     pool = SqliteConnectionPool(basic_connection_params)
 
-    # Get connection to create it
     connection = pool._get_thread_connection()
     assert connection == _cast_mock_connection(mock_connection)
 
-    # Close the connection
     pool._close_thread_connection()
     assert mock_connection.closed
 
-    # Getting connection again should create a new one
     mock_connect.return_value = MockConnection()
     new_connection = pool._get_thread_connection()
     assert new_connection is not connection
@@ -277,7 +256,6 @@ def test_close_thread_connection_no_connection() -> None:
     """Test closing thread-local connection when none exists."""
     pool = SqliteConnectionPool({"database": ":memory:"})
 
-    # Should not raise an exception
     pool._close_thread_connection()
 
 
@@ -289,16 +267,13 @@ def test_pool_size_methods(mock_connect: MagicMock, basic_connection_params: "di
 
     pool = SqliteConnectionPool(basic_connection_params)
 
-    # Initially no connection
     assert pool.size() == 0
     assert pool.checked_out() == 0
 
-    # Get connection
     _ = pool._get_thread_connection()
 
-    # Now should show 1 connection
     assert pool.size() == 1
-    assert pool.checked_out() == 0  # Always 0 for thread-local
+    assert pool.checked_out() == 0
 
 
 @patch("sqlspec.adapters.sqlite.pool.sqlite3.connect")
@@ -309,19 +284,16 @@ def test_pool_close(mock_connect: MagicMock, basic_connection_params: "dict[str,
 
     pool = SqliteConnectionPool(basic_connection_params)
 
-    # Get connection to create it
     _ = pool._get_thread_connection()
 
-    # Close the pool
     pool.close()
 
-    # Connection should be closed
     assert mock_connection.closed
 
 
 def test_connection_params_typing() -> None:
     """Test SqliteConnectionParams typing functionality."""
-    # Test with all parameters
+
     params: SqliteConnectionParams = {
         "database": "test.db",
         "timeout": 30.0,
@@ -336,7 +308,6 @@ def test_connection_params_typing() -> None:
     pool = SqliteConnectionPool(dict(params))
     assert pool._connection_parameters == params
 
-    # Test with minimal parameters
     minimal_params: SqliteConnectionParams = {"database": ":memory:"}
     pool2 = SqliteConnectionPool(dict(minimal_params))
     assert pool2._connection_parameters == minimal_params
@@ -356,43 +327,37 @@ def test_thread_safety_concurrent_access() -> None:
             with patch("sqlspec.adapters.sqlite.pool.sqlite3.connect") as mock_connect:
                 mock_connect.return_value = MockConnection(f"thread_{thread_id}")
 
-                # Rapid acquire/release cycles
                 for _ in range(10):
                     conn = pool.acquire()
                     results[f"{thread_id}_{len(results)}"] = id(conn)
                     pool.release(conn)
-                    time.sleep(0.001)  # Small delay to increase contention
+                    time.sleep(0.001)
 
         except Exception as e:
             errors.append(e)
 
-    # Start multiple threads
     threads = []
     for i in range(5):
         thread = threading.Thread(target=thread_worker, args=(i,))
         threads.append(thread)
         thread.start()
 
-    # Wait for completion
     for thread in threads:
         thread.join()
 
-    # Should have no errors
     assert len(errors) == 0
 
-    # Should have results from all threads
-    assert len(results) == 50  # 5 threads * 10 operations each
+    assert len(results) == 50
 
 
 @patch("sqlspec.adapters.sqlite.pool.sqlite3.connect")
 def test_connection_creation_failure(mock_connect: MagicMock, basic_connection_params: "dict[str, Any]") -> None:
     """Test handling of connection creation failures."""
-    # Make sqlite3.connect raise an exception
+
     mock_connect.side_effect = sqlite3.Error("Database unavailable")
 
     pool = SqliteConnectionPool(basic_connection_params)
 
-    # Should propagate the exception
     with pytest.raises(sqlite3.Error, match="Database unavailable"):
         pool._create_connection()
 
@@ -402,7 +367,6 @@ def test_pragma_execution_failure(mock_connect: MagicMock, file_connection_param
     """Test handling of PRAGMA execution failures."""
     mock_connection = MockConnection("test.db")
 
-    # Make execute raise an exception for certain pragmas
     original_execute = mock_connection.execute
 
     def failing_execute(sql: str) -> None:
@@ -415,7 +379,6 @@ def test_pragma_execution_failure(mock_connect: MagicMock, file_connection_param
 
     pool = SqliteConnectionPool(file_connection_params, enable_optimizations=True)
 
-    # Should raise exception since the current implementation doesn't handle PRAGMA failures
     with pytest.raises(sqlite3.Error, match="PRAGMA failed"):
         pool._create_connection()
 
@@ -429,8 +392,6 @@ def test_memory_database_detection() -> None:
         ("test.db", False),
         ("/path/to/file.db", False),
         ("file:test.db", False),
-        # The current implementation only checks for ":memory:" and "file::memory:" prefix
-        # So "file:test.db?mode=memory" is treated as a file database
         ("file:test.db?mode=memory", False),
     ]
 
@@ -444,7 +405,6 @@ def test_memory_database_detection() -> None:
             pool = SqliteConnectionPool(params, enable_optimizations=True)
             pool._create_connection()
 
-            # Check if WAL mode was attempted (only for non-memory databases)
             wal_pragma_called = any("journal_mode = WAL" in call for call in mock_connection.execute_calls)
 
             if is_memory:
@@ -458,7 +418,7 @@ def assert_no_thread_local_leak() -> "Generator[None, None, None]":
     """Context manager to assert no thread-local storage leaks."""
     initial_thread_count = threading.active_count()
     yield
-    # Allow some time for cleanup
+
     time.sleep(0.1)
     final_thread_count = threading.active_count()
     assert final_thread_count <= initial_thread_count, "Thread-local storage may have leaked"
@@ -475,14 +435,11 @@ def test_no_thread_local_memory_leak() -> None:
             with patch("sqlspec.adapters.sqlite.pool.sqlite3.connect") as mock_connect:
                 mock_connect.return_value = MockConnection()
 
-                # Use the pool in this thread
                 conn = pool._get_thread_connection()
                 assert conn is not None
 
-                # Clean up thread connection
                 pool._close_thread_connection()
 
-        # Create and run multiple short-lived threads
         threads = []
         for _ in range(10):
             thread = threading.Thread(target=worker)

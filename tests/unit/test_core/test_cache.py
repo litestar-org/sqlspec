@@ -20,7 +20,7 @@ optimization across the entire SQLSpec system.
 
 import threading
 import time
-from typing import Optional
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -48,8 +48,6 @@ from sqlspec.core.cache import (
     update_cache_config,
 )
 
-# CacheKey Tests
-
 
 def test_cache_key_creation_and_immutability() -> None:
     """Test CacheKey creation and immutable behavior."""
@@ -59,13 +57,9 @@ def test_cache_key_creation_and_immutability() -> None:
     assert cache_key.key_data == key_data
     assert isinstance(cache_key.key_data, tuple)
 
-    # Note: With mypyc compilation, we can't enforce immutability the same way
-    # as with object.__setattr__. The CacheKey is still effectively immutable
-    # in practice since we don't provide any methods to modify it.
-    # Test that the key data is preserved correctly
     original_data = cache_key.key_data
     assert original_data == key_data
-    assert cache_key.key_data is original_data  # Same object reference
+    assert cache_key.key_data is original_data
 
 
 def test_cache_key_hashing_consistency() -> None:
@@ -74,10 +68,8 @@ def test_cache_key_hashing_consistency() -> None:
     cache_key1 = CacheKey(key_data)
     cache_key2 = CacheKey(key_data)
 
-    # Same data should produce same hash
     assert hash(cache_key1) == hash(cache_key2)
 
-    # Hash should be cached (same object returns same hash)
     assert hash(cache_key1) == hash(cache_key1)
 
 
@@ -91,14 +83,11 @@ def test_cache_key_equality_comparison() -> None:
     cache_key2 = CacheKey(key_data2)
     cache_key3 = CacheKey(key_data3)
 
-    # Equal keys
     assert cache_key1 == cache_key2
-    assert cache_key1 is not cache_key2  # Different objects
+    assert cache_key1 is not cache_key2
 
-    # Different keys
     assert cache_key1 != cache_key3
 
-    # Different types
     assert cache_key1 != "not_a_cache_key"
     assert cache_key1 != 123
 
@@ -111,9 +100,6 @@ def test_cache_key_string_representation() -> None:
     repr_str = repr(cache_key)
     assert "CacheKey" in repr_str
     assert str(key_data) in repr_str
-
-
-# CacheStats Tests
 
 
 def test_cache_stats_initialization() -> None:
@@ -131,11 +117,9 @@ def test_cache_stats_hit_rate_calculation() -> None:
     """Test hit rate and miss rate calculations."""
     stats = CacheStats()
 
-    # Initially no operations, hit rate should be 0
     assert stats.hit_rate == 0.0
     assert stats.miss_rate == 100.0
 
-    # Record some hits and misses
     stats.record_hit()
     stats.record_hit()
     stats.record_miss()
@@ -151,33 +135,28 @@ def test_cache_stats_operations_recording() -> None:
     """Test recording of cache operations."""
     stats = CacheStats()
 
-    # Record hits
     stats.record_hit()
     stats.record_hit()
     assert stats.hits == 2
     assert stats.total_operations == 2
 
-    # Record misses
     stats.record_miss()
     assert stats.misses == 1
     assert stats.total_operations == 3
 
-    # Record evictions
     stats.record_eviction()
     assert stats.evictions == 1
-    assert stats.total_operations == 3  # Evictions don't count as operations
+    assert stats.total_operations == 3
 
 
 def test_cache_stats_reset() -> None:
     """Test resetting cache statistics."""
     stats = CacheStats()
 
-    # Record some operations
     stats.record_hit()
     stats.record_miss()
     stats.record_eviction()
 
-    # Reset and verify all counters are zero
     stats.reset()
     assert stats.hits == 0
     assert stats.misses == 0
@@ -199,12 +178,9 @@ def test_cache_stats_string_representation() -> None:
     assert "misses=1" in repr_str
 
 
-# UnifiedCache Tests
-
-
 def test_unified_cache_initialization() -> None:
     """Test UnifiedCache initialization with default parameters."""
-    cache: UnifiedCache[str] = UnifiedCache()
+    cache = UnifiedCache()
 
     assert cache.size() == 0
     assert cache.is_empty() is True
@@ -213,134 +189,116 @@ def test_unified_cache_initialization() -> None:
 
 def test_unified_cache_basic_operations() -> None:
     """Test basic cache operations - get, put, delete."""
-    cache: UnifiedCache[str] = UnifiedCache(max_size=3)
+    cache = UnifiedCache(max_size=3)
     key1 = CacheKey(("test", 1))
     key2 = CacheKey(("test", 2))
 
-    # Test put and get
     cache.put(key1, "value1")
     assert cache.get(key1) == "value1"
     assert cache.size() == 1
     assert not cache.is_empty()
 
-    # Test get non-existent key
     assert cache.get(key2) is None
 
-    # Test delete
     assert cache.delete(key1) is True
     assert cache.get(key1) is None
-    assert cache.delete(key1) is False  # Already deleted
+    assert cache.delete(key1) is False
     assert cache.size() == 0
 
 
 def test_unified_cache_lru_eviction() -> None:
     """Test LRU eviction policy when cache exceeds max size."""
-    cache: UnifiedCache[str] = UnifiedCache(max_size=2)
+    cache = UnifiedCache(max_size=2)
     key1 = CacheKey(("test", 1))
     key2 = CacheKey(("test", 2))
     key3 = CacheKey(("test", 3))
 
-    # Fill cache to capacity
     cache.put(key1, "value1")
     cache.put(key2, "value2")
     assert cache.size() == 2
 
-    # Add third item, should evict first (LRU)
     cache.put(key3, "value3")
     assert cache.size() == 2
-    assert cache.get(key1) is None  # Evicted
-    assert cache.get(key2) == "value2"  # Still present
-    assert cache.get(key3) == "value3"  # Recently added
+    assert cache.get(key1) is None
+    assert cache.get(key2) == "value2"
+    assert cache.get(key3) == "value3"
 
 
 def test_unified_cache_lru_ordering() -> None:
     """Test that LRU ordering is maintained correctly."""
-    cache: UnifiedCache[str] = UnifiedCache(max_size=3)
+    cache = UnifiedCache(max_size=3)
     key1 = CacheKey(("test", 1))
     key2 = CacheKey(("test", 2))
     key3 = CacheKey(("test", 3))
     key4 = CacheKey(("test", 4))
 
-    # Add items
     cache.put(key1, "value1")
     cache.put(key2, "value2")
     cache.put(key3, "value3")
 
-    # Access key1 to make it most recently used
     cache.get(key1)
 
-    # Add key4, should evict key2 (least recently used)
     cache.put(key4, "value4")
 
-    assert cache.get(key1) == "value1"  # Still present (recently accessed)
-    assert cache.get(key2) is None  # Evicted
-    assert cache.get(key3) == "value3"  # Still present
-    assert cache.get(key4) == "value4"  # Recently added
+    assert cache.get(key1) == "value1"
+    assert cache.get(key2) is None
+    assert cache.get(key3) == "value3"
+    assert cache.get(key4) == "value4"
 
 
 def test_unified_cache_update_existing_key() -> None:
     """Test updating value for existing cache key."""
-    cache: UnifiedCache[str] = UnifiedCache()
+    cache = UnifiedCache()
     key = CacheKey(("test", "update"))
 
-    # Initial value
     cache.put(key, "original")
     assert cache.get(key) == "original"
     assert cache.size() == 1
 
-    # Update value
     cache.put(key, "updated")
     assert cache.get(key) == "updated"
-    assert cache.size() == 1  # Size unchanged
+    assert cache.size() == 1
 
 
 def test_unified_cache_ttl_expiration() -> None:
     """Test TTL-based cache expiration."""
-    cache: UnifiedCache[str] = UnifiedCache(max_size=10, ttl_seconds=1)
+    cache = UnifiedCache(max_size=10, ttl_seconds=1)
     key = CacheKey(("test", "ttl"))
 
-    # Put value and verify it's cached
     cache.put(key, "expires_soon")
     assert cache.get(key) == "expires_soon"
     assert key in cache
 
-    # Wait for TTL expiration
     time.sleep(1.1)
 
-    # Value should be expired and removed
     assert cache.get(key) is None
     assert key not in cache
 
 
 def test_unified_cache_contains_operation() -> None:
     """Test __contains__ operation with TTL consideration."""
-    cache: UnifiedCache[str] = UnifiedCache(ttl_seconds=1)
+    cache = UnifiedCache(ttl_seconds=1)
     key = CacheKey(("test", "contains"))
 
-    # Key not in cache
     assert key not in cache
 
-    # Add key to cache
     cache.put(key, "test_value")
     assert key in cache
 
-    # Wait for expiration
     time.sleep(1.1)
     assert key not in cache
 
 
 def test_unified_cache_clear_operation() -> None:
     """Test clearing all cache entries."""
-    cache: UnifiedCache[str] = UnifiedCache()
+    cache = UnifiedCache()
     key1 = CacheKey(("test", 1))
     key2 = CacheKey(("test", 2))
 
-    # Add items
     cache.put(key1, "value1")
     cache.put(key2, "value2")
     assert cache.size() == 2
 
-    # Clear cache
     cache.clear()
     assert cache.size() == 0
     assert cache.is_empty()
@@ -350,7 +308,7 @@ def test_unified_cache_clear_operation() -> None:
 
 def test_unified_cache_statistics_tracking() -> None:
     """Test cache statistics tracking during operations."""
-    cache: UnifiedCache[str] = UnifiedCache(max_size=2)
+    cache = UnifiedCache(max_size=2)
     key1 = CacheKey(("test", 1))
     key2 = CacheKey(("test", 2))
     key3 = CacheKey(("test", 3))
@@ -359,27 +317,21 @@ def test_unified_cache_statistics_tracking() -> None:
     assert stats.hits == 0
     assert stats.misses == 0
 
-    # Miss - key not in cache
     cache.get(key1)
     stats = cache.get_stats()
     assert stats.misses == 1
     assert stats.hits == 0
 
-    # Put and hit
     cache.put(key1, "value1")
     cache.get(key1)
     stats = cache.get_stats()
     assert stats.hits == 1
     assert stats.misses == 1
 
-    # Test eviction statistics
     cache.put(key2, "value2")
-    cache.put(key3, "value3")  # Should evict key1
+    cache.put(key3, "value3")
     stats = cache.get_stats()
     assert stats.evictions == 1
-
-
-# StatementCache Tests
 
 
 def test_statement_cache_initialization() -> None:
@@ -397,7 +349,6 @@ def test_statement_cache_compiled_storage_and_retrieval(mock_sql: MagicMock) -> 
     """Test storing and retrieving compiled SQL statements."""
     stmt_cache = StatementCache()
 
-    # Create mock SQL statement
     mock_statement = MagicMock()
     mock_statement._raw_sql = "SELECT * FROM users WHERE id = ?"
     mock_statement.dialect = None
@@ -405,12 +356,10 @@ def test_statement_cache_compiled_storage_and_retrieval(mock_sql: MagicMock) -> 
     mock_statement.is_script = False
     mock_sql.return_value = mock_statement
 
-    # Store compiled SQL
     compiled_sql = "SELECT * FROM users WHERE id = $1"
     parameters = ["param1"]
     stmt_cache.put_compiled(mock_statement, compiled_sql, parameters)
 
-    # Retrieve compiled SQL
     result = stmt_cache.get_compiled(mock_statement)
     assert result is not None
     assert result[0] == compiled_sql
@@ -422,26 +371,31 @@ def test_statement_cache_key_generation(mock_sql: MagicMock) -> None:
     """Test cache key generation for SQL statements."""
     stmt_cache = StatementCache()
 
-    # Create mock SQL statements
     mock_statement1 = MagicMock()
     mock_statement1._raw_sql = "SELECT * FROM users"
     mock_statement1.dialect = "postgresql"
     mock_statement1.is_many = False
     mock_statement1.is_script = False
-    mock_statement1.__hash__ = lambda self: hash("statement1")  # type: ignore[misc]
+
+    def _hash1(self: Any) -> int:
+        return hash("statement1")
+
+    mock_statement1.__hash__ = _hash1  # pyright: ignore[reportAttributeAccessIssue]
 
     mock_statement2 = MagicMock()
-    mock_statement2._raw_sql = "SELECT * FROM orders"  # Different SQL
+    mock_statement2._raw_sql = "SELECT * FROM orders"
     mock_statement2.dialect = "postgresql"
     mock_statement2.is_many = False
     mock_statement2.is_script = False
-    mock_statement2.__hash__ = lambda self: hash("statement2")  # type: ignore[misc]
 
-    # Generate cache keys
+    def _hash2(self: Any) -> int:
+        return hash("statement2")
+
+    mock_statement2.__hash__ = _hash2  # pyright: ignore[reportAttributeAccessIssue]
+
     key1 = stmt_cache._create_statement_key(mock_statement1)
     key2 = stmt_cache._create_statement_key(mock_statement2)
 
-    # Keys should be different for different statements
     assert key1 != key2
     assert isinstance(key1, CacheKey)
     assert isinstance(key2, CacheKey)
@@ -451,18 +405,13 @@ def test_statement_cache_clear_operation() -> None:
     """Test clearing statement cache."""
     stmt_cache = StatementCache()
 
-    # Add some mock data by accessing the internal cache
     test_key = CacheKey(("test", "data"))
     stmt_cache._cache.put(test_key, ("SELECT 1", []))
 
     assert stmt_cache._cache.size() == 1
 
-    # Clear cache
     stmt_cache.clear()
     assert stmt_cache._cache.size() == 0
-
-
-# ExpressionCache Tests
 
 
 def test_expression_cache_initialization() -> None:
@@ -482,18 +431,16 @@ def test_expression_cache_key_generation() -> None:
     dialect1 = "postgresql"
     key1 = expr_cache._create_expression_key(sql1, dialect1)
 
-    sql2 = "SELECT * FROM orders"  # Different SQL
+    sql2 = "SELECT * FROM orders"
     dialect2 = "postgresql"
     key2 = expr_cache._create_expression_key(sql2, dialect2)
 
-    sql3 = sql1  # Same SQL
-    dialect3 = "mysql"  # Different dialect
+    sql3 = sql1
+    dialect3 = "mysql"
     key3 = expr_cache._create_expression_key(sql3, dialect3)
 
-    # Different SQL should produce different keys
     assert key1 != key2
 
-    # Same SQL with different dialect should produce different keys
     assert key1 != key3
 
 
@@ -506,14 +453,11 @@ def test_expression_cache_storage_and_retrieval() -> None:
     mock_expression = MagicMock()
     mock_expression.sql.return_value = sql
 
-    # Store expression
     expr_cache.put_expression(sql, mock_expression, dialect)
 
-    # Retrieve expression
     result = expr_cache.get_expression(sql, dialect)
     assert result is mock_expression
 
-    # Try with different dialect - should not find
     result_different = expr_cache.get_expression(sql, "mysql")
     assert result_different is None
 
@@ -522,17 +466,12 @@ def test_expression_cache_clear_operation() -> None:
     """Test clearing expression cache."""
     expr_cache = ExpressionCache()
 
-    # Add mock expression
     sql = "SELECT 1"
     expr_cache.put_expression(sql, MagicMock())
     assert expr_cache._cache.size() == 1
 
-    # Clear cache
     expr_cache.clear()
     assert expr_cache._cache.size() == 0
-
-
-# ParameterCache Tests
 
 
 def test_parameter_cache_initialization() -> None:
@@ -552,18 +491,16 @@ def test_parameter_cache_key_generation_dict_params() -> None:
     config_hash1 = hash("config1")
     key1 = param_cache._create_parameter_key(params1, config_hash1)
 
-    params2 = {"user_id": 2, "name": "Jane"}  # Different values
-    config_hash2 = hash("config1")  # Same config
+    params2 = {"user_id": 2, "name": "Jane"}
+    config_hash2 = hash("config1")
     key2 = param_cache._create_parameter_key(params2, config_hash2)
 
-    params3 = params1  # Same params
-    config_hash3 = hash("config2")  # Different config
+    params3 = params1
+    config_hash3 = hash("config2")
     key3 = param_cache._create_parameter_key(params3, config_hash3)
 
-    # Different parameters should produce different keys
     assert key1 != key2
 
-    # Same parameters with different config should produce different keys
     assert key1 != key3
 
 
@@ -572,13 +509,12 @@ def test_parameter_cache_key_generation_list_params() -> None:
     param_cache = ParameterCache()
 
     params1 = [1, 2, 3]
-    params2 = (1, 2, 3)  # Same values, different type
+    params2 = (1, 2, 3)
     config_hash = hash("config")
 
     key1 = param_cache._create_parameter_key(params1, config_hash)
     key2 = param_cache._create_parameter_key(params2, config_hash)
 
-    # List and tuple with same values should produce same key (both converted to tuple)
     assert key1 == key2
 
 
@@ -586,11 +522,9 @@ def test_parameter_cache_key_generation_unhashable_params() -> None:
     """Test cache key generation for unhashable parameters."""
     param_cache = ParameterCache()
 
-    # Unhashable parameter (list of lists)
     params = [[1, 2], [3, 4]]
     config_hash = hash("config")
 
-    # Should not raise exception, use string fallback
     key = param_cache._create_parameter_key(params, config_hash)
     assert isinstance(key, CacheKey)
 
@@ -600,17 +534,14 @@ def test_parameter_cache_storage_and_retrieval() -> None:
     param_cache = ParameterCache()
 
     original_params = {"user_id": 1, "name": "John"}
-    processed_params = [1, "John"]  # Converted to list format
+    processed_params = [1, "John"]
     config_hash = hash("config")
 
-    # Store parameters
     param_cache.put_parameters(original_params, processed_params, config_hash)
 
-    # Retrieve parameters
     result = param_cache.get_parameters(original_params, config_hash)
     assert result == processed_params
 
-    # Try with different config hash - should not find
     result_different = param_cache.get_parameters(original_params, hash("different_config"))
     assert result_different is None
 
@@ -619,16 +550,11 @@ def test_parameter_cache_clear_operation() -> None:
     """Test clearing parameter cache."""
     param_cache = ParameterCache()
 
-    # Add mock parameters
     param_cache.put_parameters({"test": 1}, [1], hash("config"))
     assert param_cache._cache.size() == 1
 
-    # Clear cache
     param_cache.clear()
     assert param_cache._cache.size() == 0
-
-
-# Global Cache Management Tests
 
 
 def test_get_default_cache_singleton() -> None:
@@ -669,29 +595,25 @@ def test_get_parameter_cache_singleton() -> None:
 
 def test_clear_all_caches_function() -> None:
     """Test clearing all global cache instances."""
-    # Access caches to ensure they are initialized
+
     default_cache = get_default_cache()
     stmt_cache = get_statement_cache()
     expr_cache = get_expression_cache()
     param_cache = get_parameter_cache()
 
-    # Add some data
     test_key = CacheKey(("test",))
     default_cache.put(test_key, "test_value")
     stmt_cache._cache.put(test_key, ("SELECT 1", []))
     expr_cache._cache.put(test_key, MagicMock())
     param_cache._cache.put(test_key, [1, 2, 3])
 
-    # Verify data exists
     assert default_cache.size() > 0
     assert stmt_cache._cache.size() > 0
     assert expr_cache._cache.size() > 0
     assert param_cache._cache.size() > 0
 
-    # Clear all caches
     clear_all_caches()
 
-    # Verify all caches are empty
     assert default_cache.size() == 0
     assert stmt_cache._cache.size() == 0
     assert expr_cache._cache.size() == 0
@@ -700,13 +622,12 @@ def test_clear_all_caches_function() -> None:
 
 def test_get_cache_statistics_function() -> None:
     """Test getting statistics from all cache instances."""
-    # Access caches to ensure they are initialized
+
     get_default_cache()
     get_statement_cache()
     get_expression_cache()
     get_parameter_cache()
 
-    # Get statistics
     stats_dict = get_cache_statistics()
 
     assert isinstance(stats_dict, dict)
@@ -715,12 +636,8 @@ def test_get_cache_statistics_function() -> None:
     assert "expression" in stats_dict
     assert "parameter" in stats_dict
 
-    # Each should be a CacheStats instance
     for stats in stats_dict.values():
         assert isinstance(stats, CacheStats)
-
-
-# Cache Configuration Tests
 
 
 def test_cache_config_initialization() -> None:
@@ -743,7 +660,7 @@ def test_cache_config_custom_values() -> None:
     assert config.sql_cache_enabled is False
     assert config.fragment_cache_size == 10000
     assert config.optimized_cache_enabled is False
-    # Other values should use defaults
+
     assert config.compiled_cache_enabled is True
     assert config.sql_cache_size == 1000
 
@@ -762,24 +679,17 @@ def test_update_cache_config_function() -> None:
     original_config = get_cache_config()
 
     try:
-        # Create new configuration
         new_config = CacheConfig(sql_cache_size=9999, fragment_cache_enabled=False)
 
-        # Update configuration
         update_cache_config(new_config)
 
-        # Verify configuration changed
         current_config = get_cache_config()
         assert current_config is new_config
         assert current_config.sql_cache_size == 9999
         assert current_config.fragment_cache_enabled is False
 
     finally:
-        # Restore original configuration
         update_cache_config(original_config)
-
-
-# Cache Statistics Aggregation Tests
 
 
 def test_cache_stats_aggregate_initialization() -> None:
@@ -802,33 +712,28 @@ def test_cache_stats_aggregate_initialization() -> None:
 
 def test_get_cache_stats_aggregation() -> None:
     """Test cache statistics aggregation."""
-    # Clear existing stats
+
     reset_cache_stats()
 
-    # Get aggregated stats
     stats = get_cache_stats()
     assert isinstance(stats, CacheStatsAggregate)
 
-    # Should be initialized with zeros
     assert stats.sql_hits == 0
     assert stats.sql_misses == 0
 
 
 def test_reset_cache_stats_function() -> None:
     """Test resetting all cache statistics."""
-    # Access caches to initialize them
+
     default_cache = get_default_cache()
     stmt_cache = get_statement_cache()
 
-    # Generate some statistics
     test_key = CacheKey(("test",))
-    default_cache.get(test_key)  # Miss
-    stmt_cache._cache.get(test_key)  # Miss
+    default_cache.get(test_key)
+    stmt_cache._cache.get(test_key)
 
-    # Reset statistics
     reset_cache_stats()
 
-    # Verify statistics are reset
     default_stats = default_cache.get_stats()
     stmt_stats = stmt_cache.get_stats()
 
@@ -844,15 +749,10 @@ def test_log_cache_stats_function() -> None:
         mock_logger = MagicMock()
         mock_get_logger.return_value = mock_logger
 
-        # Log cache statistics
         log_cache_stats()
 
-        # Verify logger was called
         mock_get_logger.assert_called_once_with("sqlspec.cache")
         mock_logger.info.assert_called_once()
-
-
-# SQL Compilation Cache Tests
 
 
 def test_sql_cache_interface() -> None:
@@ -860,24 +760,18 @@ def test_sql_cache_interface() -> None:
     cache_key = "test_sql_cache_key"
     cache_value = ("SELECT * FROM users WHERE id = $1", [1])
 
-    # Set value
     sql_cache.set(cache_key, cache_value)
 
-    # Get value
     result = sql_cache.get(cache_key)
     assert result == cache_value
 
-    # Get non-existent key
     result_none = sql_cache.get("non_existent_key")
     assert result_none is None
 
 
-# Thread Safety Tests
-
-
 def test_unified_cache_thread_safety() -> None:
     """Test UnifiedCache thread safety with concurrent operations."""
-    cache: UnifiedCache[int] = UnifiedCache(max_size=100)
+    cache = UnifiedCache(max_size=100)
     results = []
     errors = []
 
@@ -891,141 +785,114 @@ def test_unified_cache_thread_safety() -> None:
         except Exception as e:
             errors.append(e)
 
-    # Run multiple threads
     threads = []
     for tid in range(5):
         thread = threading.Thread(target=worker, args=(tid,))
         threads.append(thread)
         thread.start()
 
-    # Wait for all threads to complete
     for thread in threads:
         thread.join()
 
-    # Verify no errors occurred
     assert len(errors) == 0, f"Thread safety errors: {errors}"
     assert len(results) > 0
 
 
 def test_cache_statistics_thread_safety() -> None:
     """Test cache statistics thread safety."""
-    cache: UnifiedCache[str] = UnifiedCache()
+    cache = UnifiedCache()
     errors = []
 
     def stats_worker() -> None:
         try:
             for i in range(100):
                 key = CacheKey((f"thread_stats_{i}",))
-                cache.get(key)  # Miss
+                cache.get(key)
                 cache.put(key, f"value_{i}")
-                cache.get(key)  # Hit
+                cache.get(key)
         except Exception as e:
             errors.append(e)
 
-    # Run multiple threads
     threads = []
     for _ in range(3):
         thread = threading.Thread(target=stats_worker)
         threads.append(thread)
         thread.start()
 
-    # Wait for completion
     for thread in threads:
         thread.join()
 
-    # Verify no errors
     assert len(errors) == 0
 
-    # Verify statistics are reasonable
     stats = cache.get_stats()
     assert stats.hits > 0
     assert stats.misses > 0
     assert stats.total_operations > 0
 
 
-# Performance and Edge Case Tests
-
-
 def test_cache_key_performance_with_large_data() -> None:
     """Test CacheKey performance with large key data."""
-    large_key_data = tuple(range(1000))  # Large tuple
+    large_key_data = tuple(range(1000))
     cache_key = CacheKey(large_key_data)
 
-    # Should handle large keys without issues
     assert cache_key.key_data == large_key_data
     assert isinstance(hash(cache_key), int)
 
 
 def test_unified_cache_zero_max_size() -> None:
     """Test UnifiedCache with zero max size (no caching)."""
-    cache: UnifiedCache[str] = UnifiedCache(max_size=0)
+    cache = UnifiedCache(max_size=0)
     key = CacheKey(("test",))
 
-    # Put should work but immediately evict
     cache.put(key, "test_value")
 
-    # Should not be able to get the value
     assert cache.get(key) is None
     assert cache.size() == 0
 
 
 def test_unified_cache_very_short_ttl() -> None:
     """Test UnifiedCache with very short TTL."""
-    cache: UnifiedCache[str] = UnifiedCache(ttl_seconds=1)  # 1 second TTL
+    cache = UnifiedCache(ttl_seconds=1)
     key = CacheKey(("test", "short_ttl"))
 
     cache.put(key, "expires_quickly")
     assert cache.get(key) == "expires_quickly"
 
-    # Wait for expiration (1.1 seconds to ensure TTL has passed)
     time.sleep(1.1)
 
     assert cache.get(key) is None
 
 
-@pytest.mark.parametrize(
-    "cache_size,num_items",
-    [
-        (10, 15),  # More items than cache size
-        (100, 50),  # Less items than cache size
-        (1, 10),  # Much more items than cache size
-    ],
-)
+@pytest.mark.parametrize("cache_size,num_items", [(10, 15), (100, 50), (1, 10)])
 def test_unified_cache_various_sizes(cache_size: int, num_items: int) -> None:
     """Test UnifiedCache with various size configurations."""
-    cache: UnifiedCache[int] = UnifiedCache(max_size=cache_size)
+    cache = UnifiedCache(max_size=cache_size)
 
-    # Add items
     for i in range(num_items):
         key = CacheKey((i,))
         cache.put(key, i)
 
-    # Cache size should not exceed max_size
     assert cache.size() <= cache_size
 
-    # If more items than cache size, some should be evicted
     if num_items > cache_size:
         assert cache.size() == cache_size
-        # Earlier items should be evicted (LRU)
+
         early_key = CacheKey((0,))
         assert cache.get(early_key) is None
 
 
 def test_cache_with_none_values() -> None:
     """Test cache behavior with None values."""
-    cache: UnifiedCache[Optional[str]] = UnifiedCache()
+    cache = UnifiedCache()
     key = CacheKey(("none_test",))
 
-    # Store None value
     cache.put(key, None)
 
-    # Should be able to retrieve None (different from cache miss)
     result = cache.get(key)
     assert result is None
-    assert key in cache  # Key exists in cache
+    assert key in cache
 
-    # Compare with actual miss
     missing_key = CacheKey(("not_in_cache",))
     missing_result = cache.get(missing_key)
     assert missing_result is None
-    assert missing_key not in cache  # Key does not exist in cache
+    assert missing_key not in cache

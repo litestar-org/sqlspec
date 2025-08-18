@@ -21,7 +21,6 @@ def test_open_fixture_valid_file() -> None:
         fixtures_path = Path(temp_dir)
         fixture_file = fixtures_path / "test_fixture.json"
 
-        # Create a test fixture file
         test_data = {"name": "test", "value": 42, "items": [1, 2, 3]}
         with fixture_file.open("w") as f:
             import json
@@ -47,19 +46,17 @@ def test_open_fixture_invalid_json() -> None:
         fixtures_path = Path(temp_dir)
         fixture_file = fixtures_path / "invalid.json"
 
-        # Create invalid JSON file
         with fixture_file.open("w") as f:
             f.write("{ invalid json content")
 
-        # Should raise an exception when trying to parse invalid JSON
-        with pytest.raises(Exception):  # Could be JSONDecodeError or similar
+        with pytest.raises(Exception):
             open_fixture(fixtures_path, "invalid")
 
 
 @pytest.mark.asyncio
 async def test_open_fixture_async_missing_anyio() -> None:
     """Test open_fixture_async raises error when anyio not available."""
-    # Test by patching the import statement inside the function
+
     import builtins
 
     original_import = builtins.__import__

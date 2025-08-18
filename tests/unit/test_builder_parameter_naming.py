@@ -53,7 +53,6 @@ def test_insert_values_from_dict_uses_column_names() -> None:
     )
     stmt = query.build()
 
-    # Should preserve the dictionary key names as parameter names
     assert "customer_id" in stmt.parameters or any("customer_id" in key for key in stmt.parameters.keys())
     assert "product_name" in stmt.parameters or any("product_name" in key for key in stmt.parameters.keys())
     assert "quantity" in stmt.parameters or any("quantity" in key for key in stmt.parameters.keys())
@@ -65,7 +64,6 @@ def test_insert_without_columns_uses_positional_names() -> None:
     query = sql.insert("logs").values("INFO", "User login", "2023-01-01")
     stmt = query.build()
 
-    # Without column info, should use value_1, value_2, etc.
     param_keys = list(stmt.parameters.keys())
     assert len(param_keys) == 3
     assert any("value" in key for key in param_keys)
@@ -77,8 +75,6 @@ def test_case_when_uses_descriptive_names() -> None:
     query = sql.select("name", case_expr).from_("users")
     stmt = query.build()
 
-    # CASE expressions using sql.case_ create literal SQL rather than parameters
-    # This is the expected behavior for the new property syntax
     assert "CASE" in stmt.sql
     assert "Senior" in stmt.sql
     assert "Adult" in stmt.sql
@@ -99,20 +95,16 @@ def test_complex_query_preserves_column_names() -> None:
     )
     stmt = query.build()
 
-    # Should use descriptive parameter names
     params = stmt.parameters
 
-    # Status parameter
     assert "status" in params
     assert params["status"] == "active"
 
-    # IN clause parameters
     category_params = [key for key in params.keys() if "category" in key]
     assert len(category_params) == 2
     assert "tech" in params.values()
     assert "science" in params.values()
 
-    # BETWEEN clause parameters
     created_at_params = [key for key in params.keys() if "created_at" in key]
     assert len(created_at_params) == 2
     assert "2023-01-01" in params.values()
@@ -128,15 +120,12 @@ def test_parameter_collision_handling() -> None:
 
     params = stmt.parameters
 
-    # Should have status parameter
     assert "status" in params
     assert params["status"] == "active"
 
-    # Should have priority parameters with collision resolution
     priority_params = [key for key in params.keys() if "priority" in key]
     assert len(priority_params) == 2
 
-    # One should be "priority", the other "priority_1"
     assert "priority" in params or "priority_1" in params
     assert 1 in params.values()
     assert 10 in params.values()
@@ -149,7 +138,6 @@ def test_subquery_parameter_preservation() -> None:
     query = sql.select("name").from_("posts").where_in("author_id", subquery)
     stmt = query.build()
 
-    # Should preserve the subquery parameter name
     assert "status" in stmt.parameters
     assert stmt.parameters["status"] == "verified"
 
@@ -159,7 +147,6 @@ def test_table_prefixed_columns_extract_column_name() -> None:
     query = sql.select("*").from_("users u").where_eq("u.email", "test@example.com").where_gt("u.age", 21)
     stmt = query.build()
 
-    # Should extract column names without table prefix
     assert "email" in stmt.parameters
     assert "age" in stmt.parameters
     assert stmt.parameters["email"] == "test@example.com"
@@ -177,12 +164,10 @@ def test_mixed_parameter_types_preserve_names() -> None:
 
     params = stmt.parameters
 
-    # Should preserve all column names
     expected_keys = ["username", "balance", "is_active", "last_login", "account_id"]
     for key in expected_keys:
         assert key in params or any(key in param_key for param_key in params.keys())
 
-    # Should preserve values with correct types
     assert "john_doe" in params.values()
     assert 1500.75 in params.values()
     assert True in params.values()
@@ -192,7 +177,7 @@ def test_mixed_parameter_types_preserve_names() -> None:
 
 def test_no_generic_param_names_in_common_operations() -> None:
     """Test that common operations do not generate generic param_1, param_2 names."""
-    # Test various common query patterns
+
     queries = [
         sql.select("*").from_("users").where_eq("name", "John"),
         sql.update("users").set("email", "new@email.com").where_eq("id", 1),
@@ -204,10 +189,8 @@ def test_no_generic_param_names_in_common_operations() -> None:
     for query in queries:
         stmt = query.build()
 
-        # Should not contain any generic parameter names
         generic_params = [key for key in stmt.parameters.keys() if key.startswith("param_")]
         assert len(generic_params) == 0, f"Found generic parameters {generic_params} in query: {stmt.sql}"
 
-        # All parameter names should be descriptive
         for param_name in stmt.parameters.keys():
             assert not param_name.startswith("param_"), f"Parameter name '{param_name}' is generic"

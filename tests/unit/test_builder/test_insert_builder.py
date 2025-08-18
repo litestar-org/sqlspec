@@ -50,7 +50,7 @@ def test_insert_values_from_dicts_multiple_rows() -> None:
     stmt = query.build()
 
     assert "INSERT INTO" in stmt.sql
-    # Should have parameters for all rows
+
     assert "id" in stmt.parameters
     assert "name" in stmt.parameters
     assert "id_1" in stmt.parameters
@@ -85,7 +85,7 @@ def test_insert_multiple_values_calls() -> None:
     stmt = query.build()
 
     assert "INSERT INTO" in stmt.sql
-    # Should have parameters for both rows
+
     assert "name" in stmt.parameters
     assert "email" in stmt.parameters
     assert "name_1" in stmt.parameters
@@ -112,7 +112,7 @@ def test_insert_without_table_error() -> None:
 def test_insert_values_columns_mismatch_error() -> None:
     """Test that mismatched columns and values raises error."""
     with pytest.raises(SQLBuilderError, match="Number of values"):
-        sql.insert("users").columns("name", "email").values("John")  # Missing email value
+        sql.insert("users").columns("name", "email").values("John")
 
 
 def test_insert_columns_and_values_consistency() -> None:
@@ -129,10 +129,7 @@ def test_insert_columns_and_values_consistency() -> None:
 
 def test_insert_inconsistent_dict_keys_error() -> None:
     """Test that inconsistent dictionary keys in values_from_dicts raises error."""
-    data = [
-        {"id": 1, "name": "John"},
-        {"id": 2, "email": "jane@test.com"},  # Missing name, has email instead
-    ]
+    data = [{"id": 1, "name": "John"}, {"id": 2, "email": "jane@test.com"}]
     with pytest.raises(SQLBuilderError, match="do not match expected keys"):
         sql.insert("users").values_from_dicts(data).build()
 
@@ -164,7 +161,6 @@ def test_insert_with_sql_raw_parameters() -> None:
     assert stmt.parameters["fallback"] == "custom"
 
 
-# ON CONFLICT functionality tests
 def test_on_conflict_do_nothing_basic() -> None:
     """Test basic ON CONFLICT DO NOTHING."""
     query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_nothing()
@@ -211,7 +207,7 @@ def test_on_conflict_no_columns() -> None:
 
     assert "ON CONFLICT" in stmt.sql
     assert "DO NOTHING" in stmt.sql
-    # Should not specify columns
+
     assert "ON CONFLICT(" not in stmt.sql
 
 
@@ -274,12 +270,10 @@ def test_on_conflict_type_safety() -> None:
     """Test ON CONFLICT method return types for chaining."""
     insert_builder = sql.insert("users").values(id=1, name="John")
 
-    # on_conflict should return ConflictBuilder
     conflict_builder = insert_builder.on_conflict("id")
     assert hasattr(conflict_builder, "do_nothing")
     assert hasattr(conflict_builder, "do_update")
 
-    # do_nothing should return Insert for further chaining
     final_builder = conflict_builder.do_nothing()
     assert hasattr(final_builder, "returning")
     assert hasattr(final_builder, "build")
