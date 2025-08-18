@@ -86,17 +86,19 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         self,
         *,
         pool_config: Optional[Union[PsqlpyPoolParams, dict[str, Any]]] = None,
-        statement_config: Optional[StatementConfig] = None,
         pool_instance: Optional[ConnectionPool] = None,
         migration_config: Optional[dict[str, Any]] = None,
+        statement_config: Optional[StatementConfig] = None,
+        driver_features: Optional[dict[str, Any]] = None,
     ) -> None:
         """Initialize Psqlpy asynchronous configuration.
 
         Args:
             pool_config: Pool configuration parameters (TypedDict or dict)
             pool_instance: Existing connection pool instance to use
-            statement_config: Default SQL statement configuration
             migration_config: Migration configuration
+            statement_config: Default SQL statement configuration
+            driver_features: Optional driver feature configuration
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -107,6 +109,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or psqlpy_statement_config,
+            driver_features=driver_features or {},
         )
 
     def _get_pool_config_dict(self) -> dict[str, Any]:

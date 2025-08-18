@@ -70,6 +70,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         pool_instance: "Optional[Pool]" = None,
         migration_config: Optional[dict[str, Any]] = None,
         statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         """Initialize Asyncmy configuration.
 
@@ -78,6 +79,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             pool_instance: Existing pool instance to use
             migration_config: Migration configuration
             statement_config: Statement configuration override
+            driver_features: Optional driver feature configuration
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -97,7 +99,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features={},
+            driver_features=driver_features or {},
         )
 
     async def _create_pool(self) -> "Pool":  # pyright: ignore

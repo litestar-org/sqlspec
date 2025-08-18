@@ -85,17 +85,18 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         *,
         pool_config: "Optional[Union[PsycopgPoolParams, dict[str, Any]]]" = None,
         pool_instance: Optional["ConnectionPool"] = None,
-        statement_config: "Optional[StatementConfig]" = None,
         migration_config: Optional[dict[str, Any]] = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         """Initialize Psycopg synchronous configuration.
 
         Args:
             pool_config: Pool configuration parameters (TypedDict or dict)
             pool_instance: Existing pool instance to use
-            statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-
+            statement_config: Default SQL statement configuration
+            driver_features: Optional driver feature configuration
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -107,6 +108,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or psycopg_statement_config,
+            driver_features=driver_features or {},
         )
 
     def _create_pool(self) -> "ConnectionPool":
@@ -268,14 +270,16 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         pool_instance: "Optional[AsyncConnectionPool]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
         Args:
             pool_config: Pool configuration parameters (TypedDict or dict)
             pool_instance: Existing pool instance to use
-            statement_config: Default SQL statement configuration
             migration_config: Migration configuration
+            statement_config: Default SQL statement configuration
+            driver_features: Optional driver feature configuration
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -287,6 +291,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or psycopg_statement_config,
+            driver_features=driver_features or {},
         )
 
     async def _create_pool(self) -> "AsyncConnectionPool":

@@ -61,7 +61,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         pool_instance: "Optional[AiosqliteConnectionPool]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
-        **kwargs: Any,
+        driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         """Initialize AioSQLite configuration.
 
@@ -70,10 +70,9 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             pool_instance: Optional pre-configured connection pool instance.
             migration_config: Optional migration configuration.
             statement_config: Optional statement configuration.
-            **kwargs: Additional connection parameters that override pool_config.
+            driver_features: Optional driver feature configuration.
         """
         config_dict = dict(pool_config) if pool_config else {}
-        config_dict.update(kwargs)  # Allow kwargs to override pool_config values
 
         # Handle memory database URI conversion - test expectation is different than sqlite pattern
         if "database" not in config_dict or config_dict["database"] == ":memory:":
@@ -85,7 +84,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or aiosqlite_statement_config,
-            driver_features={},
+            driver_features=driver_features or {},
         )
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":

@@ -149,8 +149,8 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         self,
         *,
         pool_config: "Optional[Union[DuckDBPoolParams, dict[str, Any]]]" = None,
-        migration_config: Optional[dict[str, Any]] = None,
         pool_instance: "Optional[DuckDBConnectionPool]" = None,
+        migration_config: Optional[dict[str, Any]] = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[Union[DuckDBDriverFeatures, dict[str, Any]]]" = None,
     ) -> None:
