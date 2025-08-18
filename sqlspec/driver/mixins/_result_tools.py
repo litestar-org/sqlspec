@@ -127,30 +127,30 @@ class ToSchemaMixin:
                 result: list[Any] = []
                 for item in data:
                     if hasattr(item, "keys"):
-                        result.append(schema_type(**dict(item)))
+                        result.append(schema_type(**dict(item)))  # type: ignore[operator]
                     else:
                         result.append(item)
                 return result
             if hasattr(data, "keys"):
-                return schema_type(**dict(data))
+                return schema_type(**dict(data))  # type: ignore[operator]
             if isinstance(data, dict):
-                return schema_type(**data)
+                return schema_type(**data)  # type: ignore[operator]
             return data
         if is_msgspec_struct(schema_type):
             deserializer = partial(_default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS)
             if not isinstance(data, Sequence):
                 return convert(obj=data, type=schema_type, from_attributes=True, dec_hook=deserializer)
-            return convert(obj=data, type=list[schema_type], from_attributes=True, dec_hook=deserializer)
+            return convert(obj=data, type=list[schema_type], from_attributes=True, dec_hook=deserializer)  # type: ignore[valid-type]
         if is_pydantic_model(schema_type):
             if not isinstance(data, Sequence):
                 adapter = get_type_adapter(schema_type)
                 return adapter.validate_python(data, from_attributes=True)
-            list_adapter = get_type_adapter(list[schema_type])
+            list_adapter = get_type_adapter(list[schema_type])  # type: ignore[valid-type]
             return list_adapter.validate_python(data, from_attributes=True)
         if is_attrs_schema(schema_type):
             if CATTRS_INSTALLED:
                 if isinstance(data, Sequence):
-                    return cattrs_structure(data, list[schema_type])
+                    return cattrs_structure(data, list[schema_type])  # type: ignore[valid-type]
                 if hasattr(data, "__attrs_attrs__"):
                     unstructured_data = cattrs_unstructure(data)
                     return cattrs_structure(unstructured_data, schema_type)

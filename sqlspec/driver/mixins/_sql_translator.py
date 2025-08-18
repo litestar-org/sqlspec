@@ -18,6 +18,7 @@ class SQLTranslatorMixin:
     """Mixin for drivers supporting SQL translation."""
 
     __slots__ = ()
+    dialect: "Optional[DialectType]"
 
     def convert_to_dialect(
         self, statement: "Statement", to_dialect: "Optional[DialectType]" = None, pretty: bool = _DEFAULT_PRETTY

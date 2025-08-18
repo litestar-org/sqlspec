@@ -357,7 +357,7 @@ class SQL:
                     compiled_sql=compiled_result.compiled_sql,
                     execution_parameters=compiled_result.execution_parameters,
                     parsed_expression=compiled_result.expression,
-                    operation_type=compiled_result.operation_type,
+                    operation_type=compiled_result.operation_type,  # pyright: ignore[reportArgumentType]
                     validation_errors=[],
                     is_many=self._is_many,
                 )
@@ -366,7 +366,7 @@ class SQL:
                 self._processed_state = ProcessedState(
                     compiled_sql=self._raw_sql,
                     execution_parameters=self._named_parameters or self._positional_parameters,
-                    operation_type="UNKNOWN",
+                    operation_type="UNKNOWN",  # pyright: ignore[reportArgumentType]
                     is_many=self._is_many,
                 )
 
