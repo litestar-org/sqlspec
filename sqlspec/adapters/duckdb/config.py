@@ -71,7 +71,6 @@ class DuckDBPoolParams(DuckDBConnectionParams, total=False):
     Combines standardized pool parameters with DuckDB-specific connection parameters.
     """
 
-    # Standardized pool parameters (consistent across ALL adapters)
     pool_min_size: NotRequired[int]
     pool_max_size: NotRequired[int]
     pool_timeout: NotRequired[float]
@@ -204,7 +203,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             extensions=extensions_dicts,
             secrets=secrets_dicts,
             on_connection_create=pool_callback,
-            **self.pool_config,  # Pass all pool_config as kwargs to be filtered by the pool
+            **self.pool_config,
         )
 
     def _close_pool(self) -> None:

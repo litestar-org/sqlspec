@@ -136,9 +136,6 @@ class SQLFactory:
         """
         self.dialect = dialect
 
-    # ===================
-    # Callable Interface
-    # ===================
     def __call__(self, statement: str, dialect: DialectType = None) -> "Any":
         """Create a SelectBuilder from a SQL string, only allowing SELECT/CTE queries.
 
@@ -184,9 +181,6 @@ class SQLFactory:
         )
         raise SQLBuilderError(msg)
 
-    # ===================
-    # Statement Builders
-    # ===================
     def select(
         self, *columns_or_sql: Union[str, exp.Expression, Column, "SQL", "Case"], dialect: DialectType = None
     ) -> "Select":
@@ -270,10 +264,6 @@ class SQLFactory:
                 return self._populate_merge_from_sql(builder, table_or_sql)
             return builder.into(table_or_sql)
         return builder
-
-    # ===================
-    # DDL Statement Builders
-    # ===================
 
     def create_table(self, table_name: str, dialect: DialectType = None) -> "CreateTable":
         """Create a CREATE TABLE builder.
@@ -429,10 +419,6 @@ class SQLFactory:
         """
         return CommentOn(dialect=dialect or self.dialect)
 
-    # ===================
-    # SQL Analysis Helpers
-    # ===================
-
     @staticmethod
     def _looks_like_sql(candidate: str, expected_type: Optional[str] = None) -> bool:
         """Efficiently determine if a string looks like SQL.
@@ -452,12 +438,7 @@ class SQLFactory:
         if expected_type:
             return candidate_upper.startswith(expected_type.upper())
 
-        # More sophisticated check for SQL vs column names
-        # Column names that start with SQL keywords are common (user_id, insert_date, etc.)
         if any(candidate_upper.startswith(starter) for starter in SQL_STARTERS):
-            # Additional checks to distinguish real SQL from column names:
-            # 1. Real SQL typically has spaces (SELECT ... FROM, INSERT INTO, etc.)
-            # 2. Check for common SQL syntax patterns
             return " " in candidate
 
         return False
@@ -465,7 +446,6 @@ class SQLFactory:
     def _populate_insert_from_sql(self, builder: "Insert", sql_string: str) -> "Insert":
         """Parse SQL string and populate INSERT builder using SQLGlot directly."""
         try:
-            # Use SQLGlot directly for parsing - no validation here
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Insert):
@@ -473,11 +453,9 @@ class SQLFactory:
                 return builder
 
             if isinstance(parsed_expr, exp.Select):
-                # The actual conversion logic can be handled by the builder itself
                 logger.info("Detected SELECT statement for INSERT - may need target table specification")
                 return builder
 
-            # For other statement types, just return the builder as-is
             logger.warning("Cannot create INSERT from %s statement", type(parsed_expr).__name__)
 
         except Exception as e:
@@ -487,7 +465,6 @@ class SQLFactory:
     def _populate_select_from_sql(self, builder: "Select", sql_string: str) -> "Select":
         """Parse SQL string and populate SELECT builder using SQLGlot directly."""
         try:
-            # Use SQLGlot directly for parsing - no validation here
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Select):
@@ -503,7 +480,6 @@ class SQLFactory:
     def _populate_update_from_sql(self, builder: "Update", sql_string: str) -> "Update":
         """Parse SQL string and populate UPDATE builder using SQLGlot directly."""
         try:
-            # Use SQLGlot directly for parsing - no validation here
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
@@ -519,7 +495,6 @@ class SQLFactory:
     def _populate_delete_from_sql(self, builder: "Delete", sql_string: str) -> "Delete":
         """Parse SQL string and populate DELETE builder using SQLGlot directly."""
         try:
-            # Use SQLGlot directly for parsing - no validation here
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
@@ -535,7 +510,6 @@ class SQLFactory:
     def _populate_merge_from_sql(self, builder: "Merge", sql_string: str) -> "Merge":
         """Parse SQL string and populate MERGE builder using SQLGlot directly."""
         try:
-            # Use SQLGlot directly for parsing - no validation here
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Merge):
@@ -547,10 +521,6 @@ class SQLFactory:
         except Exception as e:
             logger.warning("Failed to parse MERGE SQL, falling back to traditional mode: %s", e)
         return builder
-
-    # ===================
-    # Column References
-    # ===================
 
     def column(self, name: str, table: Optional[str] = None) -> Column:
         """Create a column reference.
@@ -673,10 +643,6 @@ class SQLFactory:
         """
         return Column(name)
 
-    # ===================
-    # Raw SQL Expressions
-    # ===================
-
     @staticmethod
     def raw(sql_fragment: str, **parameters: Any) -> "Union[exp.Expression, SQL]":
         """Create a raw SQL expression from a string fragment with optional parameters.
@@ -698,22 +664,21 @@ class SQLFactory:
 
         Example:
             ```python
-            # Raw expression without parameters (current behavior)
             expr = sql.raw("COALESCE(name, 'Unknown')")
 
-            # Raw SQL with named parameters (new functionality)
+
             stmt = sql.raw(
                 "LOWER(name) LIKE LOWER(:pattern)", pattern=f"%{query}%"
             )
 
-            # Raw complex expression with parameters
+
             expr = sql.raw(
                 "price BETWEEN :min_price AND :max_price",
                 min_price=100,
                 max_price=500,
             )
 
-            # Raw window function
+
             query = sql.select(
                 "name",
                 sql.raw(
@@ -723,7 +688,6 @@ class SQLFactory:
             ```
         """
         if not parameters:
-            # Original behavior - return pure expression
             try:
                 parsed: exp.Expression = exp.maybe_parse(sql_fragment)
                 return parsed
@@ -734,13 +698,7 @@ class SQLFactory:
                 msg = f"Failed to parse raw SQL fragment '{sql_fragment}': {e}"
                 raise SQLBuilderError(msg) from e
 
-        # New behavior - return SQL statement with parameters
-
         return SQL(sql_fragment, parameters)
-
-    # ===================
-    # Aggregate Functions
-    # ===================
 
     @staticmethod
     def count(
@@ -828,10 +786,6 @@ class SQLFactory:
         col_expr = SQLFactory._extract_expression(column)
         return AggregateExpression(exp.Min(this=col_expr))
 
-    # ===================
-    # Advanced SQL Operations
-    # ===================
-
     @staticmethod
     def rollup(*columns: Union[str, exp.Expression]) -> FunctionExpression:
         """Create a ROLLUP expression for GROUP BY clauses.
@@ -844,7 +798,6 @@ class SQLFactory:
 
         Example:
             ```python
-            # GROUP BY ROLLUP(product, region)
             query = (
                 sql.select("product", "region", sql.sum("sales"))
                 .from_("sales_data")
@@ -867,7 +820,6 @@ class SQLFactory:
 
         Example:
             ```python
-            # GROUP BY CUBE(product, region)
             query = (
                 sql.select("product", "region", sql.sum("sales"))
                 .from_("sales_data")
@@ -890,7 +842,6 @@ class SQLFactory:
 
         Example:
             ```python
-            # GROUP BY GROUPING SETS ((product), (region), ())
             query = (
                 sql.select("product", "region", sql.sum("sales"))
                 .from_("sales_data")
@@ -925,7 +876,6 @@ class SQLFactory:
 
         Example:
             ```python
-            # WHERE id = ANY(subquery)
             subquery = sql.select("user_id").from_("active_users")
             query = (
                 sql.select("*")
@@ -938,7 +888,6 @@ class SQLFactory:
             literals = [SQLFactory.to_literal(v) for v in values]
             return FunctionExpression(exp.Any(this=exp.Array(expressions=literals)))
         if isinstance(values, str):
-            # Parse as SQL
             parsed: exp.Expression = exp.maybe_parse(values)
             return FunctionExpression(exp.Any(this=parsed))
         return FunctionExpression(exp.Any(this=values))
@@ -955,7 +904,6 @@ class SQLFactory:
 
         Example:
             ```python
-            # WHERE id <> ANY(subquery)
             subquery = sql.select("user_id").from_("blocked_users")
             query = (
                 sql.select("*")
@@ -965,10 +913,6 @@ class SQLFactory:
             ```
         """
         return SQLFactory.any(values)
-
-    # ===================
-    # String Functions
-    # ===================
 
     @staticmethod
     def concat(*expressions: Union[str, exp.Expression]) -> StringExpression:
@@ -1022,10 +966,6 @@ class SQLFactory:
         col_expr = exp.column(column) if isinstance(column, str) else column
         return StringExpression(exp.Length(this=col_expr))
 
-    # ===================
-    # Math Functions
-    # ===================
-
     @staticmethod
     def round(column: Union[str, exp.Expression], decimals: int = 0) -> MathExpression:
         """Create a ROUND expression.
@@ -1041,10 +981,6 @@ class SQLFactory:
         if decimals == 0:
             return MathExpression(exp.Round(this=col_expr))
         return MathExpression(exp.Round(this=col_expr, expression=exp.Literal.number(decimals)))
-
-    # ===================
-    # Conversion Functions
-    # ===================
 
     @staticmethod
     def to_literal(value: Any) -> FunctionExpression:
@@ -1102,7 +1038,6 @@ class SQLFactory:
         if isinstance(value, ExpressionWrapper):
             return value.expression
         if isinstance(value, Case):
-            # Case has _expression property via trait
             return exp.Case(ifs=value._conditions, default=value._default)
         if isinstance(value, exp.Expression):
             return value
@@ -1128,7 +1063,6 @@ class SQLFactory:
 
         Example:
             ```python
-            # DECODE(status, 'A', 'Active', 'I', 'Inactive', 'Unknown')
             sql.decode(
                 "status", "A", "Active", "I", "Inactive", "Unknown"
             )
@@ -1145,7 +1079,6 @@ class SQLFactory:
 
         for i in range(0, len(args) - 1, 2):
             if i + 1 >= len(args):
-                # Odd number of args means last one is default
                 default = SQLFactory._to_expression(args[i])
                 break
 
@@ -1225,7 +1158,6 @@ class SQLFactory:
 
         Example:
             ```python
-            # NVL2(salary, 'Has Salary', 'No Salary')
             sql.nvl2("salary", "Has Salary", "No Salary")
             ```
         """
@@ -1233,16 +1165,11 @@ class SQLFactory:
         not_null_expr = SQLFactory._to_expression(value_if_not_null)
         null_expr = SQLFactory._to_expression(value_if_null)
 
-        # Create CASE WHEN column IS NOT NULL THEN value_if_not_null ELSE value_if_null END
         is_null = exp.Is(this=col_expr, expression=exp.Null())
         condition = exp.Not(this=is_null)
         when_clause = exp.If(this=condition, true=not_null_expr)
 
         return ConversionExpression(exp.Case(ifs=[when_clause], default=null_expr))
-
-    # ===================
-    # Bulk Operations
-    # ===================
 
     @staticmethod
     def bulk_insert(table_name: str, column_count: int, placeholder_style: str = "?") -> FunctionExpression:
@@ -1263,21 +1190,18 @@ class SQLFactory:
             ```python
             from sqlspec import sql
 
-            # SQLite/PostgreSQL style
-            insert_expr = sql.bulk_insert("my_table", 3)
-            # Creates: INSERT INTO "my_table" VALUES (?, ?, ?)
 
-            # MySQL style
+            insert_expr = sql.bulk_insert("my_table", 3)
+
+
             insert_expr = sql.bulk_insert(
                 "my_table", 3, placeholder_style="%s"
             )
-            # Creates: INSERT INTO "my_table" VALUES (%s, %s, %s)
 
-            # Oracle style
+
             insert_expr = sql.bulk_insert(
                 "my_table", 3, placeholder_style=":1"
             )
-            # Creates: INSERT INTO "my_table" VALUES (:1, :2, :3)
             ```
         """
         return FunctionExpression(
@@ -1304,10 +1228,10 @@ class SQLFactory:
             ```python
             from sqlspec import sql
 
-            # Simple truncate
+
             truncate_sql = sql.truncate_table("my_table").build().sql
 
-            # Truncate with options
+
             truncate_sql = (
                 sql.truncate_table("my_table")
                 .cascade()
@@ -1319,10 +1243,6 @@ class SQLFactory:
         """
         return Truncate(table_name, dialect=self.dialect)
 
-    # ===================
-    # Case Expressions
-    # ===================
-
     @staticmethod
     def case() -> "Case":
         """Create a CASE expression builder.
@@ -1331,10 +1251,6 @@ class SQLFactory:
             CaseExpressionBuilder for building CASE expressions.
         """
         return Case()
-
-    # ===================
-    # Window Functions
-    # ===================
 
     def row_number(
         self,
@@ -1425,5 +1341,4 @@ class SQLFactory:
         return FunctionExpression(exp.Window(this=func_expr, **over_args))
 
 
-# Create a default SQL factory instance
 sql = SQLFactory()

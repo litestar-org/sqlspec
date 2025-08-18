@@ -38,7 +38,7 @@ __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "duckdb_sta
 
 logger = get_logger("adapters.duckdb")
 
-# Enhanced DuckDB statement configuration using core modules with performance optimizations
+
 duckdb_statement_config = StatementConfig(
     dialect="duckdb",
     parameter_config=ParameterStyleConfig(
@@ -50,16 +50,15 @@ duckdb_statement_config = StatementConfig(
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
-        allow_mixed_parameter_styles=False,  # DuckDB doesn't support mixed styles in single statement
+        allow_mixed_parameter_styles=False,
     ),
-    # Core processing features enabled for performance
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,
     enable_parameter_type_wrapping=True,
 )
 
-# DuckDB operation detection constants
+
 MODIFYING_OPERATIONS: Final[tuple[str, ...]] = ("INSERT", "UPDATE", "DELETE")
 
 
@@ -77,7 +76,7 @@ class DuckDBCursor:
         return self.cursor
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
+        _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
             self.cursor.close()
 
@@ -168,14 +167,13 @@ class DuckDBDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Enhanced configuration with global settings integration
         if statement_config is None:
             cache_config = get_cache_config()
             enhanced_config = duckdb_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,  # Default to enabled
-                enable_validation=True,  # Default to enabled
-                dialect="duckdb",  # Use adapter-specific dialect
+                enable_parsing=True,
+                enable_validation=True,
+                dialect="duckdb",
             )
             statement_config = enhanced_config
 
@@ -202,7 +200,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         Returns:
             None for standard execution (no special operations)
         """
-        _ = (cursor, statement)  # Mark as intentionally unused
+        _ = (cursor, statement)
         return None
 
     def _is_modifying_operation(self, statement: SQL) -> bool:
@@ -217,12 +215,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
         Returns:
             True if the operation modifies data (INSERT/UPDATE/DELETE)
         """
-        # Enhanced AST-based detection using core expression
+
         expression = statement.expression
         if expression and isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
             return True
 
-        # Fallback to SQL text analysis for comprehensive detection
         sql_upper = statement.sql.strip().upper()
         return any(sql_upper.startswith(op) for op in MODIFYING_OPERATIONS)
 
@@ -246,7 +243,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         last_result = None
 
         for stmt in statements:
-            # Execute each statement with parameters (DuckDB supports parameters in script statements)
             last_result = cursor.execute(stmt, prepared_parameters or ())
             successful_count += 1
 
@@ -270,20 +266,15 @@ class DuckDBDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         if prepared_parameters:
-            # Use DuckDB's efficient executemany for batch operations
             cursor.executemany(sql, prepared_parameters)
 
-            # Enhanced row counting based on operation type
             if self._is_modifying_operation(statement):
-                # For modifying operations, count equals number of parameter sets
                 row_count = len(prepared_parameters)
             else:
-                # For non-modifying operations, attempt to fetch result count
                 try:
                     result = cursor.fetchone()
                     row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
                 except Exception:
-                    # Fallback to cursor.rowcount or 0
                     row_count = max(cursor.rowcount, 0) if hasattr(cursor, "rowcount") else 0
         else:
             row_count = 0
@@ -306,17 +297,13 @@ class DuckDBDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters or ())
 
-        # Enhanced SELECT result processing
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
 
-            # Efficient data conversion handling multiple formats
             if fetched_data and isinstance(fetched_data[0], tuple):
-                # Convert tuple rows to dictionaries for consistent interface
                 dict_data = [dict(zip(column_names, row)) for row in fetched_data]
             else:
-                # Data already in appropriate format
                 dict_data = fetched_data
 
             return self.create_execution_result(
@@ -327,18 +314,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        # Enhanced non-SELECT result processing with multiple row count strategies
         try:
-            # Try to fetch result for operations that return row counts
             result = cursor.fetchone()
             row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
         except Exception:
-            # Fallback to cursor.rowcount or 0 for operations without result sets
             row_count = max(cursor.rowcount, 0) if hasattr(cursor, "rowcount") else 0
 
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
-    # Transaction management with enhanced error handling
     def begin(self) -> None:
         """Begin a database transaction with enhanced error handling."""
         try:

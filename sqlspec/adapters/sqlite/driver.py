@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "sqlite_statement_config")
 
 
-# Enhanced SQLite statement configuration using core modules with performance optimizations
 sqlite_statement_config = StatementConfig(
     dialect="sqlite",
     parameter_config=ParameterStyleConfig(
@@ -51,18 +50,12 @@ sqlite_statement_config = StatementConfig(
             datetime.datetime: lambda v: v.isoformat(),
             datetime.date: lambda v: v.isoformat(),
             Decimal: str,
-            # Note: Don't auto-convert dicts to JSON for SQLite
-            # This interferes with named parameter processing in execute_many
-            # dict: to_json,  # Removed to prevent parameter interference
             list: to_json,
-            # Note: Don't convert tuples to JSON for SQLite as they're used as parameter sets
-            # tuple: lambda v: to_json(list(v)),  # Removed - tuples are parameter sets
         },
         has_native_list_expansion=False,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
     ),
-    # Core processing features enabled for performance
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,
@@ -84,7 +77,7 @@ class SqliteCursor:
         return self.cursor
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
+        _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 self.cursor.close()
@@ -167,14 +160,13 @@ class SqliteDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Enhanced configuration with global settings integration
         if statement_config is None:
             cache_config = get_cache_config()
             enhanced_config = sqlite_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,  # Default to enabled
-                enable_validation=True,  # Default to enabled
-                dialect="sqlite",  # Use adapter-specific dialect
+                enable_parsing=True,
+                enable_validation=True,
+                dialect="sqlite",
             )
             statement_config = enhanced_config
 
@@ -230,15 +222,12 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced parameter validation for executemany
         if not prepared_parameters:
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
-        # Ensure prepared_parameters is a list of parameter sets for SQLite executemany
         cursor.executemany(sql, prepared_parameters)
 
-        # Calculate affected rows more accurately
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
@@ -251,7 +240,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters or ())
 
-        # Enhanced SELECT result processing
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
@@ -262,15 +250,12 @@ class SqliteDriver(SyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        # Enhanced non-SELECT result processing
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    # Transaction management with enhanced error handling
     def begin(self) -> None:
         """Begin a database transaction with enhanced error handling."""
         try:
-            # Only begin if not already in a transaction
             if not self.connection.in_transaction:
                 self.connection.execute("BEGIN")
         except sqlite3.Error as e:

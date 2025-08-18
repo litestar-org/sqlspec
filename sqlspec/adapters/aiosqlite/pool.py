@@ -141,7 +141,7 @@ class AiosqliteConnectionPool:
         connection_parameters: "dict[str, Any]",
         pool_size: int = 5,
         connect_timeout: float = 30.0,
-        idle_timeout: float = 24 * 60 * 60,  # 24 hours
+        idle_timeout: float = 24 * 60 * 60,
         operation_timeout: float = 10.0,
     ) -> None:
         """Initialize connection pool.
@@ -163,7 +163,6 @@ class AiosqliteConnectionPool:
         self._tracked_threads: set[Union[threading.Thread, AiosqliteConnection]] = set()
         self._wal_initialized = False
 
-        # Lazy initialization for Python 3.9 compatibility (asyncio objects can't be created without event loop)
         self._queue_instance: Optional[asyncio.Queue[AiosqlitePoolConnection]] = None
         self._lock_instance: Optional[asyncio.Lock] = None
         self._closed_event_instance: Optional[asyncio.Event] = None
@@ -234,7 +233,6 @@ class AiosqliteConnectionPool:
         connection.daemon = True
         connection = await connection
 
-        # Detect database type for appropriate optimization
         database_path = str(self._connection_parameters.get("database", ""))
         is_shared_cache = "cache=shared" in database_path
         is_memory_db = ":memory:" in database_path or "mode=memory" in database_path
@@ -494,21 +492,17 @@ class AiosqliteConnectionPool:
             return
         self._closed_event.set()
 
-        # Clear the queue
         while not self._queue.empty():
             self._queue.get_nowait()
 
-        # Get all connections and clear registry
         async with self._lock:
             connections = list(self._connection_registry.values())
             self._connection_registry.clear()
 
-        # Close all connections
         if connections:
             close_tasks = [asyncio.wait_for(conn.close(), timeout=self._operation_timeout) for conn in connections]
             results = await asyncio.gather(*close_tasks, return_exceptions=True)
 
-            # Log any close errors
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
                     logger.warning("Error closing connection %s: %s", connections[i].id, result)

@@ -74,7 +74,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         """
         config_dict = dict(pool_config) if pool_config else {}
 
-        # Handle memory database URI conversion - test expectation is different than sqlite pattern
         if "database" not in config_dict or config_dict["database"] == ":memory:":
             config_dict["database"] = "file::memory:?cache=shared"
             config_dict["uri"] = True
@@ -104,7 +103,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         Returns:
             Dictionary with connection parameters for creating connections.
         """
-        # Filter out all pool-specific parameters that aiosqlite.connect() doesn't accept
+
         excluded_keys = {
             "pool_size",
             "connect_timeout",

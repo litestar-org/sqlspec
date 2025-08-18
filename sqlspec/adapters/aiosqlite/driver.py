@@ -221,11 +221,8 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Begin a database transaction with appropriate locking strategy."""
         try:
             if not self.connection.in_transaction:
-                # For shared cache databases, use IMMEDIATE to reduce lock contention
-                # For other databases, BEGIN IMMEDIATE is also safer for concurrent access
                 await self.connection.execute("BEGIN IMMEDIATE")
         except aiosqlite.Error as e:
-            # If IMMEDIATE fails due to lock, try with exponential backoff
             import random
 
             max_retries = 3
@@ -235,7 +232,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 try:
                     await self.connection.execute("BEGIN IMMEDIATE")
                 except aiosqlite.Error:
-                    if attempt == max_retries - 1:  # Last attempt
+                    if attempt == max_retries - 1:
                         break
                 else:
                     return

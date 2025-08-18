@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "asyncmy_statement_config")
 
 
-# Enhanced AsyncMy statement configuration using core modules with performance optimizations
 asyncmy_statement_config = StatementConfig(
     dialect="mysql",
     parameter_config=ParameterStyleConfig(
@@ -42,12 +41,7 @@ asyncmy_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
         default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
         supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},
-        type_coercion_map={
-            dict: to_json,
-            list: to_json,
-            tuple: lambda v: to_json(list(v)),
-            bool: int,  # MySQL represents booleans as integers
-        },
+        type_coercion_map={dict: to_json, list: to_json, tuple: lambda v: to_json(list(v)), bool: int},
         has_native_list_expansion=False,
         needs_static_script_compilation=True,
         preserve_parameter_format=True,
@@ -173,7 +167,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         Returns:
             None - always proceeds with standard execution for AsyncMy
         """
-        _ = (cursor, statement)  # Mark as intentionally unused
+        _ = (cursor, statement)
         return None
 
     async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
@@ -203,14 +197,12 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced parameter validation for executemany
         if not prepared_parameters:
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
         await cursor.executemany(sql, prepared_parameters)
 
-        # Calculate affected rows based on parameter count for AsyncMy
         affected_rows = len(prepared_parameters) if prepared_parameters else 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
@@ -223,12 +215,10 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters or None)
 
-        # Enhanced SELECT result processing for MySQL
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
             column_names = [desc[0] for desc in cursor.description or []]
 
-            # AsyncMy may return tuples or dicts - ensure consistent dict format
             if fetched_data and not isinstance(fetched_data[0], dict):
                 data = [dict(zip(column_names, row)) for row in fetched_data]
             else:
@@ -238,19 +228,16 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        # Enhanced non-SELECT result processing for MySQL
         affected_rows = cursor.rowcount if cursor.rowcount is not None else -1
         last_id = getattr(cursor, "lastrowid", None) if cursor.rowcount and cursor.rowcount > 0 else None
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
-    # MySQL transaction management with enhanced async error handling
     async def begin(self) -> None:
         """Begin a database transaction with enhanced async error handling.
 
         Explicitly starts a MySQL transaction to ensure proper transaction boundaries.
         """
         try:
-            # Execute explicit BEGIN to start transaction
             async with AsyncmyCursor(self.connection) as cursor:
                 await cursor.execute("BEGIN")
         except asyncmy.errors.MySQLError as e:

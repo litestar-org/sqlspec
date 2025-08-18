@@ -73,14 +73,14 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation."""
-        # Filter out pool-specific parameters that SQLite doesn't use
+
         excluded_keys = {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "extra"}
         return {k: v for k, v in self.pool_config.items() if v is not None and k not in excluded_keys}
 
     def _create_pool(self) -> SqliteConnectionPool:
         """Create connection pool from configuration."""
         config_dict = self._get_connection_config_dict()
-        # Pass all pool_config as kwargs to be ignored by the pool
+
         return SqliteConnectionPool(connection_parameters=config_dict, **self.pool_config)
 
     def _close_pool(self) -> None:

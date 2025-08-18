@@ -77,7 +77,6 @@ def _adbc_ast_transformer(expression: Any, parameters: Any) -> tuple[Any, Any]:
     if not parameters:
         return expression, parameters
 
-    # Detect NULL parameter positions
     null_positions = set()
     if isinstance(parameters, (list, tuple)):
         for i, param in enumerate(parameters):
@@ -96,47 +95,44 @@ def _adbc_ast_transformer(expression: Any, parameters: Any) -> tuple[Any, Any]:
     if not null_positions:
         return expression, parameters
 
-    # Track position for QMARK-style placeholders
     qmark_position = [0]
 
     def transform_node(node: Any) -> Any:
         """Transform parameter nodes to NULL literals and renumber remaining ones."""
-        # Handle QMARK-style placeholders (?, ?, ?)
+
         if isinstance(node, exp.Placeholder) and (not hasattr(node, "this") or node.this is None):
             current_pos = qmark_position[0]
             qmark_position[0] += 1
 
             if current_pos in null_positions:
                 return exp.Null()
-            # Don't renumber QMARK placeholders - they stay as ?
+
             return node
 
-        # Handle PostgreSQL-style placeholders ($1, $2, etc.)
         if isinstance(node, exp.Placeholder) and hasattr(node, "this") and node.this is not None:
             try:
                 param_str = str(node.this).lstrip("$")
                 param_num = int(param_str)
-                param_index = param_num - 1  # Convert to 0-based
+                param_index = param_num - 1
 
                 if param_index in null_positions:
                     return exp.Null()
-                # Renumber placeholder to account for removed NULLs
+
                 nulls_before = sum(1 for idx in null_positions if idx < param_index)
                 new_param_num = param_num - nulls_before
                 return exp.Placeholder(this=f"${new_param_num}")
             except (ValueError, AttributeError):
                 pass
 
-        # Handle generic parameter nodes
         if isinstance(node, exp.Parameter) and hasattr(node, "this"):
             try:
                 param_str = str(node.this)
                 param_num = int(param_str)
-                param_index = param_num - 1  # Convert to 0-based
+                param_index = param_num - 1
 
                 if param_index in null_positions:
                     return exp.Null()
-                # Renumber parameter to account for removed NULLs
+
                 nulls_before = sum(1 for idx in null_positions if idx < param_index)
                 new_param_num = param_num - nulls_before
                 return exp.Parameter(this=str(new_param_num))
@@ -145,10 +141,8 @@ def _adbc_ast_transformer(expression: Any, parameters: Any) -> tuple[Any, Any]:
 
         return node
 
-    # Transform the AST
     modified_expression = expression.transform(transform_node)
 
-    # Remove NULL parameters from the parameter list
     cleaned_params: Any
     if isinstance(parameters, (list, tuple)):
         cleaned_params = [p for i, p in enumerate(parameters) if i not in null_positions]

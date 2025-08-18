@@ -31,7 +31,7 @@ __all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "asyncpg
 
 logger = get_logger("adapters.asyncpg")
 
-# Enhanced AsyncPG statement configuration using core modules with performance optimizations
+
 asyncpg_statement_config = StatementConfig(
     dialect="postgres",
     parameter_config=ParameterStyleConfig(
@@ -44,14 +44,13 @@ asyncpg_statement_config = StatementConfig(
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
     ),
-    # Core processing features enabled for performance
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,
     enable_parameter_type_wrapping=True,
 )
 
-# PostgreSQL status parsing constants for row count extraction
+
 ASYNC_PG_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 EXPECTED_REGEX_GROUPS: Final[int] = 3
 
@@ -68,8 +67,7 @@ class AsyncpgCursor:
         return self.connection
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
-        # AsyncPG connections don't need explicit cursor cleanup
+        _ = (exc_type, exc_val, exc_tb)
 
 
 class AsyncpgExceptionHandler:
@@ -141,14 +139,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Enhanced configuration with global settings integration
         if statement_config is None:
             cache_config = get_cache_config()
             enhanced_config = asyncpg_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,  # Default to enabled
-                enable_validation=True,  # Default to enabled
-                dialect="postgres",  # Use adapter-specific dialect
+                enable_parsing=True,
+                enable_validation=True,
+                dialect="postgres",
             )
             statement_config = enhanced_config
 
@@ -188,14 +185,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             cursor: AsyncPG connection object
             statement: SQL statement with COPY operation
         """
-        # Get metadata for copy operation data if available
+
         metadata: dict[str, Any] = getattr(statement, "metadata", {})
         sql_text = statement.sql
 
         copy_data = metadata.get("postgres_copy_data")
 
         if copy_data:
-            # Process different data formats for COPY operations
             if isinstance(copy_data, dict):
                 data_str = (
                     str(next(iter(copy_data.values())))
@@ -207,17 +203,14 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             else:
                 data_str = str(copy_data)
 
-            # Handle COPY FROM STDIN operations with binary data support
             if "FROM STDIN" in sql_text.upper():
                 from io import BytesIO
 
                 data_io = BytesIO(data_str.encode("utf-8"))
                 await cursor.copy_from_query(sql_text, output=data_io)
             else:
-                # Standard COPY operation
                 await cursor.execute(sql_text)
         else:
-            # COPY without additional data - execute directly
             await cursor.execute(sql_text)
 
     async def _execute_script(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
@@ -233,8 +226,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         last_result = None
 
         for stmt in statements:
-            # Execute each statement individually
-            # If parameters were embedded (static style), prepared_parameters will be None/empty
             result = await cursor.execute(stmt)
             last_result = result
             successful_count += 1
@@ -252,12 +243,10 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         if prepared_parameters:
-            # Use AsyncPG's efficient executemany for batch operations
             await cursor.executemany(sql, prepared_parameters)
-            # Calculate affected rows (AsyncPG doesn't provide direct rowcount for executemany)
+
             affected_rows = len(prepared_parameters)
         else:
-            # Handle empty parameter case - no operations to execute
             affected_rows = 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
@@ -270,12 +259,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced SELECT result processing
         if statement.returns_rows():
-            # Use AsyncPG's fetch for SELECT operations
             records = await cursor.fetch(sql, *prepared_parameters) if prepared_parameters else await cursor.fetch(sql)
 
-            # Efficient data conversion from asyncpg Records to dicts
             data = [dict(record) for record in records]
             column_names = list(records[0].keys()) if records else []
 
@@ -283,10 +269,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        # Enhanced non-SELECT result processing
         result = await cursor.execute(sql, *prepared_parameters) if prepared_parameters else await cursor.execute(sql)
 
-        # Parse AsyncPG status string for affected rows
         affected_rows = self._parse_asyncpg_status(result) if isinstance(result, str) else 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
@@ -312,13 +296,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             groups = match.groups()
             if len(groups) >= EXPECTED_REGEX_GROUPS:
                 try:
-                    return int(groups[-1])  # Last group contains the row count
+                    return int(groups[-1])
                 except (ValueError, IndexError):
                     pass
 
         return 0
 
-    # Async transaction management with enhanced error handling
     async def begin(self) -> None:
         """Begin a database transaction with enhanced error handling."""
         try:
