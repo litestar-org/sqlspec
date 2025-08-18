@@ -1,7 +1,7 @@
 """Safe SQL query builder with validation and parameter binding.
 
-This module provides a fluent interface for building SQL queries safely,
-with automatic parameter binding and validation.
+This module provides a fluent interface for building SQL queries with
+parameter binding and validation.
 """
 
 from abc import ABC, abstractmethod
@@ -47,7 +47,7 @@ class QueryBuilder(ABC):
     """Abstract base class for SQL query builders with SQLGlot optimization.
 
     Provides common functionality for dialect handling, parameter management,
-    query construction, and query optimization using SQLGlot.
+    and query construction using SQLGlot.
     """
 
     __slots__ = (
@@ -79,7 +79,6 @@ class QueryBuilder(ABC):
         self.optimize_predicates = optimize_predicates
         self.simplify_expressions = simplify_expressions
 
-        # Initialize mutable attributes
         self._expression: Optional[exp.Expression] = None
         self._parameters: dict[str, Any] = {}
         self._parameter_counter: int = 0
@@ -201,12 +200,11 @@ class QueryBuilder(ABC):
         if base_name not in self._parameters:
             return base_name
 
-        for i in range(1, 1000):  # Reasonable upper bound to prevent infinite loops
+        for i in range(1, 1000):
             name = f"{base_name}_{i}"
             if name not in self._parameters:
                 return name
 
-        # Fallback for edge case
         import uuid
 
         return f"{base_name}_{uuid.uuid4().hex[:8]}"
@@ -224,7 +222,6 @@ class QueryBuilder(ABC):
 
         dialect_name: str = self.dialect_name or "default"
 
-        # Ensure expression is built before generating cache key
         if self._expression is None:
             self._expression = self._create_base_expression()
 
@@ -341,7 +338,7 @@ class QueryBuilder(ABC):
         return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=self.dialect)
 
     def _optimize_expression(self, expression: exp.Expression) -> exp.Expression:
-        """Apply SQLGlot optimizations to the expression with caching.
+        """Apply SQLGlot optimizations to the expression.
 
         Args:
             expression: The expression to optimize
@@ -382,7 +379,7 @@ class QueryBuilder(ABC):
             return optimized
 
     def to_statement(self, config: "Optional[StatementConfig]" = None) -> "SQL":
-        """Converts the built query into a SQL statement object with caching.
+        """Converts the built query into a SQL statement object.
 
         Args:
             config: Optional SQL configuration.
@@ -439,7 +436,6 @@ class QueryBuilder(ABC):
                 dialect=safe_query.dialect,
             )
 
-        # Re-generate SQL if config dialect differs from SafeQuery dialect
         sql_string = safe_query.sql
         if (
             config.dialect is not None
@@ -450,7 +446,6 @@ class QueryBuilder(ABC):
             try:
                 sql_string = self._expression.sql(dialect=config.dialect, pretty=True)
             except Exception:
-                # Fall back to original SQL if dialect-specific generation fails
                 sql_string = safe_query.sql
 
         if kwargs:

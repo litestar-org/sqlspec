@@ -1,25 +1,17 @@
-"""Enhanced PostgreSQL psycopg driver with CORE_ROUND_3 architecture integration.
+"""PostgreSQL psycopg driver implementation.
 
-This driver implements the complete CORE_ROUND_3 architecture for PostgreSQL connections using psycopg3:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Complete backward compatibility with existing PostgreSQL functionality
-
-Architecture Features:
-- Direct integration with sqlspec.core modules
-- Enhanced PostgreSQL parameter processing with advanced type coercion
-- PostgreSQL-specific features (COPY, arrays, JSON, advanced types)
-- Thread-safe unified caching system
-- MyPyC-optimized performance patterns
-- Zero-copy data access where possible
+This driver provides PostgreSQL database connectivity using psycopg3:
+- SQL statement execution with parameter binding
+- Connection and transaction management
+- Row result processing with dictionary-based access
+- PostgreSQL-specific features (COPY, arrays, JSON types)
 
 PostgreSQL Features:
-- Advanced parameter styles ($1, %s, %(name)s)
-- PostgreSQL array support with optimized conversion
-- COPY operations with enhanced performance
+- Parameter styles ($1, %s, %(name)s)
+- PostgreSQL array support
+- COPY operations for bulk data transfer
 - JSON/JSONB type handling
-- PostgreSQL-specific error categorization
+- PostgreSQL-specific error handling
 """
 
 import io
@@ -53,7 +45,7 @@ TRANSACTION_STATUS_UNKNOWN = 4
 
 
 def _convert_list_to_postgres_array(value: Any) -> str:
-    """Convert Python list to PostgreSQL array literal format with enhanced type handling.
+    """Convert Python list to PostgreSQL array literal format.
 
     Args:
         value: Python list to convert
@@ -121,7 +113,7 @@ __all__ = (
 
 
 class PsycopgSyncCursor:
-    """Context manager for PostgreSQL psycopg cursor management with enhanced error handling."""
+    """Context manager for PostgreSQL psycopg cursor management."""
 
     __slots__ = ("connection", "cursor")
 
@@ -140,7 +132,7 @@ class PsycopgSyncCursor:
 
 
 class PsycopgSyncExceptionHandler:
-    """Custom sync context manager for handling PostgreSQL psycopg database exceptions."""
+    """Context manager for handling PostgreSQL psycopg database exceptions."""
 
     __slots__ = ()
 
@@ -186,35 +178,19 @@ class PsycopgSyncExceptionHandler:
 
 
 class PsycopgSyncDriver(SyncDriverAdapterBase):
-    """Enhanced PostgreSQL psycopg synchronous driver with CORE_ROUND_3 architecture integration.
+    """PostgreSQL psycopg synchronous driver.
 
-    This driver leverages the complete core module system for maximum PostgreSQL performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Optimized PostgreSQL array and JSON handling
-    - Zero-copy parameter processing where possible
+    Provides synchronous database operations for PostgreSQL using psycopg3:
+    - SQL statement execution with parameter binding
+    - Transaction management (begin, commit, rollback)
+    - Result processing with column metadata
+    - PostgreSQL-specific features support
 
     PostgreSQL Features:
-    - Advanced parameter styles ($1, %s, %(name)s)
-    - PostgreSQL array support with optimized conversion
-    - COPY operations with enhanced performance
-    - JSON/JSONB type handling
-    - PostgreSQL-specific error categorization
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    Compatibility:
-    - 100% backward compatibility with existing psycopg driver interface
-    - All existing PostgreSQL tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved cursor management and exception handling patterns
+    - Parameter styles ($1, %s, %(name)s)
+    - PostgreSQL arrays and JSON handling
+    - COPY operations for bulk data transfer
+    - PostgreSQL-specific error handling
     """
 
     __slots__ = ()
@@ -228,18 +204,18 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = psycopg_statement_config.replace(
+            default_config = psycopg_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,
                 enable_validation=True,
                 dialect="postgres",
             )
-            statement_config = enhanced_config
+            statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
-        """Create context manager for PostgreSQL cursor with enhanced resource management."""
+        """Create context manager for PostgreSQL cursor."""
         return PsycopgSyncCursor(connection)
 
     def begin(self) -> None:
@@ -274,7 +250,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         return PsycopgSyncExceptionHandler()
 
     def _handle_transaction_error_cleanup(self) -> None:
-        """Handle transaction cleanup after database errors to prevent aborted transaction states."""
+        """Handle transaction cleanup after database errors."""
         try:
             if hasattr(self.connection, "info") and hasattr(self.connection.info, "transaction_status"):
                 status = self.connection.info.transaction_status
@@ -362,10 +338,14 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         )
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script using enhanced statement splitting and parameter handling.
+        """Execute SQL script with multiple statements.
 
-        Uses core module optimization for statement parsing and parameter processing.
-        PostgreSQL supports complex scripts with multiple statements.
+        Args:
+            cursor: Database cursor
+            statement: SQL statement containing multiple commands
+
+        Returns:
+            ExecutionResult with script execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -385,9 +365,14 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized PostgreSQL batch processing.
+        """Execute SQL with multiple parameter sets.
 
-        Leverages core parameter processing for enhanced PostgreSQL type handling.
+        Args:
+            cursor: Database cursor
+            statement: SQL statement with parameter list
+
+        Returns:
+            ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -401,9 +386,14 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with enhanced PostgreSQL data handling and performance optimization.
+        """Execute single SQL statement.
 
-        Uses core processing for optimal parameter handling and PostgreSQL result processing.
+        Args:
+            cursor: Database cursor
+            statement: SQL statement to execute
+
+        Returns:
+            ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -429,7 +419,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
 
 class PsycopgAsyncCursor:
-    """Async context manager for PostgreSQL psycopg cursor management with enhanced error handling."""
+    """Async context manager for PostgreSQL psycopg cursor management."""
 
     __slots__ = ("connection", "cursor")
 
@@ -448,7 +438,7 @@ class PsycopgAsyncCursor:
 
 
 class PsycopgAsyncExceptionHandler:
-    """Custom async context manager for handling PostgreSQL psycopg database exceptions."""
+    """Async context manager for handling PostgreSQL psycopg database exceptions."""
 
     __slots__ = ()
 
@@ -494,37 +484,20 @@ class PsycopgAsyncExceptionHandler:
 
 
 class PsycopgAsyncDriver(AsyncDriverAdapterBase):
-    """Enhanced PostgreSQL psycopg asynchronous driver with CORE_ROUND_3 architecture integration.
+    """PostgreSQL psycopg asynchronous driver.
 
-    This async driver leverages the complete core module system for maximum PostgreSQL performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Optimized PostgreSQL array and JSON handling
-    - Zero-copy parameter processing where possible
-    - Async-optimized resource management
+    Provides asynchronous database operations for PostgreSQL using psycopg3:
+    - Async SQL statement execution with parameter binding
+    - Async transaction management (begin, commit, rollback)
+    - Async result processing with column metadata
+    - PostgreSQL-specific features support
 
     PostgreSQL Features:
-    - Advanced parameter styles ($1, %s, %(name)s)
-    - PostgreSQL array support with optimized conversion
-    - COPY operations with enhanced performance
-    - JSON/JSONB type handling
-    - PostgreSQL-specific error categorization
+    - Parameter styles ($1, %s, %(name)s)
+    - PostgreSQL arrays and JSON handling
+    - COPY operations for bulk data transfer
+    - PostgreSQL-specific error handling
     - Async pub/sub support (LISTEN/NOTIFY)
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    Compatibility:
-    - 100% backward compatibility with existing async psycopg driver interface
-    - All existing async PostgreSQL tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved async cursor management and exception handling patterns
     """
 
     __slots__ = ()
@@ -538,18 +511,18 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = psycopg_statement_config.replace(
+            default_config = psycopg_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,
                 enable_validation=True,
                 dialect="postgres",
             )
-            statement_config = enhanced_config
+            statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
-        """Create async context manager for PostgreSQL cursor with enhanced resource management."""
+        """Create async context manager for PostgreSQL cursor."""
         return PsycopgAsyncCursor(connection)
 
     async def begin(self) -> None:
@@ -584,7 +557,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         return PsycopgAsyncExceptionHandler()
 
     async def _handle_transaction_error_cleanup_async(self) -> None:
-        """Handle transaction cleanup after database errors to prevent aborted transaction states (async version)."""
+        """Handle async transaction cleanup after database errors."""
         try:
             if hasattr(self.connection, "info") and hasattr(self.connection.info, "transaction_status"):
                 status = self.connection.info.transaction_status
@@ -613,7 +586,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         return None
 
     async def _handle_copy_operation_async(self, cursor: Any, statement: "SQL") -> "SQLResult":
-        """Handle PostgreSQL COPY operations using copy_expert (async version).
+        """Handle PostgreSQL COPY operations (async).
 
         Args:
             cursor: Psycopg async cursor object
@@ -675,10 +648,14 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script using enhanced statement splitting and parameter handling.
+        """Execute SQL script with multiple statements (async).
 
-        Uses core module optimization for statement parsing and parameter processing.
-        PostgreSQL supports complex scripts with multiple statements.
+        Args:
+            cursor: Database cursor
+            statement: SQL statement containing multiple commands
+
+        Returns:
+            ExecutionResult with script execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -698,9 +675,14 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized PostgreSQL async batch processing.
+        """Execute SQL with multiple parameter sets (async).
 
-        Leverages core parameter processing for enhanced PostgreSQL type handling.
+        Args:
+            cursor: Database cursor
+            statement: SQL statement with parameter list
+
+        Returns:
+            ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -714,9 +696,14 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with enhanced PostgreSQL async data handling and performance optimization.
+        """Execute single SQL statement (async).
 
-        Uses core processing for optimal parameter handling and PostgreSQL result processing.
+        Args:
+            cursor: Database cursor
+            statement: SQL statement to execute
+
+        Returns:
+            ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 

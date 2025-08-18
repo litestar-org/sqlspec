@@ -45,7 +45,7 @@ logger = get_logger("config")
 
 
 class LifecycleConfig(TypedDict, total=False):
-    """Universal lifecycle hooks for all adapters.
+    """Lifecycle hooks for all adapters.
 
     Each hook accepts a list of callables to support multiple handlers.
     """
@@ -62,9 +62,8 @@ class LifecycleConfig(TypedDict, total=False):
 
 
 class MigrationConfig(TypedDict, total=False):
-    """Configuration options for SQLSpec database migrations.
+    """Configuration options for database migrations.
 
-    This TypedDict provides type safety and IDE completion for migration configuration.
     All fields are optional with sensible defaults.
     """
 

@@ -1,25 +1,7 @@
-"""Enhanced BigQuery driver with CORE_ROUND_3 architecture integration.
+"""BigQuery driver implementation.
 
-This driver implements the complete CORE_ROUND_3 architecture for BigQuery connections:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Complete backward compatibility with existing BigQuery functionality
-
-Architecture Features:
-- Direct integration with sqlspec.core modules
-- Enhanced BigQuery parameter processing with NAMED_AT conversion
-- Thread-safe unified caching system
-- MyPyC-optimized performance patterns
-- Zero-copy data access where possible
-- AST-based literal embedding for execute_many operations
-
-BigQuery Features:
-- Parameter style conversion (QMARK to NAMED_AT)
-- BigQuery-specific type coercion and data handling
-- Enhanced error categorization for BigQuery/Google Cloud errors
-- Support for QueryJobConfig and job management
-- Optimized query execution with proper BigQuery parameter handling
+Provides Google Cloud BigQuery connectivity with parameter style conversion,
+type coercion, error handling, and query job management.
 """
 
 import datetime
@@ -66,10 +48,9 @@ _BQ_TYPE_MAP: dict[type, tuple[str, Optional[str]]] = {
 
 
 def _get_bq_param_type(value: Any) -> tuple[Optional[str], Optional[str]]:
-    """Determine BigQuery parameter type from Python value using hash map dispatch.
+    """Determine BigQuery parameter type from Python value.
 
-    Uses O(1) hash map lookup for common types, with special handling for
-    datetime and array types.
+    Returns the appropriate BigQuery type for common Python types.
     """
     if value is None:
         return ("STRING", None)
@@ -105,10 +86,9 @@ _BQ_PARAM_CREATOR_MAP: dict[str, Any] = {
 
 
 def _create_bq_parameters(parameters: Any) -> "list[Union[ArrayQueryParameter, ScalarQueryParameter]]":
-    """Create BigQuery QueryParameter objects from parameters using hash map dispatch.
+    """Create BigQuery QueryParameter objects from parameters.
 
     Handles both dict-style (named) and list-style (positional) parameters.
-    Uses O(1) hash map lookup for parameter type creation.
     """
     if not parameters:
         return []
@@ -178,7 +158,7 @@ bigquery_statement_config = StatementConfig(
 
 
 class BigQueryCursor:
-    """BigQuery cursor with enhanced resource management and error handling."""
+    """BigQuery cursor with resource management."""
 
     __slots__ = ("connection", "job")
 
@@ -227,37 +207,10 @@ class BigQueryExceptionHandler:
 
 
 class BigQueryDriver(SyncDriverAdapterBase):
-    """Enhanced BigQuery driver with CORE_ROUND_3 architecture integration.
+    """BigQuery driver implementation.
 
-    This driver leverages the complete core module system for maximum BigQuery performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-    - Optimized BigQuery parameter style conversion (QMARK -> NAMED_AT)
-    - AST-based literal embedding for execute_many operations
-
-    BigQuery Features:
-    - Parameter style conversion (QMARK to NAMED_AT)
-    - BigQuery-specific type coercion and data handling
-    - Enhanced error categorization for BigQuery/Google Cloud errors
-    - QueryJobConfig support with comprehensive configuration merging
-    - Optimized query execution with proper BigQuery parameter handling
-    - Script execution with AST-based parameter embedding
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    Compatibility:
-    - 100% backward compatibility with existing BigQuery driver interface
-    - All existing BigQuery tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved QueryJobConfig and job management patterns
+    Provides Google Cloud BigQuery connectivity with parameter style conversion,
+    type coercion, error handling, and query job management.
     """
 
     __slots__ = ("_default_query_job_config",)
@@ -271,13 +224,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = bigquery_statement_config.replace(
+            statement_config = bigquery_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,
                 enable_validation=True,
                 dialect="bigquery",
             )
-            statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: Optional[QueryJobConfig] = (driver_features or {}).get(
@@ -285,7 +237,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
 
     def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
-        """Create and return a context manager for cursor acquisition and cleanup with enhanced resource management.
+        """Create context manager for cursor management.
 
         Returns:
             BigQueryCursor: Cursor object for query execution
@@ -306,7 +258,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return BigQueryExceptionHandler()
 
     def _copy_job_config_attrs(self, source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
-        """Copy non-private attributes from source config to target config with enhanced validation."""
+        """Copy non-private attributes from source config to target config."""
         for attr in dir(source_config):
             if attr.startswith("_"):
                 continue
@@ -324,7 +276,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         connection: Optional[BigQueryConnection] = None,
         job_config: Optional[QueryJobConfig] = None,
     ) -> QueryJob:
-        """Execute a BigQuery job with comprehensive configuration support and enhanced error handling."""
+        """Execute a BigQuery job with configuration support."""
         conn = connection or self.connection
 
         final_job_config = QueryJobConfig()
@@ -342,7 +294,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     @staticmethod
     def _rows_to_results(rows_iterator: Any) -> list[dict[str, Any]]:
-        """Convert BigQuery rows to dictionary format with enhanced type handling."""
+        """Convert BigQuery rows to dictionary format."""
         return [dict(row) for row in rows_iterator]
 
     def _try_special_handling(self, cursor: "Any", statement: "SQL") -> "Optional[SQLResult]":
@@ -362,10 +314,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return None
 
     def _transform_ast_with_literals(self, sql: str, parameters: Any) -> str:
-        """Transform SQL AST by replacing placeholders with literal values using enhanced core processing.
+        """Transform SQL AST by replacing placeholders with literal values.
 
-        This approach maintains the single-parse architecture by using proper
-        AST transformation instead of string manipulation, with core optimization.
+        Uses AST transformation instead of string manipulation.
         """
         if not parameters:
             return sql
@@ -378,7 +329,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         placeholder_counter = {"index": 0}
 
         def replace_placeholder(node: exp.Expression) -> exp.Expression:
-            """Replace placeholder nodes with literal values using enhanced type handling."""
+            """Replace placeholder nodes with literal values."""
             if isinstance(node, exp.Placeholder):
                 if isinstance(parameters, (list, tuple)):
                     current_index = placeholder_counter["index"]
@@ -416,7 +367,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return transformed_ast.sql(dialect="bigquery")
 
     def _create_literal_node(self, value: Any) -> "exp.Expression":
-        """Create a SQLGlot literal expression from a Python value with enhanced type handling."""
+        """Create a SQLGlot literal expression from a Python value."""
         if value is None:
             return exp.Null()
         if isinstance(value, bool):
@@ -435,9 +386,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return exp.Literal.string(str(value))
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute SQL script using enhanced statement splitting and parameter handling.
+        """Execute SQL script with statement splitting and parameter handling.
 
-        Uses core module optimization for statement parsing and parameter processing.
         Parameters are embedded as static values for script execution compatibility.
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
@@ -489,9 +439,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute single SQL statement with enhanced BigQuery data handling and performance optimization.
+        """Execute single SQL statement with BigQuery data handling.
 
-        Uses core processing for optimal parameter handling and BigQuery result processing.
+        Handles parameter processing and BigQuery result processing.
         """
         sql, parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.job = self._run_query_job(sql, parameters, connection=cursor)

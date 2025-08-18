@@ -1,4 +1,4 @@
-"""ADBC database configuration using TypedDict for better maintainability."""
+"""ADBC database configuration."""
 
 import logging
 from contextlib import contextmanager
@@ -60,16 +60,11 @@ __all__ = ("AdbcConfig", "AdbcConnectionParams")
 class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     """ADBC configuration for Arrow Database Connectivity.
 
-    ADBC (Arrow Database Connectivity) provides a unified interface for connecting
-    to multiple database systems with Arrow-native data transfer.
+    ADBC provides an interface for connecting to multiple database systems
+    with Arrow-native data transfer.
 
-    This configuration supports:
-    - Universal driver detection and loading
-    - Arrow data streaming
-    - Bulk ingestion operations
-    - Multiple database backends (PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, etc.)
-    - Driver path resolution
-    - Cloud database integrations
+    Supports multiple database backends including PostgreSQL, SQLite, DuckDB,
+    BigQuery, and Snowflake with automatic driver detection and loading.
     """
 
     driver_type: ClassVar[type[AdbcDriver]] = AdbcDriver
@@ -83,7 +78,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         statement_config: Optional[StatementConfig] = None,
         driver_features: Optional[dict[str, Any]] = None,
     ) -> None:
-        """Initialize ADBC configuration.
+        """Initialize configuration.
 
         Args:
             connection_config: Connection configuration parameters
@@ -112,7 +107,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         )
 
     def _resolve_driver_name(self) -> str:
-        """Resolve and normalize the ADBC driver name.
+        """Resolve and normalize the driver name.
 
         Returns:
             The normalized driver connect function path.
@@ -166,7 +161,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         return "adbc_driver_sqlite.dbapi.connect"
 
     def _get_connect_func(self) -> Callable[..., AdbcConnection]:
-        """Get the ADBC driver connect function.
+        """Get the driver connect function.
 
         Returns:
             The driver connect function.
@@ -184,7 +179,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 connect_func = import_string(driver_path_with_suffix)
             except ImportError as e2:
                 msg = (
-                    f"Failed to import ADBC connect function from '{driver_path}' or "
+                    f"Failed to import connect function from '{driver_path}' or "
                     f"'{driver_path_with_suffix}'. Is the driver installed? "
                     f"Original errors: {e} / {e2}"
                 )
@@ -197,10 +192,10 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         return connect_func  # type: ignore[no-any-return]
 
     def _get_dialect(self) -> "DialectType":
-        """Get the SQL dialect type based on the ADBC driver.
+        """Get the SQL dialect type based on the driver.
 
         Returns:
-            The SQL dialect type for the ADBC driver.
+            The SQL dialect type for the driver.
         """
         try:
             driver_path = self._resolve_driver_name()
@@ -241,14 +236,14 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 return (("qmark", "numeric"), "qmark")
 
         except Exception:
-            logger.debug("Error resolving parameter styles for ADBC driver, using defaults")
+            logger.debug("Error resolving parameter styles, using defaults")
         return (("qmark",), "qmark")
 
     def create_connection(self) -> AdbcConnection:
-        """Create and return a new ADBC connection using the specified driver.
+        """Create and return a new connection using the specified driver.
 
         Returns:
-            A new ADBC connection instance.
+            A new connection instance.
 
         Raises:
             ImproperConfigurationError: If the connection could not be established.
@@ -260,20 +255,20 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             connection = connect_func(**connection_config_dict)
         except Exception as e:
             driver_name = self.connection_config.get("driver_name", "Unknown")
-            msg = f"Could not configure ADBC connection using driver '{driver_name}'. Error: {e}"
+            msg = f"Could not configure connection using driver '{driver_name}'. Error: {e}"
             raise ImproperConfigurationError(msg) from e
         return connection
 
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[AdbcConnection, None, None]":
-        """Provide an ADBC connection context manager.
+        """Provide a connection context manager.
 
         Args:
             *args: Additional arguments.
             **kwargs: Additional keyword arguments.
 
         Yields:
-            An ADBC connection instance.
+            A connection instance.
         """
         connection = self.create_connection()
         try:
@@ -284,7 +279,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     def provide_session(
         self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "AbstractContextManager[AdbcDriver]":
-        """Provide an ADBC driver session context manager.
+        """Provide a driver session context manager.
 
         Args:
             *args: Additional arguments.
@@ -349,10 +344,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         return config
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
-        """Get the signature namespace for ADBC types.
-
-        This provides all ADBC-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
+        """Get the signature namespace for types.
 
         Returns:
             Dictionary mapping type names to types.

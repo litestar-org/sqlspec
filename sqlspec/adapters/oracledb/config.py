@@ -78,7 +78,7 @@ class OraclePoolParams(OracleConnectionParams, total=False):
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
-    """Configuration for Oracle synchronous database connections with direct field-based configuration."""
+    """Configuration for Oracle synchronous database connections."""
 
     __slots__ = ()
 
@@ -155,16 +155,19 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 
     @contextlib.contextmanager
     def provide_session(
-        self, *, statement_config: "Optional[StatementConfig]" = None
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "Generator[OracleSyncDriver, None, None]":
         """Provide a driver session context manager.
 
         Args:
+            *args: Positional arguments (unused).
             statement_config: Optional statement configuration override.
+            **kwargs: Keyword arguments (unused).
 
         Yields:
             An OracleSyncDriver instance.
         """
+        _ = (args, kwargs)  # Mark as intentionally unused
         with self.provide_connection() as conn:
             yield self.driver_type(connection=conn, statement_config=statement_config or self.statement_config)
 
@@ -181,26 +184,27 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for OracleDB types.
 
-        This provides all OracleDB-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
+        Provides OracleDB-specific types for Litestar framework recognition.
 
         Returns:
             Dictionary mapping type names to types.
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update({
-            "OracleSyncConnection": OracleSyncConnection,
-            "OracleAsyncConnection": OracleAsyncConnection,
-            "OracleSyncConnectionPool": OracleSyncConnectionPool,
-            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
-            "OracleSyncCursor": OracleSyncCursor,
-        })
+        namespace.update(
+            {
+                "OracleSyncConnection": OracleSyncConnection,
+                "OracleAsyncConnection": OracleAsyncConnection,
+                "OracleSyncConnectionPool": OracleSyncConnectionPool,
+                "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
+                "OracleSyncCursor": OracleSyncCursor,
+            }
+        )
         return namespace
 
 
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
-    """Configuration for Oracle asynchronous database connections with direct field-based configuration."""
+    """Configuration for Oracle asynchronous database connections."""
 
     __slots__ = ()
 
@@ -281,16 +285,19 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
     @asynccontextmanager
     async def provide_session(
-        self, *, statement_config: "Optional[StatementConfig]" = None
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "AsyncGenerator[OracleAsyncDriver, None]":
         """Provide an async driver session context manager.
 
         Args:
+            *args: Positional arguments (unused).
             statement_config: Optional statement configuration override.
+            **kwargs: Keyword arguments (unused).
 
         Yields:
             An OracleAsyncDriver instance.
         """
+        _ = (args, kwargs)  # Mark as intentionally unused
         async with self.provide_connection() as conn:
             yield self.driver_type(connection=conn, statement_config=statement_config or self.statement_config)
 
@@ -307,20 +314,21 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for OracleDB async types.
 
-        This provides all OracleDB async-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
+        Provides OracleDB async-specific types for Litestar framework recognition.
 
         Returns:
             Dictionary mapping type names to types.
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update({
-            "OracleSyncConnection": OracleSyncConnection,
-            "OracleAsyncConnection": OracleAsyncConnection,
-            "OracleSyncConnectionPool": OracleSyncConnectionPool,
-            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
-            "OracleSyncCursor": OracleSyncCursor,
-            "OracleAsyncCursor": OracleAsyncCursor,
-        })
+        namespace.update(
+            {
+                "OracleSyncConnection": OracleSyncConnection,
+                "OracleAsyncConnection": OracleAsyncConnection,
+                "OracleSyncConnectionPool": OracleSyncConnectionPool,
+                "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
+                "OracleSyncCursor": OracleSyncCursor,
+                "OracleAsyncCursor": OracleAsyncCursor,
+            }
+        )
         return namespace

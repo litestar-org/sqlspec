@@ -1,4 +1,4 @@
-"""BigQuery database configuration with direct field-based configuration."""
+"""BigQuery database configuration."""
 
 import contextlib
 import logging
@@ -79,11 +79,9 @@ __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures
 
 
 class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
-    """Enhanced BigQuery configuration with comprehensive feature support.
+    """BigQuery configuration.
 
-    BigQuery is Google Cloud's serverless, highly scalable data warehouse with
-    advanced analytics, machine learning, and AI capabilities. This configuration
-    supports all BigQuery features including:
+    Configuration for Google Cloud BigQuery connections.
     """
 
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
@@ -97,48 +95,13 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[Union[BigQueryDriverFeatures, dict[str, Any]]]" = None,
     ) -> None:
-        """Initialize BigQuery configuration with comprehensive feature support.
+        """Initialize BigQuery configuration.
 
         Args:
-            connection_config: Standard connection configuration parameters
+            connection_config: Connection configuration parameters
             migration_config: Migration configuration
             statement_config: Statement configuration override
-            driver_features: BigQuery-specific driver features and configurations.
-                Can include 'connection_instance' to reuse an existing BigQuery connection.
-
-        Example:
-            >>>
-            >>> config = BigQueryConfig(
-            ...     connection_config={
-            ...         "project": "my-project",
-            ...         "location": "US",
-            ...     }
-            ... )
-
-            >>>
-            >>> config = BigQueryConfig(
-            ...     connection_config={
-            ...         "project": "my-project",
-            ...         "location": "US",
-            ...         "enable_bigquery_ml": True,
-            ...         "enable_gemini_integration": True,
-            ...         "enable_dataframes": True,
-            ...         "enable_vector_search": True,
-            ...         "maximum_bytes_billed": 1000000000,
-            ...     }
-            ... )
-
-            >>>
-            >>> config = BigQueryConfig(
-            ...     connection_config={
-            ...         "project": "my-project",
-            ...         "location": "US",
-            ...         "edition": "Enterprise Plus",
-            ...         "reservation_id": "my-reservation",
-            ...         "enable_continuous_queries": True,
-            ...         "enable_cross_cloud": True,
-            ...     }
-            ... )
+            driver_features: BigQuery-specific driver features
         """
 
         self.connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
@@ -164,7 +127,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         )
 
     def _setup_default_job_config(self) -> None:
-        """Set up default job configuration based on connection config."""
+        """Set up default job configuration."""
 
         if self.connection_config.get("default_query_job_config") is not None:
             return
@@ -272,9 +235,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for BigQuery types.
-
-        This provides all BigQuery-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
 
         Returns:
             Dictionary mapping type names to types.

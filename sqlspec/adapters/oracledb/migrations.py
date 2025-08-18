@@ -24,7 +24,7 @@ class OracleMigrationTrackerMixin:
     """Mixin providing Oracle-specific migration table creation."""
 
     __slots__ = ()
-    
+
     version_table: str
 
     def _get_create_table_sql(self) -> CreateTable:
@@ -99,10 +99,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         if not result.data:
             return []
 
-        normalized_data = [
-            {key.lower(): value for key, value in row.items()}
-            for row in result.data
-        ]
+        normalized_data = [{key.lower(): value for key, value in row.items()} for row in result.data]
 
         return cast("list[dict[str, Any]]", normalized_data)
 
@@ -206,10 +203,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         if not result.data:
             return []
 
-        normalized_data = [
-            {key.lower(): value for key, value in row.items()}
-            for row in result.data
-        ]
+        normalized_data = [{key.lower(): value for key, value in row.items()} for row in result.data]
 
         return cast("list[dict[str, Any]]", normalized_data)
 

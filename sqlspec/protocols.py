@@ -1,7 +1,7 @@
-"""Runtime-checkable protocols for SQLSpec to replace duck typing.
+"""Runtime-checkable protocols for type safety and runtime checks.
 
 This module provides protocols that can be used for static type checking
-and runtime isinstance() checks, replacing defensive hasattr() patterns.
+and runtime isinstance() checks.
 """
 
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Protocol, Union, runtime_checkable
@@ -192,10 +192,7 @@ class ObjectStoreItemProtocol(Protocol):
 
 @runtime_checkable
 class ObjectStoreProtocol(Protocol):
-    """Protocol for object storage operations.
-
-    Defines the interface for storage backends with both sync and async operations.
-    """
+    """Protocol for object storage operations."""
 
     capabilities: ClassVar["StorageCapabilities"]
 

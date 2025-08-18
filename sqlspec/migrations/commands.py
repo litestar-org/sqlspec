@@ -25,7 +25,7 @@ console = Console()
 
 
 class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
-    """SQLSpec native migration commands."""
+    """Synchronous migration commands."""
 
     def __init__(self, config: "SyncConfigT") -> None:
         """Initialize migration commands.
@@ -201,7 +201,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
 
 class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
-    """SQLSpec native migration commands."""
+    """Asynchronous migration commands."""
 
     def __init__(self, sqlspec_config: "AsyncConfigT") -> None:
         """Initialize migration commands.

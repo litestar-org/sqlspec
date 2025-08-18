@@ -29,6 +29,8 @@ ConfigT = TypeVar("ConfigT")
 class BaseMigrationTracker(ABC, Generic[DriverT]):
     """Base class for migration version tracking."""
 
+    __slots__ = ("version_table",)
+
     def __init__(self, version_table_name: str = "ddl_migrations") -> None:
         """Initialize the migration tracker.
 

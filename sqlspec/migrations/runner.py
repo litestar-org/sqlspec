@@ -22,7 +22,7 @@ logger = get_logger("migrations.runner")
 
 
 class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
-    """Executes migrations using SQLFileLoader."""
+    """Synchronous migration executor."""
 
     def get_migration_files(self) -> "list[tuple[str, Path]]":
         """Get all migration files sorted by version.
@@ -124,7 +124,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
 
 
 class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
-    """Executes migrations using SQLFileLoader."""
+    """Asynchronous migration executor."""
 
     async def get_migration_files(self) -> "list[tuple[str, Path]]":
         """Get all migration files sorted by version.

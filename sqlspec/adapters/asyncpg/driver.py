@@ -56,7 +56,7 @@ EXPECTED_REGEX_GROUPS: Final[int] = 3
 
 
 class AsyncpgCursor:
-    """Context manager for AsyncPG cursor management with enhanced error handling."""
+    """Context manager for AsyncPG cursor management."""
 
     __slots__ = ("connection",)
 
@@ -71,7 +71,7 @@ class AsyncpgCursor:
 
 
 class AsyncpgExceptionHandler:
-    """Custom async context manager for handling AsyncPG database exceptions."""
+    """Async context manager for handling AsyncPG database exceptions."""
 
     __slots__ = ()
 
@@ -100,34 +100,15 @@ class AsyncpgExceptionHandler:
 
 
 class AsyncpgDriver(AsyncDriverAdapterBase):
-    """Enhanced AsyncPG PostgreSQL driver with CORE_ROUND_3 architecture integration.
+    """AsyncPG PostgreSQL driver for async database operations.
 
-    This driver leverages the complete core module system for maximum performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-    - Async-optimized resource management
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    PostgreSQL Features:
-    - Advanced COPY operation support
-    - Numeric parameter style optimization
-    - PostgreSQL-specific exception handling
-    - Transaction management with async patterns
-
-    Compatibility:
-    - 100% backward compatibility with existing AsyncPG driver interface
-    - All existing async tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved async patterns and exception handling
+    Features:
+    - COPY operation support
+    - Numeric parameter style handling
+    - PostgreSQL exception handling
+    - Transaction management
+    - SQL statement compilation and caching
+    - Parameter processing and type coercion
     """
 
     __slots__ = ()
@@ -141,22 +122,21 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = asyncpg_statement_config.replace(
+            statement_config = asyncpg_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,
                 enable_validation=True,
                 dialect="postgres",
             )
-            statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
-        """Create context manager for AsyncPG cursor with enhanced resource management."""
+        """Create context manager for AsyncPG cursor."""
         return AsyncpgCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
-        """Enhanced async exception handling with detailed error categorization."""
+        """Handle database exceptions with PostgreSQL error codes."""
         return AsyncpgExceptionHandler()
 
     async def _try_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "Optional[SQLResult]":
@@ -176,10 +156,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return None
 
     async def _handle_copy_operation(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
-        """Handle PostgreSQL COPY operations with enhanced data processing.
+        """Handle PostgreSQL COPY operations.
 
-        Supports both COPY FROM STDIN and COPY TO STDOUT operations
-        with proper data format handling and error management.
+        Supports both COPY FROM STDIN and COPY TO STDOUT operations.
 
         Args:
             cursor: AsyncPG connection object
@@ -214,11 +193,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             await cursor.execute(sql_text)
 
     async def _execute_script(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script using enhanced statement splitting and parameter handling.
-
-        Uses core module optimization for statement parsing and parameter processing.
-        Handles PostgreSQL-specific script execution requirements.
-        """
+        """Execute SQL script with statement splitting and parameter handling."""
         sql, _ = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -235,11 +210,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized batch processing.
-
-        Leverages AsyncPG's executemany for efficient batch operations with
-        core parameter processing for enhanced type handling and validation.
-        """
+        """Execute SQL with multiple parameter sets using AsyncPG's executemany."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         if prepared_parameters:
@@ -252,10 +223,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def _execute_statement(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with enhanced data handling and performance optimization.
+        """Execute single SQL statement.
 
-        Uses core processing for optimal parameter handling and result processing.
-        Handles both SELECT queries and non-SELECT operations efficiently.
+        Handles both SELECT queries and non-SELECT operations.
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -303,7 +273,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return 0
 
     async def begin(self) -> None:
-        """Begin a database transaction with enhanced error handling."""
+        """Begin a database transaction."""
         try:
             await self.connection.execute("BEGIN")
         except asyncpg.PostgresError as e:
@@ -311,7 +281,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def rollback(self) -> None:
-        """Rollback the current transaction with enhanced error handling."""
+        """Rollback the current transaction."""
         try:
             await self.connection.execute("ROLLBACK")
         except asyncpg.PostgresError as e:
@@ -319,7 +289,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def commit(self) -> None:
-        """Commit the current transaction with enhanced error handling."""
+        """Commit the current transaction."""
         try:
             await self.connection.execute("COMMIT")
         except asyncpg.PostgresError as e:

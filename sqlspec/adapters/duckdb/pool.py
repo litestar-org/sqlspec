@@ -25,7 +25,7 @@ __all__ = ("DuckDBConnectionPool",)
 
 
 class DuckDBConnectionPool:
-    """Thread-local connection manager for DuckDB with performance optimizations.
+    """Thread-local connection manager for DuckDB.
 
     Uses thread-local storage to ensure each thread gets its own DuckDB connection,
     preventing the thread-safety issues that cause segmentation faults when

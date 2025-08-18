@@ -1,4 +1,4 @@
-"""Aiosqlite database configuration with optimized connection management."""
+"""Aiosqlite database configuration."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -198,9 +198,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for aiosqlite types.
-
-        This provides all aiosqlite-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
 
         Returns:
             Dictionary mapping type names to types.

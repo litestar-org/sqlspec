@@ -1,17 +1,15 @@
-"""Enhanced DuckDB driver with CORE_ROUND_3 architecture integration.
+"""DuckDB driver implementation.
 
-This driver implements the complete CORE_ROUND_3 architecture for:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Complete backward compatibility with existing functionality
+This driver provides:
+- SQL compilation with single-pass processing
+- Memory-efficient design with __slots__
+- Statement caching for repeated execution
+- Backward compatibility with existing functionality
 
-Architecture Features:
-- Direct integration with sqlspec.core modules
-- Enhanced parameter processing with type coercion
-- DuckDB-optimized resource management
-- MyPyC-optimized performance patterns
-- Zero-copy data access where possible
+Features:
+- Integration with sqlspec.core modules
+- Parameter processing with type coercion
+- DuckDB resource management
 - Multi-parameter style support
 """
 
@@ -63,7 +61,7 @@ MODIFYING_OPERATIONS: Final[tuple[str, ...]] = ("INSERT", "UPDATE", "DELETE")
 
 
 class DuckDBCursor:
-    """Context manager for DuckDB cursor management with enhanced error handling."""
+    """Context manager for DuckDB cursor management."""
 
     __slots__ = ("connection", "cursor")
 
@@ -128,34 +126,33 @@ class DuckDBExceptionHandler:
 
 
 class DuckDBDriver(SyncDriverAdapterBase):
-    """Enhanced DuckDB driver with CORE_ROUND_3 architecture integration.
+    """DuckDB driver implementation.
 
-    This driver leverages the complete core module system for maximum performance:
+    This driver uses the core module system for SQL processing:
 
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-    - DuckDB-optimized resource management
+    Features:
+    - SQL compilation with single-pass processing
+    - Memory-efficient design with __slots__
+    - Statement caching for repeated execution
+    - Parameter processing with type coercion
+    - DuckDB resource management
 
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
+    Core Integration:
+    - sqlspec.core.statement for SQL processing
+    - sqlspec.core.parameters for parameter handling
+    - sqlspec.core.cache for statement caching
+    - sqlspec.core.config for configuration management
 
-    DuckDB Features:
+    DuckDB Support:
     - Multi-parameter style support (QMARK, NUMERIC, NAMED_DOLLAR)
-    - Enhanced script execution with statement splitting
-    - Optimized batch operations with accurate row counting
+    - Script execution with statement splitting
+    - Batch operations with row counting
     - DuckDB-specific exception handling
 
     Compatibility:
-    - 100% backward compatibility with existing DuckDB driver interface
-    - All existing tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved transaction management patterns
+    - Backward compatibility with existing DuckDB driver interface
+    - StatementConfig API compatibility
+    - Transaction management patterns
     """
 
     __slots__ = ()
@@ -169,18 +166,18 @@ class DuckDBDriver(SyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = duckdb_statement_config.replace(
+            updated_config = duckdb_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,
                 enable_validation=True,
                 dialect="duckdb",
             )
-            statement_config = enhanced_config
+            statement_config = updated_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
-        """Create context manager for DuckDB cursor with enhanced resource management."""
+        """Create context manager for DuckDB cursor."""
         return DuckDBCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
@@ -204,10 +201,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return None
 
     def _is_modifying_operation(self, statement: SQL) -> bool:
-        """Check if the SQL statement is a modifying operation using enhanced detection.
+        """Check if the SQL statement is a modifying operation.
 
         Uses both AST-based detection (when available) and SQL text analysis
-        for comprehensive operation type identification.
+        to identify operation type.
 
         Args:
             statement: SQL statement to analyze
@@ -224,10 +221,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return any(sql_upper.startswith(op) for op in MODIFYING_OPERATIONS)
 
     def _execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        """Execute SQL script using enhanced statement splitting and parameter handling.
+        """Execute SQL script with statement splitting and parameter handling.
 
-        Uses core module optimization for statement parsing and parameter processing.
-        Handles DuckDB-specific script execution requirements with parameter support.
+        Uses core module for statement parsing and parameter processing.
+        Handles DuckDB script execution requirements with parameter support.
 
         Args:
             cursor: DuckDB cursor object
@@ -251,17 +248,17 @@ class DuckDBDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized batch processing.
+        """Execute SQL with multiple parameter sets using batch processing.
 
-        Leverages DuckDB's executemany for efficient batch operations with
-        enhanced row counting for both modifying and non-modifying operations.
+        Uses DuckDB's executemany for batch operations with
+        row counting for both modifying and non-modifying operations.
 
         Args:
             cursor: DuckDB cursor object
             statement: SQL statement with multiple parameter sets
 
         Returns:
-            ExecutionResult with accurate batch execution metadata
+            ExecutionResult with batch execution metadata
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -282,17 +279,17 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
     def _execute_statement(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        """Execute single SQL statement with enhanced data handling and performance optimization.
+        """Execute single SQL statement with data handling.
 
-        Uses core processing for optimal parameter handling and result processing.
-        Handles both SELECT queries and non-SELECT operations efficiently.
+        Uses core processing for parameter handling and result processing.
+        Handles both SELECT queries and non-SELECT operations.
 
         Args:
             cursor: DuckDB cursor object
             statement: SQL statement to execute
 
         Returns:
-            ExecutionResult with comprehensive execution metadata
+            ExecutionResult with execution metadata
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters or ())
@@ -323,7 +320,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def begin(self) -> None:
-        """Begin a database transaction with enhanced error handling."""
+        """Begin a database transaction."""
         try:
             self.connection.execute("BEGIN TRANSACTION")
         except duckdb.Error as e:
@@ -331,7 +328,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def rollback(self) -> None:
-        """Rollback the current transaction with enhanced error handling."""
+        """Rollback the current transaction."""
         try:
             self.connection.rollback()
         except duckdb.Error as e:
@@ -339,7 +336,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
-        """Commit the current transaction with enhanced error handling."""
+        """Commit the current transaction."""
         try:
             self.connection.commit()
         except duckdb.Error as e:

@@ -1,4 +1,4 @@
-"""Psqlpy database configuration with direct field-based configuration."""
+"""Psqlpy database configuration."""
 
 import logging
 from collections.abc import AsyncGenerator
@@ -77,7 +77,7 @@ __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyPool
 
 
 class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
-    """Configuration for Psqlpy asynchronous database connections with direct field-based configuration."""
+    """Configuration for Psqlpy asynchronous database connections."""
 
     driver_type: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
     connection_type: "ClassVar[type[PsqlpyConnection]]" = PsqlpyConnection
@@ -91,14 +91,14 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         statement_config: Optional[StatementConfig] = None,
         driver_features: Optional[dict[str, Any]] = None,
     ) -> None:
-        """Initialize Psqlpy asynchronous configuration.
+        """Initialize Psqlpy configuration.
 
         Args:
-            pool_config: Pool configuration parameters (TypedDict or dict)
+            pool_config: Pool configuration parameters
             pool_instance: Existing connection pool instance to use
             migration_config: Migration configuration
-            statement_config: Default SQL statement configuration
-            driver_features: Optional driver feature configuration
+            statement_config: SQL statement configuration
+            driver_features: Driver feature configuration
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -209,9 +209,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for Psqlpy types.
-
-        This provides all Psqlpy-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
 
         Returns:
             Dictionary mapping type names to types.

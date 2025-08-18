@@ -1,10 +1,8 @@
 """ADBC driver implementation for Arrow Database Connectivity.
 
-This module provides ADBC driver integration with support for:
-- Multi-dialect database connections through ADBC
-- Arrow-native data handling with type coercion
-- Parameter style conversion for different database backends
-- Transaction management with proper error handling
+Provides ADBC driver integration with multi-dialect database connections,
+Arrow-native data handling with type coercion, parameter style conversion
+for different database backends, and transaction management.
 """
 
 import contextlib
@@ -56,16 +54,10 @@ DIALECT_PARAMETER_STYLES = {
 
 
 def _adbc_ast_transformer(expression: Any, parameters: Any) -> tuple[Any, Any]:
-    """ADBC-specific AST transformer for NULL parameter handling.
+    """AST transformer for NULL parameter handling.
 
-    For PostgreSQL, this transformer replaces NULL parameter placeholders with NULL literals
+    For PostgreSQL, replaces NULL parameter placeholders with NULL literals
     in the AST to prevent Arrow from inferring 'na' types which cause binding errors.
-
-    The transformer:
-    1. Detects None parameters in the parameter list
-    2. Replaces corresponding placeholders in the AST with NULL literals
-    3. Removes the None parameters from the list
-    4. Renumbers remaining placeholders to maintain correct mapping
 
     Args:
         expression: SQLGlot AST expression
@@ -98,8 +90,6 @@ def _adbc_ast_transformer(expression: Any, parameters: Any) -> tuple[Any, Any]:
     qmark_position = [0]
 
     def transform_node(node: Any) -> Any:
-        """Transform parameter nodes to NULL literals and renumber remaining ones."""
-
         if isinstance(node, exp.Placeholder) and (not hasattr(node, "this") or node.this is None):
             current_pos = qmark_position[0]
             qmark_position[0] += 1
@@ -161,7 +151,7 @@ def _adbc_ast_transformer(expression: Any, parameters: Any) -> tuple[Any, Any]:
 
 
 def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
-    """Create ADBC statement configuration for the specified dialect."""
+    """Create statement configuration for the specified dialect."""
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
         detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
     )
@@ -193,14 +183,14 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
 
 
 def _convert_array_for_postgres_adbc(value: Any) -> Any:
-    """Convert array values for PostgreSQL ADBC compatibility."""
+    """Convert array values for PostgreSQL compatibility."""
     if isinstance(value, tuple):
         return list(value)
     return value
 
 
 def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
-    """Get type coercion map for Arrow/ADBC type handling."""
+    """Get type coercion map for Arrow type handling."""
     type_map = {
         datetime.datetime: lambda x: x,
         datetime.date: lambda x: x,
@@ -223,7 +213,7 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
 
 
 class AdbcCursor:
-    """Context manager for ADBC cursor management."""
+    """Context manager for cursor management."""
 
     __slots__ = ("connection", "cursor")
 
@@ -243,7 +233,7 @@ class AdbcCursor:
 
 
 class AdbcExceptionHandler:
-    """Custom sync context manager for handling ADBC database exceptions."""
+    """Context manager for handling database exceptions."""
 
     __slots__ = ()
 
@@ -259,23 +249,23 @@ class AdbcExceptionHandler:
 
             if issubclass(exc_type, IntegrityError):
                 e = exc_val
-                msg = f"ADBC integrity constraint violation: {e}"
+                msg = f"Integrity constraint violation: {e}"
                 raise SQLSpecError(msg) from e
             if issubclass(exc_type, ProgrammingError):
                 e = exc_val
                 error_msg = str(e).lower()
                 if "syntax" in error_msg or "parse" in error_msg:
-                    msg = f"ADBC SQL syntax error: {e}"
+                    msg = f"SQL syntax error: {e}"
                     raise SQLParsingError(msg) from e
-                msg = f"ADBC programming error: {e}"
+                msg = f"Programming error: {e}"
                 raise SQLSpecError(msg) from e
             if issubclass(exc_type, OperationalError):
                 e = exc_val
-                msg = f"ADBC operational error: {e}"
+                msg = f"Operational error: {e}"
                 raise SQLSpecError(msg) from e
             if issubclass(exc_type, DatabaseError):
                 e = exc_val
-                msg = f"ADBC database error: {e}"
+                msg = f"Database error: {e}"
                 raise SQLSpecError(msg) from e
         except ImportError:
             pass
@@ -292,11 +282,9 @@ class AdbcExceptionHandler:
 class AdbcDriver(SyncDriverAdapterBase):
     """ADBC driver for Arrow Database Connectivity.
 
-    Provides database connectivity through ADBC with support for:
-    - Multi-database dialect support with automatic detection
-    - Arrow-native data handling with type coercion
-    - Parameter style conversion for different backends
-    - Transaction management with proper error handling
+    Provides database connectivity through ADBC with multi-database dialect
+    support, Arrow-native data handling with type coercion, parameter style
+    conversion for different backends, and transaction management.
     """
 
     __slots__ = ("_detected_dialect", "dialect")
@@ -312,17 +300,16 @@ class AdbcDriver(SyncDriverAdapterBase):
         if statement_config is None:
             cache_config = get_cache_config()
             base_config = get_adbc_statement_config(self._detected_dialect)
-            enhanced_config = base_config.replace(
+            statement_config = base_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled, enable_parsing=True, enable_validation=True
             )
-            statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self.dialect = statement_config.dialect
 
     @staticmethod
     def _ensure_pyarrow_installed() -> None:
-        """Ensure PyArrow is installed for Arrow operations."""
+        """Ensure PyArrow is installed."""
         from sqlspec.typing import PYARROW_INSTALLED
 
         if not PYARROW_INSTALLED:
@@ -330,7 +317,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:
-        """Detect database dialect from ADBC connection information."""
+        """Detect database dialect from connection information."""
         try:
             driver_info = connection.adbc_get_info()
             vendor_name = driver_info.get("vendor_name", "").lower()
@@ -338,12 +325,12 @@ class AdbcDriver(SyncDriverAdapterBase):
 
             for dialect, patterns in DIALECT_PATTERNS.items():
                 if any(pattern in vendor_name or pattern in driver_name for pattern in patterns):
-                    logger.debug("ADBC dialect detected: %s (from %s/%s)", dialect, vendor_name, driver_name)
+                    logger.debug("Dialect detected: %s (from %s/%s)", dialect, vendor_name, driver_name)
                     return dialect
         except Exception as e:
-            logger.debug("ADBC dialect detection failed: %s", e)
+            logger.debug("Dialect detection failed: %s", e)
 
-        logger.warning("Could not reliably determine ADBC dialect from driver info. Defaulting to 'postgres'.")
+        logger.warning("Could not determine dialect from driver info. Defaulting to 'postgres'.")
         return "postgres"
 
     def _handle_postgres_rollback(self, cursor: "Cursor") -> None:
@@ -351,7 +338,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         if self.dialect == "postgres":
             with contextlib.suppress(Exception):
                 cursor.execute("ROLLBACK")
-                logger.debug("PostgreSQL rollback executed after ADBC transaction failure")
+                logger.debug("PostgreSQL rollback executed after transaction failure")
 
     def _handle_postgres_empty_parameters(self, parameters: Any) -> Any:
         """Process empty parameters for PostgreSQL compatibility."""
@@ -360,7 +347,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         return parameters
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
-        """Create context manager for ADBC cursor."""
+        """Create context manager for cursor."""
         return AdbcCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
@@ -368,10 +355,10 @@ class AdbcDriver(SyncDriverAdapterBase):
         return AdbcExceptionHandler()
 
     def _try_special_handling(self, cursor: "Cursor", statement: SQL) -> "Optional[SQLResult]":
-        """Handle ADBC-specific operations.
+        """Handle special operations.
 
         Args:
-            cursor: ADBC cursor object
+            cursor: Cursor object
             statement: SQL statement to analyze
 
         Returns:
@@ -381,7 +368,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         return None
 
     def _execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using batch processing."""
+        """Execute SQL with multiple parameter sets."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         try:
@@ -405,13 +392,13 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         except Exception:
             self._handle_postgres_rollback(cursor)
-            logger.exception("ADBC executemany failed")
+            logger.exception("Executemany failed")
             raise
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
     def _execute_statement(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
-        """Execute single SQL statement with ADBC-specific data handling."""
+        """Execute single SQL statement."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         try:
@@ -443,7 +430,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def _execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with ADBC-specific transaction handling."""
+        """Execute SQL script."""
         if statement.is_script:
             sql = statement._raw_sql
             prepared_parameters: list[Any] = []
@@ -467,7 +454,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                     last_rowcount = cursor.rowcount
         except Exception:
             self._handle_postgres_rollback(cursor)
-            logger.exception("ADBC script execution failed")
+            logger.exception("Script execution failed")
             raise
 
         return self.create_execution_result(
@@ -484,7 +471,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             with self.with_cursor(self.connection) as cursor:
                 cursor.execute("BEGIN")
         except Exception as e:
-            msg = f"Failed to begin ADBC transaction: {e}"
+            msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
 
     def rollback(self) -> None:
@@ -493,7 +480,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             with self.with_cursor(self.connection) as cursor:
                 cursor.execute("ROLLBACK")
         except Exception as e:
-            msg = f"Failed to rollback ADBC transaction: {e}"
+            msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
@@ -502,5 +489,5 @@ class AdbcDriver(SyncDriverAdapterBase):
             with self.with_cursor(self.connection) as cursor:
                 cursor.execute("COMMIT")
         except Exception as e:
-            msg = f"Failed to commit ADBC transaction: {e}"
+            msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e

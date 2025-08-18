@@ -53,7 +53,6 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
     if col.default is not None:
         default_expr: Optional[exp.Expression] = None
         if isinstance(col.default, str):
-            # Use SQLGlot's built-in functions for database-specific default values
             default_upper = col.default.upper()
             if default_upper == "CURRENT_TIMESTAMP":
                 default_expr = exp.CurrentTimestamp()
@@ -68,7 +67,6 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
         else:
             default_expr = exp.convert(col.default)
 
-        # Use DefaultColumnConstraint for proper default value handling
         constraints.append(exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=default_expr)))
 
     if col.check:
@@ -475,7 +473,6 @@ class CreateTable(DDLBuilder):
         if not self._columns and not self._like_table:
             self._raise_sql_builder_error("Table must have at least one column or use LIKE clause")
 
-        # Build column definitions and constraints
         column_defs: list[exp.Expression] = []
         for col in self._columns:
             col_expr = build_column_expression(col)
@@ -491,7 +488,6 @@ class CreateTable(DDLBuilder):
             if constraint_expr:
                 column_defs.append(constraint_expr)
 
-        # Build table properties
         props: list[exp.Property] = []
         if self._table_options.get("engine"):
             props.append(
@@ -510,17 +506,12 @@ class CreateTable(DDLBuilder):
 
         properties_node = exp.Properties(expressions=props) if props else None
 
-        # FIXED: Create Schema with table name and columns (not Table object)
-        # This ensures SQLGlot generates "CREATE TABLE name (...)" instead of "CREATE TABLE name AS (...)"
         if self._schema:
             table_identifier = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
         else:
             table_identifier = exp.Table(this=exp.to_identifier(self._table_name))
 
-        schema_expr = exp.Schema(
-            this=table_identifier,  # Table name goes here
-            expressions=column_defs,  # Column definitions go here
-        )
+        schema_expr = exp.Schema(this=table_identifier, expressions=column_defs)
 
         like_expr = None
         if self._like_table:
@@ -528,7 +519,7 @@ class CreateTable(DDLBuilder):
 
         return exp.Create(
             kind="TABLE",
-            this=schema_expr,  # FIXED: Use Schema as 'this', not Table
+            this=schema_expr,
             exists=self._if_not_exists,
             temporary=self._temporary,
             properties=properties_node,
@@ -710,10 +701,7 @@ class DropSchema(DDLBuilder):
 
 
 class CreateIndex(DDLBuilder):
-    """Builder for CREATE [UNIQUE] INDEX [IF NOT EXISTS] ... ON ... (...).
-
-    Supports columns, expressions, ordering, using, and where.
-    """
+    """Builder for CREATE [UNIQUE] INDEX [IF NOT EXISTS] ... ON ... (...)."""
 
     __slots__ = ("_columns", "_if_not_exists", "_index_name", "_table_name", "_unique", "_using", "_where")
 
@@ -923,8 +911,6 @@ class CreateSchema(DDLBuilder):
 class CreateTableAsSelect(DDLBuilder):
     """Builder for CREATE TABLE [IF NOT EXISTS] ... AS SELECT ... (CTAS).
 
-    Supports optional column list and parameterized SELECT sources.
-
     Example:
         builder = (
             CreateTableAsSelectBuilder()
@@ -1016,10 +1002,7 @@ class CreateTableAsSelect(DDLBuilder):
 
 
 class CreateMaterializedView(DDLBuilder):
-    """Builder for CREATE MATERIALIZED VIEW [IF NOT EXISTS] ... AS SELECT ...
-
-    Supports optional column list, parameterized SELECT sources, and dialect-specific options.
-    """
+    """Builder for CREATE MATERIALIZED VIEW [IF NOT EXISTS] ... AS SELECT ..."""
 
     __slots__ = (
         "_columns",
@@ -1157,10 +1140,7 @@ class CreateMaterializedView(DDLBuilder):
 
 
 class CreateView(DDLBuilder):
-    """Builder for CREATE VIEW [IF NOT EXISTS] ... AS SELECT ...
-
-    Supports optional column list, parameterized SELECT sources, and hints.
-    """
+    """Builder for CREATE VIEW [IF NOT EXISTS] ... AS SELECT ..."""
 
     __slots__ = ("_columns", "_hints", "_if_not_exists", "_select_query", "_view_name")
 
@@ -1247,9 +1227,7 @@ class CreateView(DDLBuilder):
 
 
 class AlterTable(DDLBuilder):
-    """Builder for ALTER TABLE with granular operations.
-
-    Supports column operations (add, drop, alter type, rename) and constraint operations.
+    """Builder for ALTER TABLE operations.
 
     Example:
         builder = (
@@ -1513,10 +1491,7 @@ class AlterTable(DDLBuilder):
 
 
 class CommentOn(DDLBuilder):
-    """Builder for COMMENT ON ... IS ... statements.
-
-    Supports COMMENT ON TABLE and COMMENT ON COLUMN.
-    """
+    """Builder for COMMENT ON ... IS ... statements."""
 
     __slots__ = ("_column", "_comment", "_table", "_target_type")
 
@@ -1562,10 +1537,7 @@ class CommentOn(DDLBuilder):
 
 
 class RenameTable(DDLBuilder):
-    """Builder for ALTER TABLE ... RENAME TO ... statements.
-
-    Supports renaming a table.
-    """
+    """Builder for ALTER TABLE ... RENAME TO ... statements."""
 
     __slots__ = ("_new_name", "_old_name")
 

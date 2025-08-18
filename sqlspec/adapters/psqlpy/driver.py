@@ -1,18 +1,7 @@
-"""Enhanced Psqlpy driver with CORE_ROUND_3 architecture integration.
+"""Psqlpy driver implementation.
 
-This driver implements the complete CORE_ROUND_3 architecture for:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Complete backward compatibility with existing functionality
-
-Architecture Features:
-- Direct integration with sqlspec.core modules
-- Enhanced parameter processing with type coercion
-- Psqlpy-optimized async resource management
-- MyPyC-optimized performance patterns
-- Zero-copy data access where possible
-- Native PostgreSQL parameter styles
+Provides PostgreSQL connectivity with parameter style conversion,
+type coercion, error handling, and transaction management.
 """
 
 import datetime
@@ -81,23 +70,13 @@ SPECIAL_TYPE_REGEX: Final[re.Pattern[str]] = re.compile(
 
 
 def _detect_postgresql_type(value: str) -> Optional[str]:
-    """Detect PostgreSQL data type from string value using enhanced regex.
+    """Detect PostgreSQL data type from string value.
 
-    The SPECIAL_TYPE_REGEX pattern matches the following PostgreSQL types:
-    - uuid: Standard UUID format (with dashes only, not 32 hex characters to avoid false positives)
-    - ipv4: IPv4 addresses with optional CIDR notation (e.g., 192.168.1.1/24)
-    - ipv6: All IPv6 formats including compressed forms and IPv4-mapped addresses
-    - mac: MAC addresses in colon/dash separated or continuous format
-    - iso_datetime: ISO 8601 datetime strings with optional timezone
-    - iso_date: ISO 8601 date strings (YYYY-MM-DD)
-    - iso_time: Time strings with optional microseconds and timezone
-    - interval: PostgreSQL interval format or ISO 8601 duration format
-    - json: JSON objects ({...}) or arrays ([...])
-    - pg_array: PostgreSQL array literals ({...})
+    Detects common PostgreSQL types including UUID, IP addresses,
+    timestamps, JSON, and arrays.
 
     Returns:
-        Type name if detected ('uuid', 'ipv4', 'ipv6', 'mac', 'iso_datetime', etc.)
-        None if no special type detected
+        Type name if detected, None otherwise.
     """
     match = SPECIAL_TYPE_REGEX.match(value)
     if not match:
@@ -182,12 +161,9 @@ _PSQLPY_TYPE_CONVERTERS: dict[str, Any] = {
 
 
 def _convert_psqlpy_parameters(value: Any) -> Any:
-    """Convert parameters for Psqlpy compatibility using enhanced type detection.
+    """Convert parameters for Psqlpy compatibility.
 
-    This function performs intelligent type conversions based on detected PostgreSQL types.
-    Uses a hash map for O(1) type conversion dispatch. Works in conjunction with
-    the type_coercion_map for optimal performance - basic type coercion happens in
-    the core pipeline, while PostgreSQL-specific string type detection happens here.
+    Performs type conversions based on detected PostgreSQL types.
 
     Args:
         value: Parameter value to convert
@@ -212,7 +188,7 @@ def _convert_psqlpy_parameters(value: Any) -> Any:
 
 
 class PsqlpyCursor:
-    """Context manager for Psqlpy cursor management with enhanced error handling."""
+    """Context manager for Psqlpy cursor management."""
 
     __slots__ = ("_in_use", "connection")
 
@@ -221,12 +197,12 @@ class PsqlpyCursor:
         self._in_use = False
 
     async def __aenter__(self) -> "PsqlpyConnection":
-        """Enter cursor context with proper lifecycle tracking."""
+        """Enter cursor context."""
         self._in_use = True
         return self.connection
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Exit cursor context with proper cleanup."""
+        """Exit cursor context."""
         _ = (exc_type, exc_val, exc_tb)
         self._in_use = False
 
@@ -274,34 +250,10 @@ class PsqlpyExceptionHandler:
 
 
 class PsqlpyDriver(AsyncDriverAdapterBase):
-    """Enhanced Psqlpy driver with CORE_ROUND_3 architecture integration.
+    """Psqlpy driver implementation.
 
-    This driver leverages the complete core module system for maximum performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-    - Psqlpy-optimized async resource management
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    Psqlpy Features:
-    - Native PostgreSQL parameter styles (NUMERIC, NAMED_DOLLAR)
-    - Enhanced async execution with proper transaction management
-    - Optimized batch operations with psqlpy execute_many
-    - PostgreSQL-specific exception handling and command tag parsing
-
-    Compatibility:
-    - 100% backward compatibility with existing psqlpy driver interface
-    - All existing tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved async patterns and transaction management
+    Provides PostgreSQL connectivity through psqlpy with parameter style
+    conversion, type coercion, error handling, and transaction management.
     """
 
     __slots__ = ()
@@ -315,18 +267,17 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = psqlpy_statement_config.replace(
+            statement_config = psqlpy_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,
                 enable_validation=True,
                 dialect="postgres",
             )
-            statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "PsqlpyConnection") -> "PsqlpyCursor":
-        """Create context manager for psqlpy cursor with enhanced resource management."""
+        """Create context manager for psqlpy cursor."""
         return PsqlpyCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
@@ -336,30 +287,18 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     async def _try_special_handling(self, cursor: "PsqlpyConnection", statement: SQL) -> "Optional[SQLResult]":
         """Hook for psqlpy-specific special operations.
 
-        Psqlpy has some specific optimizations we could leverage in the future:
-        - Native transaction management with connection pooling
-        - Batch execution optimization for scripts
-        - Cursor-based iteration for large result sets
-        - Connection pool management
-
-        For now, we proceed with standard execution but this provides
-        a clean extension point for psqlpy-specific optimizations.
-
         Args:
             cursor: Psqlpy connection object
             statement: SQL statement to analyze
 
         Returns:
-            None for standard execution (no special operations implemented yet)
+            None for standard execution
         """
         _ = (cursor, statement)
         return None
 
     async def _execute_script(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute SQL script using enhanced statement splitting and parameter handling.
-
-        Uses core module optimization for statement parsing and parameter processing.
-        Leverages psqlpy's execute_batch for optimal script execution when possible.
+        """Execute SQL script with statement splitting and parameter handling.
 
         Args:
             cursor: Psqlpy connection object
@@ -390,17 +329,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized batch processing.
-
-        Leverages psqlpy's execute_many for efficient batch operations with
-        enhanced parameter format handling for PostgreSQL.
+        """Execute SQL with multiple parameter sets using batch processing.
 
         Args:
             cursor: Psqlpy connection object
             statement: SQL statement with multiple parameter sets
 
         Returns:
-            ExecutionResult with accurate batch execution metadata
+            ExecutionResult with batch execution metadata
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -422,17 +358,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=rows_affected, is_many_result=True)
 
     async def _execute_statement(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute single SQL statement with enhanced data handling and performance optimization.
-
-        Uses core processing for optimal parameter handling and result processing.
-        Leverages psqlpy's fetch for SELECT queries and execute for other operations.
+        """Execute single SQL statement with data handling.
 
         Args:
             cursor: Psqlpy connection object
             statement: SQL statement to execute
 
         Returns:
-            ExecutionResult with comprehensive execution metadata
+            ExecutionResult with execution metadata
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -457,10 +390,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=rows_affected)
 
     def _extract_rows_affected(self, result: Any) -> int:
-        """Extract rows affected from psqlpy result using PostgreSQL command tag parsing.
-
-        Psqlpy may return command tag information that we can parse for accurate
-        row count reporting in INSERT/UPDATE/DELETE operations.
+        """Extract rows affected from psqlpy result.
 
         Args:
             result: Psqlpy execution result object
@@ -481,11 +411,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     def _parse_command_tag(self, tag: str) -> int:
         """Parse PostgreSQL command tag to extract rows affected.
-
-        PostgreSQL command tags have formats like:
-        - 'INSERT 0 1' (INSERT with 1 row)
-        - 'UPDATE 5' (UPDATE with 5 rows)
-        - 'DELETE 3' (DELETE with 3 rows)
 
         Args:
             tag: PostgreSQL command tag string

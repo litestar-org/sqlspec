@@ -1,7 +1,7 @@
 """SQLSpec Migration Tool.
 
 A native migration system for SQLSpec that leverages the SQLFileLoader
-and driver architecture for database versioning.
+and driver system for database versioning.
 """
 
 from sqlspec.migrations.commands import AsyncMigrationCommands, MigrationCommands, SyncMigrationCommands

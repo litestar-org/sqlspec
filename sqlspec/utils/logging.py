@@ -5,23 +5,19 @@ Users should configure their own logging handlers and levels as needed.
 SQLSpec provides StructuredFormatter for JSON-formatted logs if desired.
 """
 
-from __future__ import annotations
-
 import logging
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from logging import LogRecord
+from typing import Any, Optional
 
 from sqlspec._serialization import encode_json
 
-if TYPE_CHECKING:
-    from logging import LogRecord
-
 __all__ = ("StructuredFormatter", "correlation_id_var", "get_correlation_id", "get_logger", "set_correlation_id")
 
-correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
+correlation_id_var: "ContextVar[Optional[str]]" = ContextVar("correlation_id", default=None)
 
 
-def set_correlation_id(correlation_id: str | None) -> None:
+def set_correlation_id(correlation_id: "Optional[str]") -> None:
     """Set the correlation ID for the current context.
 
     Args:
@@ -30,7 +26,7 @@ def set_correlation_id(correlation_id: str | None) -> None:
     correlation_id_var.set(correlation_id)
 
 
-def get_correlation_id() -> str | None:
+def get_correlation_id() -> "Optional[str]":
     """Get the current correlation ID.
 
     Returns:
@@ -90,7 +86,7 @@ class CorrelationIDFilter(logging.Filter):
         return True
 
 
-def get_logger(name: str | None = None) -> logging.Logger:
+def get_logger(name: "Optional[str]" = None) -> logging.Logger:
     """Get a logger instance with standardized configuration.
 
     Args:

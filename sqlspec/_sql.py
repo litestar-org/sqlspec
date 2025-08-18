@@ -1,6 +1,6 @@
-"""Unified SQL factory for creating SQL builders and column expressions with a clean API.
+"""SQL factory for creating SQL builders and column expressions.
 
-Provides both statement builders (select, insert, update, etc.) and column expressions.
+Provides statement builders (select, insert, update, etc.) and column expressions.
 """
 
 import logging
@@ -109,7 +109,7 @@ SQL_STARTERS = {
 
 
 class SQLFactory:
-    """Unified factory for creating SQL builders and column expressions with a fluent API."""
+    """Factory for creating SQL builders and column expressions."""
 
     @classmethod
     def detect_sql_type(cls, sql: str, dialect: DialectType = None) -> str:
@@ -421,7 +421,7 @@ class SQLFactory:
 
     @staticmethod
     def _looks_like_sql(candidate: str, expected_type: Optional[str] = None) -> bool:
-        """Efficiently determine if a string looks like SQL.
+        """Determine if a string looks like SQL.
 
         Args:
             candidate: String to check
@@ -536,10 +536,10 @@ class SQLFactory:
 
     @property
     def case_(self) -> "Case":
-        """Create a CASE expression builder with improved syntax.
+        """Create a CASE expression builder.
 
         Returns:
-            Case builder instance for fluent CASE expression building.
+            Case builder instance for CASE expression building.
 
         Example:
             ```python
@@ -638,18 +638,14 @@ class SQLFactory:
             Column object for the given name.
 
         Note:
-            Special SQL constructs like case_, row_number_, etc. are now
-            handled as properties for better type safety.
+            Special SQL constructs like case_, row_number_, etc. are
+            handled as properties for type safety.
         """
         return Column(name)
 
     @staticmethod
     def raw(sql_fragment: str, **parameters: Any) -> "Union[exp.Expression, SQL]":
         """Create a raw SQL expression from a string fragment with optional parameters.
-
-        This method makes it explicit that you are passing raw SQL that should
-        be parsed and included directly in the query. Useful for complex expressions,
-        database-specific functions, or when you need precise control over the SQL.
 
         Args:
             sql_fragment: Raw SQL string to parse into an expression.
@@ -986,8 +982,8 @@ class SQLFactory:
     def to_literal(value: Any) -> FunctionExpression:
         """Convert a Python value to a SQLGlot literal expression.
 
-        Uses SQLGlot's built-in exp.convert() function for optimal dialect-agnostic
-        literal creation. Handles all Python primitive types correctly:
+        Uses SQLGlot's built-in exp.convert() function for literal creation.
+        Handles all Python primitive types:
         - None -> exp.Null (renders as NULL)
         - bool -> exp.Boolean (renders as TRUE/FALSE or 1/0 based on dialect)
         - int/float -> exp.Literal with is_number=True
@@ -1175,8 +1171,8 @@ class SQLFactory:
     def bulk_insert(table_name: str, column_count: int, placeholder_style: str = "?") -> FunctionExpression:
         """Create bulk INSERT expression for executemany operations.
 
-        This is specifically for bulk loading operations like CSV ingestion where
-        we need an INSERT expression with placeholders for executemany().
+        For bulk loading operations like CSV ingestion where
+        an INSERT expression with placeholders for executemany() is needed.
 
         Args:
             table_name: Name of the table to insert into
@@ -1184,7 +1180,7 @@ class SQLFactory:
             placeholder_style: Placeholder style ("?" for SQLite/PostgreSQL, "%s" for MySQL, ":1" for Oracle)
 
         Returns:
-            INSERT expression with proper placeholders for bulk operations
+            INSERT expression with placeholders for bulk operations
 
         Example:
             ```python

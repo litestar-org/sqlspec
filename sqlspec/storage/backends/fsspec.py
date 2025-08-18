@@ -32,7 +32,7 @@ class _ArrowStreamer:
         return self
 
     async def _initialize(self) -> None:
-        """Initialize the paths iterator."""
+        """Initialize paths iterator."""
         if self.paths_iterator is None:
             paths = await async_(self.backend.glob)(self.pattern, **self.kwargs)
             self.paths_iterator = iter(paths)
@@ -59,9 +59,8 @@ class _ArrowStreamer:
 class FSSpecBackend(ObjectStoreBase):
     """Storage backend using fsspec.
 
-    Implements the ObjectStoreProtocol using fsspec,
-    providing support for various protocols including HTTP, HTTPS, FTP,
-    and cloud storage services.
+    Implements the ObjectStoreProtocol using fsspec for various protocols
+    including HTTP, HTTPS, FTP, and cloud storage services.
     """
 
     _default_capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
@@ -116,7 +115,7 @@ class FSSpecBackend(ObjectStoreBase):
         return path_str
 
     def _detect_capabilities(self) -> StorageCapabilities:
-        """Detect capabilities based on underlying filesystem protocol."""
+        """Detect capabilities based on filesystem protocol."""
         protocol = self.protocol.lower()
 
         if protocol in {"s3", "s3a", "s3n"}:
@@ -138,7 +137,7 @@ class FSSpecBackend(ObjectStoreBase):
 
     @property
     def capabilities(self) -> StorageCapabilities:
-        """Return instance-specific capabilities based on detected protocol."""
+        """Return capabilities based on detected protocol."""
         return getattr(self, "_instance_capabilities", self.__class__._default_capabilities)
 
     @classmethod

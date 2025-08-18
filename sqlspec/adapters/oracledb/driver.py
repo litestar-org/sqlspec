@@ -121,6 +121,7 @@ class OracleSyncExceptionHandler:
         return None
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        _ = exc_tb  # Mark as intentionally unused
         if exc_type is None:
             return
 
@@ -167,6 +168,7 @@ class OracleAsyncExceptionHandler:
         return None
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        _ = exc_tb  # Mark as intentionally unused
         if exc_type is None:
             return
 
@@ -205,36 +207,10 @@ class OracleAsyncExceptionHandler:
 
 
 class OracleSyncDriver(SyncDriverAdapterBase):
-    """Enhanced Oracle Sync driver with CORE_ROUND_3 architecture integration.
+    """Synchronous Oracle Database driver.
 
-    This sync driver leverages the complete core module system for maximum Oracle performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-    - Sync-optimized resource management
-    - Optimized Oracle parameter style conversion (QMARK -> NAMED_COLON)
-
-    Oracle Features:
-    - Parameter style conversion (QMARK to NAMED_COLON/POSITIONAL_COLON)
-    - Oracle-specific type coercion and data handling
-    - Enhanced error categorization for Oracle database errors
-    - Transaction management with automatic commit/rollback
-    - Oracle-specific data handling and optimization
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    Compatibility:
-    - 100% backward compatibility with existing Oracle driver interface
-    - All existing sync Oracle tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved cursor management and exception handling patterns
+    Provides Oracle Database connectivity with parameter style conversion,
+    error handling, and transaction management.
     """
 
     __slots__ = ()
@@ -246,14 +222,14 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Enhanced configuration with global settings integration
+        # Configure with default settings
         if statement_config is None:
             cache_config = get_cache_config()
             enhanced_config = oracledb_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,  # Default to enabled
-                enable_validation=True,  # Default to enabled
-                dialect="oracle",  # Use adapter-specific dialect
+                enable_parsing=True,
+                enable_validation=True,
+                dialect="oracle",
             )
             statement_config = enhanced_config
 
@@ -310,14 +286,14 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced parameter validation for executemany
+        # Parameter validation for executemany
         if not prepared_parameters:
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
         cursor.executemany(sql, prepared_parameters)
 
-        # Calculate affected rows based on parameter count for Oracle
+        # Calculate affected rows based on parameter count
         affected_rows = len(prepared_parameters) if prepared_parameters else 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
@@ -330,7 +306,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters or {})
 
-        # Enhanced SELECT result processing for Oracle
+        # SELECT result processing for Oracle
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
@@ -342,11 +318,11 @@ class OracleSyncDriver(SyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        # Enhanced non-SELECT result processing for Oracle
+        # Non-SELECT result processing
         affected_rows = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    # Oracle transaction management with enhanced error handling
+    # Oracle transaction management
     def begin(self) -> None:
         """Begin a database transaction with enhanced error handling.
 
@@ -372,36 +348,10 @@ class OracleSyncDriver(SyncDriverAdapterBase):
 
 
 class OracleAsyncDriver(AsyncDriverAdapterBase):
-    """Enhanced Oracle Async driver with CORE_ROUND_3 architecture integration.
+    """Asynchronous Oracle Database driver.
 
-    This async driver leverages the complete core module system for maximum Oracle performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-    - Async-optimized resource management
-    - Optimized Oracle parameter style conversion (QMARK -> NAMED_COLON)
-
-    Oracle Features:
-    - Parameter style conversion (QMARK to NAMED_COLON/POSITIONAL_COLON)
-    - Oracle-specific type coercion and data handling
-    - Enhanced error categorization for Oracle database errors
-    - Transaction management with automatic commit/rollback
-    - Oracle-specific data handling and optimization
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    Compatibility:
-    - 100% backward compatibility with existing Oracle driver interface
-    - All existing async Oracle tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved async cursor management and exception handling patterns
+    Provides Oracle Database connectivity with parameter style conversion,
+    error handling, and transaction management for async operations.
     """
 
     __slots__ = ()
@@ -413,21 +363,21 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Enhanced configuration with global settings integration
+        # Configure with default settings
         if statement_config is None:
             cache_config = get_cache_config()
             enhanced_config = oracledb_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,  # Default to enabled
-                enable_validation=True,  # Default to enabled
-                dialect="oracle",  # Use adapter-specific dialect
+                enable_parsing=True,
+                enable_validation=True,
+                dialect="oracle",
             )
             statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: OracleAsyncConnection) -> OracleAsyncCursor:
-        """Create async context manager for Oracle cursor with enhanced resource management."""
+        """Create async context manager for Oracle cursor."""
         return OracleAsyncCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
@@ -451,9 +401,8 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         return None
 
     async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script using enhanced statement splitting and parameter handling.
+        """Execute SQL script with statement splitting and parameter handling.
 
-        Uses core module optimization for statement parsing and parameter processing.
         Parameters are embedded as static values for script execution compatibility.
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
@@ -471,33 +420,27 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized Oracle batch processing.
-
-        Leverages core parameter processing for enhanced Oracle type handling and parameter conversion.
-        """
+        """Execute SQL with multiple parameter sets using Oracle batch processing."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced parameter validation for executemany
+        # Parameter validation for executemany
         if not prepared_parameters:
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
         await cursor.executemany(sql, prepared_parameters)
 
-        # Calculate affected rows based on parameter count for Oracle
+        # Calculate affected rows based on parameter count
         affected_rows = len(prepared_parameters) if prepared_parameters else 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with enhanced Oracle data handling and performance optimization.
-
-        Uses core processing for optimal parameter handling and Oracle result processing.
-        """
+        """Execute single SQL statement with Oracle data handling."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters or {})
 
-        # Enhanced SELECT result processing for Oracle
+        # SELECT result processing for Oracle
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
@@ -509,20 +452,20 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        # Enhanced non-SELECT result processing for Oracle
+        # Non-SELECT result processing
         affected_rows = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    # Oracle transaction management with enhanced async error handling
+    # Oracle transaction management
     async def begin(self) -> None:
-        """Begin a database transaction with enhanced async error handling.
+        """Begin a database transaction.
 
         Oracle handles transactions automatically, so this is a no-op.
         """
         # Oracle handles transactions implicitly
 
     async def rollback(self) -> None:
-        """Rollback the current transaction with enhanced async error handling."""
+        """Rollback the current transaction."""
         try:
             await self.connection.rollback()
         except oracledb.Error as e:
@@ -530,7 +473,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def commit(self) -> None:
-        """Commit the current transaction with enhanced async error handling."""
+        """Commit the current transaction."""
         try:
             await self.connection.commit()
         except oracledb.Error as e:

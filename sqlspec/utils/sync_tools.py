@@ -1,3 +1,10 @@
+"""Utilities for async/sync interoperability in SQLSpec.
+
+This module provides utilities for converting between async and sync functions,
+managing concurrency limits, and handling context managers. Used primarily
+for adapter implementations that need to support both sync and async patterns.
+"""
+
 import asyncio
 import functools
 import inspect
@@ -27,7 +34,6 @@ class CapacityLimiter:
 
     def __init__(self, total_tokens: int) -> None:
         self._total_tokens = total_tokens
-        # Lazy initialization for Python 3.9 compatibility (asyncio.Semaphore can't be created without event loop)
         self._semaphore_instance: Optional[asyncio.Semaphore] = None
 
     @property
@@ -50,7 +56,6 @@ class CapacityLimiter:
     @total_tokens.setter
     def total_tokens(self, value: int) -> None:
         self._total_tokens = value
-        # Reset the semaphore instance so it gets recreated with new value
         self._semaphore_instance = None
 
     async def __aenter__(self) -> None:

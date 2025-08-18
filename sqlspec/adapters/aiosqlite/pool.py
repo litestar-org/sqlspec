@@ -1,4 +1,4 @@
-"""Efficient multi-connection pool for aiosqlite with proper shutdown handling."""
+"""Multi-connection pool for aiosqlite."""
 
 import asyncio
 import logging
@@ -36,7 +36,7 @@ class AiosqliteConnectTimeoutError(SQLSpecError):
 
 
 class AiosqlitePoolConnection:
-    """Wrapper for database connections with pool lifecycle management."""
+    """Wrapper for database connections in the pool."""
 
     __slots__ = ("_closed", "connection", "id", "idle_since")
 
@@ -120,7 +120,7 @@ class AiosqlitePoolConnection:
 
 
 class AiosqliteConnectionPool:
-    """Multi-connection pool for aiosqlite with proper shutdown handling."""
+    """Multi-connection pool for aiosqlite."""
 
     __slots__ = (
         "_closed_event_instance",
@@ -224,7 +224,7 @@ class AiosqliteConnectionPool:
         self._tracked_threads.add(connection)
 
     async def _create_connection(self) -> AiosqlitePoolConnection:
-        """Create a new connection with SQLite optimizations.
+        """Create a new connection.
 
         Returns:
             New pool connection instance
@@ -257,10 +257,9 @@ class AiosqliteConnectionPool:
 
             if is_shared_cache:
                 self._wal_initialized = True
-                logger.debug("Database optimized for shared cache (memory: %s)", is_memory_db)
 
         except Exception as e:
-            logger.warning("Failed to optimize connection: %s", e)
+            logger.warning("Failed to configure connection: %s", e)
             await connection.execute("PRAGMA foreign_keys = ON")
             await connection.execute("PRAGMA busy_timeout = 30000")
             await connection.commit()
@@ -272,7 +271,7 @@ class AiosqliteConnectionPool:
         async with self._lock:
             self._connection_registry[pool_connection.id] = pool_connection
 
-        logger.debug("Created new aiosqlite connection: %s", pool_connection.id)
+        logger.debug("Created aiosqlite connection: %s", pool_connection.id)
         return pool_connection
 
     async def _claim_if_healthy(self, connection: AiosqlitePoolConnection) -> bool:
@@ -282,7 +281,7 @@ class AiosqliteConnectionPool:
             connection: Connection to check and claim
 
         Returns:
-            True if connection was successfully claimed
+            True if connection was claimed
         """
         if connection.idle_time > self._idle_timeout:
             logger.debug("Connection %s exceeded idle timeout, retiring", connection.id)
@@ -391,9 +390,6 @@ class AiosqliteConnectionPool:
     async def _wait_for_threads_to_terminate(self, timeout: float = 1.0) -> None:
         """Wait for all tracked aiosqlite connection threads to terminate.
 
-        Since we use daemon threads, this is just a best-effort cleanup.
-        The threads will terminate when the process exits regardless.
-
         Args:
             timeout: Maximum time to wait for thread termination in seconds
         """
@@ -419,13 +415,9 @@ class AiosqliteConnectionPool:
         elapsed = time.time() - start_time
 
         if remaining_threads > 0:
-            logger.debug(
-                "%d aiosqlite threads still running after %.2fs (daemon threads will terminate on exit)",
-                remaining_threads,
-                elapsed,
-            )
+            logger.debug("%d aiosqlite threads still running after %.2fs", remaining_threads, elapsed)
         else:
-            logger.debug("All aiosqlite connection threads terminated successfully in %.2fs", elapsed)
+            logger.debug("All aiosqlite connection threads terminated in %.2fs", elapsed)
 
     async def acquire(self) -> AiosqlitePoolConnection:
         """Acquire a connection from the pool.
@@ -484,10 +476,7 @@ class AiosqliteConnectionPool:
             await self.release(connection)
 
     async def close(self) -> None:
-        """Close the connection pool gracefully.
-
-        Ensures all connections are properly closed and background threads are terminated.
-        """
+        """Close the connection pool."""
         if self.is_closed:
             return
         self._closed_event.set()
@@ -508,4 +497,4 @@ class AiosqliteConnectionPool:
                     logger.warning("Error closing connection %s: %s", connections[i].id, result)
 
         await self._wait_for_threads_to_terminate(timeout=1.0)
-        logger.debug("Aiosqlite connection pool closed successfully")
+        logger.debug("Aiosqlite connection pool closed")

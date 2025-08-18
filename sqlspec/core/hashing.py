@@ -1,9 +1,7 @@
 """Statement hashing utilities for cache key generation.
 
-This module provides centralized hashing logic for SQL statements,
-including expressions, parameters, filters, and complete SQL objects.
-
-Also supports fine-grained AST sub-expression caching.
+Provides hashing functions for SQL statements, expressions, parameters,
+filters, and AST sub-expressions.
 """
 
 from typing import TYPE_CHECKING, Any, Optional
@@ -26,14 +24,14 @@ __all__ = (
 
 
 def hash_expression(expr: Optional[exp.Expression], _seen: Optional[set[int]] = None) -> int:
-    """Generate deterministic hash from AST structure.
+    """Generate hash from AST structure.
 
     Args:
         expr: SQLGlot Expression to hash
         _seen: Set of seen object IDs to handle circular references
 
     Returns:
-        Deterministic hash of the AST structure
+        Hash of the AST structure
     """
     if expr is None:
         return hash(None)
@@ -56,14 +54,14 @@ def hash_expression(expr: Optional[exp.Expression], _seen: Optional[set[int]] = 
 
 
 def _hash_value(value: Any, _seen: set[int]) -> int:
-    """Hash different value types consistently.
+    """Hash different value types.
 
     Args:
         value: Value to hash (can be Expression, list, dict, or primitive)
         _seen: Set of seen object IDs to handle circular references
 
     Returns:
-        Deterministic hash of the value
+        Hash of the value
     """
     if isinstance(value, exp.Expression):
         return hash_expression(value, _seen)
@@ -177,10 +175,7 @@ def hash_filters(filters: Optional[list["StatementFilter"]] = None) -> int:
 
 
 def hash_sql_statement(statement: "SQL") -> str:
-    """Generate a complete cache key for a SQL statement.
-
-    This centralizes all the complex hashing logic that was previously
-    scattered across different parts of the codebase.
+    """Generate cache key for a SQL statement.
 
     Args:
         statement: SQL statement object
@@ -216,10 +211,7 @@ def hash_sql_statement(statement: "SQL") -> str:
 
 
 def hash_expression_node(node: exp.Expression, include_children: bool = True, dialect: Optional[str] = None) -> str:
-    """Generate a cache key for an individual expression node.
-
-    This is used for sub-expression caching where we want to cache
-    frequently used SQL fragments like complex JOIN clauses or WHERE conditions.
+    """Generate cache key for an expression node.
 
     Args:
         node: The expression node to hash
@@ -248,11 +240,10 @@ def hash_optimized_expression(
     schema: Optional[dict[str, Any]] = None,
     optimizer_settings: Optional[dict[str, Any]] = None,
 ) -> str:
-    """Generate a cache key for optimized expressions.
+    """Generate cache key for optimized expressions.
 
-    This creates a unique key that captures the expression structure,
-    dialect, schema context, and optimizer settings to ensure we only
-    reuse optimized expressions when all context matches.
+    Creates a key that includes expression structure, dialect, schema
+    context, and optimizer settings.
 
     Args:
         expr: The unoptimized expression
