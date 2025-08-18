@@ -123,9 +123,7 @@ class StatementResult(ABC):
         Returns:
             The type of SQL operation that produced this result.
         """
-        if hasattr(self.statement, "operation_type"):
-            return cast("OperationType", self.statement.operation_type)
-        return "SELECT"
+        return self.statement.operation_type
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

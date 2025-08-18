@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlglot import expressions as exp
 
+from sqlspec.core.compiler import OperationType
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import (
     SQL,
@@ -154,7 +155,7 @@ def test_processed_state_initialization() -> None:
     """Test ProcessedState initialization with all parameters."""
     compiled_sql = "SELECT * FROM users WHERE id = ?"
     execution_params = [1]
-    operation_type = "SELECT"
+    operation_type: OperationType = "SELECT"
 
     state = ProcessedState(
         compiled_sql=compiled_sql, execution_parameters=execution_params, operation_type=operation_type, is_many=False
@@ -552,13 +553,13 @@ def test_sql_parameters_property_fallback_to_original() -> None:
         ("UPDATE users SET name = 'jane' WHERE id = 1", "UPDATE"),
         ("DELETE FROM users WHERE id = 1", "DELETE"),
         ("WITH cte AS (SELECT * FROM users) SELECT * FROM cte", "SELECT"),
-        ("CREATE TABLE users (id INT)", "CREATE"),
-        ("DROP TABLE users", "DROP"),
-        ("EXECUTE sp_procedure", "COMMAND"),
+        ("CREATE TABLE users (id INT)", "DDL"),
+        ("DROP TABLE users", "DDL"),
+        ("EXECUTE sp_procedure", "EXECUTE"),
     ],
     ids=["select", "insert", "update", "delete", "cte", "create", "drop", "execute"],
 )
-def test_sql_operation_type_detection(sql_statement: str, expected_operation_type: str) -> None:
+def test_sql_operation_type_detection(sql_statement: str, expected_operation_type: OperationType) -> None:
     """Test SQL operation type detection for various statement types."""
     stmt = SQL(sql_statement)
 
@@ -605,14 +606,16 @@ def test_sql_returns_rows_detection() -> None:
     with_stmt._processed_state = ProcessedState(
         compiled_sql="WITH cte AS (SELECT * FROM users) SELECT * FROM cte",
         execution_parameters=[],
-        operation_type="WITH",
+        operation_type="SELECT",  # WITH queries are treated as SELECT
     )
     assert with_stmt.returns_rows() is True
 
     # SHOW statements return rows
     show_stmt = SQL("SHOW TABLES")
     show_stmt._processed_state = ProcessedState(
-        compiled_sql="SHOW TABLES", execution_parameters=[], operation_type="SHOW"
+        compiled_sql="SHOW TABLES",
+        execution_parameters=[],
+        operation_type="SELECT",  # SHOW queries are treated as SELECT
     )
     assert show_stmt.returns_rows() is True
 

@@ -1,8 +1,4 @@
-"""Synchronous driver protocol implementation.
-
-This module provides the sync driver infrastructure for database adapters,
-including connection management, transaction support, and result processing.
-"""
+"""Synchronous driver protocol implementation."""
 
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Optional, Union, cast, overload
@@ -32,21 +28,12 @@ EMPTY_FILTERS: Final["list[StatementFilter]"] = []
 
 
 class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin):
-    """Base class for synchronous database drivers.
-
-    Provides the foundation for sync database adapters, including connection management,
-    transaction support, and SQL execution methods. All database operations are performed
-    synchronously and support context manager patterns for proper resource cleanup.
-    """
+    """Base class for synchronous database drivers."""
 
     __slots__ = ()
 
     def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
-
-        Orchestrates the common execution flow, delegating database-specific steps
-        to abstract methods that concrete adapters must implement.
-        All database operations are wrapped in exception handling.
 
         Args:
             statement: The SQL statement to execute

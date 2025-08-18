@@ -24,7 +24,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
-from sqlspec.core.compiler import SQLProcessor
+from sqlspec.core.compiler import OperationType, SQLProcessor
 from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
@@ -84,13 +84,14 @@ class ProcessedState:
     """
 
     __slots__ = PROCESSED_STATE_SLOTS
+    operation_type: "OperationType"
 
     def __init__(
         self,
         compiled_sql: str,
         execution_parameters: Any,
         parsed_expression: "Optional[exp.Expression]" = None,
-        operation_type: str = "UNKNOWN",
+        operation_type: "OperationType" = "UNKNOWN",
         validation_errors: "Optional[list[str]]" = None,
         is_many: bool = False,
     ) -> None:
@@ -263,7 +264,7 @@ class SQL:
         return self._positional_parameters or []
 
     @property
-    def operation_type(self) -> str:
+    def operation_type(self) -> "OperationType":
         """SQL operation type - requires explicit compilation."""
         if self._processed_state is Empty:
             return "UNKNOWN"
@@ -356,7 +357,7 @@ class SQL:
                     compiled_sql=compiled_result.compiled_sql,
                     execution_parameters=compiled_result.execution_parameters,
                     parsed_expression=compiled_result.expression,
-                    operation_type=compiled_result.operation_type,
+                    operation_type=compiled_result.operation_type,  # pyright: ignore[reportArgumentType]
                     validation_errors=[],
                     is_many=self._is_many,
                 )
@@ -365,7 +366,7 @@ class SQL:
                 self._processed_state = ProcessedState(
                     compiled_sql=self._raw_sql,
                     execution_parameters=self._named_parameters or self._positional_parameters,
-                    operation_type="UNKNOWN",
+                    operation_type="UNKNOWN",  # pyright: ignore[reportArgumentType]
                     is_many=self._is_many,
                 )
 
