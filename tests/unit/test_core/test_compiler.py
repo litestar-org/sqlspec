@@ -32,8 +32,6 @@ from sqlspec.core.compiler import CompiledSQL, OperationType, SQLProcessor
 from sqlspec.core.parameters import ParameterProcessor, ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
 
-# Test fixtures for compiler testing
-
 
 @pytest.fixture
 def basic_statement_config() -> "StatementConfig":
@@ -134,9 +132,6 @@ def sample_sql_queries() -> "dict[str, str]":
     }
 
 
-# CompiledSQL class tests
-
-
 def test_compiled_sql_creation() -> None:
     """Test CompiledSQL object creation and basic properties."""
     compiled_sql = "SELECT * FROM users WHERE id = ?"
@@ -165,15 +160,12 @@ def test_compiled_sql_hash_caching() -> None:
     """Test CompiledSQL hash caching for performance."""
     result = CompiledSQL(compiled_sql="SELECT * FROM users", execution_parameters=None, operation_type="SELECT")
 
-    # Hash should be None initially
     assert result._hash is None
 
-    # First call should compute and cache hash
     hash1 = hash(result)
     assert result._hash is not None
     assert hash1 == result._hash
 
-    # Second call should return cached value
     hash2 = hash(result)
     assert hash2 == hash1
     assert hash2 == result._hash
@@ -206,9 +198,6 @@ def test_compiled_sql_repr() -> None:
     assert "SELECT * FROM users" in repr_str
     assert "[123]" in repr_str
     assert "SELECT" in repr_str
-
-
-# SQLProcessor class tests
 
 
 def test_sql_processor_initialization(basic_statement_config: "StatementConfig") -> None:
@@ -251,17 +240,14 @@ def test_compilation_with_caching(
     sql = sample_sql_queries["select"]
     parameters = [123]
 
-    # First compilation should be a cache miss
     result1 = processor.compile(sql, parameters)
     assert processor._cache_misses == 1
     assert processor._cache_hits == 0
 
-    # Second compilation should be a cache hit
     result2 = processor.compile(sql, parameters)
     assert processor._cache_misses == 1
     assert processor._cache_hits == 1
 
-    # Results should be identical
     assert result1 == result2
 
 
@@ -272,15 +258,12 @@ def test_compilation_without_caching(no_cache_config: "StatementConfig", sample_
     sql = sample_sql_queries["select"]
     parameters = [123]
 
-    # Multiple compilations should not use cache
     result1 = processor.compile(sql, parameters)
     result2 = processor.compile(sql, parameters)
 
-    # Cache stats should remain at 0
     assert processor._cache_hits == 0
     assert processor._cache_misses == 0
 
-    # Results should be equal but not identical objects
     assert result1 == result2
 
 
@@ -288,20 +271,16 @@ def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None
     """Test cache key generation for consistent caching."""
     processor = SQLProcessor(basic_statement_config)
 
-    # Same SQL and parameters should generate same key
     key1 = processor._make_cache_key("SELECT * FROM users", [123])
     key2 = processor._make_cache_key("SELECT * FROM users", [123])
     assert key1 == key2
 
-    # Different SQL should generate different keys
     key3 = processor._make_cache_key("SELECT * FROM posts", [123])
     assert key1 != key3
 
-    # Different parameters should generate different keys
     key4 = processor._make_cache_key("SELECT * FROM users", [456])
     assert key1 != key4
 
-    # Keys should be strings and include "sql_" prefix
     assert isinstance(key1, str)
     assert key1.startswith("sql_")
 
@@ -310,18 +289,14 @@ def test_cache_eviction(basic_statement_config: "StatementConfig") -> None:
     """Test LRU cache eviction when at capacity."""
     processor = SQLProcessor(basic_statement_config, max_cache_size=2)
 
-    # Fill cache to capacity
     processor.compile("SELECT 1", None)
     processor.compile("SELECT 2", None)
 
-    # Verify cache is full
     assert len(processor._cache) == 2
 
-    # Add third item should evict oldest
     processor.compile("SELECT 3", None)
     assert len(processor._cache) == 2
 
-    # First item should have been evicted
     cache_keys = list(processor._cache.keys())
     key1 = processor._make_cache_key("SELECT 1", None)
     assert key1 not in cache_keys
@@ -331,18 +306,14 @@ def test_cache_lru_behavior(basic_statement_config: "StatementConfig") -> None:
     """Test LRU (Least Recently Used) cache behavior."""
     processor = SQLProcessor(basic_statement_config, max_cache_size=2)
 
-    # Fill cache
     processor.compile("SELECT 1", None)
     processor.compile("SELECT 2", None)
 
-    # Access first item to make it recently used
     processor.compile("SELECT 1", None)
     assert processor._cache_hits == 1
 
-    # Add third item - should evict second item (least recently used)
     processor.compile("SELECT 3", None)
 
-    # First and third items should be in cache
     key1 = processor._make_cache_key("SELECT 1", None)
     key2 = processor._make_cache_key("SELECT 2", None)
     key3 = processor._make_cache_key("SELECT 3", None)
@@ -350,9 +321,6 @@ def test_cache_lru_behavior(basic_statement_config: "StatementConfig") -> None:
     assert key1 in processor._cache
     assert key2 not in processor._cache
     assert key3 in processor._cache
-
-
-# Compilation pipeline tests
 
 
 @pytest.mark.parametrize(
@@ -381,7 +349,6 @@ def test_operation_type_detection_via_ast(
         detected_type = processor._detect_operation_type(expression)
         assert detected_type == expected_operation
     except ParseError:
-        # If SQLGlot can't parse, should fall back to string-based detection
         detected_type = "EXECUTE"
         assert detected_type in ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "UNKNOWN"]
 
@@ -393,13 +360,12 @@ def test_single_pass_processing(
     processor = SQLProcessor(basic_statement_config)
 
     with patch("sqlglot.parse_one") as mock_parse:
-        mock_expression = Mock(spec=exp.Select)
-        mock_expression.sql.return_value = "SELECT * FROM users WHERE id = ?"
-        mock_parse.return_value = mock_expression
+        real_expression = exp.Select()
+        real_expression.sql = Mock(return_value="SELECT * FROM users WHERE id = ?")
+        mock_parse.return_value = real_expression
 
         result = processor.compile(sample_sql_queries["select"], [123])
 
-        # SQLGlot parse should only be called once
         assert mock_parse.call_count == 1
         assert result.operation_type == "SELECT"
 
@@ -408,7 +374,6 @@ def test_parameter_processing_integration(basic_statement_config: "StatementConf
     """Test integration with parameter processing system."""
     processor = SQLProcessor(basic_statement_config)
 
-    # Test with various parameter formats
     test_cases = [
         ("SELECT * FROM users WHERE id = ?", [123]),
         ("SELECT * FROM users WHERE id = :user_id", {"user_id": 456}),
@@ -423,17 +388,13 @@ def test_parameter_processing_integration(basic_statement_config: "StatementConf
 
 def test_compilation_with_transformations(basic_statement_config: "StatementConfig") -> None:
     """Test compilation with output transformations."""
-    # Create config for transformation testing
+
     config_with_transformer = basic_statement_config.replace()
 
     processor = SQLProcessor(config_with_transformer)
     result = processor.compile("select * from users", None)
 
-    # Basic compilation should work
     assert isinstance(result, CompiledSQL)
-
-
-# Query optimization tests
 
 
 def test_parsing_enabled_optimization(
@@ -453,7 +414,7 @@ def test_parsing_disabled_fallback(
     basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
 ) -> None:
     """Test compilation fallback when parsing is disabled."""
-    # Disable parsing
+
     config = basic_statement_config.replace(enable_parsing=False)
     processor = SQLProcessor(config)
 
@@ -480,7 +441,6 @@ def test_compilation_performance_characteristics(
     """Test compilation performance characteristics."""
     processor = SQLProcessor(basic_statement_config)
 
-    # Measure compilation time for complex query
     start_time = time.time()
 
     for _ in range(10):
@@ -489,14 +449,9 @@ def test_compilation_performance_characteristics(
     end_time = time.time()
     compilation_time = end_time - start_time
 
-    # Should be fast enough (less than 1 second for 10 compilations)
     assert compilation_time < 1.0
 
-    # Cache hits should improve performance
-    assert processor._cache_hits >= 9  # 9 cache hits after first compilation
-
-
-# AST transformation tests
+    assert processor._cache_hits >= 9
 
 
 def test_ast_based_operation_detection(basic_statement_config: "StatementConfig") -> None:
@@ -523,9 +478,6 @@ def test_ast_based_operation_detection(basic_statement_config: "StatementConfig"
             pytest.skip(f"SQLGlot cannot parse: {sql}")
 
 
-# Dialect-specific compilation tests
-
-
 def test_sqlite_dialect_compilation(
     basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
 ) -> None:
@@ -547,7 +499,6 @@ def test_postgres_dialect_compilation(
     result = processor.compile(sample_sql_queries["select"], [123])
 
     assert result.parameter_style == ParameterStyle.NUMERIC.value
-    # Should convert to $1, $2, etc. format
 
 
 def test_mysql_dialect_compilation(
@@ -565,15 +516,10 @@ def test_dialect_specific_optimizations(postgres_statement_config: "StatementCon
     """Test dialect-specific SQL optimizations."""
     processor = SQLProcessor(postgres_statement_config)
 
-    # PostgreSQL-specific syntax
-    postgres_sql = "SELECT * FROM users WHERE data ? 'key'"  # JSON operator
+    postgres_sql = "SELECT * FROM users WHERE data ? 'key'"
 
     result = processor.compile(postgres_sql, None)
     assert isinstance(result, CompiledSQL)
-    # Should not confuse ? operator with parameter placeholder
-
-
-# Error handling tests
 
 
 def test_parse_error_fallback(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
@@ -582,9 +528,8 @@ def test_parse_error_fallback(basic_statement_config: "StatementConfig", sample_
 
     result = processor.compile(sample_sql_queries["malformed"], None)
 
-    # Should not raise exception, should provide fallback result
     assert isinstance(result, CompiledSQL)
-    # Malformed SQL "SELECT * FROM users WHERE" still starts with SELECT, so detected as SELECT
+
     assert result.operation_type == "EXECUTE"
 
 
@@ -592,11 +537,9 @@ def test_empty_sql_handling(basic_statement_config: "StatementConfig", sample_sq
     """Test handling of empty SQL strings."""
     processor = SQLProcessor(basic_statement_config)
 
-    # Empty SQL
     result = processor.compile(sample_sql_queries["empty"], None)
     assert isinstance(result, CompiledSQL)
 
-    # Whitespace-only SQL
     result = processor.compile(sample_sql_queries["whitespace"], None)
     assert isinstance(result, CompiledSQL)
 
@@ -605,11 +548,8 @@ def test_parameter_processing_errors(basic_statement_config: "StatementConfig") 
     """Test handling of parameter processing errors."""
     processor = SQLProcessor(basic_statement_config)
 
-    # Test that processor can handle edge cases in parameter processing
-    # Since ParameterProcessor.process is read-only (likely @mypyc_attr), test with unusual parameters
-    result = processor.compile("SELECT * FROM users", object())  # Unusual parameter type
+    result = processor.compile("SELECT * FROM users", object())
 
-    # Should still compile successfully due to robust error handling
     assert isinstance(result, CompiledSQL)
     assert result.operation_type == "SELECT"
 
@@ -621,7 +561,6 @@ def test_sqlglot_parse_exceptions(basic_statement_config: "StatementConfig") -> 
     with patch("sqlglot.parse_one", side_effect=ParseError("Parse failed")):
         result = processor.compile("SELECT * FROM users", None)
 
-        # Should fall back to string-based operation detection
         assert isinstance(result, CompiledSQL)
         assert result.expression is None
         assert result.operation_type == "EXECUTE"
@@ -631,23 +570,16 @@ def test_compilation_exception_recovery(basic_statement_config: "StatementConfig
     """Test recovery from compilation exceptions."""
     processor = SQLProcessor(basic_statement_config)
 
-    # Test with SQL that might cause internal issues but should still be handled gracefully
-    # Since _compile_uncached is read-only (likely @mypyc_attr), test actual edge cases
     result = processor.compile("COMPLETELY_INVALID_SQL_STATEMENT", None)
 
-    # Should handle gracefully and return a result
     assert isinstance(result, CompiledSQL)
     assert result.operation_type == "UNKNOWN"
-
-
-# Performance characteristics tests
 
 
 def test_cache_statistics(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
     """Test cache statistics collection."""
     processor = SQLProcessor(basic_statement_config)
 
-    # Initial stats
     stats = processor.cache_stats
     assert stats["hits"] == 0
     assert stats["misses"] == 0
@@ -655,30 +587,27 @@ def test_cache_statistics(basic_statement_config: "StatementConfig", sample_sql_
     assert stats["max_size"] == 1000
     assert stats["hit_rate_percent"] == 0
 
-    # After some operations
-    processor.compile(sample_sql_queries["select"], [123])  # Miss
-    processor.compile(sample_sql_queries["select"], [123])  # Hit
-    processor.compile(sample_sql_queries["insert"], [456, "test"])  # Miss
+    processor.compile(sample_sql_queries["select"], [123])
+    processor.compile(sample_sql_queries["select"], [123])
+    processor.compile(sample_sql_queries["insert"], [456, "test"])
 
     stats = processor.cache_stats
     assert stats["hits"] == 1
     assert stats["misses"] == 2
     assert stats["size"] == 2
-    assert stats["hit_rate_percent"] == 33  # 1 hit out of 3 total requests
+    assert stats["hit_rate_percent"] == 33
 
 
 def test_cache_clear(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
     """Test cache clearing functionality."""
     processor = SQLProcessor(basic_statement_config)
 
-    # Populate cache
     processor.compile(sample_sql_queries["select"], [123])
     processor.compile(sample_sql_queries["insert"], [456, "test"])
 
     assert len(processor._cache) == 2
     assert processor._cache_misses == 2
 
-    # Clear cache
     processor.clear_cache()
 
     assert len(processor._cache) == 0
@@ -690,10 +619,8 @@ def test_memory_efficiency_with_slots() -> None:
     """Test memory efficiency of CompiledSQL with __slots__."""
     result = CompiledSQL(compiled_sql="SELECT * FROM users", execution_parameters=[123], operation_type="SELECT")
 
-    # Should not have __dict__ due to __slots__
     assert not hasattr(result, "__dict__")
 
-    # Should have all expected slots
     expected_slots = {
         "_hash",
         "compiled_sql",
@@ -711,10 +638,8 @@ def test_processor_memory_efficiency_with_slots() -> None:
     config = StatementConfig()
     processor = SQLProcessor(config)
 
-    # Should not have __dict__ due to __slots__
     assert not hasattr(processor, "__dict__")
 
-    # Should have all expected slots
     expected_slots = {"_cache", "_cache_hits", "_cache_misses", "_config", "_max_cache_size", "_parameter_processor"}
     assert set(processor.__slots__) == expected_slots
 
@@ -726,41 +651,34 @@ def test_compilation_speed_benchmark(
     """Benchmark compilation speed for performance regression detection."""
     processor = SQLProcessor(basic_statement_config)
 
-    # Warm up
     for _ in range(5):
         processor.compile(sample_sql_queries["select_complex"], [True])
 
-    # Benchmark cached compilation
     start_time = time.time()
     for _ in range(100):
         processor.compile(sample_sql_queries["select_complex"], [True])
     cached_time = time.time() - start_time
 
-    # Benchmark uncached compilation
     start_time = time.time()
     for i in range(100):
         processor.compile(f"SELECT {i} FROM users", [i])
     uncached_time = time.time() - start_time
 
-    # Cached compilation should be significantly faster
     assert cached_time < uncached_time / 10
 
-    # Performance targets (adjust as needed based on hardware)
-    assert cached_time < 0.1  # 100 cached compilations in < 100ms
-    assert uncached_time < 2.0  # 100 uncached compilations in < 2s
+    assert cached_time < 0.1
+    assert uncached_time < 2.0
 
 
 def test_end_to_end_compilation_workflow(basic_statement_config: "StatementConfig") -> None:
     """Test complete end-to-end compilation workflow."""
     processor = SQLProcessor(basic_statement_config)
 
-    # Complex SQL with multiple parameter types
     sql = "SELECT u.id, u.name FROM users u WHERE u.id = ? AND u.active = ? AND u.created > ?"
     parameters = [123, True, datetime(2023, 1, 1)]
 
     result = processor.compile(sql, parameters)
 
-    # Verify complete compilation
     assert isinstance(result, CompiledSQL)
     assert result.operation_type == "SELECT"
     assert result.compiled_sql is not None
@@ -769,7 +687,6 @@ def test_end_to_end_compilation_workflow(basic_statement_config: "StatementConfi
     assert result.parameter_style is not None
     assert result.expression is not None
 
-    # Verify caching works for identical requests
     result2 = processor.compile(sql, parameters)
     assert result == result2
     assert processor._cache_hits == 1
@@ -806,21 +723,17 @@ def test_concurrent_compilation_safety(basic_statement_config: "StatementConfig"
         except Exception as e:
             errors.append(e)
 
-    # Create multiple threads
     threads = []
     for i in range(10):
         thread = threading.Thread(target=compile_sql, args=(i,))
         threads.append(thread)
 
-    # Start all threads
     for thread in threads:
         thread.start()
 
-    # Wait for completion
     for thread in threads:
         thread.join()
 
-    # Verify no errors and all compilations succeeded
     assert len(errors) == 0
     assert len(results) == 10
     assert all(isinstance(r, CompiledSQL) for r in results)
@@ -829,10 +742,10 @@ def test_concurrent_compilation_safety(basic_statement_config: "StatementConfig"
 @pytest.mark.parametrize(
     "sql,parameters,expected_supports_many",
     [
-        ("SELECT * FROM users WHERE id = ?", [123], True),  # List parameters = supports_many
+        ("SELECT * FROM users WHERE id = ?", [123], True),
         ("INSERT INTO users (name) VALUES (?)", [["john"], ["jane"]], True),
         ("UPDATE users SET name = ? WHERE id = ?", [("new", 1), ("other", 2)], True),
-        ("SELECT * FROM users", None, False),  # No parameters = no many support
+        ("SELECT * FROM users", None, False),
     ],
 )
 def test_execute_many_detection(
@@ -848,7 +761,7 @@ def test_execute_many_detection(
 
 def test_module_constants() -> None:
     """Test module constants are properly defined."""
-    # OperationType constants
+
     operation_types = ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "UNKNOWN"]
     assert "SELECT" in operation_types
     assert "INSERT" in operation_types

@@ -104,7 +104,6 @@ def test_bigquery_complex_parameter_queries(bigquery_session: BigQueryDriver, bi
     """Test complex queries with BigQuery parameters."""
     table_name = bigquery_test_table
 
-    # Insert test data
     test_data = [(1, "Alice", 1000), (2, "Bob", 1500), (3, "Charlie", 2000), (4, "Diana", 800)]
     bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", test_data)
 
@@ -136,7 +135,7 @@ def test_bigquery_complex_parameter_queries(bigquery_session: BigQueryDriver, bi
     )
     assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
-    assert agg_result.data[0]["count"] == 3  # Alice, Bob, Charlie
+    assert agg_result.data[0]["count"] == 3
     assert agg_result.data[0]["avg_value"] == (1000 + 1500 + 2000) / 3
 
 

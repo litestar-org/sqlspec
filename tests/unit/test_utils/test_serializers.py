@@ -14,34 +14,29 @@ from sqlspec.utils.serializers import from_json, to_json
 
 def test_to_json_basic_types() -> None:
     """Test serialization of basic Python types."""
-    # String
+
     assert to_json("hello") == '"hello"'
 
-    # Number
     assert to_json(42) == "42"
 
-    # Boolean
     assert to_json(True) == "true"
     assert to_json(False) == "false"
 
-    # None
     assert to_json(None) == "null"
 
 
 def test_to_json_collections() -> None:
     """Test serialization of collections."""
-    # List - msgspec/orjson use compact formatting
+
     list_result = to_json([1, 2, 3])
-    assert list_result in {"[1,2,3]", "[1, 2, 3]"}  # Accept both formats
+    assert list_result in {"[1,2,3]", "[1, 2, 3]"}
     assert to_json([]) == "[]"
 
-    # Dict
     result = to_json({"key": "value", "num": 42})
-    # Parse back to verify correctness (order may vary)
+
     parsed = json.loads(result)
     assert parsed == {"key": "value", "num": 42}
 
-    # Empty dict
     assert to_json({}) == "{}"
 
 
@@ -53,7 +48,7 @@ def test_to_json_nested_structures() -> None:
     }
 
     result = to_json(nested)
-    # Verify by parsing back
+
     parsed = json.loads(result)
     assert parsed == nested
 
@@ -63,7 +58,6 @@ def test_to_json_unicode_strings() -> None:
     unicode_text = "Hello 世界 🌍 café naïve résumé"
     result = to_json(unicode_text)
 
-    # Should be valid JSON
     parsed = json.loads(result)
     assert parsed == unicode_text
 
@@ -73,21 +67,18 @@ def test_to_json_special_characters() -> None:
     special_chars = "Line1\nLine2\tTabbed\"Quoted'Single\\Backslash"
     result = to_json(special_chars)
 
-    # Should properly escape and be parseable
     parsed = json.loads(result)
     assert parsed == special_chars
 
 
 def test_to_json_numeric_edge_cases() -> None:
     """Test serialization of edge case numeric values."""
-    # Large integers
-    large_int = 9223372036854775807  # Max 64-bit signed int
+
+    large_int = 9223372036854775807
     assert to_json(large_int) == str(large_int)
 
-    # Negative numbers
     assert to_json(-42) == "-42"
 
-    # Zero
     assert to_json(0) == "0"
     assert to_json(0.0) == "0.0"
 
@@ -96,13 +87,13 @@ def test_to_json_empty_collections() -> None:
     """Test serialization of empty collections."""
     assert to_json([]) == "[]"
     assert to_json({}) == "{}"
-    assert to_json(()) == "[]"  # Tuple serializes as array
+    assert to_json(()) == "[]"
 
 
 def test_to_json_tuple_serialization() -> None:
     """Test that tuples are serialized as JSON arrays."""
     tuple_result = to_json((1, 2, 3))
-    assert tuple_result in {"[1,2,3]", "[1, 2, 3]"}  # Accept both formats
+    assert tuple_result in {"[1,2,3]", "[1, 2, 3]"}
     assert to_json(()) == "[]"
 
     nested_tuple = ((1, 2), (3, 4))
@@ -130,32 +121,27 @@ def test_to_json_mixed_type_collections() -> None:
 
 def test_from_json_basic_types() -> None:
     """Test deserialization of basic JSON types."""
-    # String
+
     assert from_json('"hello"') == "hello"
 
-    # Number
     assert from_json("42") == 42
     assert from_json("3.14") == 3.14
 
-    # Boolean
     assert from_json("true") is True
     assert from_json("false") is False
 
-    # None
     assert from_json("null") is None
 
 
 def test_from_json_collections() -> None:
     """Test deserialization of JSON collections."""
-    # Array
+
     assert from_json("[1, 2, 3]") == [1, 2, 3]
     assert from_json("[]") == []
 
-    # Object
     result = from_json('{"key": "value", "num": 42}')
     assert result == {"key": "value", "num": 42}
 
-    # Empty object
     assert from_json("{}") == {}
 
 
@@ -199,14 +185,12 @@ def test_from_json_escaped_characters() -> None:
 
 def test_from_json_numeric_edge_cases() -> None:
     """Test deserialization of edge case numeric values."""
-    # Large integers
+
     assert from_json("9223372036854775807") == 9223372036854775807
 
-    # Negative numbers
     assert from_json("-42") == -42
     assert from_json("-3.14") == -3.14
 
-    # Zero
     assert from_json("0") == 0
     assert from_json("0.0") == 0.0
 
@@ -220,14 +204,14 @@ def test_from_json_scientific_notation() -> None:
 
 def test_from_json_whitespace_handling() -> None:
     """Test that whitespace in JSON is handled correctly."""
-    # Extra whitespace should be ignored
+
     assert from_json('  "hello"  ') == "hello"
     assert from_json('\n\t{\n\t  "key": "value"\n\t}\n') == {"key": "value"}
 
 
 def test_from_json_invalid_json_raises_error() -> None:
     """Test that invalid JSON raises appropriate errors."""
-    # Need to handle msgspec.DecodeError which is different from json.JSONDecodeError
+
     try:
         import msgspec
 
@@ -342,7 +326,7 @@ def test_round_trip_empty_structures() -> None:
 
 def test_edge_case_very_long_strings() -> None:
     """Test serialization of very long strings."""
-    long_string = "x" * 10000  # 10KB string
+    long_string = "x" * 10000
     serialized = to_json(long_string)
     deserialized = from_json(serialized)
     assert deserialized == long_string
@@ -350,7 +334,7 @@ def test_edge_case_very_long_strings() -> None:
 
 def test_edge_case_deeply_nested_structures() -> None:
     """Test deeply nested data structures."""
-    # Create deeply nested structure
+
     nested = "base"
     for i in range(100):
         nested = {"level": i, "data": nested}
@@ -358,7 +342,6 @@ def test_edge_case_deeply_nested_structures() -> None:
     serialized = to_json(nested)
     deserialized = from_json(serialized)
 
-    # Navigate back to verify structure
     current = deserialized
     for i in range(99, -1, -1):
         assert current["level"] == i
@@ -368,7 +351,7 @@ def test_edge_case_deeply_nested_structures() -> None:
 
 def test_edge_case_large_arrays() -> None:
     """Test serialization of large arrays."""
-    large_array = list(range(10000))  # 10K element array
+    large_array = list(range(10000))
     serialized = to_json(large_array)
     deserialized = from_json(serialized)
     assert deserialized == large_array
@@ -376,7 +359,7 @@ def test_edge_case_large_arrays() -> None:
 
 def test_edge_case_dict_with_numeric_keys() -> None:
     """Test that dict keys are properly handled."""
-    # JSON requires string keys, numeric keys should be converted
+
     data = {"1": "one", "2": "two", "key": "value"}
     serialized = to_json(data)
     deserialized = from_json(serialized)
@@ -385,18 +368,15 @@ def test_edge_case_dict_with_numeric_keys() -> None:
 
 def test_edge_case_special_float_values() -> None:
     """Test handling of special float values."""
-    # Note: JSON doesn't support inf, -inf, or nan
-    # These should either be handled gracefully or raise appropriate errors
+
     special_values = [float("inf"), float("-inf"), float("nan")]
 
     for value in special_values:
-        # Depending on implementation, this might raise an error or convert to null
         try:
             serialized = to_json(value)
-            # If it doesn't raise, it should produce valid JSON
+
             json.loads(serialized)
         except (ValueError, OverflowError):
-            # It's acceptable to raise an error for these values
             pass
 
 
@@ -406,7 +386,6 @@ def test_compatibility_produces_valid_json() -> None:
 
     serialized = to_json(test_data)
 
-    # Should be parseable by standard json module
     stdlib_parsed = json.loads(serialized)
     assert stdlib_parsed == test_data
 
@@ -422,13 +401,12 @@ def test_compatibility_parses_stdlib_json_output() -> None:
 
 def test_compatibility_consistent_formatting() -> None:
     """Test that formatting is consistent with expectations."""
-    # Simple data should produce similar output to stdlib
+
     simple_data = {"key": "value", "num": 42}
 
     our_output = to_json(simple_data)
     stdlib_output = json.dumps(simple_data)
 
-    # Both should parse to the same data
     assert from_json(our_output) == json.loads(stdlib_output) == simple_data
 
 
@@ -457,11 +435,10 @@ def test_parametrized_round_trip(test_input: Any) -> None:
 
 def test_imports_work_correctly() -> None:
     """Test that the imports from _serialization module work correctly."""
-    # This test ensures the re-exports are working
+
     assert callable(to_json)
     assert callable(from_json)
 
-    # Basic functionality test
     test_data = {"test": "import"}
     assert from_json(to_json(test_data)) == test_data
 
@@ -481,7 +458,6 @@ def test_error_messages_are_helpful() -> None:
         from_json("invalid json content")
         assert False, "Should have raised an exception"
     except Exception as e:
-        # Should contain some indication of what went wrong
         error_msg = str(e).lower()
-        # msgspec uses "malformed" instead of "invalid", so check for various terms
+
         assert any(word in error_msg for word in ["json", "decode", "parse", "invalid", "expect", "malformed"])

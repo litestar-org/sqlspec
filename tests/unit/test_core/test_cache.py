@@ -20,6 +20,7 @@ optimization across the entire SQLSpec system.
 
 import threading
 import time
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -375,14 +376,22 @@ def test_statement_cache_key_generation(mock_sql: MagicMock) -> None:
     mock_statement1.dialect = "postgresql"
     mock_statement1.is_many = False
     mock_statement1.is_script = False
-    mock_statement1.__hash__ = lambda self: hash("statement1")  # type: ignore[misc]
+
+    def _hash1(self: Any) -> int:
+        return hash("statement1")
+
+    mock_statement1.__hash__ = _hash1  # pyright: ignore[reportAttributeAccessIssue]
 
     mock_statement2 = MagicMock()
     mock_statement2._raw_sql = "SELECT * FROM orders"
     mock_statement2.dialect = "postgresql"
     mock_statement2.is_many = False
     mock_statement2.is_script = False
-    mock_statement2.__hash__ = lambda self: hash("statement2")  # type: ignore[misc]
+
+    def _hash2(self: Any) -> int:
+        return hash("statement2")
+
+    mock_statement2.__hash__ = _hash2  # pyright: ignore[reportAttributeAccessIssue]
 
     key1 = stmt_cache._create_statement_key(mock_statement1)
     key2 = stmt_cache._create_statement_key(mock_statement2)
@@ -670,10 +679,8 @@ def test_update_cache_config_function() -> None:
     original_config = get_cache_config()
 
     try:
-        # Create new configuration
         new_config = CacheConfig(sql_cache_size=9999, fragment_cache_enabled=False)
 
-        # Update configuration
         update_cache_config(new_config)
 
         current_config = get_cache_config()

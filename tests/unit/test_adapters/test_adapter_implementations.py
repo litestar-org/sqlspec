@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 __all__ = ()
 
 
-# Database adapter configurations for testing
 ADAPTER_CONFIGS = [
     {
         "name": "SQLite",
@@ -70,7 +69,7 @@ def statement_config_for_adapter(adapter_config: "dict[str, Any]") -> StatementC
     """Create statement config for specific adapter."""
     return StatementConfig(
         dialect=adapter_config["dialect"],
-        enable_caching=False,  # Disable caching to avoid hash issues
+        enable_caching=False,
         parameter_config=ParameterStyleConfig(
             default_parameter_style=adapter_config["parameter_style"],
             supported_parameter_styles={adapter_config["parameter_style"]},
@@ -89,7 +88,6 @@ def test_adapter_parameter_style_handling(
     assert config.parameter_config.default_parameter_style == adapter_config["parameter_style"]
     assert adapter_config["parameter_style"] in config.parameter_config.supported_parameter_styles
 
-    # Test SQL statement creation with appropriate parameter style
     queries = adapter_config["example_queries"]
 
     if adapter_config["parameter_style"] == ParameterStyle.QMARK:
@@ -97,10 +95,10 @@ def test_adapter_parameter_style_handling(
         assert "?" in statement.sql
     elif adapter_config["parameter_style"] == ParameterStyle.NUMERIC:
         statement = SQL(queries["select"], 1, statement_config=config)
-        assert "$1" in statement.sql or "?" in statement.sql  # May be converted
+        assert "$1" in statement.sql or "?" in statement.sql
     elif adapter_config["parameter_style"] == ParameterStyle.POSITIONAL_PYFORMAT:
         statement = SQL(queries["select"], 1, statement_config=config)
-        assert "%s" in statement.sql or "?" in statement.sql  # May be converted
+        assert "%s" in statement.sql or "?" in statement.sql
 
 
 def test_adapter_sql_compilation(
@@ -110,7 +108,6 @@ def test_adapter_sql_compilation(
     config = statement_config_for_adapter
     queries = adapter_config["example_queries"]
 
-    # Test SELECT statement
     select_stmt = SQL(queries["select"], 1, statement_config=config)
     compiled_sql, compiled_params = select_stmt.compile()
 
@@ -118,7 +115,6 @@ def test_adapter_sql_compilation(
     assert len(compiled_sql) > 0
     assert compiled_params is not None
 
-    # Test INSERT statement
     insert_stmt = SQL(queries["insert"], "test_user", statement_config=config)
     compiled_sql, compiled_params = insert_stmt.compile()
 
@@ -134,19 +130,15 @@ def test_adapter_query_type_detection(
     config = statement_config_for_adapter
     queries = adapter_config["example_queries"]
 
-    # Test SELECT detection
     select_stmt = SQL(queries["select"], 1, statement_config=config)
     assert select_stmt.returns_rows() is True
 
-    # Test INSERT detection
     insert_stmt = SQL(queries["insert"], "test", statement_config=config)
     assert insert_stmt.returns_rows() is False
 
-    # Test UPDATE detection
     update_stmt = SQL(queries["update"], "new_name", 1, statement_config=config)
     assert update_stmt.returns_rows() is False
 
-    # Test DELETE detection
     delete_stmt = SQL(queries["delete"], 1, statement_config=config)
     assert delete_stmt.returns_rows() is False
 
@@ -158,6 +150,7 @@ def test_adapter_query_types(
     """Test different query types for each adapter."""
     config = statement_config_for_adapter
     query = adapter_config["example_queries"][query_type]
+
     if query_type == "select":
         statement = SQL(query, 1, statement_config=config)
         assert statement.returns_rows() is True
@@ -170,8 +163,10 @@ def test_adapter_query_types(
     elif query_type == "delete":
         statement = SQL(query, 1, statement_config=config)
         assert statement.returns_rows() is False
+    else:
+        statement = SQL(query, statement_config=config)
 
-    assert statement  # pyright: ignore
+    assert statement
     compiled_sql, _compiled_params = statement.compile()
     assert isinstance(compiled_sql, str)
     assert query_type.upper() in compiled_sql.upper()
@@ -179,48 +174,41 @@ def test_adapter_query_types(
 
 def test_sqlite_driver_real_implementation() -> None:
     """Test SQLite driver with real SQLite connection."""
-    # Create in-memory SQLite database
+
     connection = sqlite3.connect(":memory:")
 
     try:
-        # Create test table
         connection.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
         connection.execute("INSERT INTO users (name) VALUES ('test_user')")
         connection.commit()
 
-        # Create simple statement config without type coercion map
         from sqlspec.core.parameters import ParameterStyleConfig
 
         simple_config = StatementConfig(
             dialect="sqlite",
-            enable_caching=False,  # Disable caching to avoid hash issues in tests
+            enable_caching=False,
             parameter_config=ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
             ),
         )
 
-        # Create SQLite driver
         driver = SqliteDriver(connection, simple_config)
 
-        # Test SELECT
         result = driver.execute("SELECT * FROM users WHERE name = ?", "test_user")
         assert isinstance(result, SQLResult)
         assert result.operation_type == "SELECT"
         assert len(result.get_data()) == 1
         assert result.get_data()[0]["name"] == "test_user"
 
-        # Test INSERT
         result = driver.execute("INSERT INTO users (name) VALUES (?)", "new_user")
         assert isinstance(result, SQLResult)
         assert result.operation_type == "INSERT"
         assert result.rows_affected == 1
 
-        # Test execute_many
         result = driver.execute_many("INSERT INTO users (name) VALUES (?)", [["user1"], ["user2"], ["user3"]])
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 3
 
-        # Test execute_script
         script = """
         UPDATE users SET name = 'updated_' || name WHERE id > 1;
         DELETE FROM users WHERE name = 'test_user';
@@ -230,22 +218,18 @@ def test_sqlite_driver_real_implementation() -> None:
         assert result.operation_type == "SCRIPT"
         assert result.total_statements == 2
 
-        # Test transaction management
         driver.begin()
         driver.execute("INSERT INTO users (name) VALUES (?)", "transaction_test")
         driver.commit()
 
-        # Verify transaction worked
         result = driver.execute("SELECT COUNT(*) as count FROM users WHERE name = ?", "transaction_test")
         count = result.get_data()[0]["count"]
         assert count == 1
 
-        # Test rollback
         driver.begin()
         driver.execute("INSERT INTO users (name) VALUES (?)", "rollback_test")
         driver.rollback()
 
-        # Verify rollback worked
         result = driver.execute("SELECT COUNT(*) as count FROM users WHERE name = ?", "rollback_test")
         count = result.get_data()[0]["count"]
         assert count == 0
@@ -258,12 +242,11 @@ def test_sqlite_driver_exception_handling() -> None:
     """Test SQLite driver exception handling."""
     connection = sqlite3.connect(":memory:")
 
-    # Create simple config without type coercion map
     from sqlspec.core.parameters import ParameterStyleConfig
 
     simple_config = StatementConfig(
         dialect="sqlite",
-        enable_caching=False,  # Disable caching to avoid hash issues in tests
+        enable_caching=False,
         parameter_config=ParameterStyleConfig(
             default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
         ),
@@ -272,17 +255,14 @@ def test_sqlite_driver_exception_handling() -> None:
     driver = SqliteDriver(connection, simple_config)
 
     try:
-        # Test SQL syntax error
         with pytest.raises(SQLSpecError):
             driver.execute("INVALID SQL SYNTAX")
 
-        # Test constraint violation (after creating table with constraints)
         connection.execute("CREATE TABLE test_table (id INTEGER PRIMARY KEY, unique_col TEXT UNIQUE)")
         connection.commit()
 
         driver.execute("INSERT INTO test_table (unique_col) VALUES (?)", "unique_value")
 
-        # Try to insert duplicate
         with pytest.raises(SQLSpecError):
             driver.execute("INSERT INTO test_table (unique_col) VALUES (?)", "unique_value")
 
@@ -294,12 +274,11 @@ def test_sqlite_driver_cursor_management() -> None:
     """Test SQLite driver cursor management."""
     connection = sqlite3.connect(":memory:")
 
-    # Create simple config without type coercion map
     from sqlspec.core.parameters import ParameterStyleConfig
 
     simple_config = StatementConfig(
         dialect="sqlite",
-        enable_caching=False,  # Disable caching to avoid hash issues in tests
+        enable_caching=False,
         parameter_config=ParameterStyleConfig(
             default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
         ),
@@ -308,32 +287,20 @@ def test_sqlite_driver_cursor_management() -> None:
     driver = SqliteDriver(connection, simple_config)
 
     try:
-        # Test cursor context manager
         with driver.with_cursor(connection) as cursor:
             assert cursor is not None
             assert hasattr(cursor, "execute")
             assert hasattr(cursor, "fetchall")
 
-        # Test cursor is properly cleaned up
-        # Note: In real implementation, cursor should be closed after context exit
-
     finally:
         connection.close()
 
 
-@pytest.mark.parametrize(
-    "script_statements",
-    [
-        1,  # Single statement
-        2,  # Two statements
-        5,  # Multiple statements
-    ],
-)
+@pytest.mark.parametrize("script_statements", [1, 2, 5])
 def test_adapter_script_execution_counts(statement_config_for_adapter: StatementConfig, script_statements: int) -> None:
     """Test script execution with different statement counts."""
     config = statement_config_for_adapter
 
-    # Build script with specified number of statements
     statements = [f"INSERT INTO users (name) VALUES ('user_{i}')" for i in range(script_statements)]
 
     script = "; ".join(statements) + ";"
@@ -342,13 +309,11 @@ def test_adapter_script_execution_counts(statement_config_for_adapter: Statement
 
     assert statement_as_script.is_script is True
 
-    # Test script splitting (basic functionality)
     from sqlspec.driver._common import CommonDriverAttributesMixin
 
-    mixin = CommonDriverAttributesMixin(None, config)  # type: ignore[arg-type]
+    mixin = CommonDriverAttributesMixin(None, config)
     split_statements = mixin.split_script_statements(script, config, strip_trailing_semicolon=True)
 
-    # Should have expected number of non-empty statements
     non_empty_statements = [stmt for stmt in split_statements if stmt.strip()]
     assert len(non_empty_statements) == script_statements
 
@@ -360,12 +325,11 @@ def test_adapter_parameter_handling(
     """Test parameter handling with different parameter counts."""
     config = statement_config_for_adapter
 
-    # Build query with specified number of parameters
     if adapter_config["parameter_style"] == ParameterStyle.QMARK:
         placeholders = ", ".join(["?"] * parameter_count)
     elif adapter_config["parameter_style"] == ParameterStyle.NUMERIC:
         placeholders = ", ".join([f"${i + 1}" for i in range(parameter_count)])
-    else:  # POSITIONAL_PYFORMAT
+    else:
         placeholders = ", ".join(["%s"] * parameter_count)
 
     if parameter_count == 0:
@@ -377,15 +341,12 @@ def test_adapter_parameter_handling(
 
     statement = SQL(query, *parameters, statement_config=config)
 
-    # Test compilation
     compiled_sql, compiled_params = statement.compile()
     assert isinstance(compiled_sql, str)
 
     if parameter_count == 0:
-        # Should have no parameters
         assert compiled_params is None or len(compiled_params) == 0
     else:
-        # Should have expected number of parameters
         assert compiled_params is not None
         assert len(compiled_params) == parameter_count
 
@@ -396,12 +357,10 @@ def test_execution_result_creation() -> None:
     from sqlspec.driver._common import CommonDriverAttributesMixin
 
     config = StatementConfig(
-        enable_caching=False,  # Disable caching to avoid hash issues
-        parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK),
+        enable_caching=False, parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
     )
-    mixin = CommonDriverAttributesMixin(None, config)  # type: ignore[arg-type]
+    mixin = CommonDriverAttributesMixin(None, config)
 
-    # Test SELECT result
     select_result = mixin.create_execution_result(
         cursor_result="mock_cursor",
         selected_data=[{"id": 1}, {"id": 2}],
@@ -416,13 +375,11 @@ def test_execution_result_creation() -> None:
     assert select_result.column_names == ["id"]
     assert select_result.data_row_count == 2
 
-    # Test INSERT result
     insert_result = mixin.create_execution_result(cursor_result="mock_cursor", rowcount_override=1)
 
     assert insert_result.is_select_result is False
     assert insert_result.rowcount_override == 1
 
-    # Test script result
     script_result = mixin.create_execution_result(
         cursor_result="mock_cursor", statement_count=3, successful_statements=3, is_script_result=True
     )
@@ -431,7 +388,6 @@ def test_execution_result_creation() -> None:
     assert script_result.statement_count == 3
     assert script_result.successful_statements == 3
 
-    # Test execute_many result
     many_result = mixin.create_execution_result(cursor_result="mock_cursor", rowcount_override=5, is_many_result=True)
 
     assert many_result.is_many_result is True
@@ -444,12 +400,10 @@ def test_sql_result_building() -> None:
     from sqlspec.driver._common import CommonDriverAttributesMixin
 
     config = StatementConfig(
-        enable_caching=False,  # Disable caching to avoid hash issues
-        parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK),
+        enable_caching=False, parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
     )
-    mixin = CommonDriverAttributesMixin(None, config)  # type: ignore[arg-type]
+    mixin = CommonDriverAttributesMixin(None, config)
 
-    # Test SELECT result building
     statement = SQL("SELECT * FROM users", statement_config=config)
     execution_result = mixin.create_execution_result(
         cursor_result="mock",
@@ -465,7 +419,6 @@ def test_sql_result_building() -> None:
     assert sql_result.get_data() == [{"id": 1, "name": "test"}]
     assert sql_result.column_names == ["id", "name"]
 
-    # Test script result building
     script_statement = SQL("INSERT INTO users VALUES (1, 'test');", statement_config=config, is_script=True)
     script_execution_result = mixin.create_execution_result(
         cursor_result="mock", statement_count=1, successful_statements=1, is_script_result=True

@@ -201,7 +201,6 @@ async def test_psqlpy_rust_performance_indicators(psqlpy_session: PsqlpyDriver) 
     """Test indicators of Rust-based performance benefits."""
     import time
 
-    # Test that should benefit from Rust performance
     start_time = time.time()
 
     for i in range(50):
@@ -222,4 +221,4 @@ async def test_psqlpy_rust_performance_indicators(psqlpy_session: PsqlpyDriver) 
     )
 
     bulk_elapsed = time.time() - bulk_start
-    assert bulk_elapsed < 5.0  # Bulk operations should be fast
+    assert bulk_elapsed < 5.0

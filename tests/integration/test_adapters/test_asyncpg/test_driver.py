@@ -27,7 +27,6 @@ async def asyncpg_session(postgres_service: PostgresService) -> AsyncGenerator[A
 
     try:
         async with config.provide_session() as session:
-            # Create test table
             await session.execute_script("""
                 CREATE TABLE IF NOT EXISTS test_table (
                     id SERIAL PRIMARY KEY,
@@ -37,24 +36,22 @@ async def asyncpg_session(postgres_service: PostgresService) -> AsyncGenerator[A
                 )
             """)
             yield session
-            # Cleanup
+
             await session.execute_script("DROP TABLE IF EXISTS test_table")
     finally:
-        # Ensure pool is closed properly to avoid threading issues during test shutdown
         await config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
     """Test basic CRUD operations."""
-    # INSERT
+
     insert_result = await asyncpg_session.execute(
         "INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_name", 42)
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
-    # SELECT
     select_result = await asyncpg_session.execute("SELECT name, value FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
@@ -62,25 +59,21 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
     assert select_result[0]["name"] == "test_name"
     assert select_result[0]["value"] == 42
 
-    # UPDATE
     update_result = await asyncpg_session.execute(
         "UPDATE test_table SET value = $1 WHERE name = $2", (100, "test_name")
     )
     assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1
 
-    # Verify UPDATE
     verify_result = await asyncpg_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result is not None
     assert verify_result[0]["value"] == 100
 
-    # DELETE
     delete_result = await asyncpg_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
-    # Verify DELETE
     empty_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(empty_result, SQLResult)
     assert empty_result is not None
@@ -97,18 +90,15 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_styles(asyncpg_session: AsyncpgDriver, parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
-    # Insert test data
+
     await asyncpg_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("test_value",))
 
-    # Test parameter style
     if style == "tuple_binds":
         sql = "SELECT name FROM test_table WHERE name = $1"
         result = await asyncpg_session.execute(sql, parameters)
-    else:  # dict_binds
-        # AsyncPG only supports numeric placeholders, so we need to use $1 even with dict
-        # The driver should handle the conversion from dict to positional
+    else:
         sql = "SELECT name FROM test_table WHERE name = $1"
-        # Convert dict to tuple for AsyncPG
+
         result = await asyncpg_session.execute(sql, (parameters["name"],))
     assert isinstance(result, SQLResult)
     assert result is not None
@@ -125,13 +115,11 @@ async def test_asyncpg_execute_many(asyncpg_session: AsyncpgDriver) -> None:
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(parameters_list)
 
-    # Verify all records were inserted
     select_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
     assert select_result[0]["count"] == len(parameters_list)
 
-    # Verify data integrity
     ordered_result = await asyncpg_session.execute("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(ordered_result, SQLResult)
     assert ordered_result is not None
@@ -146,12 +134,10 @@ async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
     import random
     import time
 
-    # Use unique test data to avoid isolation issues
-    test_suffix = f"{str(int(time.time() * 1000))[-6:]}_{random.randint(1000, 9999)}"  # Timestamp + random
+    test_suffix = f"{str(int(time.time() * 1000))[-6:]}_{random.randint(1000, 9999)}"
     test_name1 = f"script_test1_{test_suffix}"
     test_name2 = f"script_test2_{test_suffix}"
 
-    # Clean up any existing test data with this suffix
     await asyncpg_session.execute(f"DELETE FROM test_table WHERE name LIKE 'script_test%_{test_suffix}'")
 
     script = f"""
@@ -161,11 +147,10 @@ async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
     """
 
     result = await asyncpg_session.execute_script(script)
-    # Script execution now returns SQLResult object
+
     assert isinstance(result, SQLResult)
     assert result.operation_type == "SCRIPT"
 
-    # Verify script effects
     select_result = await asyncpg_session.execute(
         f"SELECT name, value FROM test_table WHERE name LIKE 'script_test%_{test_suffix}' ORDER BY name"
     )
@@ -177,34 +162,28 @@ async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
     assert select_result[1]["name"] == test_name2
     assert select_result[1]["value"] == 888
 
-    # Clean up test data
     await asyncpg_session.execute(f"DELETE FROM test_table WHERE name LIKE 'script_test%_{test_suffix}'")
 
 
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_result_methods(asyncpg_session: AsyncpgDriver) -> None:
     """Test SQLResult methods."""
-    # Insert test data
+
     await asyncpg_session.execute_many(
         "INSERT INTO test_table (name, value) VALUES ($1, $2)", [("result1", 10), ("result2", 20), ("result3", 30)]
     )
 
-    # Test SQLResult methods
     result = await asyncpg_session.execute("SELECT * FROM test_table ORDER BY name")
     assert isinstance(result, SQLResult)
 
-    # Test get_first()
     first_row = result.get_first()
     assert first_row is not None
     assert first_row["name"] == "result1"
 
-    # Test get_count()
     assert result.get_count() == 3
 
-    # Test is_empty()
     assert not result.is_empty()
 
-    # Test empty result
     empty_result = await asyncpg_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent",))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
@@ -214,15 +193,13 @@ async def test_asyncpg_result_methods(asyncpg_session: AsyncpgDriver) -> None:
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_error_handling(asyncpg_session: AsyncpgDriver) -> None:
     """Test error handling and exception propagation."""
-    # Test invalid SQL
-    with pytest.raises(Exception):  # asyncpg.PostgresSyntaxError
+
+    with pytest.raises(Exception):
         await asyncpg_session.execute("INVALID SQL STATEMENT")
 
-    # Test constraint violation
     await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("unique_test", 1))
 
-    # Try to insert with invalid column reference
-    with pytest.raises(Exception):  # asyncpg.UndefinedColumnError
+    with pytest.raises(Exception):
         await asyncpg_session.execute("SELECT nonexistent_column FROM test_table")
 
 
@@ -232,7 +209,6 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
     import datetime
     import uuid
 
-    # Create table with various PostgreSQL data types
     await asyncpg_session.execute_script("""
         CREATE TABLE data_types_test (
             id SERIAL PRIMARY KEY,
@@ -248,7 +224,6 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
         )
     """)
 
-    # Insert data with various types (using proper Python types for AsyncPG)
     await asyncpg_session.execute(
         """
         INSERT INTO data_types_test (
@@ -265,13 +240,12 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
             True,
             '{"key": "value"}',
             [1, 2, 3],
-            datetime.date(2024, 1, 15),  # Python date object
-            datetime.datetime(2024, 1, 15, 10, 30, 0),  # Python datetime object
-            uuid.UUID("550e8400-e29b-41d4-a716-446655440000"),  # Python UUID object
+            datetime.date(2024, 1, 15),
+            datetime.datetime(2024, 1, 15, 10, 30, 0),
+            uuid.UUID("550e8400-e29b-41d4-a716-446655440000"),
         ),
     )
 
-    # Retrieve and verify data
     select_result = await asyncpg_session.execute(
         "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM data_types_test"
     )
@@ -285,17 +259,15 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
     assert row["boolean_col"] is True
     assert row["array_col"] == [1, 2, 3]
 
-    # Clean up
     await asyncpg_session.execute_script("DROP TABLE data_types_test")
 
 
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_transactions(asyncpg_session: AsyncpgDriver) -> None:
     """Test transaction behavior."""
-    # PostgreSQL supports explicit transactions
+
     await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("transaction_test", 100))
 
-    # Verify data is committed
     result = await asyncpg_session.execute(
         "SELECT COUNT(*) as count FROM test_table WHERE name = $1", ("transaction_test",)
     )
@@ -307,12 +279,11 @@ async def test_asyncpg_transactions(asyncpg_session: AsyncpgDriver) -> None:
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
     """Test complex SQL queries."""
-    # Insert test data
+
     test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
     await asyncpg_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", test_data)
 
-    # Test JOIN (self-join)
     join_result = await asyncpg_session.execute("""
         SELECT t1.name as name1, t2.name as name2, t1.value as value1, t2.value as value2
         FROM test_table t1
@@ -325,7 +296,6 @@ async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
     assert join_result is not None
     assert len(join_result) == 3
 
-    # Test aggregation
     agg_result = await asyncpg_session.execute("""
         SELECT
             COUNT(*) as total_count,
@@ -341,7 +311,6 @@ async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
     assert agg_result[0]["min_value"] == 25
     assert agg_result[0]["max_value"] == 35
 
-    # Test subquery
     subquery_result = await asyncpg_session.execute("""
         SELECT name, value
         FROM test_table
@@ -350,7 +319,7 @@ async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
     """)
     assert isinstance(subquery_result, SQLResult)
     assert subquery_result is not None
-    assert len(subquery_result) == 2  # Bob and Charlie
+    assert len(subquery_result) == 2
     assert subquery_result[0]["name"] == "Bob"
     assert subquery_result[1]["name"] == "Charlie"
 
@@ -358,7 +327,7 @@ async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_schema_operations(asyncpg_session: AsyncpgDriver) -> None:
     """Test schema operations (DDL)."""
-    # Create a new table
+
     await asyncpg_session.execute_script("""
         CREATE TABLE schema_test (
             id SERIAL PRIMARY KEY,
@@ -367,14 +336,12 @@ async def test_asyncpg_schema_operations(asyncpg_session: AsyncpgDriver) -> None
         )
     """)
 
-    # Insert data into new table
     insert_result = await asyncpg_session.execute(
         "INSERT INTO schema_test (description) VALUES ($1)", ("test description",)
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
-    # Verify table structure
     info_result = await asyncpg_session.execute("""
         SELECT column_name, data_type
         FROM information_schema.columns
@@ -383,19 +350,17 @@ async def test_asyncpg_schema_operations(asyncpg_session: AsyncpgDriver) -> None
     """)
     assert isinstance(info_result, SQLResult)
     assert info_result is not None
-    assert len(info_result) == 3  # id, description, created_at
+    assert len(info_result) == 3
 
-    # Drop table
     await asyncpg_session.execute_script("DROP TABLE schema_test")
 
 
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_column_names_and_metadata(asyncpg_session: AsyncpgDriver) -> None:
     """Test column names and result metadata."""
-    # Insert test data
+
     await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("metadata_test", 123))
 
-    # Test column names
     result = await asyncpg_session.execute(
         "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test",)
     )
@@ -404,7 +369,6 @@ async def test_asyncpg_column_names_and_metadata(asyncpg_session: AsyncpgDriver)
     assert result is not None
     assert len(result) == 1
 
-    # Test that we can access data by column name
     row = result[0]
     assert row["name"] == "metadata_test"
     assert row["value"] == 123
@@ -415,15 +379,13 @@ async def test_asyncpg_column_names_and_metadata(asyncpg_session: AsyncpgDriver)
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_performance_bulk_operations(asyncpg_session: AsyncpgDriver) -> None:
     """Test performance with bulk operations."""
-    # Generate bulk data
+
     bulk_data = [(f"bulk_user_{i}", i * 10) for i in range(100)]
 
-    # Bulk insert
     result = await asyncpg_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", bulk_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 100
 
-    # Bulk select
     select_result = await asyncpg_session.execute(
         "SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'"
     )
@@ -431,7 +393,6 @@ async def test_asyncpg_performance_bulk_operations(asyncpg_session: AsyncpgDrive
     assert select_result is not None
     assert select_result[0]["count"] == 100
 
-    # Test pagination-like query
     page_result = await asyncpg_session.execute(
         "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
     )
@@ -444,16 +405,15 @@ async def test_asyncpg_performance_bulk_operations(asyncpg_session: AsyncpgDrive
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_postgresql_specific_features(asyncpg_session: AsyncpgDriver) -> None:
     """Test PostgreSQL-specific features."""
-    # Test RETURNING clause
+
     returning_result = await asyncpg_session.execute(
         "INSERT INTO test_table (name, value) VALUES ($1, $2) RETURNING id, name", ("returning_test", 999)
     )
-    assert isinstance(returning_result, SQLResult)  # asyncpg returns SQLResult for RETURNING
+    assert isinstance(returning_result, SQLResult)
     assert returning_result is not None
     assert len(returning_result) == 1
     assert returning_result[0]["name"] == "returning_test"
 
-    # Test window functions
     await asyncpg_session.execute_many(
         "INSERT INTO test_table (name, value) VALUES ($1, $2)", [("window1", 10), ("window2", 20), ("window3", 30)]
     )
@@ -478,7 +438,7 @@ async def test_asyncpg_postgresql_specific_features(asyncpg_session: AsyncpgDriv
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_json_operations(asyncpg_session: AsyncpgDriver) -> None:
     """Test PostgreSQL JSON operations."""
-    # Create table with JSONB column
+
     await asyncpg_session.execute_script("""
         CREATE TABLE json_test (
             id SERIAL PRIMARY KEY,
@@ -486,18 +446,15 @@ async def test_asyncpg_json_operations(asyncpg_session: AsyncpgDriver) -> None:
         )
     """)
 
-    # Insert JSON data
     json_data = '{"name": "test", "age": 30, "tags": ["postgres", "json"]}'
     await asyncpg_session.execute("INSERT INTO json_test (data) VALUES ($1)", (json_data,))
 
-    # Test JSON queries
     json_result = await asyncpg_session.execute("SELECT data->>'name' as name, data->>'age' as age FROM json_test")
     assert isinstance(json_result, SQLResult)
     assert json_result is not None
     assert json_result[0]["name"] == "test"
     assert json_result[0]["age"] == "30"
 
-    # Clean up
     await asyncpg_session.execute_script("DROP TABLE json_test")
 
 
@@ -516,14 +473,12 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
     import random
     import time
 
-    # Use unique table names to avoid conflicts with parallel tests
-    test_suffix = f"{str(int(time.time() * 1000))[-6:]}_{random.randint(1000, 9999)}"  # Timestamp + random
+    test_suffix = f"{str(int(time.time() * 1000))[-6:]}_{random.randint(1000, 9999)}"
     alert_def_table = f"alert_definition_{test_suffix}"
     asset_maint_table = f"asset_maintenance_{test_suffix}"
     users_table = f"users_{test_suffix}"
     alert_users_table = f"alert_users_{test_suffix}"
 
-    # Create required tables with unique names
     await asyncpg_session.execute_script(f"""
         CREATE TABLE {alert_def_table} (
             id SERIAL PRIMARY KEY,
@@ -556,40 +511,33 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
         );
     """)
 
-    # Insert test data
     await asyncpg_session.execute(f"INSERT INTO {alert_def_table} (name) VALUES ($1)", ("maintenances_today",))
 
-    # Insert users
     await asyncpg_session.execute_many(
         f"INSERT INTO {users_table} (name, email) VALUES ($1, $2)",
         [("John Doe", "john@example.com"), ("Jane Smith", "jane@example.com"), ("Bob Wilson", "bob@example.com")],
     )
 
-    # Get user IDs
     users_result = await asyncpg_session.execute(f"SELECT id, name FROM {users_table} ORDER BY id")
     user_ids = {row["name"]: row["id"] for row in users_result}
 
-    # Insert asset maintenance records
     from datetime import date
 
     await asyncpg_session.execute_many(
         f"INSERT INTO {asset_maint_table} (responsible_id, planned_date_start, cancelled) VALUES ($1, $2, $3)",
         [
-            (user_ids["John Doe"], date(2024, 1, 15), False),  # Within date range
-            (user_ids["Jane Smith"], date(2024, 1, 16), False),  # Within date range
-            (user_ids["Bob Wilson"], date(2024, 1, 17), False),  # Within date range
-            (user_ids["John Doe"], date(2024, 1, 18), True),  # Cancelled - should be excluded
-            (user_ids["Jane Smith"], date(2024, 1, 10), False),  # Outside date range
-            (user_ids["Bob Wilson"], date(2024, 1, 20), False),  # Outside date range
+            (user_ids["John Doe"], date(2024, 1, 15), False),
+            (user_ids["Jane Smith"], date(2024, 1, 16), False),
+            (user_ids["Bob Wilson"], date(2024, 1, 17), False),
+            (user_ids["John Doe"], date(2024, 1, 18), True),
+            (user_ids["Jane Smith"], date(2024, 1, 10), False),
+            (user_ids["Bob Wilson"], date(2024, 1, 20), False),
         ],
     )
 
-    # Verify the maintenance records were inserted
     maintenance_result = await asyncpg_session.execute(f"SELECT COUNT(*) as count FROM {asset_maint_table}")
     assert maintenance_result.data[0]["count"] == 6
 
-    # Execute the query with AsyncPG numeric placeholders
-    # AsyncPG doesn't support named parameters, so we use $1, $2
     result = await asyncpg_session.execute(
         f"""
         -- name: asset_maintenance_alert
@@ -610,7 +558,7 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    # Now try with dates as strings
+
     date_test = await asyncpg_session.execute(
         f"SELECT * FROM {asset_maint_table} WHERE planned_date_start::text BETWEEN '2024-01-15' AND '2024-01-17' AND cancelled = False"
     )
@@ -620,36 +568,27 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
         (date(2024, 1, 15), date(2024, 1, 17)),
     )
 
-    # If we're getting 0 records, skip the assertion and adjust the test
     if len(check_result.data) == 0 and len(date_test.data) == 3:
-        # There's likely an issue with parameter handling for dates
-        # For now, let's verify that the insert query works without expecting results
         pass
     else:
-        assert len(check_result.data) == 3  # Verify we have 3 matching records
+        assert len(check_result.data) == 3
 
-    # The INSERT...ON CONFLICT DO NOTHING might not return any rows if they already exist
-    # or if the insert doesn't happen. Let's check if any rows were actually inserted
     alert_users_count = await asyncpg_session.execute(f"SELECT COUNT(*) as count FROM {alert_users_table}")
     inserted_count = alert_users_count.data[0]["count"]
 
-    # If no rows were inserted, the WITH clause returns empty and so does the final SELECT
     if inserted_count == 0:
-        # No rows were inserted (maybe constraint violation), so result is empty
         assert len(result.data) == 0
     else:
-        assert len(result.data) == inserted_count  # Should return inserted records
+        assert len(result.data) == inserted_count
 
-    # Verify the data structure
     for row in result.data:
         assert "user_id" in row
         assert "asset_maintenance_id" in row
         assert "alert_definition_id" in row
-        assert "user" in row  # The to_jsonb result
+        assert "user" in row
 
-        # Verify the user JSON object
         user_json = row["user"]
-        assert isinstance(user_json, (dict, str))  # Could be dict or JSON string depending on driver
+        assert isinstance(user_json, (dict, str))
         if isinstance(user_json, str):
             import json
 
@@ -660,7 +599,6 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
         assert user_json["name"] in ["John Doe", "Jane Smith", "Bob Wilson"]
         assert "@example.com" in user_json["email"]
 
-    # Test idempotency - running the same query again should return no rows
     result2 = await asyncpg_session.execute(
         f"""
         with inserted_data as (
@@ -678,14 +616,12 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
     )
 
     assert result2.data is not None
-    assert len(result2.data) == 0  # No new rows should be inserted/returned
+    assert len(result2.data) == 0
 
-    # Verify the records are actually in the database
     count_result = await asyncpg_session.execute(f"SELECT COUNT(*) as count FROM {alert_users_table}")
     assert count_result.data is not None
     assert count_result.data[0]["count"] == 3
 
-    # Clean up tables with unique names
     await asyncpg_session.execute_script(f"""
         DROP TABLE IF EXISTS {alert_users_table} CASCADE;
         DROP TABLE IF EXISTS {asset_maint_table} CASCADE;
@@ -697,15 +633,7 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
 @pytest.mark.integration
 async def test_asyncpg_pgvector_integration(asyncpg_session: AsyncpgDriver) -> None:
     """Test that asyncpg driver initializes pgvector support automatically via pool init."""
-    # pgvector should be registered automatically when the pool/connection is created
-    # This test verifies that the connection was created without errors, which means
-    # the pgvector initialization (if pgvector is available) completed successfully
 
-    # Test that we can execute a basic query without errors
     result = await asyncpg_session.execute("SELECT 1 as test_value")
     assert result.data is not None
     assert result.data[0]["test_value"] == 1
-
-    # If pgvector was available and registered, the connection should work normally
-    # If pgvector was not available, the connection should still work normally
-    # This test passes if no exceptions are raised during connection setup

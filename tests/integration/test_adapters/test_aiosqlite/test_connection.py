@@ -249,12 +249,11 @@ async def test_config_parameter_preservation() -> None:
 
         async with config.provide_session() as driver:
             await driver.execute("CREATE TABLE IF NOT EXISTS parameter_test (id INTEGER)")
-            await driver.execute("INSERT INTO parameter_test VALUES (MAX_THRESHOLD_42)")
+            await driver.execute("INSERT INTO parameter_test VALUES (42)")
             result = await driver.execute("SELECT id FROM parameter_test")
             assert isinstance(result, SQLResult)
             assert result.data[0]["id"] == 42
 
-            # Clean up
             await driver.execute("DROP TABLE parameter_test")
             await driver.commit()
 

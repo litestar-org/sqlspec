@@ -87,11 +87,9 @@ def test_parameter_collision_handling() -> None:
     query = sql.select("*").from_("products").where_gt("price", 10).where_lt("price", 100)
     stmt = query.build()
 
-    # Should have both price parameters with collision resolution
     price_params = [key for key in stmt.parameters.keys() if "price" in key]
     assert len(price_params) == 2
 
-    # One should be "price", the other "price_1"
     assert "price" in stmt.parameters
     assert "price_1" in stmt.parameters
     assert 10 in stmt.parameters.values()
@@ -109,7 +107,6 @@ def test_table_prefixed_columns_extract_column_name() -> None:
     )
     stmt = query.build()
 
-    # Should extract column names without table prefix
     assert "email" in stmt.parameters
     assert "status" in stmt.parameters
     assert stmt.parameters["email"] == "test@example.com"
@@ -144,13 +141,10 @@ def test_update_set_with_dict_uses_column_names() -> None:
     query = sql.update("accounts").set({"balance": 1500.75, "last_transaction": "2023-01-15", "is_verified": True})
     stmt = query.build()
 
-    # Should use dictionary keys as parameter names
     expected_keys = ["balance", "last_transaction", "is_verified"]
     for key in expected_keys:
-        # Parameter might have collision suffix, so check if base name exists
         assert any(key in param_key for param_key in stmt.parameters.keys())
 
-    # Should preserve values
     assert 1500.75 in stmt.parameters.values()
     assert "2023-01-15" in stmt.parameters.values()
     assert True in stmt.parameters.values()
@@ -163,7 +157,6 @@ def test_insert_with_columns_uses_column_names() -> None:
     )
     stmt = query.build()
 
-    # Should use column names for parameters
     assert "first_name" in stmt.parameters
     assert "last_name" in stmt.parameters
     assert "department" in stmt.parameters
@@ -179,10 +172,8 @@ def test_insert_values_from_dict_preserves_keys() -> None:
     )
     stmt = query.build()
 
-    # Should preserve dictionary keys in parameter names
     expected_keys = ["customer_id", "product_name", "quantity", "order_date"]
     for key in expected_keys:
-        # Check if key exists directly or as part of parameter name
         assert key in stmt.parameters or any(key in param_key for param_key in stmt.parameters.keys())
 
 
@@ -201,23 +192,19 @@ def test_complex_query_preserves_all_column_names() -> None:
 
     params = stmt.parameters
 
-    # Should preserve all column names
     assert "status" in params
     assert params["status"] == "active"
 
-    # Category parameters with numbering
     category_params = [key for key in params.keys() if "category" in key]
     assert len(category_params) == 2
     assert "tech" in params.values()
     assert "science" in params.values()
 
-    # Views parameters with descriptive suffixes
     views_params = [key for key in params.keys() if "views" in key]
     assert len(views_params) == 2
     assert 100 in params.values()
     assert 10000 in params.values()
 
-    # Title parameter
     assert "title" in params
     assert params["title"] == "%python%"
 
@@ -229,7 +216,6 @@ def test_subquery_parameters_are_preserved() -> None:
     query = sql.select("name", "email").from_("users").where_in("id", subquery)
     stmt = query.build()
 
-    # Subquery parameter should be preserved
     assert "plan_type" in stmt.parameters
     assert stmt.parameters["plan_type"] == "premium"
 
@@ -238,27 +224,17 @@ def test_mixed_parameter_types_preserve_names() -> None:
     """Test that mixed parameter types preserve proper column names."""
     query = (
         sql.update("user_profiles")
-        .set(
-            {
-                "username": "john_doe",  # string
-                "age": 28,  # int
-                "salary": 75000.50,  # float
-                "is_active": True,  # bool
-                "last_seen": None,  # None
-            }
-        )
+        .set({"username": "john_doe", "age": 28, "salary": 75000.50, "is_active": True, "last_seen": None})
         .where_eq("user_id", 12345)
     )
     stmt = query.build()
 
     params = stmt.parameters
 
-    # Should preserve all column names regardless of value type
     expected_columns = ["username", "age", "salary", "is_active", "last_seen", "user_id"]
     for col in expected_columns:
         assert any(col in param_key for param_key in params.keys())
 
-    # Should preserve value types
     assert "john_doe" in params.values()
     assert 28 in params.values()
     assert 75000.50 in params.values()
@@ -280,7 +256,6 @@ def test_no_generic_param_names_in_where_clauses() -> None:
     for query in test_cases:
         stmt = query.build()
 
-        # Should not contain any generic parameter names
         generic_params = [key for key in stmt.parameters.keys() if key.startswith("param_")]
         assert len(generic_params) == 0, f"Found generic parameters {generic_params} in: {stmt.sql}"
 
@@ -296,7 +271,6 @@ def test_no_generic_param_names_in_update_operations() -> None:
     for query in test_cases:
         stmt = query.build()
 
-        # Should not contain any generic parameter names
         generic_params = [key for key in stmt.parameters.keys() if key.startswith("param_")]
         assert len(generic_params) == 0, f"Found generic parameters {generic_params} in: {stmt.sql}"
 
@@ -311,7 +285,6 @@ def test_no_generic_param_names_in_insert_operations() -> None:
     for query in test_cases:
         stmt = query.build()
 
-        # Should not contain any generic parameter names
         generic_params = [key for key in stmt.parameters.keys() if key.startswith("param_")]
         assert len(generic_params) == 0, f"Found generic parameters {generic_params} in: {stmt.sql}"
 
@@ -324,39 +297,25 @@ def test_parameter_names_are_sql_safe() -> None:
     stmt = query.build()
 
     for param_name in stmt.parameters.keys():
-        # Should not contain SQL injection characters
         assert "'" not in param_name
         assert '"' not in param_name
         assert ";" not in param_name
         assert "--" not in param_name
 
-        # Should be valid identifier-like
         assert param_name.replace("_", "").replace(string.digits, "").isalpha() or "_" in param_name
 
 
 def test_empty_and_null_values_preserve_column_names() -> None:
     """Test that empty and null values still preserve column names."""
-    query = (
-        sql.update("users")
-        .set(
-            {
-                "middle_name": "",  # empty string
-                "phone": None,  # null
-                "notes": "   ",  # whitespace
-            }
-        )
-        .where_eq("id", 1)
-    )
+    query = sql.update("users").set({"middle_name": "", "phone": None, "notes": "   "}).where_eq("id", 1)
     stmt = query.build()
 
     params = stmt.parameters
 
-    # Should preserve column names even for empty/null values
     expected_columns = ["middle_name", "phone", "notes", "id"]
     for col in expected_columns:
         assert any(col in param_key for param_key in params.keys())
 
-    # Should preserve actual values
     assert "" in params.values()
     assert None in params.values()
     assert "   " in params.values()
@@ -368,12 +327,10 @@ def test_original_user_example_works_correctly() -> None:
     query = sql.select("id", "name", "slug").from_("test_table").where_eq("slug", "test-item")
     stmt = query.build()
 
-    # Should use :slug parameter, not :param_1
     assert "slug" in stmt.parameters
     assert stmt.parameters["slug"] == "test-item"
     assert ":slug" in stmt.sql
 
-    # Should not contain any generic parameters
     assert not any(key.startswith("param_") for key in stmt.parameters.keys())
 
 
@@ -387,7 +344,6 @@ def test_parameter_naming_with_special_characters_in_values() -> None:
     )
     stmt = query.build()
 
-    # Should preserve column names despite special characters in values
     assert "message" in stmt.parameters
     assert "details" in stmt.parameters
     assert stmt.parameters["message"] == "Error: Connection failed!"
@@ -399,7 +355,6 @@ def test_where_string_condition_with_dollar_sign_parameters() -> None:
     query = sql.select("*").from_("products").where("category = $1", "Electronics")
     stmt = query.build()
 
-    # Should handle $1 parameter style correctly
     assert len(stmt.parameters) == 1
     assert "Electronics" in stmt.parameters.values()
     assert "WHERE" in stmt.sql
@@ -408,10 +363,9 @@ def test_where_string_condition_with_dollar_sign_parameters() -> None:
 
 def test_where_string_condition_parameter_parsing() -> None:
     """Test that WHERE string conditions parse parameters correctly through _parsing_utils."""
-    # Test that the parsing utilities can handle different parameter styles
+
     from sqlspec.builder._parsing_utils import parse_condition_expression
 
-    # These should parse without errors due to our parameter conversion fix
     expr1 = parse_condition_expression("category = $1")
     assert expr1 is not None
 
@@ -427,7 +381,6 @@ def test_where_string_condition_with_colon_numeric_parameters() -> None:
     query = sql.select("*").from_("orders").where("status = :1", "pending")
     stmt = query.build()
 
-    # Should handle :1 parameter style correctly
     assert len(stmt.parameters) == 1
     assert "pending" in stmt.parameters.values()
     assert "WHERE" in stmt.sql
@@ -439,7 +392,6 @@ def test_where_string_condition_with_named_parameters() -> None:
     query = sql.select("*").from_("events").where("type = :event_type", event_type="click")
     stmt = query.build()
 
-    # Should handle named parameter style correctly
     assert len(stmt.parameters) == 1
     assert "click" in stmt.parameters.values()
     assert "WHERE" in stmt.sql
@@ -451,7 +403,6 @@ def test_where_string_condition_mixed_parameter_styles() -> None:
     query = sql.select("*").from_("mixed_table").where("col1 = $1 AND col2 = :named", "value1", named="value2")
     stmt = query.build()
 
-    # Should handle mixed parameter styles correctly
     assert len(stmt.parameters) == 2
     assert "value1" in stmt.parameters.values()
     assert "value2" in stmt.parameters.values()
@@ -463,7 +414,6 @@ def test_where_string_condition_no_parameters() -> None:
     query = sql.select("*").from_("users").where("active = TRUE")
     stmt = query.build()
 
-    # Should work without parameters
     assert len(stmt.parameters) == 0
     assert "WHERE" in stmt.sql
     assert "active" in stmt.sql and "TRUE" in stmt.sql.upper()
@@ -471,33 +421,28 @@ def test_where_string_condition_no_parameters() -> None:
 
 def test_querybuilder_parameter_regression_test() -> None:
     """Regression test for the specific QueryBuilder parameter issue that was fixed."""
-    # This test reproduces the exact scenario that was failing before the fix
+
     query = sql.select("id", "name", "price").from_("products").where("category = $1", "Electronics")
     stmt = query.build()
 
-    # Should not raise "Incorrect number of bindings supplied" error
     assert "WHERE" in stmt.sql
     assert "category" in stmt.sql
     assert len(stmt.parameters) == 1
     assert "Electronics" in stmt.parameters.values()
 
-    # Should generate valid SQL that can be executed
-    assert stmt.sql.count("$") == 0  # $1 should be converted to :param_0
+    assert stmt.sql.count("$") == 0
 
 
 def test_parameter_style_conversion_in_parsing_utils() -> None:
     """Test that _parsing_utils correctly converts parameter styles."""
-    # Test the specific functionality that was added to parse_condition_expression
+
     from sqlspec.builder._parsing_utils import parse_condition_expression
 
-    # Test $1 style parameter conversion
     condition_expr = parse_condition_expression("category = $1")
     assert condition_expr is not None
 
-    # Test %s style parameter conversion
     condition_expr2 = parse_condition_expression("name = %s")
     assert condition_expr2 is not None
 
-    # Test :1 style parameter conversion
     condition_expr3 = parse_condition_expression("id = :1")
     assert condition_expr3 is not None

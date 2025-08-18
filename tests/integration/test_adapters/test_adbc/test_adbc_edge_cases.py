@@ -364,7 +364,6 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
         )
     """)
 
-    # Insert different types into the same column
     flexible_data = [(1, "text_value"), (2, 42), (3, math.pi), (4, b"binary_data"), (5, None)]
 
     for row_id, value in flexible_data:
@@ -389,7 +388,6 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
     assert dynamic_result.data is not None
     assert len(dynamic_result.data) == 5
 
-    # Verify type detection
     types_found = [row["column_type"] for row in dynamic_result.data if row["column_type"]]
     assert "text" in types_found or "TEXT" in types_found
     assert "integer" in types_found or "INTEGER" in types_found
@@ -409,7 +407,7 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
 
     func_row = func_result.data[0]
     assert func_row["total_rows"] == 5
-    assert func_row["non_null_count"] == 4  # Excluding NULL
+    assert func_row["non_null_count"] == 4
     assert func_row["sqlite_ver"] is not None
 
 
@@ -436,7 +434,7 @@ def test_duckdb_specific_edge_cases() -> None:
         result = session.execute("""
             INSERT INTO advanced_types_test VALUES (
                 1,
-                [[1, 2], [3, 4], [MIN_THRESHOLD_5, 6]],
+                [[1, 2], [3, 4], [5, 6]],
                 {'name': 'complex_test', 'scores': [95, 87, 92], 'metadata': {'created': '2024-01-15T10:00:00', 'active': true}},
                 MAP(['key1', 'key2', 'key3'], [1.1, 2.2, 3.3])
             )

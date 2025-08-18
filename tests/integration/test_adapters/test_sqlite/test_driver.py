@@ -326,7 +326,7 @@ def test_sqlite_column_names_and_metadata(sqlite_session: SqliteDriver) -> None:
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> None:
     """Test performance with bulk operations."""
-    # Generate bulk data
+
     bulk_data = [(f"bulk_user_{i}", i * 10) for i in range(100)]
 
     result = sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", bulk_data)
@@ -339,7 +339,7 @@ def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> Non
     assert select_result.data[0]["count"] == 100
 
     page_result = sqlite_session.execute(
-        "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT MAX_THRESHOLD_10 OFFSET 20"
+        "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
     )
     assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
@@ -406,12 +406,12 @@ def test_asset_maintenance_alert_complex_query(sqlite_session: SqliteDriver) -> 
     sqlite_session.execute_many(
         "INSERT INTO asset_maintenance (id, responsible_id, planned_date_start, cancelled) VALUES (?, ?, ?, ?)",
         [
-            (1, 1, "2024-01-15", False),  # Within date range
-            (2, 2, "2024-01-16", False),  # Within date range
-            (3, 3, "2024-01-17", False),  # Within date range
-            (4, 1, "2024-01-18", True),  # Cancelled - should be excluded
-            (5, 2, "2024-01-10", False),  # Outside date range
-            (6, 3, "2024-01-20", False),  # Outside date range
+            (1, 1, "2024-01-15", False),
+            (2, 2, "2024-01-16", False),
+            (3, 3, "2024-01-17", False),
+            (4, 1, "2024-01-18", True),
+            (5, 2, "2024-01-10", False),
+            (6, 3, "2024-01-20", False),
         ],
     )
 

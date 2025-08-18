@@ -949,7 +949,7 @@ def test_parameter_ordinal_assignment(validator: ParameterValidator) -> None:
 
 def test_large_parameter_count(validator: ParameterValidator) -> None:
     """Test handling of SQL with many parameters."""
-    # Generate SQL with many parameters
+
     placeholders = ", ".join("?" for _ in range(50))
     sql = f"INSERT INTO test_table (col1, col2, ...) VALUES ({placeholders})"
 

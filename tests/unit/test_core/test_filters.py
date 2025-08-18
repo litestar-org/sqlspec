@@ -318,10 +318,9 @@ def test_find_filter_with_mixed_parameter_types() -> None:
     """Test that find_filter works with mixed filter and parameter types."""
 
     search_filter = SearchFilter("name", "john")
-    some_parameter = {"key": "value"}  # Simulating StatementParameters
+    some_parameter = {"key": "value"}
     limit_filter = LimitOffsetFilter(5, 10)
 
-    # Mixed list with different types
     filters: list[object] = [search_filter, some_parameter, limit_filter]
 
     found_search = CommonDriverAttributesMixin.find_filter(SearchFilter, filters)

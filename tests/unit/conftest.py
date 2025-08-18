@@ -795,12 +795,14 @@ def mock_mysql_connection() -> MockSyncConnection:
 def mock_bigquery_connection() -> MockSyncConnection:
     """Mock BigQuery connection with BigQuery-specific behavior."""
     conn = MockSyncConnection("bigquery_connection", "bigquery")
-    conn.connection_info.update({
-        "project_id": "test-project",
-        "dataset_id": "test_dataset",
-        "supports_arrays": "True",
-        "supports_structs": "True",
-    })
+    conn.connection_info.update(
+        {
+            "project_id": "test-project",
+            "dataset_id": "test_dataset",
+            "supports_arrays": "True",
+            "supports_structs": "True",
+        }
+    )
     return conn
 
 
@@ -849,7 +851,7 @@ def performance_timer() -> "Generator[Any, None, None]":
         end_time = time.perf_counter()
         times[operation_name] = end_time - start_time
 
-    timer.times = times
+    timer.times = times  # pyright: ignore[reportFunctionMemberAccess]
     yield timer
 
 
@@ -916,7 +918,7 @@ def compilation_metrics() -> "Generator[Any, None, None]":
         metrics["transform_times"].append(transform_time)
         metrics["total_compilation_times"].append(total_time)
 
-    record_compilation.metrics = metrics
+    record_compilation.metrics = metrics  # pyright: ignore[reportFunctionMemberAccess]
     yield record_compilation
 
 

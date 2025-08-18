@@ -408,7 +408,6 @@ async def test_aiosqlite_sql_object_integration(aiosqlite_session: AiosqliteDriv
 
     sql_obj = SQL("SELECT name, value FROM test_table WHERE value > ?")
 
-    # Insert test data
     await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("sql_test", 50))
 
     result = await aiosqlite_session.execute(sql_obj, (25,))

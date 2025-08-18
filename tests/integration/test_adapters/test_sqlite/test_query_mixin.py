@@ -186,7 +186,7 @@ def test_query_mixin_with_sql_functions(sqlite_driver: SqliteDriver) -> None:
     """Test query mixin methods with SQLite-specific functions."""
 
     result = sqlite_driver.select_value("SELECT LENGTH(name) FROM users WHERE id = 1")
-    assert result == 8  # "John Doe" has 8 characters
+    assert result == 8
 
     result = sqlite_driver.select_value("SELECT UPPER(name) FROM users WHERE id = 2")
     assert result == "JANE SMITH"

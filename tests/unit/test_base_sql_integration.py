@@ -81,7 +81,7 @@ class TestSQLSpecSQLIntegration:
         sql_spec = SQLSpec()
 
         sql_spec.add_named_sql("query_a", "SELECT 1")
-        sql_spec.add_named_sql("query_b", "SELECT EXPECTED_PARTS_COUNT")
+        sql_spec.add_named_sql("query_b", "SELECT 2")
 
         queries = sql_spec.list_sql_queries()
         assert sorted(queries) == ["query_a", "query_b"]
@@ -212,12 +212,11 @@ SELECT COUNT(*) as total FROM users;
         sql_spec = SQLSpec()
 
         sql_spec.add_named_sql("query1", "SELECT 1")
-        sql_spec.add_named_sql("query2", "SELECT EXPECTED_PARTS_COUNT")
+        sql_spec.add_named_sql("query2", "SELECT 2")
 
         assert sql_spec._sql_loader is not None
         assert len(sql_spec.list_sql_queries()) == 2
 
-        # Clear cache
         sql_spec.clear_sql_cache()
 
         assert sql_spec._sql_loader is not None
@@ -269,7 +268,7 @@ SELECT COUNT(*) as total FROM users;
 
         with pytest.raises(ValueError, match="already exists"):
             sql_spec.add_named_sql("duplicate", "SELECT 1")
-            sql_spec.add_named_sql("duplicate", "SELECT EXPECTED_PARTS_COUNT")
+            sql_spec.add_named_sql("duplicate", "SELECT 2")
 
     def test_name_normalization_consistency(self) -> None:
         """Test that name normalization works consistently."""

@@ -14,7 +14,7 @@ from sqlspec.core.result import SQLResult
 @pytest.mark.xdist_group("aiosqlite")
 async def test_shared_memory_pooling() -> None:
     """Test that shared memory databases allow pooling."""
-    # Create config with shared memory database
+
     config = AiosqliteConfig(
         pool_config={"database": "file::memory:?cache=shared", "uri": True, "pool_min_size": 2, "pool_max_size": 5}
     )
@@ -51,14 +51,12 @@ async def test_shared_memory_pooling() -> None:
 @pytest.mark.xdist_group("aiosqlite")
 async def test_regular_memory_auto_converted_pooling() -> None:
     """Test that regular memory databases are auto-converted and pooling works."""
-    # Create config with regular memory database
+
     config = AiosqliteConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
     try:
-        # Verify database was auto-converted to shared cache format for pooling
-        assert config._get_connection_config_dict()["database"] == "file::memory:?cache=shared"  # pyright: ignore[reportAttributeAccessIssue]
+        assert config._get_connection_config_dict()["database"] == "file::memory:?cache=shared"
 
-        # Test that multiple connections can access the same data (like shared memory test)
         async with config.provide_session() as session1:
             await session1.execute("DROP TABLE IF EXISTS converted_test")
             await session1.commit()
@@ -187,6 +185,5 @@ async def test_pool_concurrent_access(aiosqlite_config_file: AiosqliteConfig) ->
         assert result.data is not None
         assert result.data[0]["count"] == 5
 
-        # Clean up
         await verify_session.execute("DROP TABLE IF EXISTS concurrent_test")
         await verify_session.commit()

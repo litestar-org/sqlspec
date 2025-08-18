@@ -246,10 +246,8 @@ def test_multiple_concurrent_connections() -> None:
 def test_config_with_pool_config_parameter() -> None:
     """Test that DuckDBConfig correctly accepts pool_config parameter."""
 
-    # Define connection parameters using DuckDBPoolParams type
     pool_config = {"database": "test.duckdb", "memory_limit": "256MB", "threads": 4}
 
-    # Create config with pool_config
     config = DuckDBConfig(pool_config=pool_config)
 
     try:
@@ -258,7 +256,6 @@ def test_config_with_pool_config_parameter() -> None:
         assert connection_config["memory_limit"] == "256MB"
         assert connection_config["threads"] == 4
 
-        # Test that pool-related parameters are excluded from connection config
         assert "pool_min_size" not in connection_config
         assert "pool_max_size" not in connection_config
 
@@ -333,8 +330,8 @@ def test_config_consistency_with_other_adapters() -> None:
         "database": "consistency_test.duckdb",
         "memory_limit": "512MB",
         "threads": 2,
-        "pool_min_size": 1,  # Should be filtered out
-        "pool_max_size": 4,  # Should be filtered out
+        "pool_min_size": 1,
+        "pool_max_size": 4,
     }
 
     config = DuckDBConfig(pool_config=pool_config)

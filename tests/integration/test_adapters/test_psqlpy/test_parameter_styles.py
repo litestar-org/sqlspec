@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+import decimal
 import math
 from typing import Any, Literal
 
@@ -151,7 +153,6 @@ async def test_parameters_with_sql_object(psqlpy_session: PsqlpyDriver) -> None:
     assert result.data[0]["name"] == "sql_object_test"
     assert result.data[0]["id"] is not None
 
-    # Test SQL object with multiple parameters
     multi_sql = SQL("SELECT $1::text as msg, $2::int as num, $3::bool as flag", ("test", 123, False))
     multi_result = await psqlpy_session.execute(multi_sql)
     assert isinstance(multi_result, SQLResult)
@@ -183,10 +184,8 @@ async def test_parameter_edge_cases(psqlpy_session: PsqlpyDriver) -> None:
 
 async def test_parameter_conversion_accuracy(psqlpy_session: PsqlpyDriver) -> None:
     """Test that parameter conversion maintains accuracy."""
-    import datetime
-    import decimal
 
-    decimal_val = decimal.Decimal("LIMIT_123.456789")
+    decimal_val = decimal.Decimal("123.456789")
     result1 = await psqlpy_session.execute("SELECT $1::float as decimal_val", (float(decimal_val),))
     assert isinstance(result1, SQLResult)
     assert result1.data is not None

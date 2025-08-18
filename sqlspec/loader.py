@@ -7,11 +7,9 @@ from files using aiosql-style named queries.
 import hashlib
 import re
 import time
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from difflib import get_close_matches
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
 from sqlspec.core.statement import SQL
@@ -21,10 +19,12 @@ from sqlspec.exceptions import (
     SQLFileParseError,
     StorageOperationFailedError,
 )
-from sqlspec.storage import storage_registry
-from sqlspec.storage.registry import StorageRegistry
+from sqlspec.storage.registry import storage_registry as default_storage_registry
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from sqlspec.storage.registry import StorageRegistry
 
 __all__ = ("CachedSQLFile", "NamedStatement", "SQLFile", "SQLFileLoader")
 
@@ -38,48 +38,8 @@ TRIM_SPECIAL_CHARS = re.compile(r"[^\w.-]")
 # Matches: -- dialect: dialect_name (optional dialect specification)
 DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
 
-# Supported SQL dialects (based on SQLGlot's available dialects)
-SUPPORTED_DIALECTS = {
-    # Core databases
-    "sqlite",
-    "postgresql",
-    "postgres",
-    "mysql",
-    "oracle",
-    "mssql",
-    "tsql",
-    # Cloud platforms
-    "bigquery",
-    "snowflake",
-    "redshift",
-    "athena",
-    "fabric",
-    # Analytics engines
-    "clickhouse",
-    "duckdb",
-    "databricks",
-    "spark",
-    "spark2",
-    "trino",
-    "presto",
-    # Specialized
-    "hive",
-    "drill",
-    "druid",
-    "materialize",
-    "teradata",
-    "dremio",
-    "doris",
-    "risingwave",
-    "singlestore",
-    "starrocks",
-    "tableau",
-    "exasol",
-    "dune",
-}
 
-# Dialect aliases for common variants
-DIALECT_ALIASES = {
+DIALECT_ALIASES: Final = {
     "postgresql": "postgres",
     "pg": "postgres",
     "pgplsql": "postgres",
@@ -88,7 +48,7 @@ DIALECT_ALIASES = {
     "tsql": "mssql",
 }
 
-MIN_QUERY_PARTS = 3
+MIN_QUERY_PARTS: Final = 3
 
 
 def _normalize_query_name(name: str) -> str:
@@ -129,19 +89,6 @@ def _normalize_dialect_for_sqlglot(dialect: str) -> str:
     return DIALECT_ALIASES.get(normalized, normalized)
 
 
-def _get_dialect_suggestions(invalid_dialect: str) -> "list[str]":
-    """Get dialect suggestions using fuzzy matching.
-
-    Args:
-        invalid_dialect: Invalid dialect name that was provided
-
-    Returns:
-        List of suggested dialect names (up to 3 suggestions)
-    """
-
-    return get_close_matches(invalid_dialect, SUPPORTED_DIALECTS, n=3, cutoff=0.6)
-
-
 class NamedStatement:
     """Represents a parsed SQL statement with metadata.
 
@@ -159,7 +106,6 @@ class NamedStatement:
         self.start_line = start_line
 
 
-@dataclass
 class SQLFile:
     """Represents a loaded SQL file with metadata.
 
@@ -167,23 +113,27 @@ class SQLFile:
     timestamps, and content hash.
     """
 
-    content: str
-    """The raw SQL content from the file."""
+    __slots__ = ("checksum", "content", "loaded_at", "metadata", "path")
 
-    path: str
-    """Path where the SQL file was loaded from."""
+    def __init__(
+        self,
+        content: str,
+        path: str,
+        metadata: "Optional[dict[str, Any]]" = None,
+        loaded_at: "Optional[datetime]" = None,
+    ) -> None:
+        """Initialize SQLFile.
 
-    metadata: "dict[str, Any]" = field(default_factory=dict)
-    """Optional metadata associated with the SQL file."""
-
-    checksum: str = field(init=False)
-    """MD5 checksum of the SQL content for cache invalidation."""
-
-    loaded_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    """Timestamp when the file was loaded."""
-
-    def __post_init__(self) -> None:
-        """Calculate checksum after initialization."""
+        Args:
+            content: The raw SQL content from the file.
+            path: Path where the SQL file was loaded from.
+            metadata: Optional metadata associated with the SQL file.
+            loaded_at: Timestamp when the file was loaded.
+        """
+        self.content = content
+        self.path = path
+        self.metadata = metadata or {}
+        self.loaded_at = loaded_at or datetime.now(timezone.utc)
         self.checksum = hashlib.md5(self.content.encode(), usedforsecurity=False).hexdigest()
 
 
@@ -205,7 +155,7 @@ class CachedSQLFile:
         """
         self.sql_file = sql_file
         self.parsed_statements = parsed_statements
-        self.statement_names = list(parsed_statements.keys())
+        self.statement_names = tuple(parsed_statements.keys())
 
 
 class SQLFileLoader:
@@ -215,7 +165,9 @@ class SQLFileLoader:
     (using -- name: syntax) and retrieve them by name.
     """
 
-    def __init__(self, *, encoding: str = "utf-8", storage_registry: StorageRegistry = storage_registry) -> None:
+    __slots__ = ("_files", "_queries", "_query_to_file", "encoding", "storage_registry")
+
+    def __init__(self, *, encoding: str = "utf-8", storage_registry: "Optional[StorageRegistry]" = None) -> None:
         """Initialize the SQL file loader.
 
         Args:
@@ -223,7 +175,8 @@ class SQLFileLoader:
             storage_registry: Storage registry for handling file URIs.
         """
         self.encoding = encoding
-        self.storage_registry = storage_registry
+
+        self.storage_registry = storage_registry or default_storage_registry
         self._queries: dict[str, NamedStatement] = {}
         self._files: dict[str, SQLFile] = {}
         self._query_to_file: dict[str, str] = {}
@@ -309,7 +262,6 @@ class SQLFileLoader:
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e
         except MissingDependencyError:
-            # Fall back to standard file reading when no storage backend is available
             try:
                 return path.read_text(encoding=self.encoding)  # type: ignore[union-attr]
             except FileNotFoundError as e:
@@ -350,7 +302,6 @@ class SQLFileLoader:
                               or invalid dialect names are specified
         """
         statements: dict[str, NamedStatement] = {}
-        content.splitlines()
 
         name_matches = list(QUERY_NAME_PATTERN.finditer(content))
         if not name_matches:
@@ -379,20 +330,7 @@ class SQLFileLoader:
                 if dialect_match:
                     declared_dialect = dialect_match.group("dialect").lower()
 
-                    normalized_dialect = _normalize_dialect(declared_dialect)
-
-                    if normalized_dialect not in SUPPORTED_DIALECTS:
-                        suggestions = _get_dialect_suggestions(normalized_dialect)
-                        warning_msg = f"Unknown dialect '{declared_dialect}' at line {statement_start_line + 1}"
-                        if suggestions:
-                            warning_msg += f". Did you mean: {', '.join(suggestions)}?"
-                        warning_msg += (
-                            f". Supported dialects: {', '.join(sorted(SUPPORTED_DIALECTS))}. Using dialect as-is."
-                        )
-                        logger.warning(warning_msg)
-                        dialect = declared_dialect.lower()
-                    else:
-                        dialect = normalized_dialect
+                    dialect = _normalize_dialect(declared_dialect)
                     remaining_lines = section_lines[1:]
                     statement_sql = "\n".join(remaining_lines)
 
@@ -580,7 +518,7 @@ class SQLFileLoader:
         Raises:
             ValueError: If query name already exists.
         """
-        # Normalize the name for consistency with file-loaded queries
+
         normalized_name = _normalize_query_name(name)
 
         if normalized_name in self._queries:
@@ -589,17 +527,7 @@ class SQLFileLoader:
             raise ValueError(msg)
 
         if dialect is not None:
-            normalized_dialect = _normalize_dialect(dialect)
-            if normalized_dialect not in SUPPORTED_DIALECTS:
-                suggestions = _get_dialect_suggestions(normalized_dialect)
-                warning_msg = f"Unknown dialect '{dialect}'"
-                if suggestions:
-                    warning_msg += f". Did you mean: {', '.join(suggestions)}?"
-                warning_msg += f". Supported dialects: {', '.join(sorted(SUPPORTED_DIALECTS))}. Using dialect as-is."
-                logger.warning(warning_msg)
-                dialect = dialect.lower()
-            else:
-                dialect = normalized_dialect
+            dialect = _normalize_dialect(dialect)
 
         statement = NamedStatement(name=normalized_name, sql=sql.strip(), dialect=dialect, start_line=0)
         self._queries[normalized_name] = statement

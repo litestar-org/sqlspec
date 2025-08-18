@@ -1,6 +1,6 @@
 """SQL statement and configuration management."""
 
-from typing import TYPE_CHECKING, Any, Callable, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Final, Optional, Union
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -290,7 +290,9 @@ class SQL:
     def returns_rows(self) -> bool:
         """Check if statement returns rows."""
         if self._processed_state is Empty:
-            return True
+            self.compile()
+            if self._processed_state is Empty:
+                return False
 
         op_type = self._processed_state.operation_type
         if op_type in RETURNS_ROWS_OPERATIONS:
@@ -335,7 +337,7 @@ class SQL:
                     compiled_sql=compiled_result.compiled_sql,
                     execution_parameters=compiled_result.execution_parameters,
                     parsed_expression=compiled_result.expression,
-                    operation_type=cast("OperationType", compiled_result.operation_type),
+                    operation_type=compiled_result.operation_type,
                     validation_errors=[],
                     is_many=self._is_many,
                 )
@@ -344,7 +346,7 @@ class SQL:
                 self._processed_state = ProcessedState(
                     compiled_sql=self._raw_sql,
                     execution_parameters=self._named_parameters or self._positional_parameters,
-                    operation_type=cast("OperationType", "UNKNOWN"),
+                    operation_type="UNKNOWN",
                     is_many=self._is_many,
                 )
 

@@ -267,7 +267,7 @@ def up():
             name TEXT NOT NULL
         )""",
         "INSERT INTO customers (name) VALUES ('Customer 1')",
-        "INSERT INTO customers (name) VALUES ('Customer EXPECTED_PARTS_COUNT')"
+        "INSERT INTO customers (name) VALUES ('Customer 2')"
     ]
 
 
@@ -284,7 +284,7 @@ def down():
             customers_result = driver.execute("SELECT * FROM customers ORDER BY name")
             assert len(customers_result.data) == 2
             assert customers_result.data[0]["name"] == "Customer 1"
-            assert customers_result.data[1]["name"] == "Customer EXPECTED_PARTS_COUNT"
+            assert customers_result.data[1]["name"] == "Customer 2"
 
         commands.downgrade("base")
 

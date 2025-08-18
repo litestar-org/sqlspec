@@ -22,7 +22,7 @@ try:
 
     console = Console()
 except ImportError:
-    # Fallback if rich is not available
+
     class MockConsole:
         def print(self, *args: Any, **kwargs: Any) -> None:
             pass
@@ -40,24 +40,19 @@ def test_load_entire_fixtures_directory(fixtures_path: Path) -> None:
     """Test loading the entire fixtures directory successfully."""
     loader = SQLFileLoader()
 
-    # Load the entire fixtures directory
     start_time = time.perf_counter()
     try:
         loader.load_sql(fixtures_path)
         load_time = time.perf_counter() - start_time
     except Exception as e:
-        # If there are storage backend issues, test with individual files
         pytest.skip(f"Storage backend issue, skipping directory test: {e}")
         return
 
-    # Should complete in reasonable time
     assert load_time < 5.0, f"Loading took too long: {load_time:.3f}s"
 
-    # Should have loaded queries
     queries = loader.list_queries()
     assert len(queries) > 0, "No queries were loaded"
 
-    # Should have queries from different subdirectories (namespaces)
     postgres_queries = [q for q in queries if q.startswith("postgres.")]
     mysql_queries = [q for q in queries if q.startswith("mysql.")]
     root_queries = [q for q in queries if "." not in q]
@@ -81,7 +76,6 @@ def test_complex_postgresql_queries(fixtures_path: Path) -> None:
         pytest.skip("Storage backend issue, skipping test")
         return
 
-    # Get all PostgreSQL queries and test for complexity
     queries = loader.list_queries()
     postgres_queries = [q for q in queries if q.startswith("postgres.")]
 
@@ -91,18 +85,16 @@ def test_complex_postgresql_queries(fixtures_path: Path) -> None:
         assert isinstance(sql, SQL)
         assert len(sql.sql.strip()) > 0
 
-        # Should contain typical PostgreSQL patterns
         sql_text = sql.sql.upper()
-        # CTEs, complex joins, or PostgreSQL-specific functions
+
         if any(
             pattern in sql_text
             for pattern in ["WITH", "CTE", "PG_", "CURRENT_DATABASE", "ARRAY_AGG", "INFORMATION_SCHEMA", "SELECT"]
         ):
             found_complex += 1
-            if found_complex >= 3:  # Stop after finding a few
+            if found_complex >= 3:
                 break
 
-    # Should find at least one complex query
     assert found_complex > 0, "No complex PostgreSQL queries found"
     console.print(f"[green]✓[/green] Validated {found_complex} complex PostgreSQL queries")
 
@@ -116,7 +108,6 @@ def test_complex_mysql_queries(fixtures_path: Path) -> None:
         pytest.skip("Storage backend issue, skipping test")
         return
 
-    # Get all MySQL queries and test for complexity
     queries = loader.list_queries()
     mysql_queries = [q for q in queries if q.startswith("mysql.")]
 
@@ -126,18 +117,16 @@ def test_complex_mysql_queries(fixtures_path: Path) -> None:
         assert isinstance(sql, SQL)
         assert len(sql.sql.strip()) > 0
 
-        # Should contain typical MySQL patterns
         sql_text = sql.sql.upper()
-        # MySQL hints, information_schema, or MySQL-specific functions
+
         if any(
             pattern in sql_text
             for pattern in ["INFORMATION_SCHEMA", "MAX_EXECUTION_TIME", "@", "GROUP_CONCAT", "SELECT"]
         ):
             found_complex += 1
-            if found_complex >= 3:  # Stop after finding a few
+            if found_complex >= 3:
                 break
 
-    # Should find at least one complex query
     assert found_complex > 0, "No complex MySQL queries found"
     console.print(f"[green]✓[/green] Validated {found_complex} complex MySQL queries")
 
@@ -153,7 +142,6 @@ def test_parameter_styles_detection(fixtures_path: Path) -> None:
 
     queries = loader.list_queries()
 
-    # Find queries with different parameter styles
     colon_param_queries = []
     at_param_queries = []
     other_param_queries = []
@@ -174,10 +162,8 @@ def test_parameter_styles_detection(fixtures_path: Path) -> None:
             elif any(pattern in sql_text for pattern in ["?", "$1", "%s"]):
                 other_param_queries.append(query_name)
         except Exception:
-            # Skip queries that can't be retrieved
             continue
 
-    # Report findings
     console.print(f"[blue]Found {len(colon_param_queries)} queries with colon parameters[/blue]")
     console.print(f"[blue]Found {len(at_param_queries)} queries with at parameters[/blue]")
     console.print(f"[blue]Found {len(other_param_queries)} queries with other parameter styles[/blue]")
@@ -194,7 +180,6 @@ def test_namespace_organization(fixtures_path: Path) -> None:
 
     queries = loader.list_queries()
 
-    # Group by namespace
     namespaces: dict[str, list[str]] = {}
     for query in queries:
         if "." in query:
@@ -203,7 +188,6 @@ def test_namespace_organization(fixtures_path: Path) -> None:
         else:
             namespaces.setdefault("root", []).append(query)
 
-    # Should have some organized structure
     assert len(namespaces) > 0, "No namespaces found"
 
     console.print("[bold]Namespaces found:[/bold]")
@@ -249,17 +233,14 @@ def test_query_text_retrieval(fixtures_path: Path) -> None:
     tested_count = 0
     for query_name in sample_queries:
         try:
-            # Test get_query_text
             text = loader.get_query_text(query_name)
             assert isinstance(text, str)
             assert len(text.strip()) > 0
 
-            # Should match the SQL object's text
             sql = loader.get_sql(query_name)
             assert text == sql.sql
             tested_count += 1
         except Exception:
-            # Skip queries that can't be retrieved
             continue
 
     assert tested_count > 0, "No queries could be tested for text retrieval"
@@ -280,7 +261,6 @@ def test_file_metadata_tracking(fixtures_path: Path) -> None:
 
     assert len(files) > 0, "No files tracked"
 
-    # Every query should have a source file
     sample_queries = queries[:10] if len(queries) >= 10 else queries
     tested_count = 0
     for query_name in sample_queries:
@@ -290,7 +270,6 @@ def test_file_metadata_tracking(fixtures_path: Path) -> None:
                 assert file_info.path in files, f"File {file_info.path} not in files list"
                 tested_count += 1
         except Exception:
-            # Skip queries that can't be retrieved
             continue
 
     assert tested_count > 0, "No queries could be tested for file metadata"
@@ -301,7 +280,6 @@ def test_performance_benchmarks(fixtures_path: Path) -> None:
     """Test that loading performance meets expectations."""
     loader = SQLFileLoader()
 
-    # Measure loading time
     start_time = time.perf_counter()
     try:
         loader.load_sql(fixtures_path)
@@ -312,11 +290,9 @@ def test_performance_benchmarks(fixtures_path: Path) -> None:
 
     queries = loader.list_queries()
 
-    # Performance expectations
     assert load_time < 5.0, f"Loading too slow: {load_time:.3f}s"
     assert len(queries) > 0, "No queries loaded"
 
-    # Measure query retrieval time if we have queries
     if queries:
         sample_queries = queries[:20] if len(queries) >= 20 else queries
         start_time = time.perf_counter()
@@ -326,7 +302,6 @@ def test_performance_benchmarks(fixtures_path: Path) -> None:
                 loader.get_sql(query_name)
                 successful_retrievals += 1
             except Exception:
-                # Skip queries that can't be retrieved
                 continue
         retrieval_time = time.perf_counter() - start_time
 
@@ -347,7 +322,6 @@ def test_reload_and_cache_behavior(fixtures_path: Path) -> None:
     """Test reloading behavior and cache efficiency."""
     loader = SQLFileLoader()
 
-    # First load
     start_time = time.perf_counter()
     try:
         loader.load_sql(fixtures_path)
@@ -357,16 +331,13 @@ def test_reload_and_cache_behavior(fixtures_path: Path) -> None:
         pytest.skip("Storage backend issue, skipping test")
         return
 
-    # Second load (should use cache where possible)
     start_time = time.perf_counter()
     loader.load_sql(fixtures_path)
     second_load_time = time.perf_counter() - start_time
     second_query_count = len(loader.list_queries())
 
-    # Query count should be the same
     assert first_query_count == second_query_count
 
-    # Second load might be faster due to caching, but not required
     console.print(f"[dim]Load times: first={first_load_time:.3f}s, second={second_load_time:.3f}s[/dim]")
 
 
@@ -381,20 +352,17 @@ def test_mixed_dialect_queries(fixtures_path: Path) -> None:
 
     queries = loader.list_queries()
 
-    # Get samples from different namespaces/dialects
     postgres_query = next((q for q in queries if q.startswith("postgres.")), None)
     mysql_query = next((q for q in queries if q.startswith("mysql.")), None)
 
     if postgres_query and mysql_query:
         try:
-            # Both should create valid SQL objects
             pg_sql = loader.get_sql(postgres_query)
             mysql_sql = loader.get_sql(mysql_query)
 
             assert isinstance(pg_sql, SQL)
             assert isinstance(mysql_sql, SQL)
 
-            # Should have different characteristics
             assert pg_sql.sql != mysql_sql.sql
 
             console.print(f"[green]✓[/green] Tested mixed dialects: {postgres_query}, {mysql_query}")
@@ -415,15 +383,14 @@ def test_specific_real_world_patterns(fixtures_path: Path) -> None:
 
     queries = loader.list_queries()
 
-    # Count different SQL pattern occurrences
     pattern_counts = {
-        "ctes": 0,  # Common Table Expressions
-        "hints": 0,  # MySQL hints
-        "params_colon": 0,  # :parameter style
-        "params_at": 0,  # @parameter style
-        "pg_functions": 0,  # PostgreSQL specific functions
-        "info_schema": 0,  # information_schema usage
-        "selects": 0,  # Basic SELECT statements
+        "ctes": 0,
+        "hints": 0,
+        "params_colon": 0,
+        "params_at": 0,
+        "pg_functions": 0,
+        "info_schema": 0,
+        "selects": 0,
     }
 
     for query_name in queries:
@@ -434,7 +401,7 @@ def test_specific_real_world_patterns(fixtures_path: Path) -> None:
 
             if "WITH " in sql_text:
                 pattern_counts["ctes"] += 1
-            if "/*+" in original_sql:  # Preserve case for hints
+            if "/*+" in original_sql:
                 pattern_counts["hints"] += 1
             if ":" in original_sql:
                 pattern_counts["params_colon"] += 1
@@ -447,10 +414,8 @@ def test_specific_real_world_patterns(fixtures_path: Path) -> None:
             if "SELECT" in sql_text:
                 pattern_counts["selects"] += 1
         except Exception:
-            # Skip queries that can't be retrieved
             continue
 
-    # At least some patterns should be found
     total_patterns = sum(pattern_counts.values())
     assert total_patterns > 0, "No real-world SQL patterns found"
 
@@ -463,7 +428,6 @@ def test_simulated_complex_queries() -> None:
     """Test with simulated complex queries based on fixtures content."""
     loader = SQLFileLoader()
 
-    # Add realistic PostgreSQL query with CTEs and parameters
     postgres_cte_query = """
 with db as (
   select db.oid as database_oid,
@@ -485,7 +449,6 @@ join db_stats stats on db.database_oid = stats.database_oid
 where db.database_oid = :target_oid
 """
 
-    # Add realistic MySQL query with hints and different parameter style
     mysql_query = """
 select
   /*+ MAX_EXECUTION_TIME(5000) */
@@ -504,7 +467,6 @@ from (
 ) src
 """
 
-    # Add complex insert query with CONFLICT handling (like our asset maintenance)
     conflict_query = """
 with inserted_data as (
 insert into alert_users (user_id, asset_maintenance_id, alert_definition_id)
@@ -520,16 +482,13 @@ from inserted_data
 left join users on users.id = inserted_data.user_id
 """
 
-    # Load all the queries
     loader.add_named_sql("postgres_cte_complex", postgres_cte_query.strip())
     loader.add_named_sql("mysql_hint_complex", mysql_query.strip())
     loader.add_named_sql("conflict_handling_complex", conflict_query.strip())
 
-    # Test each query
     queries = loader.list_queries()
     assert len(queries) == 3
 
-    # PostgreSQL query tests
     pg_sql = loader.get_sql("postgres_cte_complex")
     assert isinstance(pg_sql, SQL)
     assert "WITH" in pg_sql.sql.upper()
@@ -537,15 +496,13 @@ left join users on users.id = inserted_data.user_id
     assert ":target_oid" in pg_sql.sql
     assert "pg_database_size" in pg_sql.sql
 
-    # MySQL query tests
     mysql_sql = loader.get_sql("mysql_hint_complex")
     assert isinstance(mysql_sql, SQL)
-    assert "/*+" in mysql_sql.sql  # MySQL hint
+    assert "/*+" in mysql_sql.sql
     assert "@PKEY" in mysql_sql.sql
     assert "@DMA_SOURCE_ID" in mysql_sql.sql
     assert "information_schema" in mysql_sql.sql.lower()
 
-    # Conflict handling query tests
     conflict_sql = loader.get_sql("conflict_handling_complex")
     assert isinstance(conflict_sql, SQL)
     assert "CONFLICT" in conflict_sql.sql.upper()
@@ -553,7 +510,6 @@ left join users on users.id = inserted_data.user_id
     assert ":date_end" in conflict_sql.sql
     assert "to_jsonb" in conflict_sql.sql
 
-    # Verify no parameters are pre-loaded
     for sql_obj in [pg_sql, mysql_sql, conflict_sql]:
         assert sql_obj.parameters == []
 
@@ -564,7 +520,6 @@ def test_query_name_normalization_with_hyphens() -> None:
     """Test that fixture-style query names with hyphens are normalized properly."""
     loader = SQLFileLoader()
 
-    # Simulate names from actual fixtures
     fixture_names = [
         "collection-postgres-base-database-details",
         "collection-mysql-database-details",
@@ -575,17 +530,13 @@ def test_query_name_normalization_with_hyphens() -> None:
     for name in fixture_names:
         loader.add_named_sql(name, f"SELECT '{name}' as query_name")
 
-    # All should be accessible with hyphens or underscores
     for original_name in fixture_names:
         underscore_name = original_name.replace("-", "_")
 
-        # The normalized (underscore) version should be stored
         assert loader.has_query(underscore_name), f"Should have normalized name: {underscore_name}"
 
-        # Should also be accessible with original hyphenated name (via normalization)
         assert loader.has_query(original_name), f"Should normalize and find: {original_name}"
 
-        # Should return same SQL object
         sql1 = loader.get_sql(original_name)
         sql2 = loader.get_sql(underscore_name)
         assert sql1.sql == sql2.sql
@@ -597,7 +548,6 @@ def test_large_query_handling() -> None:
     """Test handling of large, complex SQL queries like those in fixtures."""
     loader = SQLFileLoader()
 
-    # Create a large, complex query similar to fixture patterns
     large_query = """
 -- Complex query with multiple CTEs, joins, and aggregations
 with database_metrics as (
@@ -670,17 +620,15 @@ limit :result_limit
 
     loader.add_named_sql("large_database_analysis", large_query.strip())
 
-    # Should handle the large query without issues
     sql = loader.get_sql("large_database_analysis")
     assert isinstance(sql, SQL)
-    assert len(sql.sql) > 1000  # Should be a substantial query
-    assert sql.sql.count("select") >= 4  # Multiple SELECT statements
-    assert sql.sql.count("with") >= 1  # Has CTEs
+    assert len(sql.sql) > 1000
+    assert sql.sql.count("select") >= 4
+    assert sql.sql.count("with") >= 1
     assert ":min_modifications" in sql.sql
     assert ":min_hit_ratio" in sql.sql
     assert ":result_limit" in sql.sql
 
-    # Should parse quickly even for large queries
     start_time = time.perf_counter()
     for _ in range(100):
         loader.get_sql("large_database_analysis")

@@ -9,8 +9,6 @@ from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
 
-# Note: Only apply asyncio mark to actual async tests, not all tests in the file
-
 
 @pytest.mark.xdist_group("oracle")
 def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> None:
@@ -256,9 +254,8 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
     assert it_sorted[2]["DEPT_RANK"] == 3
 
     for emp in it_employees:
-        assert emp["DEPT_TOTAL_SALARY"] == 183000  # 60000 + 65000 + 58000
+        assert emp["DEPT_TOTAL_SALARY"] == 183000
 
-    # Cleanup
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_analytics_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )

@@ -242,7 +242,7 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
             '2024-01-15',
             '2024-01-15 10:30:00',
             true,
-            [1, 2, 3, MIN_THRESHOLD_4],
+            [1, 2, 3, 4],
             '{"key": "value", "number": 42}'
         )
     """
@@ -285,7 +285,7 @@ def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:
             (1, 'Alice', 1, 75000.00),
             (2, 'Bob', 1, 80000.00),
             (3, 'Carol', 2, 65000.00),
-            (MIN_THRESHOLD_4, 'Dave', 2, 70000.00),
+            (4, 'Dave', 2, 70000.00),
             (5, 'Eve', 3, 60000.00);
     """)
 
@@ -337,7 +337,7 @@ def test_duckdb_window_functions(duckdb_session: DuckDBDriver) -> None:
             (1, 'Product A', 1000.00, '2024-01-01'),
             (2, 'Product B', 1500.00, '2024-01-02'),
             (3, 'Product A', 1200.00, '2024-01-03'),
-            (MIN_THRESHOLD_4, 'Product C', 800.00, '2024-01-04'),
+            (4, 'Product C', 800.00, '2024-01-04'),
             (5, 'Product B', 1800.00, '2024-01-05');
     """)
 
@@ -474,15 +474,13 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
             (1, 'A', 10),
             (2, 'B', 20),
             (3, 'A', 30),
-            (MIN_THRESHOLD_4, 'C', 40);
+            (4, 'C', 40);
     """)
 
     select_result = duckdb_session.execute("SELECT * FROM result_methods_test ORDER BY id")
 
-    # Test get_count()
     assert select_result.get_count() == 4
 
-    # Test get_first()
     first_row = select_result.get_first()
     assert first_row is not None
     assert first_row["id"] == 1

@@ -152,6 +152,8 @@ class SQLResult(StatementResult):
         "total_statements",
     )
 
+    _operation_type: OperationType
+
     def __init__(
         self,
         statement: "SQL",
@@ -204,7 +206,7 @@ class SQLResult(StatementResult):
     @property
     def operation_type(self) -> OperationType:
         """Get operation type for this result."""
-        return cast("OperationType", self._operation_type)
+        return self._operation_type
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Get metadata value by key.

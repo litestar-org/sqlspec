@@ -48,19 +48,17 @@ SELECT id, name FROM users WHERE active = true;
         loader = SQLFileLoader()
         loader.load_sql(sql_file)
 
-        # Verify queries were loaded
         queries = loader.list_queries()
         assert "get_user_count" in queries
         assert "get_active_users" in queries
 
-        # Verify SQL objects can be created
         user_count_sql = loader.get_sql("get_user_count")
         assert isinstance(user_count_sql, SQL)
         assert "COUNT(*)" in user_count_sql.sql
 
     def test_load_multiple_files_from_filesystem(self, temp_workspace: Path) -> None:
         """Test loading multiple SQL files from the file system."""
-        # Create multiple SQL files
+
         users_file = temp_workspace / "users.sql"
         users_file.write_text("""
 -- name: create_user
@@ -82,21 +80,19 @@ SELECT * FROM products WHERE id = :product_id;
         loader = SQLFileLoader()
         loader.load_sql(users_file, products_file)
 
-        # Verify all queries from both files are loaded
         queries = loader.list_queries()
         assert "create_user" in queries
         assert "update_user_email" in queries
         assert "list_products" in queries
         assert "get_product_by_id" in queries
 
-        # Verify file tracking
         files = loader.list_files()
         assert str(users_file) in files
         assert str(products_file) in files
 
     def test_load_directory_structure_from_filesystem(self, temp_workspace: Path) -> None:
         """Test loading entire directory structures from file system."""
-        # Create nested directory structure
+
         queries_dir = temp_workspace / "queries"
         queries_dir.mkdir()
 
@@ -106,7 +102,6 @@ SELECT * FROM products WHERE id = :product_id;
         admin_dir = queries_dir / "admin"
         admin_dir.mkdir()
 
-        # Create SQL files at different levels
         (temp_workspace / "root.sql").write_text("""
 -- name: health_check
 SELECT 'OK' as status;
@@ -135,10 +130,8 @@ DELETE FROM logs WHERE created_at < :cutoff_date;
 
         queries = loader.list_queries()
 
-        # Root level queries
         assert "health_check" in queries
 
-        # Namespaced queries
         assert "queries.get_system_info" in queries
         assert "queries.analytics.user_analytics" in queries
         assert "queries.analytics.sales_analytics" in queries
@@ -146,7 +139,7 @@ DELETE FROM logs WHERE created_at < :cutoff_date;
 
     def test_file_content_encoding_handling(self, temp_workspace: Path) -> None:
         """Test handling of different file encodings."""
-        # Test UTF-8 with Unicode characters
+
         utf8_file = temp_workspace / "utf8_queries.sql"
         utf8_content = """
 -- name: unicode_query
@@ -176,11 +169,9 @@ SELECT 'original' as version;
         loader = SQLFileLoader()
         loader.load_sql(sql_file)
 
-        # Verify original content
         sql = loader.get_sql("original_query")
         assert "original" in sql.sql
 
-        # Modify the file
         modified_content = """
 -- name: modified_query
 SELECT 'modified' as version;
@@ -188,14 +179,12 @@ SELECT 'modified' as version;
 -- name: additional_query
 SELECT 'new' as status;
 """
-        time.sleep(0.1)  # Ensure different timestamp
+        time.sleep(0.1)
         sql_file.write_text(modified_content)
 
-        # Reload
         loader.clear_cache()
         loader.load_sql(sql_file)
 
-        # Should have new queries
         queries = loader.list_queries()
         assert "modified_query" in queries
         assert "additional_query" in queries
@@ -203,14 +192,13 @@ SELECT 'new' as status;
 
     def test_symlink_resolution(self, temp_workspace: Path) -> None:
         """Test resolution of symbolic links."""
-        # Create original file
+
         original_file = temp_workspace / "original.sql"
         original_file.write_text("""
 -- name: symlinked_query
 SELECT 'from symlink' as source;
 """)
 
-        # Create symbolic link
         symlink_file = temp_workspace / "linked.sql"
         try:
             symlink_file.symlink_to(original_file)
@@ -247,7 +235,6 @@ class TestFileSystemErrorHandling:
         loader = SQLFileLoader()
         nonexistent_dir = temp_workspace / "does_not_exist"
 
-        # Should not raise error, just return empty result
         loader.load_sql(nonexistent_dir)
 
         assert loader.list_queries() == []
@@ -255,7 +242,7 @@ class TestFileSystemErrorHandling:
 
     def test_permission_denied_error(self, temp_workspace: Path) -> None:
         """Test handling of permission denied errors."""
-        if os.name == "nt":  # Skip on Windows
+        if os.name == "nt":
             pytest.skip("Permission testing not reliable on Windows")
 
         restricted_file = temp_workspace / "restricted.sql"
@@ -264,7 +251,6 @@ class TestFileSystemErrorHandling:
 SELECT 'restricted' as access;
 """)
 
-        # Remove read permissions
         restricted_file.chmod(0o000)
 
         try:
@@ -273,14 +259,12 @@ SELECT 'restricted' as access;
             with pytest.raises(SQLFileParseError):
                 loader.load_sql(restricted_file)
         finally:
-            # Restore permissions for cleanup
             restricted_file.chmod(0o644)
 
     def test_corrupted_file_handling(self, temp_workspace: Path) -> None:
         """Test handling of corrupted or invalid SQL files."""
         corrupted_file = temp_workspace / "corrupted.sql"
 
-        # Create file with invalid SQL structure
         corrupted_file.write_text("""
 This is not a valid SQL file with named queries.
 It has no proper -- name: declarations.
@@ -310,7 +294,6 @@ Just random text that should cause parsing to fail.
         """Test handling of binary files with .sql extension."""
         binary_file = temp_workspace / "binary.sql"
 
-        # Write binary data
         with open(binary_file, "wb") as f:
             f.write(b"\x00\x01\x02\x03\x04\x05")
 
@@ -334,7 +317,6 @@ class TestFileSystemPerformance:
         """Test performance with large SQL files."""
         large_file = temp_workspace / "large_queries.sql"
 
-        # Generate large file with many queries
         large_content = "\n".join(
             f"""
 -- name: large_query_{i:04d}
@@ -360,11 +342,9 @@ LIMIT 1000;
 
         load_time = end_time - start_time
 
-        # Verify all queries loaded
         queries = loader.list_queries()
         assert len(queries) == 500
 
-        # Performance should be reasonable (adjust threshold as needed)
         assert load_time < 5.0, f"Loading took too long: {load_time:.2f}s"
 
     def test_many_small_files_performance(self, temp_workspace: Path) -> None:
@@ -372,7 +352,6 @@ LIMIT 1000;
         files_dir = temp_workspace / "many_files"
         files_dir.mkdir()
 
-        # Create many small SQL files
         for i in range(100):
             small_file = files_dir / f"query_{i:03d}.sql"
             small_file.write_text(f"""
@@ -388,22 +367,19 @@ SELECT {i} as file_number, 'small file {i}' as description;
 
         load_time = end_time - start_time
 
-        # Verify all queries loaded
         queries = loader.list_queries()
         assert len(queries) == 100
 
-        # Performance should be reasonable
         assert load_time < 10.0, f"Loading took too long: {load_time:.2f}s"
 
     def test_deep_directory_structure_performance(self, temp_workspace: Path) -> None:
         """Test performance with deep directory structures."""
-        # Create deep nested structure (10 levels)
+
         current_path = temp_workspace
         for level in range(10):
             current_path = current_path / f"level_{level}"
             current_path.mkdir()
 
-            # Add SQL file at each level
             sql_file = current_path / f"queries_level_{level}.sql"
             sql_file.write_text(f"""
 -- name: deep_query_level_{level}
@@ -418,16 +394,13 @@ SELECT {level} as depth_level, 'level {level}' as description;
 
         load_time = end_time - start_time
 
-        # Verify all queries loaded with proper namespacing
         queries = loader.list_queries()
         assert len(queries) == 10
 
-        # Check deepest query has correct namespace
         deepest_namespace = ".".join([f"level_{i}" for i in range(10)])
         deepest_query = f"{deepest_namespace}.deep_query_level_9"
         assert deepest_query in queries
 
-        # Performance should be reasonable
         assert load_time < 5.0, f"Loading took too long: {load_time:.2f}s"
 
 
@@ -445,7 +418,6 @@ class TestFileSystemConcurrency:
         """Test handling of concurrent file modifications."""
         shared_file = temp_workspace / "shared.sql"
 
-        # Initial content
         shared_file.write_text("""
 -- name: shared_query_v1
 SELECT 'version 1' as version;
@@ -454,29 +426,23 @@ SELECT 'version 1' as version;
         loader1 = SQLFileLoader()
         loader2 = SQLFileLoader()
 
-        # Both loaders load the same file
         loader1.load_sql(shared_file)
         loader2.load_sql(shared_file)
 
-        # Verify both have the query
         assert "shared_query_v1" in loader1.list_queries()
         assert "shared_query_v1" in loader2.list_queries()
 
-        # Modify file
         shared_file.write_text("""
 -- name: shared_query_v2
 SELECT 'version 2' as version;
 """)
 
-        # Reload in one loader
         loader1.clear_cache()
         loader1.load_sql(shared_file)
 
-        # First loader should see new version
         assert "shared_query_v2" in loader1.list_queries()
         assert "shared_query_v1" not in loader1.list_queries()
 
-        # Second loader should still see old version until reloaded
         assert "shared_query_v1" in loader2.list_queries()
         assert "shared_query_v2" not in loader2.list_queries()
 
@@ -488,19 +454,15 @@ SELECT 'version 2' as version;
 SELECT 'accessed by multiple loaders' as message;
 """)
 
-        # Create multiple loaders
         loaders = [SQLFileLoader() for _ in range(5)]
 
-        # All loaders load the same file
         for loader in loaders:
             loader.load_sql(sql_file)
 
-        # All should have the query
         for i, loader in enumerate(loaders):
             queries = loader.list_queries()
             assert "multi_access_query" in queries, f"Loader {i} missing query"
 
-            # Verify SQL object creation works
             sql = loader.get_sql("multi_access_query")
             assert isinstance(sql, SQL)
 
@@ -522,11 +484,9 @@ SELECT 'from loader 2' as source;
         loader1 = SQLFileLoader()
         loader2 = SQLFileLoader()
 
-        # Each loader loads different file
         loader1.load_sql(file1)
         loader2.load_sql(file2)
 
-        # Each should only see its own queries
         queries1 = loader1.list_queries()
         queries2 = loader2.list_queries()
 
@@ -555,11 +515,9 @@ class TestFileSystemCacheIntegration:
 SELECT 'cached content' as status;
 """)
 
-        # First loader loads and caches
         loader1 = SQLFileLoader()
         loader1.load_sql(sql_file)
 
-        # Second loader should benefit from cache (if enabled)
         loader2 = SQLFileLoader()
 
         with patch("sqlspec.loader.get_cache_config") as mock_config:
@@ -573,11 +531,8 @@ SELECT 'cached content' as status;
 
             cache_load_time = end_time - start_time
 
-            # Should have loaded the query
             assert "cached_query" in loader2.list_queries()
 
-            # Cache hit should be faster than parsing (if cache is working)
-            # This is more of a performance hint than a strict test
             assert cache_load_time < 1.0
 
     def test_cache_invalidation_on_file_change(self, temp_workspace: Path) -> None:
@@ -590,7 +545,6 @@ SELECT 'version 1' as version;
 """
         sql_file.write_text(original_content)
 
-        # Load with caching enabled
         with patch("sqlspec.loader.get_cache_config") as mock_config:
             mock_cache_config = Mock()
             mock_cache_config.compiled_cache_enabled = True
@@ -599,18 +553,15 @@ SELECT 'version 1' as version;
             loader = SQLFileLoader()
             loader.load_sql(sql_file)
 
-            # Verify original version
             assert "changing_query_v1" in loader.list_queries()
 
-            # Change file content
             modified_content = """
 -- name: changing_query_v2
 SELECT 'version 2' as version;
 """
-            time.sleep(0.1)  # Ensure different timestamp
+            time.sleep(0.1)
             sql_file.write_text(modified_content)
 
-            # Reload should detect change and load new content
             loader.clear_cache()
             loader.load_sql(sql_file)
 
@@ -629,19 +580,15 @@ SELECT 'will be deleted' as status;
         loader = SQLFileLoader()
         loader.load_sql(sql_file)
 
-        # Verify query loaded
         assert "deletable_query" in loader.list_queries()
 
-        # Delete the file
         sql_file.unlink()
 
-        # New loader should handle missing file gracefully
         loader2 = SQLFileLoader()
 
         with pytest.raises(SQLFileNotFoundError):
             loader2.load_sql(sql_file)
 
-        # Original loader should still have the query in memory
         assert "deletable_query" in loader.list_queries()
 
 
@@ -694,13 +641,12 @@ SELECT 'Unicode: 测试 тест עברית' as multilingual_message,
         queries = loader.list_queries()
         assert "unicode_content_query" in queries
 
-        # Verify content preservation
         sql = loader.get_sql("unicode_content_query")
         assert "Unicode: 测试 тест עברית" in sql.sql
 
     def test_mixed_encoding_handling(self, temp_workspace: Path) -> None:
         """Test handling of different encodings."""
-        # Create UTF-8 file
+
         utf8_file = temp_workspace / "utf8.sql"
         utf8_file.write_text(
             """
@@ -710,7 +656,6 @@ SELECT 'UTF-8: 测试' as message;
             encoding="utf-8",
         )
 
-        # Create Latin-1 file
         latin1_file = temp_workspace / "latin1.sql"
         latin1_content = """
 -- name: latin1_query
@@ -718,13 +663,11 @@ SELECT 'Latin-1: café' as message;
 """
         latin1_file.write_text(latin1_content, encoding="latin-1")
 
-        # Load UTF-8 file with UTF-8 loader
         utf8_loader = SQLFileLoader(encoding="utf-8")
         utf8_loader.load_sql(utf8_file)
 
         assert "utf8_query" in utf8_loader.list_queries()
 
-        # Load Latin-1 file with Latin-1 loader
         latin1_loader = SQLFileLoader(encoding="latin-1")
         latin1_loader.load_sql(latin1_file)
 
@@ -732,9 +675,9 @@ SELECT 'Latin-1: café' as message;
 
     def test_special_characters_in_paths(self, temp_workspace: Path) -> None:
         """Test handling of special characters in file paths."""
-        # Create directory with special characters
+
         try:
-            special_dir = temp_workspace / "special-chars_&_symbols!@#"
+            special_dir = temp_workspace / "special-chars_&_symbols!@#$"
             special_dir.mkdir()
 
             special_file = special_dir / "query-file_with&symbols.sql"

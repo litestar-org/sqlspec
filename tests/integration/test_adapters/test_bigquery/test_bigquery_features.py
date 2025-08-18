@@ -11,7 +11,6 @@ from sqlspec.core.result import SQLResult
 def test_bigquery_standard_sql_functions(bigquery_session: BigQueryDriver) -> None:
     """Test BigQuery standard SQL functions."""
 
-    # Test basic math functions
     result = bigquery_session.execute("""
         SELECT
             ABS(-42) as abs_value,
@@ -26,7 +25,6 @@ def test_bigquery_standard_sql_functions(bigquery_session: BigQueryDriver) -> No
     assert result.data[0]["mod_result"] == 2
     assert result.data[0]["power_result"] == 8
 
-    # Test string functions
     string_result = bigquery_session.execute("""
         SELECT
             UPPER('hello') as upper_str,
@@ -47,7 +45,6 @@ def test_bigquery_standard_sql_functions(bigquery_session: BigQueryDriver) -> No
 def test_bigquery_date_time_functions(bigquery_session: BigQueryDriver) -> None:
     """Test BigQuery date and time functions."""
 
-    # Test date functions (avoid CURRENT_DATE/TIMESTAMP due to emulator issues)
     result = bigquery_session.execute("""
         SELECT
             DATE('2024-01-15') as test_date,
@@ -93,11 +90,9 @@ def test_bigquery_aggregate_functions(bigquery_session: BigQueryDriver, bigquery
     """Test BigQuery aggregate functions."""
     table_name = bigquery_test_table
 
-    # Insert test data for aggregation
     test_data = [(1, "Group A", 10), (2, "Group A", 20), (3, "Group B", 15), (4, "Group B", 25), (5, "Group C", 30)]
     bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", test_data)
 
-    # Test basic aggregates
     result = bigquery_session.execute(f"""
         SELECT
             COUNT(*) as total_count,
@@ -113,12 +108,11 @@ def test_bigquery_aggregate_functions(bigquery_session: BigQueryDriver, bigquery
     assert result.data is not None
     assert result.data[0]["total_count"] == 5
     assert result.data[0]["distinct_groups"] == 3
-    assert result.data[0]["total_value"] == 100  # 10+20+15+25+30
+    assert result.data[0]["total_value"] == 100
     assert result.data[0]["avg_value"] == 20.0
     assert result.data[0]["min_value"] == 10
     assert result.data[0]["max_value"] == 30
 
-    # Test GROUP BY aggregates
     group_result = bigquery_session.execute(f"""
         SELECT
             name,
@@ -134,7 +128,7 @@ def test_bigquery_aggregate_functions(bigquery_session: BigQueryDriver, bigquery
     assert len(group_result.data) == 3
     assert group_result.data[0]["name"] == "Group A"
     assert group_result.data[0]["count"] == 2
-    assert group_result.data[0]["sum_value"] == 30  # 10+20
+    assert group_result.data[0]["sum_value"] == 30
 
 
 @pytest.mark.xdist_group("bigquery")
@@ -142,11 +136,10 @@ def test_bigquery_join_operations(bigquery_session: BigQueryDriver, bigquery_ser
     """Test BigQuery JOIN operations."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
 
-    # Drop table if exists and recreate
     try:
         bigquery_session.execute_script(f"DROP TABLE {table_name}")
     except Exception:
-        pass  # Table doesn't exist, ignore
+        pass
 
     bigquery_session.execute_script(f"""
         CREATE TABLE {table_name} (
@@ -156,7 +149,6 @@ def test_bigquery_join_operations(bigquery_session: BigQueryDriver, bigquery_ser
         )
     """)
 
-    # Create second table for joins
     bigquery_session.execute_script(f"""
         CREATE TABLE IF NOT EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.join_table` (
             id INT64,
@@ -165,7 +157,6 @@ def test_bigquery_join_operations(bigquery_session: BigQueryDriver, bigquery_ser
         )
     """)
 
-    # Insert data into both tables
     bigquery_session.execute_many(
         f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)",
         [(1, "Item A", 100), (2, "Item B", 200), (3, "Item C", 150)],
@@ -176,7 +167,6 @@ def test_bigquery_join_operations(bigquery_session: BigQueryDriver, bigquery_ser
         [(1, "Premium", 2), (2, "Standard", 1), (4, "Discount", 0)],
     )
 
-    # Test INNER JOIN
     inner_result = bigquery_session.execute(f"""
         SELECT
             t1.name,
@@ -190,11 +180,10 @@ def test_bigquery_join_operations(bigquery_session: BigQueryDriver, bigquery_ser
     """)
     assert isinstance(inner_result, SQLResult)
     assert inner_result.data is not None
-    assert len(inner_result.data) == 2  # Only matching records
+    assert len(inner_result.data) == 2
     assert inner_result.data[0]["name"] == "Item A"
-    assert inner_result.data[0]["calculated_value"] == 200  # 100 * 2
+    assert inner_result.data[0]["calculated_value"] == 200
 
-    # Test LEFT JOIN
     left_result = bigquery_session.execute(f"""
         SELECT
             t1.name,
@@ -206,11 +195,10 @@ def test_bigquery_join_operations(bigquery_session: BigQueryDriver, bigquery_ser
     """)
     assert isinstance(left_result, SQLResult)
     assert left_result.data is not None
-    assert len(left_result.data) == 3  # All records from left table
+    assert len(left_result.data) == 3
     assert left_result.data[2]["name"] == "Item C"
-    assert left_result.data[2]["category"] is None  # No match in right table
+    assert left_result.data[2]["category"] is None
 
-    # Cleanup
     bigquery_session.execute_script(f"DROP TABLE `{bigquery_service.project}.{bigquery_service.dataset}.join_table`")
 
 
@@ -219,11 +207,10 @@ def test_bigquery_subqueries(bigquery_session: BigQueryDriver, bigquery_service:
     """Test BigQuery subquery operations."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
 
-    # Drop table if exists and recreate
     try:
         bigquery_session.execute_script(f"DROP TABLE {table_name}")
     except Exception:
-        pass  # Table doesn't exist, ignore
+        pass
 
     bigquery_session.execute_script(f"""
         CREATE TABLE {table_name} (
@@ -233,11 +220,9 @@ def test_bigquery_subqueries(bigquery_session: BigQueryDriver, bigquery_service:
         )
     """)
 
-    # Insert test data
     test_data = [(1, "High", 80), (2, "Medium", 60), (3, "Low", 40), (4, "High", 90)]
     bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", test_data)
 
-    # Test scalar subquery
     scalar_result = bigquery_session.execute(f"""
         SELECT name, value
         FROM {table_name}
@@ -246,10 +231,9 @@ def test_bigquery_subqueries(bigquery_session: BigQueryDriver, bigquery_service:
     """)
     assert isinstance(scalar_result, SQLResult)
     assert scalar_result.data is not None
-    assert len(scalar_result.data) == 2  # 80 and 90 are above average (67.5)
+    assert len(scalar_result.data) == 2
     assert scalar_result.data[0]["value"] == 90
 
-    # Test EXISTS subquery
     exists_result = bigquery_session.execute(f"""
         SELECT DISTINCT name
         FROM {table_name} t1
@@ -264,7 +248,6 @@ def test_bigquery_subqueries(bigquery_session: BigQueryDriver, bigquery_service:
     assert len(exists_result.data) == 1
     assert exists_result.data[0]["name"] == "High"
 
-    # Test IN subquery
     in_result = bigquery_session.execute(f"""
         SELECT name, value
         FROM {table_name}
@@ -277,7 +260,7 @@ def test_bigquery_subqueries(bigquery_session: BigQueryDriver, bigquery_service:
     """)
     assert isinstance(in_result, SQLResult)
     assert in_result.data is not None
-    assert len(in_result.data) == 3  # Max value for each group
+    assert len(in_result.data) == 3
 
 
 @pytest.mark.xdist_group("bigquery")
@@ -287,11 +270,10 @@ def test_bigquery_cte_common_table_expressions(
     """Test BigQuery Common Table Expressions (CTEs)."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
 
-    # Drop table if exists and recreate
     try:
         bigquery_session.execute_script(f"DROP TABLE {table_name}")
     except Exception:
-        pass  # Table doesn't exist, ignore
+        pass
 
     bigquery_session.execute_script(f"""
         CREATE TABLE {table_name} (
@@ -301,11 +283,9 @@ def test_bigquery_cte_common_table_expressions(
         )
     """)
 
-    # Insert test data
     test_data = [(1, "Dept A", 50), (2, "Dept A", 60), (3, "Dept B", 70), (4, "Dept B", 80)]
     bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", test_data)
 
-    # Test single CTE
     cte_result = bigquery_session.execute(f"""
         WITH dept_stats AS (
             SELECT
@@ -333,7 +313,6 @@ def test_bigquery_cte_common_table_expressions(
     assert cte_result.data[0]["avg_value"] == 55.0
     assert cte_result.data[1]["performance_category"] == "High Performance"
 
-    # Test multiple CTEs
     multiple_cte_result = bigquery_session.execute(f"""
         WITH
         dept_totals AS (
@@ -358,6 +337,6 @@ def test_bigquery_cte_common_table_expressions(
     assert isinstance(multiple_cte_result, SQLResult)
     assert multiple_cte_result.data is not None
     assert len(multiple_cte_result.data) == 2
-    # Dept B (150) should have higher percentage than Dept A (110)
+
     assert multiple_cte_result.data[0]["department"] == "Dept B"
     assert multiple_cte_result.data[0]["percentage_of_total"] > 50.0

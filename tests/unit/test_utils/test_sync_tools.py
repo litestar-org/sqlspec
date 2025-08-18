@@ -41,10 +41,8 @@ async def test_capacity_limiter_async_context() -> None:
     limiter = CapacityLimiter(1)
 
     async with limiter:
-        # Inside context, semaphore should be acquired
         assert limiter._semaphore._value == 0
 
-    # Outside context, semaphore should be released
     assert limiter._semaphore._value == 1
 
 
@@ -70,17 +68,15 @@ async def test_capacity_limiter_concurrent_access_edge_cases() -> None:
         try:
             async with limiter:
                 results.append(f"worker_{worker_id}_started")
-                await asyncio.sleep(0.001)  # Very small delay
+                await asyncio.sleep(0.001)
                 results.append(f"worker_{worker_id}_finished")
         except Exception as e:
             results.append(f"worker_{worker_id}_error_{e}")
 
-    # Run multiple workers concurrently
     tasks = [worker(i) for i in range(5)]
     await asyncio.gather(*tasks)
 
-    # Should have orderly execution due to capacity limit
-    assert len(results) == 10  # 5 workers * 2 events each
+    assert len(results) == 10
     assert all("error" not in result for result in results)
 
 
@@ -118,7 +114,6 @@ def test_run_exception_propagation_detailed() -> None:
     async def async_func_custom_error() -> None:
         raise MissingDependencyError("Custom error")
 
-    # Test different exception types
     sync_func_ve = run_(async_func_value_error)
     with pytest.raises(ValueError, match="Async ValueError"):
         sync_func_ve()
@@ -151,15 +146,12 @@ def test_await_sync_error() -> None:
 
     sync_version = await_(async_function, raise_sync_error=True)
 
-    # This test depends on whether there's already an event loop running
-    # In a testing environment, this behavior might vary
     try:
         asyncio.get_running_loop()
-        # If there's a loop, we expect a RuntimeError about calling from within a task
+
         with pytest.raises(RuntimeError):
             sync_version()
     except RuntimeError:
-        # No loop running, should also raise RuntimeError due to raise_sync_error=True
         with pytest.raises(RuntimeError):
             sync_version()
 
@@ -171,12 +163,10 @@ def test_await_raise_sync_error_configurations() -> None:
         await asyncio.sleep(0.001)
         return x * 2
 
-    # Test with raise_sync_error=False (should work in sync context)
     sync_func_safe = await_(simple_async_func, raise_sync_error=False)
     result = sync_func_safe(21)
     assert result == 42
 
-    # Test with raise_sync_error=True (should raise in sync context)
     sync_func_strict = await_(simple_async_func, raise_sync_error=True)
     with pytest.raises(RuntimeError, match="Cannot run async function"):
         sync_func_strict(21)
@@ -214,7 +204,7 @@ async def test_ensure_async_with_async_function() -> None:
     async def already_async(x: int) -> int:
         return x * 6
 
-    ensured: Any = ensure_async_(already_async)  # type: ignore[arg-type]
+    ensured: Any = ensure_async_(already_async)
     result = await ensured(2)
     assert result == 12
 
@@ -347,14 +337,11 @@ async def test_get_next_no_default_behavior() -> None:
 
     iterator = EmptyAsyncIterator()
 
-    # The function might return a default value (NoValue) instead of raising
-    # Let's just test that it handles the case without crashing
     try:
         result = await get_next(iterator)
-        # If it returns something, check it's the expected default behavior
-        assert isinstance(result, (type(NoValue), type(NoValue())))
+
+        assert isinstance(result, type(NoValue))
     except StopAsyncIteration:
-        # This is also acceptable behavior
         pass
 
 
@@ -363,9 +350,8 @@ def test_no_value_class() -> None:
     no_val = NoValue()
     assert isinstance(no_val, NoValue)
 
-    # Should be usable as a sentinel value
     assert no_val is not None
-    assert no_val != "some_value"  # type: ignore[comparison-overlap]
+    assert no_val != "some_value"  # type: ignore[comparison-overlap]  # pyright: ignore[reportUnnecessaryComparison]
 
 
 def test_sync_tools_error_handling() -> None:
@@ -383,16 +369,13 @@ def test_sync_tools_error_handling() -> None:
 async def test_async_tools_comprehensive() -> None:
     """Test async tools work together comprehensively."""
 
-    # Test combining multiple async utilities
     def blocking_operation(x: int) -> int:
         return x**2
 
     async_op = async_(blocking_operation)
 
-    # Test with capacity limiter
     CapacityLimiter(2)
 
-    # Run multiple operations concurrently
     tasks = [async_op(i) for i in range(5)]
     results = await asyncio.gather(*tasks)
 

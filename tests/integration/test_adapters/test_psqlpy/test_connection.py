@@ -118,11 +118,9 @@ async def test_connection_concurrent_access(psqlpy_config: PsqlpyConfig) -> None
 
             return cast(str, result.data[0]["task_id"])
 
-    # Run multiple concurrent queries
     tasks = [query_task(i) for i in range(3)]
     results = await asyncio.gather(*tasks)
 
-    # Verify all tasks completed successfully
     assert len(results) == 3
     assert all(result.startswith("task_") for result in results)
     assert sorted(results) == ["task_0", "task_1", "task_2"]

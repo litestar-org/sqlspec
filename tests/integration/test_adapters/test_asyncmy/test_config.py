@@ -20,7 +20,6 @@ def test_asyncmy_typed_dict_structure() -> None:
     assert connection_parameters["host"] == "localhost"
     assert connection_parameters["port"] == 3306
 
-    # Test that pool parameters inherit from connection parameters and add pool-specific fields
     pool_parameters: AsyncmyPoolParams = {"host": "localhost", "port": 3306, "minsize": 5, "maxsize": 20, "echo": True}
     assert pool_parameters["host"] == "localhost"
     assert pool_parameters["minsize"] == 5

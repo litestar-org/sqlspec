@@ -21,14 +21,13 @@ def psycopg_parameters_session(postgres_service: PostgresService) -> "Generator[
             "user": postgres_service.user,
             "password": postgres_service.password,
             "dbname": postgres_service.database,
-            "autocommit": True,  # Enable autocommit for tests
+            "autocommit": True,
         },
         statement_config=psycopg_statement_config,
     )
 
     try:
         with config.provide_session() as session:
-            # Create test table
             session.execute_script("""
                 CREATE TABLE IF NOT EXISTS test_parameters (
                     id SERIAL PRIMARY KEY,
@@ -37,10 +36,9 @@ def psycopg_parameters_session(postgres_service: PostgresService) -> "Generator[
                     description TEXT
                 )
             """)
-            # Clear any existing data
+
             session.execute_script("TRUNCATE TABLE test_parameters RESTART IDENTITY")
 
-            # Insert test data
             session.execute(
                 "INSERT INTO test_parameters (name, value, description) VALUES (%s, %s, %s)",
                 ("test1", 100, "First test"),
@@ -51,23 +49,16 @@ def psycopg_parameters_session(postgres_service: PostgresService) -> "Generator[
             )
             session.execute(
                 "INSERT INTO test_parameters (name, value, description) VALUES (%s, %s, %s)", ("test3", 300, None)
-            )  # NULL description
+            )
             yield session
-            # Cleanup
+
             session.execute_script("DROP TABLE IF EXISTS test_parameters")
     finally:
-        # Ensure pool is closed properly to avoid "cannot join current thread" warnings
         config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")
-@pytest.mark.parametrize(
-    "parameters,expected_count",
-    [
-        (("test1"), 1),  # Tuple parameter
-        (["test1"], 1),  # List parameter
-    ],
-)
+@pytest.mark.parametrize("parameters,expected_count", [(("test1"), 1), (["test1"], 1)])
 def test_psycopg_pyformat_parameter_types(
     psycopg_parameters_session: PsycopgSyncDriver, parameters: Any, expected_count: int
 ) -> None:
@@ -131,7 +122,7 @@ def test_psycopg_multiple_parameters_named(psycopg_parameters_session: PsycopgSy
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test handling of NULL parameters on Psycopg."""
-    # Query for NULL values
+
     result = psycopg_parameters_session.execute("SELECT * FROM test_parameters WHERE description IS NULL")
 
     assert isinstance(result, SQLResult)
@@ -140,7 +131,6 @@ def test_psycopg_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) 
     assert result.data[0]["name"] == "test3"
     assert result.data[0]["description"] is None
 
-    # Test inserting NULL with parameters
     psycopg_parameters_session.execute(
         "INSERT INTO test_parameters (name, value, description) VALUES (%s, %s, %s)", ("null_param_test", 400, None)
     )
@@ -155,18 +145,17 @@ def test_psycopg_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) 
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_escaping(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameter escaping prevents SQL injection."""
-    # This should safely search for a literal string with quotes
+
     malicious_input = "'; DROP TABLE test_parameters; --"
 
     result = psycopg_parameters_session.execute("SELECT * FROM test_parameters WHERE name = %s", (malicious_input))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 0  # No matches, but table should still exist
+    assert len(result.data) == 0
 
-    # Verify table still exists by counting all records
     count_result = psycopg_parameters_session.execute("SELECT COUNT(*) as count FROM test_parameters")
-    assert count_result.data[0]["count"] >= 3  # Our test data should still be there
+    assert count_result.data[0]["count"] >= 3
 
 
 @pytest.mark.xdist_group("postgres")
@@ -176,9 +165,8 @@ def test_psycopg_parameter_with_like(psycopg_parameters_session: PsycopgSyncDriv
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) >= 3  # test1, test2, test3
+    assert len(result.data) >= 3
 
-    # Test with named parameter
     named_result = psycopg_parameters_session.execute(
         "SELECT * FROM test_parameters WHERE name LIKE %(pattern)s", {"pattern": "test1%"}
     )
@@ -189,13 +177,12 @@ def test_psycopg_parameter_with_like(psycopg_parameters_session: PsycopgSyncDriv
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_any_array(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL ANY and arrays."""
-    # Insert additional test data
+
     psycopg_parameters_session.execute_many(
         "INSERT INTO test_parameters (name, value, description) VALUES (%s, %s, %s)",
         [("alpha", 10, "Alpha test"), ("beta", 20, "Beta test"), ("gamma", 30, "Gamma test")],
     )
 
-    # Test ANY with array parameter
     result = psycopg_parameters_session.execute(
         "SELECT * FROM test_parameters WHERE name = ANY(%s) ORDER BY name", (["alpha", "beta", "test1"],)
     )
@@ -213,7 +200,6 @@ def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSy
     """Test parameters with SQL object."""
     from sqlspec.core.statement import SQL
 
-    # Test with pyformat style
     sql_obj = SQL("SELECT * FROM test_parameters WHERE value > %s", [150])
     result = psycopg_parameters_session.execute(sql_obj)
 
@@ -222,7 +208,6 @@ def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSy
     assert len(result.data) >= 1
     assert all(row["value"] > 150 for row in result.data)
 
-    # Test with named style
     named_sql = SQL("SELECT * FROM test_parameters WHERE value < %(max_value)s", {"max_value": 150})
     named_result = psycopg_parameters_session.execute(named_sql)
 
@@ -235,7 +220,7 @@ def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSy
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_data_types(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test different parameter data types with Psycopg."""
-    # Drop and recreate table to ensure clean state
+
     psycopg_parameters_session.execute_script("""
         DROP TABLE IF EXISTS test_types;
         CREATE TABLE test_types (
@@ -248,7 +233,6 @@ def test_psycopg_parameter_data_types(psycopg_parameters_session: PsycopgSyncDri
         )
     """)
 
-    # Test different data types
     test_data = [
         (42, math.pi, "hello", True, [1, 2, 3]),
         (-100, -2.5, "world", False, [4, 5, 6]),
@@ -261,25 +245,22 @@ def test_psycopg_parameter_data_types(psycopg_parameters_session: PsycopgSyncDri
             data,
         )
 
-    # Verify data with parameters
-    # First check if data was inserted
     all_data_result = psycopg_parameters_session.execute("SELECT * FROM test_types")
-    assert len(all_data_result.data) == 3  # We inserted 3 rows
+    assert len(all_data_result.data) == 3
 
-    # Now test with specific parameters - use int comparison only to avoid float precision issues
     result = psycopg_parameters_session.execute("SELECT * FROM test_types WHERE int_val = %s", (42))
 
     assert len(result.data) == 1
     assert result.data[0]["text_val"] == "hello"
     assert result.data[0]["bool_val"] is True
     assert result.data[0]["array_val"] == [1, 2, 3]
-    assert abs(result.data[0]["real_val"] - math.pi) < 0.001  # Use approximate comparison for float
+    assert abs(result.data[0]["real_val"] - math.pi) < 0.001
 
 
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_edge_cases(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test edge cases for Psycopg parameters."""
-    # Empty string parameter
+
     psycopg_parameters_session.execute(
         "INSERT INTO test_parameters (name, value, description) VALUES (%s, %s, %s)", ("", 999, "Empty name test")
     )
@@ -288,7 +269,6 @@ def test_psycopg_parameter_edge_cases(psycopg_parameters_session: PsycopgSyncDri
     assert len(empty_result.data) == 1
     assert empty_result.data[0]["value"] == 999
 
-    # Very long string parameter
     long_string = "x" * 1000
     psycopg_parameters_session.execute(
         "INSERT INTO test_parameters (name, value, description) VALUES (%s, %s, %s)", ("long_test", 1000, long_string)
@@ -304,17 +284,16 @@ def test_psycopg_parameter_edge_cases(psycopg_parameters_session: PsycopgSyncDri
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_postgresql_functions(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL functions."""
-    # Test with string functions
+
     result = psycopg_parameters_session.execute(
         "SELECT * FROM test_parameters WHERE LENGTH(name) > %s AND UPPER(name) LIKE %s", (4, "TEST%")
     )
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    # Should find test1, test2, test3 (all have length > 4 and start with "test")
+
     assert len(result.data) >= 3
 
-    # Test with math functions and named parameters
     math_result = psycopg_parameters_session.execute(
         "SELECT name, value, ROUND(CAST(value * %(multiplier)s AS NUMERIC), 2) as multiplied FROM test_parameters WHERE value >= %(min_val)s",
         {"multiplier": 1.5, "min_val": 100},
@@ -328,7 +307,7 @@ def test_psycopg_parameter_with_postgresql_functions(psycopg_parameters_session:
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_json(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL JSON operations."""
-    # Create table with JSONB column
+
     psycopg_parameters_session.execute_script("""
         DROP TABLE IF EXISTS test_json;
         CREATE TABLE test_json (
@@ -340,7 +319,6 @@ def test_psycopg_parameter_with_json(psycopg_parameters_session: PsycopgSyncDriv
 
     import json
 
-    # Test inserting JSON data with parameters
     json_data = [
         ("JSON 1", {"type": "test", "value": 100, "active": True}),
         ("JSON 2", {"type": "prod", "value": 200, "active": False}),
@@ -352,16 +330,14 @@ def test_psycopg_parameter_with_json(psycopg_parameters_session: PsycopgSyncDriv
             "INSERT INTO test_json (name, metadata) VALUES (%s, %s)", (name, json.dumps(metadata))
         )
 
-    # Test querying JSON with parameters
     result = psycopg_parameters_session.execute(
         "SELECT name, metadata->>'type' as type, (metadata->>'value')::INTEGER as value FROM test_json WHERE metadata->>'type' = %s",
         ("test"),
     )
 
-    assert len(result.data) == 2  # JSON 1 and JSON 3
+    assert len(result.data) == 2
     assert all(row["type"] == "test" for row in result.data)
 
-    # Test with named parameters
     named_result = psycopg_parameters_session.execute(
         "SELECT name FROM test_json WHERE (metadata->>'value')::INTEGER > %(min_value)s", {"min_value": 150}
     )
@@ -371,7 +347,7 @@ def test_psycopg_parameter_with_json(psycopg_parameters_session: PsycopgSyncDriv
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_arrays(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL array operations."""
-    # Create table with array columns
+
     psycopg_parameters_session.execute_script("""
         DROP TABLE IF EXISTS test_arrays;
         CREATE TABLE test_arrays (
@@ -382,7 +358,6 @@ def test_psycopg_parameter_with_arrays(psycopg_parameters_session: PsycopgSyncDr
         )
     """)
 
-    # Test inserting array data with parameters
     array_data = [
         ("Array 1", ["tag1", "tag2"], [10, 20, 30]),
         ("Array 2", ["tag3"], [40, 50]),
@@ -394,23 +369,21 @@ def test_psycopg_parameter_with_arrays(psycopg_parameters_session: PsycopgSyncDr
             "INSERT INTO test_arrays (name, tags, scores) VALUES (%s, %s, %s)", (name, tags, scores)
         )
 
-    # Test querying arrays with parameters
     result = psycopg_parameters_session.execute("SELECT name FROM test_arrays WHERE %s = ANY(tags)", ("tag2"))
 
     assert len(result.data) == 1
     assert result.data[0]["name"] == "Array 1"
 
-    # Test with named parameters
     named_result = psycopg_parameters_session.execute(
         "SELECT name FROM test_arrays WHERE array_length(scores, 1) > %(min_length)s", {"min_length": 1}
     )
-    assert len(named_result.data) == 2  # Array 1 and Array 2
+    assert len(named_result.data) == 2
 
 
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_window_functions(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL window functions."""
-    # Insert some test data for window functions
+
     psycopg_parameters_session.execute_many(
         "INSERT INTO test_parameters (name, value, description) VALUES (%s, %s, %s)",
         [
@@ -421,7 +394,6 @@ def test_psycopg_parameter_with_window_functions(psycopg_parameters_session: Psy
         ],
     )
 
-    # Test window function with parameter
     result = psycopg_parameters_session.execute(
         """
         SELECT
@@ -437,40 +409,38 @@ def test_psycopg_parameter_with_window_functions(psycopg_parameters_session: Psy
     )
 
     assert len(result.data) >= 4
-    # Verify window function worked correctly
+
     group_a_rows = [row for row in result.data if row["description"] == "Group A"]
     assert len(group_a_rows) == 2
-    assert group_a_rows[0]["row_num"] == 1  # First in partition
-    assert group_a_rows[1]["row_num"] == 2  # Second in partition
+    assert group_a_rows[0]["row_num"] == 1
+    assert group_a_rows[1]["row_num"] == 2
 
 
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_copy_operations(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters in queries alongside COPY operations."""
-    # First use parameters to find specific data
+
     filter_result = psycopg_parameters_session.execute(
         "SELECT COUNT(*) as count FROM test_parameters WHERE value >= %s", (100)
     )
     filter_result.data[0]["count"]
 
-    # Insert data that would be suitable for COPY operations
     batch_data = [(f"Copy Item {i}", i * 50, "COPY_DATA") for i in range(10)]
     psycopg_parameters_session.execute_many(
         "INSERT INTO test_parameters (name, value, description) VALUES (%s, %s, %s)", batch_data
     )
 
-    # Use parameters to verify the data was inserted correctly
     verify_result = psycopg_parameters_session.execute(
         "SELECT COUNT(*) as count FROM test_parameters WHERE description = %s AND value >= %s", ("COPY_DATA", 100)
     )
 
-    assert verify_result.data[0]["count"] >= 8  # Should have items with value >= 100
+    assert verify_result.data[0]["count"] >= 8
 
 
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_mixed_styles_same_query(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test edge case where mixing parameter styles might occur."""
-    # This should work with named parameters
+
     result = psycopg_parameters_session.execute(
         "SELECT * FROM test_parameters WHERE name = %(name)s AND value > %(min_value)s",
         {"name": "test1", "min_value": 50},
@@ -486,7 +456,7 @@ def test_psycopg_parameter_mixed_styles_same_query(psycopg_parameters_session: P
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_named_pyformat_parameter_conversion(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test that NAMED_PYFORMAT parameters are converted correctly through the pipeline."""
-    # Test the exact scenario that was failing: %(name)s style parameters
+
     result = psycopg_parameters_session.execute(
         "SELECT * FROM test_parameters WHERE name = %(target_name)s AND value > %(min_value)s",
         {"target_name": "test1", "min_value": 50},
@@ -502,7 +472,7 @@ def test_psycopg_named_pyformat_parameter_conversion(psycopg_parameters_session:
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_mixed_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test edge cases with mixed NULL and non-NULL parameters."""
-    # Insert test data with mixed NULL values
+
     test_data = [("test_null_1", 10, None), ("test_null_2", 20, "non-null"), ("test_null_3", 30, None)]
 
     for name, value, description in test_data:
@@ -511,28 +481,24 @@ def test_psycopg_mixed_null_parameters(psycopg_parameters_session: PsycopgSyncDr
             {"name": name, "value": value, "description": description},
         )
 
-    # Test with mixed NULL and non-NULL parameters - filter to our specific test data
     result = psycopg_parameters_session.execute(
         "SELECT COUNT(*) as count FROM test_parameters WHERE description IS NULL AND value > %(min_val)s AND name LIKE %(pattern)s",
         {"min_val": 15, "pattern": "test_null_%"},
     )
 
-    # Should return 1 row (test_null_3 has NULL description and value > 15)
     assert result.data[0]["count"] == 1
 
 
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_consistency_check(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test that different parameter styles produce consistent results."""
-    # Query using named pyformat style
+
     named_result = psycopg_parameters_session.execute(
         "SELECT COUNT(*) as count FROM test_parameters WHERE value > %(threshold)s", {"threshold": 150}
     )
 
-    # Query using positional pyformat style (the execution style)
     positional_result = psycopg_parameters_session.execute(
         "SELECT COUNT(*) as count FROM test_parameters WHERE value > %s", (150,)
     )
 
-    # Both should return the same result
     assert named_result.data[0]["count"] == positional_result.data[0]["count"]

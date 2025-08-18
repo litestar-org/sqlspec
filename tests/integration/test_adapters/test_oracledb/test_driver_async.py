@@ -208,7 +208,7 @@ async def test_async_execute_script(oracle_async_session: OracleAsyncDriver) -> 
         name VARCHAR2(50)
     );
     INSERT INTO test_script_table (id, name) VALUES (1, 'script_name1');
-    INSERT INTO test_script_table (id, name) VALUES (EXPECTED_PARTS_COUNT, 'script_name2');
+    INSERT INTO test_script_table (id, name) VALUES (2, 'script_name2');
     """
 
     result = await oracle_async_session.execute_script(script)
@@ -217,7 +217,7 @@ async def test_async_execute_script(oracle_async_session: OracleAsyncDriver) -> 
     select_result = await oracle_async_session.execute("SELECT COUNT(*) as count FROM test_script_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["COUNT"] == 2  # Oracle returns uppercase column names
+    assert select_result.data[0]["COUNT"] == 2
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_script_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -247,7 +247,7 @@ async def test_async_update_operation(oracle_async_session: OracleAsyncDriver) -
     assert insert_result.rows_affected == 1
 
     update_result = await oracle_async_session.execute(
-        "UPDATE test_table SET name = :1 WHERE name = :EXPECTED_PARTS_COUNT", ("updated_name", "original_name")
+        "UPDATE test_table SET name = :1 WHERE name = :2", ("updated_name", "original_name")
     )
     assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1

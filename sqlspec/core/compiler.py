@@ -17,7 +17,7 @@ Features:
 
 import hashlib
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -52,6 +52,18 @@ __all__ = ("CompiledSQL", "OperationType", "SQLProcessor")
 
 logger = get_logger("sqlspec.core.compiler")
 
+OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
+    exp.Select: "SELECT",
+    exp.Insert: "INSERT",
+    exp.Update: "UPDATE",
+    exp.Delete: "DELETE",
+    exp.Pragma: "PRAGMA",
+    exp.Command: "EXECUTE",
+    exp.Create: "DDL",
+    exp.Drop: "DDL",
+    exp.Alter: "DDL",
+}
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class CompiledSQL:
@@ -76,6 +88,8 @@ class CompiledSQL:
         "parameter_style",
         "supports_many",
     )
+
+    operation_type: "OperationType"
 
     def __init__(
         self,
@@ -234,7 +248,7 @@ class SQLProcessor:
             final_parameters = processed_params
             ast_was_transformed = False
             expression = None
-            operation_type: OperationType = cast("OperationType", "EXECUTE")
+            operation_type: OperationType = "EXECUTE"
 
             if self._config.enable_parsing:
                 try:
@@ -248,7 +262,7 @@ class SQLProcessor:
 
                 except ParseError:
                     expression = None
-                    operation_type = cast("OperationType", "EXECUTE")
+                    operation_type = "EXECUTE"
 
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
@@ -279,9 +293,7 @@ class SQLProcessor:
 
         except Exception as e:
             logger.warning("Compilation failed, using fallback: %s", e)
-            return CompiledSQL(
-                compiled_sql=sql, execution_parameters=parameters, operation_type=cast("OperationType", "UNKNOWN")
-            )
+            return CompiledSQL(compiled_sql=sql, execution_parameters=parameters, operation_type="UNKNOWN")
 
     def _make_cache_key(self, sql: str, parameters: Any) -> str:
         """Generate cache key for compilation result.
@@ -321,31 +333,20 @@ class SQLProcessor:
         Returns:
             Operation type literal
         """
-        operation_type_map: dict[type, OperationType] = {
-            exp.Select: cast("OperationType", "SELECT"),
-            exp.Insert: cast("OperationType", "INSERT"),
-            exp.Update: cast("OperationType", "UPDATE"),
-            exp.Delete: cast("OperationType", "DELETE"),
-            exp.Pragma: cast("OperationType", "PRAGMA"),
-            exp.Command: cast("OperationType", "EXECUTE"),
-        }
 
         expr_type = type(expression)
-        if expr_type in operation_type_map:
-            return operation_type_map[expr_type]
+        if expr_type in OPERATION_TYPE_MAP:
+            return OPERATION_TYPE_MAP[expr_type]  # pyright: ignore
 
         if isinstance(expression, exp.Copy):
             copy_kind = expression.args.get("kind")
             if copy_kind is True:
-                return cast("OperationType", "COPY_FROM")
+                return "COPY_FROM"
             if copy_kind is False:
-                return cast("OperationType", "COPY_TO")
-            return cast("OperationType", "COPY")
+                return "COPY_TO"
+            return "COPY"
 
-        if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):
-            return cast("OperationType", "DDL")
-
-        return cast("OperationType", "UNKNOWN")
+        return "UNKNOWN"
 
     def _apply_final_transformations(
         self, expression: "Optional[exp.Expression]", sql: str, parameters: Any, dialect_str: "Optional[str]"

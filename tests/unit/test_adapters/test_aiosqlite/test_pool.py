@@ -26,7 +26,7 @@ class MockAiosqliteConnection:
         self.closed = False
         self.commit_called = False
         self.rollback_called = False
-        # Add thread-like attributes to match aiosqlite.Connection
+
         self.daemon = False
         self.name = f"MockConnection-{id(self)}"
 
@@ -112,7 +112,7 @@ class TestPoolConnection:
 
         assert pool_conn.connection == _cast_mock_connection(mock_aiosqlite_connection)
         assert pool_conn.id is not None
-        assert len(pool_conn.id) == 32  # UUID hex string length
+        assert len(pool_conn.id) == 32
         assert pool_conn.idle_since is None
         assert not pool_conn.is_closed
 
@@ -120,28 +120,24 @@ class TestPoolConnection:
         """Test idle time calculation."""
         pool_conn = AiosqlitePoolConnection(_cast_mock_connection(mock_aiosqlite_connection))
 
-        # Initially not idle
         assert pool_conn.idle_time == 0.0
 
-        # Mark as idle
         time.time()
         pool_conn.mark_as_idle()
-        time.sleep(0.1)  # Small delay
+        time.sleep(0.1)
 
         idle_time = pool_conn.idle_time
         assert idle_time > 0.0
         assert idle_time >= 0.1
-        assert idle_time < 1.0  # Should be less than 1 second
+        assert idle_time < 1.0
 
     def test_mark_as_in_use(self, mock_aiosqlite_connection: MockAiosqliteConnection) -> None:
         """Test marking connection as in use."""
         pool_conn = AiosqlitePoolConnection(_cast_mock_connection(mock_aiosqlite_connection))
 
-        # Mark as idle first
         pool_conn.mark_as_idle()
         assert pool_conn.idle_since is not None
 
-        # Mark as in use
         pool_conn.mark_as_in_use()
         assert pool_conn.idle_since is None
         assert pool_conn.idle_time == 0.0
@@ -164,7 +160,7 @@ class TestPoolConnection:
 
     async def test_is_alive_failing_connection(self, mock_aiosqlite_connection: MockAiosqliteConnection) -> None:
         """Test is_alive with failing connection."""
-        # Make execute raise an exception
+
         mock_aiosqlite_connection.execute = AsyncMock(side_effect=Exception("Connection error"))
 
         pool_conn = AiosqlitePoolConnection(_cast_mock_connection(mock_aiosqlite_connection))
@@ -183,7 +179,6 @@ class TestPoolConnection:
         pool_conn = AiosqlitePoolConnection(_cast_mock_connection(mock_aiosqlite_connection))
         await pool_conn.close()
 
-        # Should not raise exception
         await pool_conn.reset()
 
     async def test_reset_failing_rollback(self, mock_aiosqlite_connection: MockAiosqliteConnection) -> None:
@@ -192,7 +187,6 @@ class TestPoolConnection:
 
         pool_conn = AiosqlitePoolConnection(_cast_mock_connection(mock_aiosqlite_connection))
 
-        # Should not raise exception (uses suppress)
         await pool_conn.reset()
 
     async def test_close_connection(self, mock_aiosqlite_connection: MockAiosqliteConnection) -> None:
@@ -208,7 +202,7 @@ class TestPoolConnection:
         pool_conn = AiosqlitePoolConnection(_cast_mock_connection(mock_aiosqlite_connection))
 
         await pool_conn.close()
-        await pool_conn.close()  # Should not raise exception
+        await pool_conn.close()
         assert pool_conn.is_closed
 
     async def test_close_failing_connection(self, mock_aiosqlite_connection: MockAiosqliteConnection) -> None:
@@ -217,10 +211,9 @@ class TestPoolConnection:
 
         pool_conn = AiosqlitePoolConnection(_cast_mock_connection(mock_aiosqlite_connection))
 
-        # Should not raise exception even when close fails
         await pool_conn.close()
 
-        assert pool_conn.is_closed  # Should still be marked as closed
+        assert pool_conn.is_closed
 
 
 class TestAiosqliteConnectionPool:
@@ -231,10 +224,10 @@ class TestAiosqliteConnectionPool:
         pool = AiosqliteConnectionPool(basic_connection_params)
 
         assert pool._connection_parameters == basic_connection_params
-        assert pool._pool_size == 5  # Default
-        assert pool._connect_timeout == 30.0  # Default
-        assert pool._idle_timeout == 24 * 60 * 60  # Default (24 hours)
-        assert pool._operation_timeout == 10.0  # Default
+        assert pool._pool_size == 5
+        assert pool._connect_timeout == 30.0
+        assert pool._idle_timeout == 24 * 60 * 60
+        assert pool._operation_timeout == 10.0
         assert pool.size() == 0
         assert pool.checked_out() == 0
         assert not pool.is_closed
@@ -271,9 +264,8 @@ class TestAiosqliteConnectionPool:
 
         mock_connect.assert_called_once_with(**basic_connection_params)
         assert pool_conn.connection == _cast_mock_connection(mock_connection)
-        assert pool_conn.idle_since is not None  # Should be marked as idle
+        assert pool_conn.idle_since is not None
 
-        # Memory database should have specific optimizations
         expected_pragmas = [
             "PRAGMA journal_mode = MEMORY",
             "PRAGMA synchronous = OFF",
@@ -299,7 +291,6 @@ class TestAiosqliteConnectionPool:
         pool = AiosqliteConnectionPool(file_connection_params)
         await pool._create_connection()
 
-        # File database should have WAL mode
         expected_pragmas = [
             "PRAGMA journal_mode = WAL",
             "PRAGMA synchronous = NORMAL",
@@ -321,11 +312,7 @@ class TestAiosqliteConnectionPool:
         pool = AiosqliteConnectionPool(shared_memory_params)
         await pool._create_connection()
 
-        # Should have shared cache optimizations
-        expected_pragmas = [
-            "PRAGMA journal_mode = MEMORY",
-            "PRAGMA read_uncommitted = ON",  # For shared cache memory
-        ]
+        expected_pragmas = ["PRAGMA journal_mode = MEMORY", "PRAGMA read_uncommitted = ON"]
 
         for pragma in expected_pragmas:
             assert pragma in mock_connection.execute_calls
@@ -339,7 +326,6 @@ class TestAiosqliteConnectionPool:
         """Test connection creation when optimization fails."""
         mock_connection = MockAiosqliteConnection("test.db")
 
-        # Make some pragma executions fail
         original_execute = mock_connection.execute
 
         async def failing_execute(sql: str) -> None:
@@ -352,12 +338,10 @@ class TestAiosqliteConnectionPool:
 
         pool = AiosqliteConnectionPool(file_connection_params)
 
-        # Should not raise exception even when optimization fails
         pool_conn = await pool._create_connection()
 
         assert pool_conn.connection == _cast_mock_connection(mock_connection)
 
-        # Should have fallback pragmas
         assert "PRAGMA foreign_keys = ON" in mock_connection.execute_calls
         assert "PRAGMA busy_timeout = 30000" in mock_connection.execute_calls
 
@@ -372,10 +356,9 @@ class TestAiosqliteConnectionPool:
         pool = AiosqliteConnectionPool(basic_connection_params)
         pool_conn = await pool._create_connection()
 
-        # Connection should be claimable
         claimed = await pool._claim_if_healthy(pool_conn)
         assert claimed is True
-        assert pool_conn.idle_since is None  # Should be marked as in use
+        assert pool_conn.idle_since is None
 
     @patch("sqlspec.adapters.aiosqlite.pool.aiosqlite.connect")
     async def test_claim_if_healthy_idle_timeout(
@@ -388,10 +371,8 @@ class TestAiosqliteConnectionPool:
         pool = AiosqliteConnectionPool(basic_connection_params, idle_timeout=0.1)
         pool_conn = await pool._create_connection()
 
-        # Wait for idle timeout
         await asyncio.sleep(0.2)
 
-        # Connection should not be claimable
         claimed = await pool._claim_if_healthy(pool_conn)
         assert claimed is False
         assert pool_conn.id not in pool._connection_registry
@@ -403,9 +384,8 @@ class TestAiosqliteConnectionPool:
         """Test claiming connection with health check timeout."""
         mock_connection = MockAiosqliteConnection()
 
-        # Make is_alive take too long
         async def slow_execute(sql: str) -> None:
-            await asyncio.sleep(1.0)  # Longer than operation timeout
+            await asyncio.sleep(1.0)
 
         mock_connection.execute = slow_execute
         mock_connect.return_value = mock_connection
@@ -413,7 +393,6 @@ class TestAiosqliteConnectionPool:
         pool = AiosqliteConnectionPool(basic_connection_params, operation_timeout=0.1)
         pool_conn = await pool._create_connection()
 
-        # Health check should timeout
         claimed = await pool._claim_if_healthy(pool_conn)
         assert claimed is False
         assert pool_conn.id not in pool._connection_registry
@@ -431,7 +410,7 @@ class TestAiosqliteConnectionPool:
         new_conn = await pool._try_provision_new_connection()
         assert new_conn is not None
         assert new_conn.connection == _cast_mock_connection(mock_connection)
-        assert new_conn.idle_since is None  # Should be marked as in use
+        assert new_conn.idle_since is None
         assert pool.size() == 1
 
     @patch("sqlspec.adapters.aiosqlite.pool.aiosqlite.connect")
@@ -443,10 +422,8 @@ class TestAiosqliteConnectionPool:
 
         pool = AiosqliteConnectionPool(basic_connection_params, pool_size=1)
 
-        # Create one connection to reach capacity
         await pool._create_connection()
 
-        # Should not create another
         new_conn = await pool._try_provision_new_connection()
         assert new_conn is None
 
@@ -459,7 +436,6 @@ class TestAiosqliteConnectionPool:
 
         pool = AiosqliteConnectionPool(basic_connection_params)
 
-        # Should return None when connection creation fails
         new_conn = await pool._try_provision_new_connection()
 
         assert new_conn is None
@@ -472,15 +448,13 @@ class TestAiosqliteConnectionPool:
 
         pool = AiosqliteConnectionPool(basic_connection_params)
 
-        # Pre-populate with a connection
         pool_conn = await pool._create_connection()
         pool_conn.mark_as_idle()
         pool._queue.put_nowait(pool_conn)
 
-        # Acquire should get the queued connection
         acquired = await pool.acquire()
         assert acquired == pool_conn
-        assert acquired.idle_since is None  # Should be marked as in use
+        assert acquired.idle_since is None
 
     @patch("sqlspec.adapters.aiosqlite.pool.aiosqlite.connect")
     async def test_acquire_create_new(self, mock_connect: MagicMock, basic_connection_params: "dict[str, Any]") -> None:
@@ -490,7 +464,6 @@ class TestAiosqliteConnectionPool:
 
         pool = AiosqliteConnectionPool(basic_connection_params)
 
-        # Queue is empty, should create new connection
         acquired = await pool.acquire()
         assert acquired.connection == _cast_mock_connection(mock_connection)
         assert acquired.idle_since is None
@@ -500,11 +473,9 @@ class TestAiosqliteConnectionPool:
         """Test acquisition timeout."""
         pool = AiosqliteConnectionPool(basic_connection_params, connect_timeout=0.1, pool_size=1)
 
-        # Fill the pool by manually adding to registry
         dummy_conn = AiosqlitePoolConnection(_cast_mock_connection(MockAiosqliteConnection()))
         pool._connection_registry[dummy_conn.id] = dummy_conn
 
-        # Should timeout since pool is full and no connections available
         with pytest.raises(AiosqliteConnectTimeoutError, match="Connection acquisition timed out"):
             await pool.acquire()
 
@@ -528,9 +499,9 @@ class TestAiosqliteConnectionPool:
 
         await pool.release(pool_conn)
 
-        assert pool_conn.idle_since is not None  # Should be marked as idle
-        assert mock_connection.rollback_called  # Should have been reset
-        assert pool._queue.qsize() == 1  # Should be back in queue
+        assert pool_conn.idle_since is not None
+        assert mock_connection.rollback_called
+        assert pool._queue.qsize() == 1
 
     @patch("sqlspec.adapters.aiosqlite.pool.aiosqlite.connect")
     async def test_release_reset_failure(
@@ -539,10 +510,8 @@ class TestAiosqliteConnectionPool:
         """Test release when reset fails."""
         mock_connection = MockAiosqliteConnection()
 
-        # Make rollback hang to cause a timeout
-
         async def hanging_rollback() -> None:
-            await asyncio.sleep(1.0)  # Longer than operation timeout
+            await asyncio.sleep(1.0)
 
         mock_connection.rollback = hanging_rollback
         mock_connect.return_value = mock_connection
@@ -550,10 +519,8 @@ class TestAiosqliteConnectionPool:
         pool = AiosqliteConnectionPool(basic_connection_params, operation_timeout=0.1)
         pool_conn = await pool._create_connection()
 
-        # Release should not raise exception even when reset fails
         await pool.release(pool_conn)
 
-        # Connection should be retired when reset fails
         assert pool_conn.id not in pool._connection_registry
 
     async def test_release_to_closed_pool(self, basic_connection_params: "dict[str, Any]") -> None:
@@ -565,7 +532,6 @@ class TestAiosqliteConnectionPool:
         await pool.close()
         await pool.release(pool_conn)
 
-        # Connection should be retired
         assert pool_conn.id not in pool._connection_registry
 
     async def test_release_unknown_connection(self, basic_connection_params: "dict[str, Any]") -> None:
@@ -573,10 +539,8 @@ class TestAiosqliteConnectionPool:
         pool = AiosqliteConnectionPool(basic_connection_params)
         unknown_conn = AiosqlitePoolConnection(_cast_mock_connection(MockAiosqliteConnection()))
 
-        # Should not raise exception when releasing unknown connection
         await pool.release(unknown_conn)
 
-        # Pool should remain in valid state
         assert not pool.is_closed
 
     @patch("sqlspec.adapters.aiosqlite.pool.aiosqlite.connect")
@@ -592,7 +556,6 @@ class TestAiosqliteConnectionPool:
         async with pool.get_connection() as conn:
             assert conn == _cast_mock_connection(mock_connection)
 
-        # Connection should be released back to pool
         assert pool._queue.qsize() == 1
 
     @patch("sqlspec.adapters.aiosqlite.pool.aiosqlite.connect")
@@ -612,7 +575,6 @@ class TestAiosqliteConnectionPool:
         except ValueError:
             pass
 
-        # Connection should still be released back to pool
         assert pool._queue.qsize() == 1
 
     @patch("sqlspec.adapters.aiosqlite.pool.aiosqlite.connect")
@@ -623,7 +585,6 @@ class TestAiosqliteConnectionPool:
 
         pool = AiosqliteConnectionPool(basic_connection_params, pool_size=5)
 
-        # Create some connections
         conns = []
         for _ in range(3):
             conn = await pool._create_connection()
@@ -636,7 +597,6 @@ class TestAiosqliteConnectionPool:
         assert pool._queue.qsize() == 0
         assert len(pool._connection_registry) == 0
 
-        # All connections should be closed
         for mock_conn in mock_connections:
             assert mock_conn.closed
 
@@ -645,7 +605,7 @@ class TestAiosqliteConnectionPool:
         pool = AiosqliteConnectionPool(basic_connection_params)
 
         await pool.close()
-        await pool.close()  # Should not raise exception
+        await pool.close()
 
         assert pool.is_closed
 
@@ -660,7 +620,6 @@ class TestAiosqliteConnectionPool:
             await asyncio.sleep(0.1)
             await pool.close()
 
-        # Start closing pool while waiting for connection
         close_task = asyncio.create_task(close_pool_after_delay())
 
         with pytest.raises(AiosqlitePoolClosedError, match="Pool closed during connection acquisition"):
@@ -671,7 +630,7 @@ class TestAiosqliteConnectionPool:
     @patch("sqlspec.adapters.aiosqlite.pool.aiosqlite.connect")
     async def test_concurrent_access(self, mock_connect: MagicMock, basic_connection_params: "dict[str, Any]") -> None:
         """Test concurrent pool access."""
-        # Create mock connections for each acquire
+
         mock_connections = [MockAiosqliteConnection(f"conn_{i}") for i in range(10)]
         mock_connect.side_effect = mock_connections
 
@@ -680,19 +639,15 @@ class TestAiosqliteConnectionPool:
         async def worker(worker_id: int) -> str:
             """Worker that acquires and releases a connection."""
             async with pool.get_connection():
-                # Simulate some work
                 await asyncio.sleep(0.01)
                 return f"worker_{worker_id}_done"
 
-        # Run multiple workers concurrently
         tasks = [worker(i) for i in range(10)]
         results = await asyncio.gather(*tasks)
 
-        # All workers should complete successfully
         assert len(results) == 10
         assert all("done" in result for result in results)
 
-        # Pool should still be functional
         assert not pool.is_closed
         await pool.close()
 
@@ -706,11 +661,8 @@ class TestAiosqliteConnectionPool:
 
         pool = AiosqliteConnectionPool(shared_memory_params)
 
-        # Ensure _wal_initialized is False before the test
         pool._wal_initialized = False
 
-        # This should trigger the delay condition since _wal_initialized is False
-        # and database contains "cache=shared"
         conn = await pool.acquire()
 
         assert conn.connection == _cast_mock_connection(mock_connection)
@@ -722,22 +674,19 @@ class TestAiosqliteConnectionPool:
         """Test pool size and checked out tracking."""
         pool = AiosqliteConnectionPool(basic_connection_params, pool_size=3)
 
-        # Initially empty
         assert pool.size() == 0
         assert pool.checked_out() == 0
 
-        # Add connection to registry
         conn = AiosqlitePoolConnection(_cast_mock_connection(MockAiosqliteConnection()))
         pool._connection_registry[conn.id] = conn
 
         assert pool.size() == 1
-        assert pool.checked_out() == 1  # Not in queue, so checked out
+        assert pool.checked_out() == 1
 
-        # Add to queue (available)
         pool._queue.put_nowait(conn)
 
         assert pool.size() == 1
-        assert pool.checked_out() == 0  # In queue, so available
+        assert pool.checked_out() == 0
 
 
 class TestPoolExceptionClasses:
@@ -760,7 +709,6 @@ class TestPoolExceptionClasses:
 async def test_pool_stress_test(basic_connection_params: "dict[str, Any]") -> None:
     """Stress test the pool with many concurrent operations."""
     with patch("sqlspec.adapters.aiosqlite.pool.aiosqlite.connect") as mock_connect:
-        # Create enough mock connections
         mock_connections = [MockAiosqliteConnection(f"stress_{i}") for i in range(20)]
         mock_connect.side_effect = mock_connections
 
@@ -772,19 +720,17 @@ async def test_pool_stress_test(basic_connection_params: "dict[str, Any]") -> No
             for _ in range(5):
                 try:
                     async with pool.get_connection():
-                        await asyncio.sleep(0.001)  # Tiny delay
+                        await asyncio.sleep(0.001)
                         operations += 1
                 except Exception:
-                    pass  # Ignore errors for stress test
+                    pass
             return operations
 
-        # Run many concurrent workers
         tasks = [stress_worker(i) for i in range(20)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Count successful operations
         total_operations = sum(r for r in results if isinstance(r, int))
-        assert total_operations > 0  # At least some operations should succeed
+        assert total_operations > 0
 
         await pool.close()
 
@@ -797,13 +743,11 @@ async def test_memory_usage_pattern(basic_connection_params: "dict[str, Any]") -
 
         pool = AiosqliteConnectionPool(basic_connection_params, pool_size=2)
 
-        # Rapid acquire/release cycles
         for _ in range(100):
             async with pool.get_connection():
-                pass  # Just acquire and release immediately
+                pass
 
-        # Pool should be stable
-        assert pool.size() <= 2  # Should not exceed pool size
+        assert pool.size() <= 2
         assert not pool.is_closed
 
         await pool.close()

@@ -45,7 +45,6 @@ def test_sync_driver_with_custom_config(mock_sync_connection: MockSyncConnection
 def test_sync_driver_with_cursor(mock_sync_driver: MockSyncDriver) -> None:
     """Test cursor context manager functionality."""
     with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
-        # Test that cursor has expected attributes
         assert hasattr(cursor, "connection")
         assert hasattr(cursor, "execute")
         assert hasattr(cursor, "fetchall")
@@ -55,7 +54,7 @@ def test_sync_driver_with_cursor(mock_sync_driver: MockSyncDriver) -> None:
 def test_sync_driver_database_exception_handling(mock_sync_driver: MockSyncDriver) -> None:
     """Test database exception handling context manager."""
     with mock_sync_driver.handle_database_exceptions():
-        pass  # No exception should be raised
+        pass
 
     with pytest.raises(SQLSpecError, match="Mock database error"):
         with mock_sync_driver.handle_database_exceptions():
@@ -108,7 +107,7 @@ def test_sync_driver_execute_many(mock_sync_driver: MockSyncDriver) -> None:
     assert result.is_many_result is True
     assert result.is_select_result is False
     assert result.is_script_result is False
-    assert result.rowcount_override == 3  # 3 parameter sets
+    assert result.rowcount_override == 3
     assert mock_sync_driver.connection.execute_many_count == 1
 
 
@@ -200,15 +199,12 @@ def test_sync_driver_transaction_management(mock_sync_driver: MockSyncDriver) ->
     """Test transaction management methods."""
     connection = mock_sync_driver.connection
 
-    # Test begin
     mock_sync_driver.begin()
     assert connection.in_transaction is True
 
-    # Test commit
     mock_sync_driver.commit()
     assert connection.in_transaction is False
 
-    # Test rollback
     mock_sync_driver.begin()
     assert connection.in_transaction is True
     mock_sync_driver.rollback()
@@ -253,7 +249,7 @@ def test_sync_driver_select_one(mock_sync_driver: MockSyncDriver) -> None:
 
 def test_sync_driver_select_one_no_results(mock_sync_driver: MockSyncDriver) -> None:
     """Test select_one method with no results."""
-    # Mock empty result
+
     with patch.object(mock_sync_driver, "execute") as mock_execute:
         mock_result = Mock(spec=SQLResult)
         mock_result.get_data.return_value = []
@@ -265,7 +261,7 @@ def test_sync_driver_select_one_no_results(mock_sync_driver: MockSyncDriver) -> 
 
 def test_sync_driver_select_one_multiple_results(mock_sync_driver: MockSyncDriver) -> None:
     """Test select_one method with multiple results."""
-    # Mock multiple results
+
     with patch.object(mock_sync_driver, "execute") as mock_execute:
         mock_result = Mock(spec=SQLResult)
         mock_result.get_data.return_value = [{"id": 1}, {"id": 2}, {"id": 3}]
@@ -315,7 +311,7 @@ def test_sync_driver_select(mock_sync_driver: MockSyncDriver) -> None:
 
 def test_sync_driver_select_value(mock_sync_driver: MockSyncDriver) -> None:
     """Test select_value method."""
-    # Mock single row, single column result
+
     with patch.object(mock_sync_driver, "execute") as mock_execute:
         mock_result = Mock(spec=SQLResult)
         mock_result.one.return_value = {"count": 42}
@@ -379,14 +375,13 @@ def test_sync_driver_parameter_styles(
     driver = MockSyncDriver(mock_sync_connection, config)
     assert driver.statement_config.parameter_config.default_parameter_style == expected_style
 
-    # Test execution with parameter style
     if parameter_style == ParameterStyle.QMARK:
         statement = SQL("SELECT * FROM users WHERE id = ?", 1, statement_config=config)
     elif parameter_style == ParameterStyle.NUMERIC:
         statement = SQL("SELECT * FROM users WHERE id = $1", 1, statement_config=config)
     elif parameter_style == ParameterStyle.NAMED_COLON:
         statement = SQL("SELECT * FROM users WHERE id = :id", {"id": 1}, statement_config=config)
-    else:  # NAMED_PYFORMAT
+    else:
         statement = SQL("SELECT * FROM users WHERE id = %(id)s", {"id": 1}, statement_config=config)
 
     result = driver.dispatch_statement_execution(statement, driver.connection)
@@ -406,7 +401,6 @@ def test_sync_driver_different_dialects(mock_sync_connection: MockSyncConnection
     driver = MockSyncDriver(mock_sync_connection, config)
     assert driver.statement_config.dialect == dialect
 
-    # Test basic query execution
     result = driver.execute("SELECT 1 as test")
     assert isinstance(result, SQLResult)
 
@@ -415,7 +409,6 @@ def test_sync_driver_create_execution_result(mock_sync_driver: MockSyncDriver) -
     """Test create_execution_result method."""
     cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
 
-    # Test SELECT result
     result = mock_sync_driver.create_execution_result(
         cursor, selected_data=[{"id": 1}, {"id": 2}], column_names=["id"], data_row_count=2, is_select_result=True
     )
@@ -425,12 +418,10 @@ def test_sync_driver_create_execution_result(mock_sync_driver: MockSyncDriver) -
     assert result.column_names == ["id"]
     assert result.data_row_count == 2
 
-    # Test INSERT result
     result = mock_sync_driver.create_execution_result(cursor, rowcount_override=1)
     assert result.is_select_result is False
     assert result.rowcount_override == 1
 
-    # Test script result
     result = mock_sync_driver.create_execution_result(
         cursor, statement_count=3, successful_statements=3, is_script_result=True
     )
@@ -444,7 +435,6 @@ def test_sync_driver_build_statement_result(mock_sync_driver: MockSyncDriver) ->
     statement = SQL("SELECT * FROM users", statement_config=mock_sync_driver.statement_config)
     cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
 
-    # Test SELECT result
     execution_result = mock_sync_driver.create_execution_result(
         cursor, selected_data=[{"id": 1}], column_names=["id"], data_row_count=1, is_select_result=True
     )
@@ -455,7 +445,6 @@ def test_sync_driver_build_statement_result(mock_sync_driver: MockSyncDriver) ->
     assert sql_result.get_data() == [{"id": 1}]
     assert sql_result.column_names == ["id"]
 
-    # Test script result
     script_statement = SQL(
         "INSERT INTO users (name) VALUES ('test');", statement_config=mock_sync_driver.statement_config, is_script=True
     )
@@ -484,7 +473,6 @@ def test_sync_driver_error_handling_in_dispatch(mock_sync_driver: MockSyncDriver
     """Test error handling during statement dispatch."""
     statement = SQL("SELECT * FROM users", statement_config=mock_sync_driver.statement_config)
 
-    # Mock an exception during execution
     with patch.object(mock_sync_driver, "_execute_statement", side_effect=ValueError("Test error")):
         with pytest.raises(SQLSpecError, match="Mock database error"):
             mock_sync_driver.dispatch_statement_execution(statement, mock_sync_driver.connection)

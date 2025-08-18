@@ -466,7 +466,7 @@ class SQLFactory:
         """Parse SQL string and populate INSERT builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
-            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
+            parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Insert):
                 builder._expression = parsed_expr
@@ -488,7 +488,7 @@ class SQLFactory:
         """Parse SQL string and populate SELECT builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
-            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
+            parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Select):
                 builder._expression = parsed_expr
@@ -504,7 +504,7 @@ class SQLFactory:
         """Parse SQL string and populate UPDATE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
-            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
+            parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
                 builder._expression = parsed_expr
@@ -520,7 +520,7 @@ class SQLFactory:
         """Parse SQL string and populate DELETE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
-            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
+            parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
                 builder._expression = parsed_expr
@@ -536,7 +536,7 @@ class SQLFactory:
         """Parse SQL string and populate MERGE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
-            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
+            parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Merge):
                 builder._expression = parsed_expr
@@ -725,9 +725,8 @@ class SQLFactory:
         if not parameters:
             # Original behavior - return pure expression
             try:
-                parsed: Optional[exp.Expression] = exp.maybe_parse(sql_fragment)
-                if parsed is not None:
-                    return parsed
+                parsed: exp.Expression = exp.maybe_parse(sql_fragment)
+                return parsed
                 if sql_fragment.strip().replace("_", "").replace(".", "").isalnum():
                     return exp.to_identifier(sql_fragment)
                 return exp.Literal.string(sql_fragment)
@@ -940,10 +939,8 @@ class SQLFactory:
             return FunctionExpression(exp.Any(this=exp.Array(expressions=literals)))
         if isinstance(values, str):
             # Parse as SQL
-            parsed = exp.maybe_parse(values)  # type: ignore[var-annotated]
-            if parsed:
-                return FunctionExpression(exp.Any(this=parsed))
-            return FunctionExpression(exp.Any(this=exp.Literal.string(values)))
+            parsed: exp.Expression = exp.maybe_parse(values)
+            return FunctionExpression(exp.Any(this=parsed))
         return FunctionExpression(exp.Any(this=values))
 
     @staticmethod

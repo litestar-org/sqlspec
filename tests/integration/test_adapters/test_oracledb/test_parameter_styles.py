@@ -132,7 +132,7 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
     """)
 
     await oracle_async_session.execute(
-        "INSERT INTO test_mixed_params_table (id, name, status, last_updated) VALUES (:1, :EXPECTED_PARTS_COUNT, :3, SYSDATE)",
+        "INSERT INTO test_mixed_params_table (id, name, status, last_updated) VALUES (:1, :2, :3, SYSDATE)",
         (1, "Test User", "PENDING"),
     )
 
@@ -180,13 +180,10 @@ def test_sync_oracle_in_clause_with_params(oracle_sync_session: OracleSyncDriver
         )
     """)
 
-    # Insert test data
     test_data = [(1, "TYPE_A", 100), (2, "TYPE_B", 200), (3, "TYPE_C", 300), (4, "TYPE_A", 150), (5, "TYPE_B", 250)]
 
     for data in test_data:
-        oracle_sync_session.execute(
-            "INSERT INTO test_in_clause_table (id, category, value) VALUES (:1, :EXPECTED_PARTS_COUNT, :3)", data
-        )
+        oracle_sync_session.execute("INSERT INTO test_in_clause_table (id, category, value) VALUES (:1, :2, :3)", data)
 
     select_sql = """
         SELECT id, category, value

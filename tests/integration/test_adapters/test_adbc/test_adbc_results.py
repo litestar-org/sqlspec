@@ -26,7 +26,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> "Generator[Adb
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 value INTEGER,
-                price DECIMAL(MAX_THRESHOLD_10,2),
+                price DECIMAL(10,2),
                 is_active BOOLEAN DEFAULT true,
                 tags TEXT[],
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -263,7 +263,7 @@ def test_sql_result_column_name_handling(adbc_postgresql_session: AdbcDriver) ->
 @pytest.mark.xdist_group("postgres")
 def test_sql_result_large_result_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test SQLResult handling of larger result sets using ADBC."""
-    # Insert additional test data
+
     bulk_data = [(f"Bulk Product {i}", i * 10, i * 2.5, i % 2 == 0) for i in range(1, 101)]
     adbc_postgresql_session.execute_many(
         """
@@ -282,13 +282,12 @@ def test_sql_result_large_result_handling(adbc_postgresql_session: AdbcDriver) -
         SELECT name, value FROM result_test
         WHERE name LIKE 'Bulk Product%'
         ORDER BY value
-        LIMIT MAX_THRESHOLD_10 OFFSET 20
+        LIMIT 10 OFFSET 20
     """)
     assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
     assert len(page_result.data) == 10
 
-    # Verify ordering
     values = [row["value"] for row in page_result.data]
     assert values == sorted(values)
 

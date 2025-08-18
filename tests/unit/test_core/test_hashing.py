@@ -5,11 +5,16 @@ Covers all hashing functions with edge cases, performance considerations, and ci
 """
 
 import math
+from typing import TYPE_CHECKING, Any
 from unittest.mock import Mock
 
 import pytest
 from sqlglot import exp, parse_one
 
+from sqlspec.core.filters import StatementFilter
+
+if TYPE_CHECKING:
+    from sqlspec.core.statement import SQL
 from sqlspec.core.hashing import (
     _hash_value,
     hash_expression,
@@ -205,14 +210,32 @@ def test_hash_filters_no_filters() -> None:
 def test_hash_filters_with_filters() -> None:
     """Test hash_filters with test filter objects."""
 
-    class TestFilter1:
+    class TestFilter1(StatementFilter):
         def __init__(self) -> None:
             self.attr1 = "value1"
             self.attr2 = 42
 
-    class TestFilter2:
+        def apply(self, query: str) -> str:
+            return query
+
+        def append_to_statement(self, statement: "SQL") -> "SQL":
+            return statement
+
+        def get_cache_key(self) -> tuple[Any, ...]:
+            return ("test_filter1",)
+
+    class TestFilter2(StatementFilter):
         def __init__(self) -> None:
             self.attr3 = "value3"
+
+        def apply(self, query: str) -> str:
+            return query
+
+        def append_to_statement(self, statement: "SQL") -> "SQL":
+            return statement
+
+        def get_cache_key(self) -> tuple[Any, ...]:
+            return ("test_filter2",)
 
     filters = [TestFilter1(), TestFilter2()]
     result = hash_filters(filters)
@@ -227,20 +250,29 @@ def test_hash_filters_no_dict_attribute() -> None:
     del filter_obj.__dict__
 
     filters = [filter_obj]
-    result = hash_filters(filters)
+    result = hash_filters(filters)  # type: ignore[arg-type]
     assert isinstance(result, int)
 
 
 def test_hash_filters_unhashable_attributes() -> None:
     """Test hash_filters with filters having unhashable attributes."""
 
-    class FilterWithUnhashable:
+    class FilterWithUnhashable(StatementFilter):
         def __init__(self) -> None:
             self.list_attr = [1, 2, 3]
             self.dict_attr = {"key": "value"}
 
+        def apply(self, query: str) -> str:
+            return query
+
+        def append_to_statement(self, statement: "SQL") -> "SQL":
+            return statement
+
+        def get_cache_key(self) -> tuple[Any, ...]:
+            return ("filter_unhashable",)
+
     filters = [FilterWithUnhashable()]
-    result = hash_filters(filters)
+    result = hash_filters(filters)  # type: ignore[arg-type]
     assert isinstance(result, int)
 
 
