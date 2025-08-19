@@ -593,22 +593,18 @@ class SQLSpec:
             )
         )
 
-    def _ensure_sql_loader(self) -> "SQLFileLoader":
-        """Ensure SQL loader is initialized lazily."""
-        if self._sql_loader is None:
-            from sqlspec.loader import SQLFileLoader
-
-            self._sql_loader = SQLFileLoader()
-        return self._sql_loader
-
     def load_sql_files(self, *paths: "Union[str, Path]") -> None:
         """Load SQL files from paths or directories.
 
         Args:
             *paths: One or more file paths or directory paths to load.
         """
-        loader = self._ensure_sql_loader()
-        loader.load_sql(*paths)
+        if self._sql_loader is None:
+            from sqlspec.loader import SQLFileLoader
+
+            self._sql_loader = SQLFileLoader()
+
+        self._sql_loader.load_sql(*paths)
         logger.debug("Loaded SQL files: %s", paths)
 
     def add_named_sql(self, name: str, sql: str, dialect: "Optional[str]" = None) -> None:
@@ -619,8 +615,12 @@ class SQLSpec:
             sql: Raw SQL content.
             dialect: Optional dialect for the SQL statement.
         """
-        loader = self._ensure_sql_loader()
-        loader.add_named_sql(name, sql, dialect)
+        if self._sql_loader is None:
+            from sqlspec.loader import SQLFileLoader
+
+            self._sql_loader = SQLFileLoader()
+
+        self._sql_loader.add_named_sql(name, sql, dialect)
         logger.debug("Added named SQL: %s", name)
 
     def get_sql(self, name: str) -> "SQL":
@@ -633,8 +633,12 @@ class SQLSpec:
         Returns:
             SQL object ready for execution.
         """
-        loader = self._ensure_sql_loader()
-        return loader.get_sql(name)
+        if self._sql_loader is None:
+            from sqlspec.loader import SQLFileLoader
+
+            self._sql_loader = SQLFileLoader()
+
+        return self._sql_loader.get_sql(name)
 
     def list_sql_queries(self) -> "list[str]":
         """List all available query names.

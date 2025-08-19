@@ -11,11 +11,14 @@ from sqlspec.core.result import SQLResult
 @pytest.fixture
 def duckdb_batch_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for batch operation testing."""
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    import uuid
+
+    # Use unique database for each test to avoid data contamination
+    config = DuckDBConfig(pool_config={"database": f":memory:{uuid.uuid4().hex}"})
 
     with config.provide_session() as session:
         session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_batch (
+            CREATE TABLE test_batch (
                 id INTEGER PRIMARY KEY,
                 name VARCHAR NOT NULL,
                 value INTEGER DEFAULT 0,

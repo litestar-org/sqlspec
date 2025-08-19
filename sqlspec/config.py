@@ -11,8 +11,11 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import Awaitable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
+    from pathlib import Path
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.loader import SQLFileLoader
+    from sqlspec.migrations.commands import MigrationCommands
 
 
 __all__ = (
@@ -76,11 +79,24 @@ class MigrationConfig(TypedDict, total=False):
     project_root: NotRequired[str]
     """Path to the project root directory. Used for relative path resolution."""
 
+    enabled: NotRequired[bool]
+    """Whether this configuration should be included in CLI operations. Defaults to True."""
+
 
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
-    __slots__ = ("driver_features", "migration_config", "pool_instance", "statement_config")
+    __slots__ = (
+        "_migration_commands",
+        "_migration_loader",
+        "driver_features",
+        "migration_config",
+        "pool_instance",
+        "statement_config",
+    )
+
+    _migration_loader: "SQLFileLoader"
+    _migration_commands: "MigrationCommands"
     driver_type: "ClassVar[type[Any]]"
     connection_type: "ClassVar[type[Any]]"
     is_async: "ClassVar[bool]" = False
@@ -153,6 +169,136 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """
         return {}
 
+    def _initialize_migration_components(self) -> None:
+        """Initialize migration loader and commands with necessary imports.
+
+        This method handles the circular import between config and commands
+        by importing at runtime when needed.
+        """
+        from sqlspec.loader import SQLFileLoader
+        from sqlspec.migrations.commands import MigrationCommands
+
+        self._migration_loader = SQLFileLoader()
+        self._migration_commands = MigrationCommands(self)  # type: ignore[arg-type]
+
+    def _ensure_migration_loader(self) -> "SQLFileLoader":
+        """Get the migration SQL loader and auto-load files if needed.
+
+        Returns:
+            The SQLFileLoader instance for migration files.
+        """
+        # Auto-load migration files from configured migration path if it exists
+        migration_config = self.migration_config or {}
+        script_location = migration_config.get("script_location", "migrations")
+
+        from pathlib import Path
+
+        migration_path = Path(script_location)
+        if migration_path.exists() and not self._migration_loader.list_files():
+            self._migration_loader.load_sql(migration_path)
+            logger.debug("Auto-loaded migration SQL files from %s", migration_path)
+
+        return self._migration_loader
+
+    def _ensure_migration_commands(self) -> "MigrationCommands":
+        """Get the migration commands instance.
+
+        Returns:
+            The MigrationCommands instance for this config.
+        """
+        return self._migration_commands
+
+    def get_migration_loader(self) -> "SQLFileLoader":
+        """Get the SQL loader for migration files.
+
+        This provides access to migration SQL files loaded from the configured
+        script_location directory. Files are loaded lazily on first access.
+
+        Returns:
+            SQLFileLoader instance with migration files loaded.
+        """
+        return self._ensure_migration_loader()
+
+    def load_migration_sql_files(self, *paths: "Union[str, Path]") -> None:
+        """Load additional migration SQL files from specified paths.
+
+        Args:
+            *paths: One or more file paths or directory paths to load migration SQL files from.
+        """
+        from pathlib import Path
+
+        loader = self._ensure_migration_loader()
+        for path in paths:
+            path_obj = Path(path)
+            if path_obj.exists():
+                loader.load_sql(path_obj)
+                logger.debug("Loaded migration SQL files from %s", path_obj)
+            else:
+                logger.warning("Migration path does not exist: %s", path_obj)
+
+    def get_migration_commands(self) -> "MigrationCommands":
+        """Get migration commands for this configuration.
+
+        Returns:
+            MigrationCommands instance configured for this database.
+        """
+        return self._ensure_migration_commands()
+
+    def migrate_up(self, revision: str = "head") -> None:
+        """Apply migrations up to the specified revision.
+
+        Args:
+            revision: Target revision or "head" for latest. Defaults to "head".
+        """
+        commands = self._ensure_migration_commands()
+        commands.upgrade(revision)
+
+    def migrate_down(self, revision: str = "-1") -> None:
+        """Apply migrations down to the specified revision.
+
+        Args:
+            revision: Target revision, "-1" for one step back, or "base" for all migrations. Defaults to "-1".
+        """
+        commands = self._ensure_migration_commands()
+        commands.downgrade(revision)
+
+    def get_current_migration(self, verbose: bool = False) -> "Optional[str]":
+        """Get the current migration version.
+
+        Args:
+            verbose: Whether to show detailed migration history.
+
+        Returns:
+            The current migration version or None if no migrations applied.
+        """
+        commands = self._ensure_migration_commands()
+        return commands.current(verbose=verbose)
+
+    def create_migration(self, message: str, file_type: str = "sql") -> None:
+        """Create a new migration file.
+
+        Args:
+            message: Description for the migration.
+            file_type: Type of migration file to create ('sql' or 'py'). Defaults to 'sql'.
+        """
+        commands = self._ensure_migration_commands()
+        commands.revision(message, file_type)
+
+    def init_migrations(self, directory: "Optional[str]" = None, package: bool = True) -> None:
+        """Initialize migration directory structure.
+
+        Args:
+            directory: Directory to initialize migrations in. Uses script_location from migration_config if not provided.
+            package: Whether to create __init__.py file. Defaults to True.
+        """
+        if directory is None:
+            migration_config = self.migration_config or {}
+            directory = migration_config.get("script_location") or "migrations"
+
+        commands = self._ensure_migration_commands()
+        assert directory is not None
+        commands.init(directory, package)
+
 
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for a sync database configurations that do not implement a pool."""
@@ -173,6 +319,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.pool_instance = None
         self.connection_config = connection_config or {}
         self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
+        self._initialize_migration_components()
 
         if statement_config is None:
             default_parameter_config = ParameterStyleConfig(
@@ -226,6 +373,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.pool_instance = None
         self.connection_config = connection_config or {}
         self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
+        self._initialize_migration_components()
 
         if statement_config is None:
             default_parameter_config = ParameterStyleConfig(
@@ -280,6 +428,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
         self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
+        self._initialize_migration_components()
 
         if statement_config is None:
             default_parameter_config = ParameterStyleConfig(
@@ -356,6 +505,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
         self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
+        self._initialize_migration_components()
 
         if statement_config is None:
             self.statement_config = StatementConfig(

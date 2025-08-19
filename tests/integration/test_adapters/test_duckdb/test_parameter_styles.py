@@ -13,17 +13,19 @@ from sqlspec.core.result import SQLResult
 @pytest.fixture
 def duckdb_parameters_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for parameter style testing."""
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    import uuid
+
+    # Use unique database for each test to avoid data contamination
+    config = DuckDBConfig(pool_config={"database": f":memory:{uuid.uuid4().hex}"})
 
     with config.provide_session() as session:
         session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_parameters (
+            CREATE TABLE test_parameters (
                 id INTEGER PRIMARY KEY,
                 name VARCHAR NOT NULL,
                 value INTEGER DEFAULT 0,
                 description VARCHAR
-            );
-            TRUNCATE TABLE test_parameters;
+            )
         """)
 
         session.execute(
