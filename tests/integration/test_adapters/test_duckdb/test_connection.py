@@ -10,6 +10,8 @@ from sqlspec.core.result import SQLResult
 
 def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     """Create a DuckDB config with permissive SQL settings."""
+    import uuid
+
     connection_config = kwargs.pop("connection_config", {})
 
     for param in [
@@ -29,7 +31,8 @@ def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
             connection_config[param] = kwargs.pop(param)
 
     if "database" not in connection_config:
-        connection_config["database"] = ":memory:"
+        # Use a unique memory database identifier to avoid configuration conflicts
+        connection_config["database"] = f":memory:{uuid.uuid4().hex}"
 
     kwargs["pool_config"] = connection_config
     return DuckDBConfig(**kwargs)

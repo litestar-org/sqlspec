@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from litestar.di import Provide
 from litestar.plugins import CLIPlugin, InitPluginProtocol
@@ -14,21 +14,29 @@ if TYPE_CHECKING:
     from click import Group
     from litestar.config.app import AppConfig
 
+    from sqlspec.loader import SQLFileLoader
+
 logger = get_logger("extensions.litestar")
 
 
-class SQLSpec(InitPluginProtocol, CLIPlugin, SQLSpecBase):
+class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
     """Litestar plugin for SQLSpec database integration."""
 
     __slots__ = ("_plugin_configs",)
 
-    def __init__(self, config: Union["SyncConfigT", "AsyncConfigT", "DatabaseConfig", list["DatabaseConfig"]]) -> None:
+    def __init__(
+        self,
+        config: Union["SyncConfigT", "AsyncConfigT", "DatabaseConfig", list["DatabaseConfig"]],
+        *,
+        loader: "Optional[SQLFileLoader]" = None,
+    ) -> None:
         """Initialize SQLSpec plugin.
 
         Args:
             config: Database configuration for SQLSpec plugin.
+            loader: Optional SQL file loader instance.
         """
-        super().__init__()
+        super().__init__(loader=loader)
         if isinstance(config, DatabaseConfigProtocol):
             self._plugin_configs: list[DatabaseConfig] = [DatabaseConfig(config=config)]  # pyright: ignore
         elif isinstance(config, DatabaseConfig):
@@ -83,8 +91,7 @@ class SQLSpec(InitPluginProtocol, CLIPlugin, SQLSpecBase):
             app_config.signature_types.append(c.config.connection_type)  # type: ignore[union-attr]
             app_config.signature_types.append(c.config.driver_type)  # type: ignore[union-attr]
 
-            if hasattr(c.config, "get_signature_namespace"):
-                signature_namespace.update(c.config.get_signature_namespace())  # type: ignore[attr-defined]
+            signature_namespace.update(c.config.get_signature_namespace())  # type: ignore[union-attr]
 
             app_config.before_send.append(c.before_send_handler)
             app_config.lifespan.append(c.lifespan_handler)  # pyright: ignore[reportUnknownMemberType]
