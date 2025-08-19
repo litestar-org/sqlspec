@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Union
 
 from litestar.di import Provide
 from litestar.plugins import CLIPlugin, InitPluginProtocol
@@ -20,7 +20,7 @@ logger = get_logger("extensions.litestar")
 class SQLSpec(InitPluginProtocol, CLIPlugin, SQLSpecBase):
     """Litestar plugin for SQLSpec database integration."""
 
-    __slots__ = ("_config", "_plugin_configs")
+    __slots__ = ("_plugin_configs",)
 
     def __init__(self, config: Union["SyncConfigT", "AsyncConfigT", "DatabaseConfig", list["DatabaseConfig"]]) -> None:
         """Initialize SQLSpec plugin.
@@ -28,9 +28,9 @@ class SQLSpec(InitPluginProtocol, CLIPlugin, SQLSpecBase):
         Args:
             config: Database configuration for SQLSpec plugin.
         """
-        self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
+        super().__init__()
         if isinstance(config, DatabaseConfigProtocol):
-            self._plugin_configs: list[DatabaseConfig] = [DatabaseConfig(config=config)]
+            self._plugin_configs: list[DatabaseConfig] = [DatabaseConfig(config=config)]  # pyright: ignore
         elif isinstance(config, DatabaseConfig):
             self._plugin_configs = [config]
         else:
