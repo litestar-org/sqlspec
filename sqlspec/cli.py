@@ -124,15 +124,26 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         """
         configs = ctx.obj["configs"]
         if bind_key is None:
-            return cast("Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]", configs[0])
+            config = configs[0]
+        else:
+            config = None
+            for cfg in configs:
+                config_name = getattr(cfg, "name", None) or getattr(cfg, "bind_key", None)
+                if config_name == bind_key:
+                    config = cfg
+                    break
 
-        for config in configs:
-            config_name = getattr(config, "name", None) or getattr(config, "bind_key", None)
-            if config_name == bind_key:
-                return cast("Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]", config)
+            if config is None:
+                console.print(f"[red]No config found for bind key: {bind_key}[/]")
+                sys.exit(1)
 
-        console.print(f"[red]No config found for bind key: {bind_key}[/]")
-        sys.exit(1)
+        # Extract the actual config from DatabaseConfig wrapper if needed
+        from sqlspec.extensions.litestar.config import DatabaseConfig
+
+        if isinstance(config, DatabaseConfig):
+            config = config.config
+
+        return cast("Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]", config)
 
     def get_configs_with_migrations(ctx: "click.Context", enabled_only: bool = False) -> "list[tuple[str, Any]]":
         """Get all configurations that have migrations enabled.
@@ -147,15 +158,22 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         configs = ctx.obj["configs"]
         migration_configs = []
 
+        from sqlspec.extensions.litestar.config import DatabaseConfig
+
         for config in configs:
-            migration_config = getattr(config, "migration_config", None)
+            # Extract the actual config from DatabaseConfig wrapper if needed
+            actual_config = config.config if isinstance(config, DatabaseConfig) else config
+
+            migration_config = getattr(actual_config, "migration_config", None)
             if migration_config:
                 enabled = migration_config.get("enabled", True)
                 if not enabled_only or enabled:
                     config_name = (
-                        getattr(config, "name", None) or getattr(config, "bind_key", None) or str(type(config).__name__)
+                        getattr(actual_config, "name", None)
+                        or getattr(actual_config, "bind_key", None)
+                        or str(type(actual_config).__name__)
                     )
-                    migration_configs.append((config_name, config))
+                    migration_configs.append((config_name, actual_config))
 
         return migration_configs
 
@@ -418,10 +436,14 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         )
         if input_confirmed:
             configs = [get_config_by_bind_key(ctx, bind_key)] if bind_key is not None else ctx.obj["configs"]
+            from sqlspec.extensions.litestar.config import DatabaseConfig
+
             for config in configs:
-                migration_config = getattr(config, "migration_config", {})
+                # Extract the actual config from DatabaseConfig wrapper if needed
+                actual_config = config.config if isinstance(config, DatabaseConfig) else config
+                migration_config = getattr(actual_config, "migration_config", {})
                 directory = migration_config.get("script_location", "migrations") if directory is None else directory
-                migration_commands = MigrationCommands(config=config)
+                migration_commands = MigrationCommands(config=actual_config)
                 migration_commands.init(directory=cast("str", directory), package=package)
 
     @database_group.command(name="make-migrations", help="Create a new migration revision.")
@@ -445,9 +467,9 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         migration_commands = MigrationCommands(config=sqlspec_config)
         migration_commands.revision(message=message)
 
-    @database_group.command(name="detect-migrations", help="Detect all configurations with migrations enabled.")
-    def detect_migrations() -> None:  # pyright: ignore[reportUnusedFunction]
-        """Detect and display all configurations with migrations enabled."""
+    @database_group.command(name="show-config", help="Show all configurations with migrations enabled.")
+    def show_config() -> None:  # pyright: ignore[reportUnusedFunction]
+        """Show and display all configurations with migrations enabled."""
         from rich.table import Table
 
         ctx = click.get_current_context()
@@ -457,12 +479,15 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
             console.print("[yellow]No configurations with migrations detected.[/]")
             return
 
-        table = Table(title="Detected Migration Configurations")
+        table = Table(title="Migration Configurations")
         table.add_column("Configuration Name", style="cyan")
+        table.add_column("Migration Path", style="blue")
         table.add_column("Status", style="green")
 
-        for config_name, _ in migration_configs:
-            table.add_row(config_name, "Migration Enabled")
+        for config_name, config in migration_configs:
+            migration_config = getattr(config, "migration_config", {})
+            script_location = migration_config.get("script_location", "migrations")
+            table.add_row(config_name, script_location, "Migration Enabled")
 
         console.print(table)
         console.print(f"[blue]Found {len(migration_configs)} configuration(s) with migrations enabled.[/]")
