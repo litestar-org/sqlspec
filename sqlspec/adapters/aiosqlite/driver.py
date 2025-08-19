@@ -1,11 +1,4 @@
-"""AIOSQLite driver implementation for async SQLite operations.
-
-Provides async SQLite database connectivity with:
-- Async parameter processing with type coercion
-- Thread-safe caching system
-- Context management for resource handling
-- SQLite-specific optimizations
-"""
+"""AIOSQLite driver implementation for async SQLite operations."""
 
 import asyncio
 import contextlib
@@ -61,7 +54,7 @@ aiosqlite_statement_config = StatementConfig(
 
 
 class AiosqliteCursor:
-    """Async context manager for AIOSQLite cursor management."""
+    """Async context manager for AIOSQLite cursors."""
 
     __slots__ = ("connection", "cursor")
 
@@ -81,7 +74,7 @@ class AiosqliteCursor:
 
 
 class AiosqliteExceptionHandler:
-    """Custom async context manager for handling AIOSQLite database exceptions."""
+    """Async context manager for AIOSQLite database exceptions."""
 
     __slots__ = ()
 
@@ -125,13 +118,7 @@ class AiosqliteExceptionHandler:
 
 
 class AiosqliteDriver(AsyncDriverAdapterBase):
-    """AIOSQLite driver for async SQLite database operations.
-
-    Provides async SQLite connectivity with:
-    - Statement processing and parameter handling
-    - Cursor management and resource cleanup
-    - Exception handling for SQLite operations
-    """
+    """AIOSQLite driver for async SQLite database operations."""
 
     __slots__ = ()
     dialect = "sqlite"
@@ -170,7 +157,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return None
 
     async def _execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script using statement splitting and parameter handling."""
+        """Execute SQL script."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -186,7 +173,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using async batch processing."""
+        """Execute SQL with multiple parameter sets."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         if not prepared_parameters:
@@ -200,7 +187,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def _execute_statement(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with async data handling."""
+        """Execute single SQL statement."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters or ())
 
@@ -218,14 +205,11 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def begin(self) -> None:
-        """Begin a database transaction with appropriate locking strategy."""
+        """Begin a database transaction."""
         try:
             if not self.connection.in_transaction:
-                # For shared cache databases, use IMMEDIATE to reduce lock contention
-                # For other databases, BEGIN IMMEDIATE is also safer for concurrent access
                 await self.connection.execute("BEGIN IMMEDIATE")
         except aiosqlite.Error as e:
-            # If IMMEDIATE fails due to lock, try with exponential backoff
             import random
 
             max_retries = 3
@@ -235,7 +219,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 try:
                     await self.connection.execute("BEGIN IMMEDIATE")
                 except aiosqlite.Error:
-                    if attempt == max_retries - 1:  # Last attempt
+                    if attempt == max_retries - 1:
                         break
                 else:
                     return

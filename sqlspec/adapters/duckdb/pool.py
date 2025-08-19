@@ -25,7 +25,7 @@ __all__ = ("DuckDBConnectionPool",)
 
 
 class DuckDBConnectionPool:
-    """Thread-local connection manager for DuckDB with performance optimizations.
+    """Thread-local connection manager for DuckDB.
 
     Uses thread-local storage to ensure each thread gets its own DuckDB connection,
     preventing the thread-safety issues that cause segmentation faults when
@@ -54,7 +54,7 @@ class DuckDBConnectionPool:
         extensions: "Optional[list[dict[str, Any]]]" = None,
         secrets: "Optional[list[dict[str, Any]]]" = None,
         on_connection_create: "Optional[Callable[[DuckDBConnection], None]]" = None,
-        **kwargs: Any,  # Accept and ignore additional parameters for compatibility
+        **kwargs: Any,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -159,7 +159,6 @@ class DuckDBConnectionPool:
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
 
-        # Check if connection needs recycling
         if self._recycle > 0 and time.time() - self._thread_local.created_at > self._recycle:
             with suppress(Exception):
                 self._thread_local.connection.close()
@@ -207,7 +206,6 @@ class DuckDBConnectionPool:
         try:
             yield connection
         except Exception:
-            # On error, close and recreate connection for this thread
             self._close_thread_connection()
             raise
 
@@ -240,4 +238,3 @@ class DuckDBConnectionPool:
         Args:
             connection: The connection to release (ignored)
         """
-        # No-op: thread-local connections are managed per-thread

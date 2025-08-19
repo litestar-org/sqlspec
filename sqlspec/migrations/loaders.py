@@ -70,7 +70,7 @@ class BaseMigrationLoader(abc.ABC):
 
 
 class SQLFileLoader(BaseMigrationLoader):
-    """Loader for SQL migration files using SQLFileLoader."""
+    """Loader for SQL migration files."""
 
     __slots__ = ("sql_loader",)
 

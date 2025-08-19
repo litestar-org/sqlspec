@@ -1,19 +1,14 @@
-"""Caching system with unified cache management.
+"""Caching system for SQL statement processing.
 
 This module provides a caching system with LRU eviction and TTL support for
 SQL statement processing, parameter processing, and expression caching.
 
 Components:
 - CacheKey: Immutable cache key
-- UnifiedCache: Main cache implementation with LRU eviction and TTL
-- StatementCache: Specialized cache for compiled SQL statements
-- ExpressionCache: Specialized cache for parsed expressions
-- ParameterCache: Specialized cache for processed parameters
-
-Features:
-- LRU caching with configurable size and TTL
-- Thread-safe cache operations for concurrent access
-- Cache lookup and insertion operations
+- UnifiedCache: Cache implementation with LRU eviction and TTL
+- StatementCache: Cache for compiled SQL statements
+- ExpressionCache: Cache for parsed expressions
+- ParameterCache: Cache for processed parameters
 """
 
 import threading
@@ -64,13 +59,6 @@ CACHE_STATS_SLOTS: Final = ("hits", "misses", "evictions", "total_operations", "
 class CacheKey:
     """Immutable cache key.
 
-    This class provides an immutable cache key for consistent cache operations
-    across all cache types.
-
-    Features:
-    - Immutable design for safe sharing across threads
-    - Equality comparison with short-circuit evaluation
-
     Args:
         key_data: Tuple of hashable values that uniquely identify the cached item
     """
@@ -96,7 +84,7 @@ class CacheKey:
         return self._hash
 
     def __eq__(self, other: object) -> bool:
-        """Equality comparison with short-circuit evaluation."""
+        """Equality comparison."""
         if type(other) is not CacheKey:
             return False
         other_key = other
@@ -113,8 +101,7 @@ class CacheKey:
 class CacheStats:
     """Cache statistics tracking.
 
-    Tracks cache performance metrics including hit rates, evictions,
-    and memory usage.
+    Tracks cache metrics including hit rates, evictions, and memory usage.
     """
 
     __slots__ = CACHE_STATS_SLOTS
@@ -171,11 +158,7 @@ class CacheStats:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class CacheNode:
-    """Internal cache node for LRU linked list implementation.
-
-    This class represents a node in the doubly-linked list used for
-    LRU cache implementation.
-    """
+    """Internal cache node for LRU linked list implementation."""
 
     __slots__ = CACHE_NODE_SLOTS
 
@@ -197,16 +180,6 @@ class CacheNode:
 @mypyc_attr(allow_interpreted_subclasses=False)
 class UnifiedCache:
     """Cache with LRU eviction and TTL support.
-
-    This class provides a thread-safe cache implementation with LRU eviction
-    and time-based expiration.
-
-    Features:
-    - Cache lookup, insertion, and deletion operations
-    - LRU eviction policy with configurable size limits
-    - TTL-based expiration for cache entries
-    - Thread-safe operations
-    - Statistics tracking
 
     Args:
         max_size: Maximum number of items to cache (LRU eviction when exceeded)
@@ -234,7 +207,7 @@ class UnifiedCache:
         self._tail.prev = self._head
 
     def get(self, key: CacheKey) -> Optional[Any]:
-        """Get value from cache with LRU update.
+        """Get value from cache.
 
         Args:
             key: Cache key to lookup
@@ -264,7 +237,7 @@ class UnifiedCache:
             return node.value
 
     def put(self, key: CacheKey, value: Any) -> None:
-        """Put value in cache with LRU management.
+        """Put value in cache.
 
         Args:
             key: Cache key
@@ -329,7 +302,7 @@ class UnifiedCache:
         return self._stats
 
     def _add_to_head(self, node: CacheNode) -> None:
-        """Add node after head."""
+        """Add node to head of list."""
         node.prev = self._head
         head_next: Optional[CacheNode] = self._head.next
         node.next = head_next
@@ -347,7 +320,7 @@ class UnifiedCache:
             node_next.prev = node_prev
 
     def _move_to_head(self, node: CacheNode) -> None:
-        """Move existing node to head."""
+        """Move node to head of list."""
         self._remove_node(node)
         self._add_to_head(node)
 
@@ -368,10 +341,7 @@ class UnifiedCache:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class StatementCache:
-    """Specialized cache for compiled SQL statements.
-
-    Caches compiled SQL statements and their execution parameters.
-    """
+    """Cache for compiled SQL statements."""
 
     def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
         """Initialize statement cache.
@@ -388,7 +358,7 @@ class StatementCache:
             statement: SQL statement to lookup
 
         Returns:
-            Tuple of (compiled_sql, parameters) or None if not cached
+            Tuple of (compiled_sql, parameters) or None if not found
         """
         cache_key = self._create_statement_key(statement)
         return self._cache.get(cache_key)
@@ -435,10 +405,7 @@ class StatementCache:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ExpressionCache:
-    """Specialized cache for parsed expressions.
-
-    Caches parsed expressions to avoid redundant parsing operations.
-    """
+    """Cache for parsed expressions."""
 
     def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
         """Initialize expression cache.
@@ -456,7 +423,7 @@ class ExpressionCache:
             dialect: SQL dialect
 
         Returns:
-            Parsed expression or None if not cached
+            Parsed expression or None if not found
         """
         cache_key = self._create_expression_key(sql, dialect)
         return self._cache.get(cache_key)
@@ -496,10 +463,7 @@ class ExpressionCache:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterCache:
-    """Specialized cache for processed parameters.
-
-    Caches processed parameter transformations.
-    """
+    """Cache for processed parameters."""
 
     def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
         """Initialize parameter cache.
@@ -517,7 +481,7 @@ class ParameterCache:
             config_hash: Hash of parameter processing configuration
 
         Returns:
-            Processed parameters or None if not cached
+            Processed parameters or None if not found
         """
         cache_key = self._create_parameter_key(original_params, config_hash)
         return self._cache.get(cache_key)
@@ -665,10 +629,7 @@ _global_cache_config: "Optional[CacheConfig]" = None
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class CacheConfig:
-    """Global cache configuration for SQLSpec.
-
-    Controls caching behavior across the SQLSpec system.
-    """
+    """Global cache configuration for SQLSpec."""
 
     def __init__(
         self,
@@ -716,8 +677,7 @@ def get_cache_config() -> CacheConfig:
 def update_cache_config(config: CacheConfig) -> None:
     """Update the global cache configuration.
 
-    This clears all existing caches when configuration changes to ensure
-    consistency with the new settings.
+    Clears all existing caches when configuration changes.
 
     Args:
         config: New cache configuration to apply globally
@@ -747,7 +707,7 @@ def update_cache_config(config: CacheConfig) -> None:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class CacheStatsAggregate:
-    """Aggregated cache statistics from all cache instances."""
+    """Cache statistics from all cache instances."""
 
     __slots__ = (
         "fragment_capacity",
@@ -768,7 +728,7 @@ class CacheStatsAggregate:
     )
 
     def __init__(self) -> None:
-        """Initialize aggregated cache statistics."""
+        """Initialize cache statistics."""
         self.sql_hit_rate = 0.0
         self.fragment_hit_rate = 0.0
         self.optimized_hit_rate = 0.0
@@ -787,10 +747,10 @@ class CacheStatsAggregate:
 
 
 def get_cache_stats() -> CacheStatsAggregate:
-    """Get current cache statistics from all caches.
+    """Get cache statistics from all caches.
 
     Returns:
-        Combined cache statistics object
+        Cache statistics object
     """
     stats_dict = get_cache_statistics()
     stats = CacheStatsAggregate()
@@ -834,7 +794,7 @@ def reset_cache_stats() -> None:
 
 
 def log_cache_stats() -> None:
-    """Log current cache statistics using the configured logger."""
+    """Log cache statistics."""
     logger = get_logger("sqlspec.cache")
     stats = get_cache_stats()
     logger.info("Cache Statistics: %s", stats)

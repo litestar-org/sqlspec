@@ -18,7 +18,7 @@ logger = get_logger("migrations.tracker")
 
 
 class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
-    """Tracks applied migrations in the database."""
+    """Synchronous migration version tracker."""
 
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
@@ -103,7 +103,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
 
 
 class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
-    """Tracks applied migrations in the database."""
+    """Asynchronous migration version tracker."""
 
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.

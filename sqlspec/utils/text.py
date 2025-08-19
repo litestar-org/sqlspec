@@ -1,4 +1,9 @@
-"""General utility functions."""
+"""Text processing utilities for SQLSpec.
+
+Provides functions for string manipulation including case conversion,
+slugification, and email validation. Used primarily for identifier
+generation and data validation.
+"""
 
 import re
 import unicodedata

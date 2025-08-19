@@ -1,8 +1,7 @@
 """Object storage backend using obstore.
 
-Implements the ObjectStoreProtocol using obstore,
-providing native support for S3, GCS, Azure, and local file storage
-with Arrow support.
+Implements the ObjectStoreProtocol using obstore for S3, GCS, Azure,
+and local file storage with Arrow support.
 """
 
 from __future__ import annotations
@@ -56,11 +55,11 @@ DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_tim
 class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     """Object storage backend using obstore.
 
-    Uses obstore's Rust-based implementation for storage operations,
-    providing native support for AWS S3, Google Cloud Storage, Azure Blob Storage,
+    Uses obstore's Rust-based implementation for storage operations.
+    Supports AWS S3, Google Cloud Storage, Azure Blob Storage,
     local filesystem, and HTTP endpoints.
 
-    Includes native Arrow support.
+    Includes Arrow support.
     """
 
     capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
@@ -203,7 +202,7 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
             raise StorageOperationFailedError(msg) from exc
 
     def glob(self, pattern: str, **kwargs: Any) -> list[str]:
-        """Find objects matching pattern using obstore.
+        """Find objects matching pattern.
 
         Lists all objects and filters them client-side using the pattern.
         """
@@ -330,7 +329,7 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
             raise StorageOperationFailedError(msg) from exc
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
-        """Stream Arrow record batches using obstore.
+        """Stream Arrow record batches.
 
         Yields:
             Iterator of Arrow record batches from matching objects.

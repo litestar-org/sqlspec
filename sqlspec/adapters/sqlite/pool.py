@@ -40,10 +40,7 @@ class SqliteConnectionPool:
     __slots__ = ("_connection_parameters", "_enable_optimizations", "_thread_local")
 
     def __init__(
-        self,
-        connection_parameters: "dict[str, Any]",
-        enable_optimizations: bool = True,
-        **kwargs: Any,  # Accept and ignore pool parameters for compatibility
+        self, connection_parameters: "dict[str, Any]", enable_optimizations: bool = True, **kwargs: Any
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -60,18 +57,16 @@ class SqliteConnectionPool:
         """Create a new SQLite connection with optimizations."""
         connection = sqlite3.connect(**self._connection_parameters)
 
-        # Only apply optimizations if requested and not in-memory
         if self._enable_optimizations:
             database = self._connection_parameters.get("database", ":memory:")
             is_memory = database == ":memory:" or database.startswith("file::memory:")
 
             if not is_memory:
-                # WAL mode doesn't work with in-memory databases
                 connection.execute("PRAGMA journal_mode = WAL")
-                # Set busy timeout for better concurrent access
+
                 connection.execute("PRAGMA busy_timeout = 5000")
                 connection.execute("PRAGMA optimize")
-            # These work for all database types
+
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA synchronous = NORMAL")
 
@@ -82,7 +77,6 @@ class SqliteConnectionPool:
         try:
             return cast("SqliteConnection", self._thread_local.connection)
         except AttributeError:
-            # Connection doesn't exist for this thread yet
             connection = self._create_connection()
             self._thread_local.connection = connection
             return connection
@@ -94,7 +88,6 @@ class SqliteConnectionPool:
             connection.close()
             del self._thread_local.connection
         except AttributeError:
-            # No connection for this thread
             pass
 
     @contextmanager
@@ -124,9 +117,7 @@ class SqliteConnectionPool:
         Args:
             connection: The connection to release (ignored)
         """
-        # No-op: thread-local connections are managed per-thread
 
-    # Compatibility methods that return dummy values
     def size(self) -> int:
         """Get pool size (always 1 for thread-local)."""
         try:

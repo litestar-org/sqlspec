@@ -1,10 +1,7 @@
-"""AsyncMy MySQL driver implementation for async MySQL operations.
+"""AsyncMy MySQL driver implementation.
 
-Provides async MySQL/MariaDB connectivity with:
-- Parameter style conversion (QMARK to POSITIONAL_PYFORMAT)
-- MySQL-specific type coercion and data handling
-- Error categorization for MySQL/MariaDB
-- Transaction management
+Provides MySQL/MariaDB connectivity with parameter style conversion,
+type coercion, error handling, and transaction management.
 """
 
 import logging
@@ -34,7 +31,6 @@ logger = logging.getLogger(__name__)
 __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "asyncmy_statement_config")
 
 
-# Enhanced AsyncMy statement configuration using core modules with performance optimizations
 asyncmy_statement_config = StatementConfig(
     dialect="mysql",
     parameter_config=ParameterStyleConfig(
@@ -42,12 +38,7 @@ asyncmy_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
         default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
         supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},
-        type_coercion_map={
-            dict: to_json,
-            list: to_json,
-            tuple: lambda v: to_json(list(v)),
-            bool: int,  # MySQL represents booleans as integers
-        },
+        type_coercion_map={dict: to_json, list: to_json, tuple: lambda v: to_json(list(v)), bool: int},
         has_native_list_expansion=False,
         needs_static_script_compilation=True,
         preserve_parameter_format=True,
@@ -125,13 +116,10 @@ class AsyncmyExceptionHandler:
 
 
 class AsyncmyDriver(AsyncDriverAdapterBase):
-    """AsyncMy MySQL/MariaDB driver for async database operations.
+    """AsyncMy MySQL/MariaDB driver.
 
-    Provides MySQL/MariaDB connectivity with:
-    - Parameter style conversion (QMARK to POSITIONAL_PYFORMAT)
-    - MySQL-specific type coercion (bool -> int, dict/list -> JSON)
-    - Error categorization for MySQL/MariaDB
-    - Transaction management
+    Provides MySQL/MariaDB connectivity with parameter style conversion,
+    type coercion, error handling, and transaction management.
     """
 
     __slots__ = ()
@@ -145,18 +133,17 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = asyncmy_statement_config.replace(
+            statement_config = asyncmy_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,
                 enable_validation=True,
                 dialect="mysql",
             )
-            statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
-        """Create async context manager for AsyncMy cursor."""
+        """Create context manager for AsyncMy cursor."""
         return AsyncmyCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
@@ -173,13 +160,12 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         Returns:
             None - always proceeds with standard execution for AsyncMy
         """
-        _ = (cursor, statement)  # Mark as intentionally unused
+        _ = (cursor, statement)
         return None
 
     async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script using enhanced statement splitting and parameter handling.
+        """Execute SQL script with statement splitting and parameter handling.
 
-        Uses core module optimization for statement parsing and parameter processing.
         Parameters are embedded as static values for script execution compatibility.
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
@@ -197,38 +183,34 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized AsyncMy batch processing.
+        """Execute SQL with multiple parameter sets using AsyncMy batch processing.
 
-        Leverages core parameter processing for enhanced MySQL type handling and parameter conversion.
+        Handles MySQL type conversion and parameter processing.
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced parameter validation for executemany
         if not prepared_parameters:
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
         await cursor.executemany(sql, prepared_parameters)
 
-        # Calculate affected rows based on parameter count for AsyncMy
         affected_rows = len(prepared_parameters) if prepared_parameters else 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with enhanced AsyncMy MySQL data handling and performance optimization.
+        """Execute single SQL statement with AsyncMy MySQL data handling.
 
-        Uses core processing for optimal parameter handling and MySQL result processing.
+        Handles parameter processing and MySQL result processing.
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters or None)
 
-        # Enhanced SELECT result processing for MySQL
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
             column_names = [desc[0] for desc in cursor.description or []]
 
-            # AsyncMy may return tuples or dicts - ensure consistent dict format
             if fetched_data and not isinstance(fetched_data[0], dict):
                 data = [dict(zip(column_names, row)) for row in fetched_data]
             else:
@@ -238,19 +220,16 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        # Enhanced non-SELECT result processing for MySQL
         affected_rows = cursor.rowcount if cursor.rowcount is not None else -1
         last_id = getattr(cursor, "lastrowid", None) if cursor.rowcount and cursor.rowcount > 0 else None
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
-    # MySQL transaction management with enhanced async error handling
     async def begin(self) -> None:
-        """Begin a database transaction with enhanced async error handling.
+        """Begin a database transaction.
 
         Explicitly starts a MySQL transaction to ensure proper transaction boundaries.
         """
         try:
-            # Execute explicit BEGIN to start transaction
             async with AsyncmyCursor(self.connection) as cursor:
                 await cursor.execute("BEGIN")
         except asyncmy.errors.MySQLError as e:
@@ -258,7 +237,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def rollback(self) -> None:
-        """Rollback the current transaction with enhanced async error handling."""
+        """Rollback the current transaction."""
         try:
             await self.connection.rollback()
         except asyncmy.errors.MySQLError as e:
@@ -266,7 +245,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def commit(self) -> None:
-        """Commit the current transaction with enhanced async error handling."""
+        """Commit the current transaction."""
         try:
             await self.connection.commit()
         except asyncmy.errors.MySQLError as e:

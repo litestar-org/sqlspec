@@ -1,4 +1,4 @@
-"""SQLSpec: Safe and elegant SQL query building for Python."""
+"""SQLSpec: Type-safe SQL query mapper for Python."""
 
 from sqlspec import adapters, base, builder, core, driver, exceptions, extensions, loader, migrations, typing, utils
 from sqlspec.__metadata__ import __version__

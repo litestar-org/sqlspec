@@ -1,4 +1,4 @@
-"""Aiosqlite database configuration with optimized connection management."""
+"""Aiosqlite database configuration."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -74,7 +74,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         """
         config_dict = dict(pool_config) if pool_config else {}
 
-        # Handle memory database URI conversion - test expectation is different than sqlite pattern
         if "database" not in config_dict or config_dict["database"] == ":memory:":
             config_dict["database"] = "file::memory:?cache=shared"
             config_dict["uri"] = True
@@ -104,7 +103,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         Returns:
             Dictionary with connection parameters for creating connections.
         """
-        # Filter out all pool-specific parameters that aiosqlite.connect() doesn't accept
+
         excluded_keys = {
             "pool_size",
             "connect_timeout",
@@ -199,9 +198,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for aiosqlite types.
-
-        This provides all aiosqlite-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
 
         Returns:
             Dictionary mapping type names to types.

@@ -71,7 +71,6 @@ class DuckDBPoolParams(DuckDBConnectionParams, total=False):
     Combines standardized pool parameters with DuckDB-specific connection parameters.
     """
 
-    # Standardized pool parameters (consistent across ALL adapters)
     pool_min_size: NotRequired[int]
     pool_max_size: NotRequired[int]
     pool_timeout: NotRequired[float]
@@ -122,24 +121,21 @@ class DuckDBDriverFeatures(TypedDict, total=False):
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
-    """Enhanced DuckDB configuration with connection pooling and intelligent features.
+    """DuckDB configuration with connection pooling.
 
-    This configuration supports all of DuckDB's unique features including:
+    This configuration supports DuckDB's features including:
 
-    - Connection pooling optimized for DuckDB's architecture
-    - Extension auto-management and installation
+    - Connection pooling
+    - Extension management and installation
     - Secret management for API integrations
-    - Intelligent auto configuration settings
-    - High-performance Arrow integration
+    - Auto configuration settings
+    - Arrow integration
     - Direct file querying capabilities
-    - Performance optimizations for analytics workloads
 
-    DuckDB Connection Pool Best Practices:
-    - DuckDB performs best with long-lived connections that maintain cache
-    - Default pool size is 1-4 connections (DuckDB is optimized for single connection)
+    DuckDB Connection Pool Configuration:
+    - Default pool size is 1-4 connections (DuckDB uses single connection by default)
     - Connection recycling is set to 24 hours by default (set to 0 to disable)
     - Shared memory databases use `:memory:shared_db` for proper concurrency
-    - Health checks are minimized to reduce overhead
     """
 
     driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
@@ -154,7 +150,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[Union[DuckDBDriverFeatures, dict[str, Any]]]" = None,
     ) -> None:
-        """Initialize DuckDB configuration with intelligent features."""
+        """Initialize DuckDB configuration."""
         if pool_config is None:
             pool_config = {}
         if "database" not in pool_config:
@@ -204,7 +200,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             extensions=extensions_dicts,
             secrets=secrets_dicts,
             on_connection_create=pool_callback,
-            **self.pool_config,  # Pass all pool_config as kwargs to be filtered by the pool
+            **self.pool_config,
         )
 
     def _close_pool(self) -> None:

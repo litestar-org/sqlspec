@@ -181,9 +181,8 @@ def wrap_exceptions(
             (isinstance(suppress, type) and isinstance(exc, suppress))
             or (isinstance(suppress, tuple) and isinstance(exc, suppress))
         ):
-            return  # Suppress this exception
+            return
 
-        # If it's already a SQLSpec exception, don't wrap it
         if isinstance(exc, SQLSpecError):
             raise
 

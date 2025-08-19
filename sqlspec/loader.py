@@ -1,6 +1,6 @@
-"""SQL file loader module for managing SQL statements from files.
+"""SQL file loader for managing SQL statements from files.
 
-This module provides functionality to load, cache, and manage SQL statements
+Provides functionality to load, cache, and manage SQL statements
 from files using aiosql-style named queries.
 """
 
@@ -138,7 +138,7 @@ class SQLFile:
 
 
 class CachedSQLFile:
-    """Cached SQL file with parsed statements for efficient reloading.
+    """Cached SQL file with parsed statements.
 
     Stored in the file cache to avoid re-parsing SQL files when their
     content hasn't changed.
@@ -161,8 +161,8 @@ class CachedSQLFile:
 class SQLFileLoader:
     """Loads and parses SQL files with aiosql-style named queries.
 
-    Provides functionality to load SQL files containing named queries
-    (using -- name: syntax) and retrieve them by name.
+    Loads SQL files containing named queries (using -- name: syntax)
+    and retrieves them by name.
     """
 
     __slots__ = ("_files", "_queries", "_query_to_file", "encoding", "storage_registry")
@@ -411,7 +411,7 @@ class SQLFileLoader:
             raise
 
     def _load_directory(self, dir_path: Path) -> int:
-        """Load all SQL files from a directory with namespacing."""
+        """Load all SQL files from a directory."""
         sql_files = list(dir_path.rglob("*.sql"))
         if not sql_files:
             return 0
@@ -424,7 +424,7 @@ class SQLFileLoader:
         return len(sql_files)
 
     def _load_single_file(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
-        """Load a single SQL file with optional namespace and caching.
+        """Load a single SQL file with optional namespace.
 
         Args:
             file_path: Path to the SQL file.
@@ -481,7 +481,7 @@ class SQLFileLoader:
             unified_cache.put(cache_key, cached_file_data)
 
     def _load_file_without_cache(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
-        """Load a single SQL file without caching.
+        """Load a single SQL file without using cache.
 
         Args:
             file_path: Path to the SQL file.

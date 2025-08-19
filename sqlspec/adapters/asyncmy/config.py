@@ -1,4 +1,4 @@
-"""Asyncmy database configuration with direct field-based configuration."""
+"""Asyncmy database configuration."""
 
 import logging
 from collections.abc import AsyncGenerator
@@ -58,7 +58,7 @@ class AsyncmyPoolParams(AsyncmyConnectionParams, total=False):
 
 
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver]):  # pyright: ignore
-    """Configuration for Asyncmy database connections with direct field-based configuration."""
+    """Configuration for Asyncmy database connections."""
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
     connection_type: "ClassVar[type[AsyncmyConnection]]" = AsyncmyConnection  # pyright: ignore
@@ -79,7 +79,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             pool_instance: Existing pool instance to use
             migration_config: Migration configuration
             statement_config: Statement configuration override
-            driver_features: Optional driver feature configuration
+            driver_features: Driver feature configuration
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -171,9 +171,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for Asyncmy types.
-
-        This provides all Asyncmy-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
 
         Returns:
             Dictionary mapping type names to types.

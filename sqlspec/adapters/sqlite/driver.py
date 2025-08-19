@@ -1,18 +1,4 @@
-"""Enhanced SQLite driver with CORE_ROUND_3 architecture integration.
-
-This driver implements the complete CORE_ROUND_3 architecture for:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Complete backward compatibility with existing functionality
-
-Architecture Features:
-- Direct integration with sqlspec.core modules
-- Enhanced parameter processing with type coercion
-- Thread-safe unified caching system
-- MyPyC-optimized performance patterns
-- Zero-copy data access where possible
-"""
+"""SQLite driver implementation."""
 
 import contextlib
 import datetime
@@ -38,7 +24,6 @@ if TYPE_CHECKING:
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "sqlite_statement_config")
 
 
-# Enhanced SQLite statement configuration using core modules with performance optimizations
 sqlite_statement_config = StatementConfig(
     dialect="sqlite",
     parameter_config=ParameterStyleConfig(
@@ -51,18 +36,12 @@ sqlite_statement_config = StatementConfig(
             datetime.datetime: lambda v: v.isoformat(),
             datetime.date: lambda v: v.isoformat(),
             Decimal: str,
-            # Note: Don't auto-convert dicts to JSON for SQLite
-            # This interferes with named parameter processing in execute_many
-            # dict: to_json,  # Removed to prevent parameter interference
             list: to_json,
-            # Note: Don't convert tuples to JSON for SQLite as they're used as parameter sets
-            # tuple: lambda v: to_json(list(v)),  # Removed - tuples are parameter sets
         },
         has_native_list_expansion=False,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
     ),
-    # Core processing features enabled for performance
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,
@@ -71,7 +50,7 @@ sqlite_statement_config = StatementConfig(
 
 
 class SqliteCursor:
-    """Context manager for SQLite cursor management with enhanced error handling."""
+    """Context manager for SQLite cursor management."""
 
     __slots__ = ("connection", "cursor")
 
@@ -84,14 +63,14 @@ class SqliteCursor:
         return self.cursor
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
+        _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 self.cursor.close()
 
 
 class SqliteExceptionHandler:
-    """Custom sync context manager for handling SQLite database exceptions."""
+    """Context manager for handling SQLite database exceptions."""
 
     __slots__ = ()
 
@@ -135,27 +114,10 @@ class SqliteExceptionHandler:
 
 
 class SqliteDriver(SyncDriverAdapterBase):
-    """Enhanced SQLite driver with CORE_ROUND_3 architecture integration.
+    """SQLite driver implementation.
 
-    This driver leverages the complete core module system for maximum performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    Compatibility:
-    - 100% backward compatibility with existing SQLite driver interface
-    - All existing tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved cursor management and exception handling patterns
+    Provides SQL statement execution, transaction management, and result handling
+    for SQLite databases using the standard sqlite3 module.
     """
 
     __slots__ = ()
@@ -167,21 +129,19 @@ class SqliteDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Enhanced configuration with global settings integration
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = sqlite_statement_config.replace(
+            statement_config = sqlite_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,  # Default to enabled
-                enable_validation=True,  # Default to enabled
-                dialect="sqlite",  # Use adapter-specific dialect
+                enable_parsing=True,
+                enable_validation=True,
+                dialect="sqlite",
             )
-            statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
-        """Create context manager for SQLite cursor with enhanced resource management."""
+        """Create context manager for SQLite cursor."""
         return SqliteCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
@@ -190,9 +150,6 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     def _try_special_handling(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "Optional[SQLResult]":
         """Hook for SQLite-specific special operations.
-
-        SQLite doesn't have complex special operations like PostgreSQL COPY,
-        so this always returns None to proceed with standard execution.
 
         Args:
             cursor: SQLite cursor object
@@ -204,10 +161,14 @@ class SqliteDriver(SyncDriverAdapterBase):
         return None
 
     def _execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script using enhanced statement splitting and parameter handling.
+        """Execute SQL script with statement splitting and parameter handling.
 
-        Uses core module optimization for statement parsing and parameter processing.
-        Parameters are embedded as static values for script execution compatibility.
+        Args:
+            cursor: SQLite cursor object
+            statement: SQL statement containing multiple statements
+
+        Returns:
+            ExecutionResult with script execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -224,34 +185,40 @@ class SqliteDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized batch processing.
+        """Execute SQL with multiple parameter sets.
 
-        Leverages core parameter processing for enhanced type handling and validation.
+        Args:
+            cursor: SQLite cursor object
+            statement: SQL statement with multiple parameter sets
+
+        Returns:
+            ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced parameter validation for executemany
         if not prepared_parameters:
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
-        # Ensure prepared_parameters is a list of parameter sets for SQLite executemany
         cursor.executemany(sql, prepared_parameters)
 
-        # Calculate affected rows more accurately
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def _execute_statement(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with enhanced data handling and performance optimization.
+        """Execute single SQL statement.
 
-        Uses core processing for optimal parameter handling and result processing.
+        Args:
+            cursor: SQLite cursor object
+            statement: SQL statement to execute
+
+        Returns:
+            ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters or ())
 
-        # Enhanced SELECT result processing
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
@@ -262,15 +229,12 @@ class SqliteDriver(SyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        # Enhanced non-SELECT result processing
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    # Transaction management with enhanced error handling
     def begin(self) -> None:
-        """Begin a database transaction with enhanced error handling."""
+        """Begin a database transaction."""
         try:
-            # Only begin if not already in a transaction
             if not self.connection.in_transaction:
                 self.connection.execute("BEGIN")
         except sqlite3.Error as e:
@@ -278,7 +242,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def rollback(self) -> None:
-        """Rollback the current transaction with enhanced error handling."""
+        """Rollback the current transaction."""
         try:
             self.connection.rollback()
         except sqlite3.Error as e:
@@ -286,7 +250,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
-        """Commit the current transaction with enhanced error handling."""
+        """Commit the current transaction."""
         try:
             self.connection.commit()
         except sqlite3.Error as e:

@@ -45,7 +45,6 @@ class SQLSpec:
 
     def __init__(self, *, loader: "Optional[SQLFileLoader]" = None) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
-        # Register sync cleanup only for sync resources
         atexit.register(self._cleanup_sync_pools)
         self._instance_cache_config: Optional[CacheConfig] = None
         self._sql_loader: Optional[SQLFileLoader] = loader
@@ -90,7 +89,6 @@ class SQLSpec:
                 except Exception as e:
                     logger.warning("Failed to prepare cleanup for config %s: %s", config_type.__name__, e)
 
-        # Close async pools concurrently
         if cleanup_tasks:
             try:
                 await asyncio.gather(*cleanup_tasks, return_exceptions=True)
@@ -98,9 +96,8 @@ class SQLSpec:
             except Exception as e:
                 logger.warning("Failed to complete async pool cleanup: %s", e)
 
-        # Close sync pools
         for _config_type, config in sync_configs:
-            config.close_pool()  # Let exceptions propagate for proper logging
+            config.close_pool()
 
         if sync_configs:
             logger.debug("Sync pool cleanup completed. Cleaned %d pools.", len(sync_configs))
@@ -596,12 +593,9 @@ class SQLSpec:
             )
         )
 
-    # SQL File Loading Integration
-
     def _ensure_sql_loader(self) -> "SQLFileLoader":
         """Ensure SQL loader is initialized lazily."""
         if self._sql_loader is None:
-            # Import here to avoid circular imports
             from sqlspec.loader import SQLFileLoader
 
             self._sql_loader = SQLFileLoader()
@@ -677,7 +671,6 @@ class SQLSpec:
         Note: This clears the cache and requires calling load_sql_files again.
         """
         if self._sql_loader is not None:
-            # Clear cache to force reload
             self._sql_loader.clear_cache()
             logger.debug("Cleared SQL cache for reload")
 

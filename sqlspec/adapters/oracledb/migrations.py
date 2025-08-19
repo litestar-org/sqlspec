@@ -23,7 +23,9 @@ logger = get_logger("migrations.oracle")
 class OracleMigrationTrackerMixin:
     """Mixin providing Oracle-specific migration table creation."""
 
-    version_table: str  # This will be set by the base class
+    __slots__ = ()
+
+    version_table: str
 
     def _get_create_table_sql(self) -> CreateTable:
         """Get Oracle-specific SQL builder for creating the tracking table.
@@ -50,6 +52,8 @@ class OracleMigrationTrackerMixin:
 class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["SyncDriverAdapterBase"]):
     """Oracle-specific sync migration tracker."""
 
+    __slots__ = ()
+
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
 
@@ -58,7 +62,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         Args:
             driver: The database driver to use.
         """
-        # Check if table already exists using Oracle's system views
+
         check_sql = (
             sql.select(sql.count().as_("table_count"))
             .from_("user_tables")
@@ -67,7 +71,6 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         result = driver.execute(check_sql)
 
         if result.data[0]["TABLE_COUNT"] == 0:
-            # Table doesn't exist, create it
             driver.execute(self._get_create_table_sql())
             self._safe_commit(driver)
 
@@ -96,11 +99,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         if not result.data:
             return []
 
-        # Convert Oracle's uppercase column names to lowercase for consistency
-        normalized_data = []
-        for row in result.data:
-            normalized_row = {key.lower(): value for key, value in row.items()}
-            normalized_data.append(normalized_row)
+        normalized_data = [{key.lower(): value for key, value in row.items()} for row in result.data]
 
         return cast("list[dict[str, Any]]", normalized_data)
 
@@ -116,7 +115,6 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
         """
-        # Get current user for applied_by field
 
         applied_by = getpass.getuser()
 
@@ -142,26 +140,23 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             driver: The database driver to use.
         """
         try:
-            # Check if the connection has autocommit enabled
-            connection = getattr(driver, "connection", None)
-            if connection and hasattr(connection, "autocommit") and getattr(connection, "autocommit", False):
+            # Check driver features first (preferred approach)
+            if driver.driver_features.get("autocommit", False):
                 return
 
-            # For ADBC and other drivers, check the driver_features
-            driver_features = getattr(driver, "driver_features", {})
-            if driver_features and driver_features.get("autocommit", False):
+            # Fallback to connection-level autocommit check
+            if driver.connection and driver.connection.autocommit:
                 return
 
-            # Safe to commit manually
             driver.commit()
         except Exception:
-            # If commit fails due to no active transaction, that's acceptable
-            # Some drivers with autocommit will fail when trying to commit
             logger.debug("Failed to commit transaction, likely due to autocommit being enabled")
 
 
 class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["AsyncDriverAdapterBase"]):
     """Oracle-specific async migration tracker."""
+
+    __slots__ = ()
 
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
@@ -171,7 +166,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         Args:
             driver: The database driver to use.
         """
-        # Check if table already exists using Oracle's system views
+
         check_sql = (
             sql.select(sql.count().as_("table_count"))
             .from_("user_tables")
@@ -180,7 +175,6 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         result = await driver.execute(check_sql)
 
         if result.data[0]["TABLE_COUNT"] == 0:
-            # Table doesn't exist, create it
             await driver.execute(self._get_create_table_sql())
             await self._safe_commit_async(driver)
 
@@ -209,11 +203,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         if not result.data:
             return []
 
-        # Convert Oracle's uppercase column names to lowercase for consistency
-        normalized_data = []
-        for row in result.data:
-            normalized_row = {key.lower(): value for key, value in row.items()}
-            normalized_data.append(normalized_row)
+        normalized_data = [{key.lower(): value for key, value in row.items()} for row in result.data]
 
         return cast("list[dict[str, Any]]", normalized_data)
 
@@ -229,8 +219,6 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
         """
-        # Get current user for applied_by field
-        import getpass
 
         applied_by = getpass.getuser()
 
@@ -256,19 +244,14 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             driver: The database driver to use.
         """
         try:
-            # Check if the connection has autocommit enabled
-            connection = getattr(driver, "connection", None)
-            if connection and hasattr(connection, "autocommit") and getattr(connection, "autocommit", False):
+            # Check driver features first (preferred approach)
+            if driver.driver_features.get("autocommit", False):
                 return
 
-            # For ADBC and other drivers, check the driver_features
-            driver_features = getattr(driver, "driver_features", {})
-            if driver_features and driver_features.get("autocommit", False):
+            # Fallback to connection-level autocommit check
+            if driver.connection and driver.connection.autocommit:
                 return
 
-            # Safe to commit manually
             await driver.commit()
         except Exception:
-            # If commit fails due to no active transaction, that's acceptable
-            # Some drivers with autocommit will fail when trying to commit
             logger.debug("Failed to commit transaction, likely due to autocommit being enabled")

@@ -1,10 +1,10 @@
 """Storage abstraction layer for SQLSpec.
 
-Provides a flexible storage system with:
+Provides a storage system with:
 - Multiple backend support (local, fsspec, obstore)
-- Lazy loading and configuration-based registration
-- URI scheme-based automatic backend resolution
-- Key-based named storage configurations
+- Configuration-based registration
+- URI scheme-based backend resolution
+- Named storage configurations
 - Capability-based backend selection
 """
 

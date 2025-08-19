@@ -311,7 +311,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             "num_workers": all_config.pop("num_workers", 3),
         }
 
-        # Capture autocommit setting before configuring the pool
         autocommit_setting = all_config.get("autocommit")
 
         async def configure_connection(conn: "PsycopgAsyncConnection") -> None:

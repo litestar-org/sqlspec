@@ -1,18 +1,9 @@
-"""SQL processor with compilation and caching.
-
-This module implements the core compilation system for SQL statements with
-parameter processing and caching.
+"""SQL compilation and caching.
 
 Components:
 - CompiledSQL: Immutable compilation result
 - SQLProcessor: SQL compiler with caching
 - Parameter processing via ParameterProcessor
-
-Features:
-- SQL parsing
-- AST-based operation type detection
-- Caching system with LRU eviction
-- StatementConfig support
 """
 
 import hashlib
@@ -67,16 +58,9 @@ OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class CompiledSQL:
-    """Immutable compiled SQL result.
+    """Compiled SQL result.
 
-    This class represents the result of SQL compilation, containing
-    information needed for execution.
-
-    Features:
-    - Immutable design for safe sharing
-    - Operation type detection
-    - Parameter style and execution information
-    - Support for execute_many operations
+    Contains the result of SQL compilation with information needed for execution.
     """
 
     __slots__ = (
@@ -100,12 +84,12 @@ class CompiledSQL:
         parameter_style: Optional[str] = None,
         supports_many: bool = False,
     ) -> None:
-        """Initialize immutable compiled result.
+        """Initialize compiled result.
 
         Args:
-            compiled_sql: Final SQL string ready for execution
+            compiled_sql: SQL string ready for execution
             execution_parameters: Parameters in driver-specific format
-            operation_type: Detected SQL operation type (SELECT, INSERT, etc.)
+            operation_type: SQL operation type (SELECT, INSERT, etc.)
             expression: SQLGlot AST expression
             parameter_style: Parameter style used in compilation
             supports_many: Whether this supports execute_many operations
@@ -119,14 +103,14 @@ class CompiledSQL:
         self._hash: Optional[int] = None
 
     def __hash__(self) -> int:
-        """Cached hash value with optimization."""
+        """Cached hash value."""
         if self._hash is None:
             param_str = str(self.execution_parameters)
             self._hash = hash((self.compiled_sql, param_str, self.operation_type, self.parameter_style))
         return self._hash
 
     def __eq__(self, other: object) -> bool:
-        """Equality comparison for compiled results."""
+        """Equality comparison."""
         if not isinstance(other, CompiledSQL):
             return False
         return (
@@ -137,7 +121,7 @@ class CompiledSQL:
         )
 
     def __repr__(self) -> str:
-        """String representation for debugging."""
+        """String representation."""
         return (
             f"CompiledSQL(sql={self.compiled_sql!r}, "
             f"params={self.execution_parameters!r}, "
@@ -147,32 +131,18 @@ class CompiledSQL:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class SQLProcessor:
-    """SQL processor with caching and compilation.
+    """SQL processor with compilation and caching.
 
-    This is the core compilation engine that processes SQL statements with
-    parameter processing and caching.
-
-    Processing Flow:
-    1. Parameter detection and normalization (if needed)
-    2. SQL parsing
-    3. AST-based operation type detection
-    4. Parameter conversion (if needed)
-    5. Final SQL generation with execution parameters
-
-    Features:
-    - LRU cache
-    - Parameter processing
-    - Compilation results
-    - StatementConfig support
+    Processes SQL statements with parameter processing and caching.
     """
 
     __slots__ = ("_cache", "_cache_hits", "_cache_misses", "_config", "_max_cache_size", "_parameter_processor")
 
     def __init__(self, config: "StatementConfig", max_cache_size: int = 1000) -> None:
-        """Initialize processor with configuration and caching.
+        """Initialize processor.
 
         Args:
-            config: Statement configuration with parameter processing settings
+            config: Statement configuration
             max_cache_size: Maximum number of compilation results to cache
         """
         self._config = config
@@ -183,15 +153,15 @@ class SQLProcessor:
         self._cache_misses = 0
 
     def compile(self, sql: str, parameters: Any = None, is_many: bool = False) -> CompiledSQL:
-        """Compile SQL statement with caching.
+        """Compile SQL statement.
 
         Args:
-            sql: Raw SQL string for compilation
-            parameters: Parameter values in any format
+            sql: SQL string for compilation
+            parameters: Parameter values
             is_many: Whether this is for execute_many operation
 
         Returns:
-            CompiledSQL with information for execution
+            CompiledSQL with execution information
         """
         if not self._config.enable_caching:
             return self._compile_uncached(sql, parameters, is_many)
@@ -218,7 +188,7 @@ class SQLProcessor:
         """Compile SQL without caching.
 
         Args:
-            sql: Raw SQL string
+            sql: SQL string
             parameters: Parameter values
             is_many: Whether this is for execute_many operation
 
@@ -296,7 +266,7 @@ class SQLProcessor:
             return CompiledSQL(compiled_sql=sql, execution_parameters=parameters, operation_type="UNKNOWN")
 
     def _make_cache_key(self, sql: str, parameters: Any) -> str:
-        """Generate cache key for compilation result.
+        """Generate cache key.
 
         Args:
             sql: SQL string
@@ -325,8 +295,6 @@ class SQLProcessor:
     def _detect_operation_type(self, expression: "exp.Expression") -> "OperationType":
         """Detect operation type from AST.
 
-        Uses AST structure to determine operation type.
-
         Args:
             expression: AST expression
 
@@ -354,10 +322,10 @@ class SQLProcessor:
         """Apply final transformations.
 
         Args:
-            expression: SQLGlot AST expression (if available)
-            sql: Compiled SQL string (fallback)
+            expression: SQLGlot AST expression
+            sql: SQL string
             parameters: Execution parameters
-            dialect_str: SQL dialect for AST-to-SQL conversion
+            dialect_str: SQL dialect
 
         Returns:
             Tuple of (final_sql, final_parameters)
@@ -372,7 +340,7 @@ class SQLProcessor:
         return sql, parameters
 
     def clear_cache(self) -> None:
-        """Clear compilation cache."""
+        """Clear cache."""
         self._cache.clear()
         self._cache_hits = 0
         self._cache_misses = 0
@@ -382,7 +350,7 @@ class SQLProcessor:
         """Get cache statistics.
 
         Returns:
-            Dictionary with cache hit/miss statistics
+            Dictionary with cache statistics
         """
         total_requests = self._cache_hits + self._cache_misses
         hit_rate_pct = int((self._cache_hits / total_requests) * 100) if total_requests > 0 else 0

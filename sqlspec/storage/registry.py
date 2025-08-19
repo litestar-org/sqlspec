@@ -1,8 +1,8 @@
-"""Unified Storage Registry for ObjectStore backends.
+"""Storage Registry for ObjectStore backends.
 
-Provides a flexible, lazy-loading storage registry that supports URI-first access
+Provides a storage registry that supports URI-first access
 pattern with automatic backend detection, ObStore preferred with FSSpec fallback,
-intelligent scheme-based routing, and named aliases for common configurations.
+scheme-based routing, and named aliases for common configurations.
 """
 
 import logging

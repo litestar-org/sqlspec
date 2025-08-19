@@ -184,7 +184,7 @@ class SQL:
         return False
 
     def _process_parameters(self, *parameters: Any, dialect: Optional[str] = None, **kwargs: Any) -> None:
-        """Process parameters using parameter system."""
+        """Process parameters and filters."""
         if dialect is not None:
             self._dialect = self._normalize_dialect(dialect)
 
@@ -221,31 +221,31 @@ class SQL:
 
     @property
     def sql(self) -> str:
-        """Get the raw SQL string - no compilation triggered."""
+        """Get the raw SQL string."""
         return self._raw_sql
 
     @property
     def parameters(self) -> Any:
-        """Get the original parameters without triggering compilation."""
+        """Get the original parameters."""
         if self._named_parameters:
             return self._named_parameters
         return self._positional_parameters or []
 
     @property
     def operation_type(self) -> "OperationType":
-        """SQL operation type - requires explicit compilation."""
+        """SQL operation type."""
         if self._processed_state is Empty:
             return "UNKNOWN"
         return self._processed_state.operation_type
 
     @property
     def statement_config(self) -> "StatementConfig":
-        """Statement configuration - preserved interface."""
+        """Statement configuration."""
         return self._statement_config
 
     @property
     def expression(self) -> "Optional[exp.Expression]":
-        """SQLGlot expression - only available after explicit compilation."""
+        """SQLGlot expression."""
         if self._processed_state is not Empty:
             return self._processed_state.parsed_expression
         return None
@@ -277,7 +277,7 @@ class SQL:
 
     @property
     def validation_errors(self) -> "list[str]":
-        """Validation errors - requires explicit compilation."""
+        """Validation errors."""
         if self._processed_state is Empty:
             return []
         return self._processed_state.validation_errors.copy()
@@ -324,7 +324,7 @@ class SQL:
         return False
 
     def compile(self) -> tuple[str, Any]:
-        """Explicitly compile the SQL statement."""
+        """Compile the SQL statement."""
         if self._processed_state is Empty:
             try:
                 config = self._statement_config
@@ -441,7 +441,7 @@ class SQL:
         return new_sql
 
     def __hash__(self) -> int:
-        """Hash value with optimized computation."""
+        """Hash value computation."""
         if self._hash is None:
             positional_tuple = tuple(self._positional_parameters)
             named_tuple = tuple(sorted(self._named_parameters.items())) if self._named_parameters else ()
@@ -583,7 +583,7 @@ class StatementConfig:
         return type(self)(**current_kwargs)
 
     def __hash__(self) -> int:
-        """Hash based on key configuration settings."""
+        """Hash based on configuration settings."""
         return hash(
             (
                 self.enable_parsing,
@@ -644,7 +644,7 @@ class StatementConfig:
         )
 
     def _compare_parameter_configs(self, config1: Any, config2: Any) -> bool:
-        """Compare parameter configs by key attributes."""
+        """Compare parameter configs."""
         return bool(
             config1.default_parameter_style == config2.default_parameter_style
             and config1.supported_parameter_styles == config2.supported_parameter_styles
