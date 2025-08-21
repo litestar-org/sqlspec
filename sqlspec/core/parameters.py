@@ -678,7 +678,7 @@ class ParameterConverter:
 
         return None, False
 
-    def _extract_param_value_single_style(self, param: ParameterInfo, parameters: Mapping) -> Any:
+    def _extract_param_value_single_style(self, param: ParameterInfo, parameters: Mapping) -> "tuple[Any, bool]":
         """Extract parameter value for single style parameters.
 
         Args:
@@ -686,18 +686,18 @@ class ParameterConverter:
             parameters: Parameter mapping
 
         Returns:
-            Parameter value or None if not found
+            Tuple of (value, found_flag) where found_flag indicates if parameter was found
         """
         if param.name and param.name in parameters:
-            return parameters[param.name]
+            return parameters[param.name], True
         if f"param_{param.ordinal}" in parameters:
-            return parameters[f"param_{param.ordinal}"]
+            return parameters[f"param_{param.ordinal}"], True
 
         ordinal_key = str(param.ordinal + 1)
         if ordinal_key in parameters:
-            return parameters[ordinal_key]
+            return parameters[ordinal_key], True
 
-        return None
+        return None, False
 
     def _preserve_original_format(self, param_values: "list[Any]", original_parameters: Any) -> Any:
         """Preserve the original parameter container format.
@@ -771,8 +771,8 @@ class ParameterConverter:
                         param_values.append(value)
             else:
                 for param in param_info:
-                    value = self._extract_param_value_single_style(param, parameters)
-                    if value is not None:
+                    value, found = self._extract_param_value_single_style(param, parameters)
+                    if found:
                         param_values.append(value)
 
             if preserve_parameter_format and original_parameters is not None:

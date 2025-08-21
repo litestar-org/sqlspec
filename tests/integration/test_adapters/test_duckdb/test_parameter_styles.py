@@ -2,7 +2,9 @@
 
 import math
 from collections.abc import Generator
+from datetime import date
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -486,3 +488,408 @@ def test_duckdb_parameter_performance(duckdb_parameters_session: DuckDBDriver) -
     query_time = end_time - start_time
     assert query_time < 1.0, f"Query took too long: {query_time:.2f} seconds"
     assert result.data[0]["count"] >= 800
+
+
+# ===== None Parameter Tests =====
+# Tests consolidated from test_none_parameters.py
+
+
+@pytest.mark.duckdb
+def test_duckdb_none_parameters() -> None:
+    """Test that None values in named parameters are handled correctly by DuckDB."""
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_none_test"})
+
+    with config.provide_session() as driver:
+        # Create test table
+        driver.execute("""
+            CREATE TABLE test_none_values (
+                id VARCHAR PRIMARY KEY,
+                text_col VARCHAR,
+                nullable_text VARCHAR,
+                int_col INTEGER,
+                nullable_int INTEGER,
+                bool_col BOOLEAN,
+                nullable_bool BOOLEAN,
+                date_col DATE,
+                nullable_date DATE
+            )
+        """)
+
+        # Test INSERT with None values using named parameters (dollar style)
+        test_id = str(uuid4())
+        params = {
+            "id": test_id,
+            "text_col": "test_value",
+            "nullable_text": None,  # None value
+            "int_col": 42,
+            "nullable_int": None,  # None value
+            "bool_col": True,
+            "nullable_bool": None,  # None value
+            "date_col": date(2025, 1, 21),
+            "nullable_date": None,  # None value
+        }
+
+        result = driver.execute(
+            """
+            INSERT INTO test_none_values (
+                id, text_col, nullable_text, int_col, nullable_int,
+                bool_col, nullable_bool, date_col, nullable_date
+            )
+            VALUES (
+                $id, $text_col, $nullable_text, $int_col, $nullable_int,
+                $bool_col, $nullable_bool, $date_col, $nullable_date
+            )
+        """,
+            statement_config=None,
+            **params,
+        )
+
+        assert isinstance(result, SQLResult)
+        assert result.rows_affected == 1
+
+        # Verify the insert worked
+        select_result = driver.select_one("SELECT * FROM test_none_values WHERE id = $id", id=test_id)
+
+        assert select_result is not None
+        assert select_result["id"] == test_id
+        assert select_result["text_col"] == "test_value"
+        assert select_result["nullable_text"] is None
+        assert select_result["int_col"] == 42
+        assert select_result["nullable_int"] is None
+        assert select_result["bool_col"] is True
+        assert select_result["nullable_bool"] is None
+        assert select_result["date_col"] is not None  # Date object
+        assert select_result["nullable_date"] is None
+
+
+@pytest.mark.duckdb
+def test_duckdb_none_parameters_qmark_style() -> None:
+    """Test None values with QMARK (?) parameter style - DuckDB default."""
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_qmark_test"})
+
+    with config.provide_session() as driver:
+        # Create test table without primary key constraint to allow None insertion test
+        driver.execute("""
+            CREATE TABLE test_none_qmark (
+                id INTEGER,
+                col1 VARCHAR,
+                col2 INTEGER,
+                col3 BOOLEAN
+            )
+        """)
+
+        # Test INSERT with None values using positional parameters
+        params = (1, "test_value", None, None)  # Provide explicit ID, None in positions 2 and 3
+
+        result = driver.execute("INSERT INTO test_none_qmark (id, col1, col2, col3) VALUES (?, ?, ?, ?)", params)
+
+        assert isinstance(result, SQLResult)
+        assert result.rows_affected == 1
+
+        # Verify the insert worked
+        select_result = driver.select_one("SELECT * FROM test_none_qmark WHERE col1 = ?", ("test_value",))
+
+        assert select_result is not None
+        assert select_result["col1"] == "test_value"
+        assert select_result["col2"] is None
+        assert select_result["col3"] is None
+
+
+@pytest.mark.duckdb
+def test_duckdb_none_parameters_numeric_style() -> None:
+    """Test None values with NUMERIC ($1, $2) parameter style."""
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_numeric_test"})
+
+    with config.provide_session() as driver:
+        # Create test table without primary key constraint
+        driver.execute("""
+            CREATE TABLE test_none_numeric (
+                id INTEGER,
+                col1 VARCHAR,
+                col2 INTEGER,
+                col3 BOOLEAN
+            )
+        """)
+
+        # Test INSERT with None values using numeric parameters
+        params = (1, "test_value", None, None)  # Provide explicit ID, None in positions 2 and 3
+
+        result = driver.execute("INSERT INTO test_none_numeric (id, col1, col2, col3) VALUES ($1, $2, $3, $4)", params)
+
+        assert isinstance(result, SQLResult)
+        assert result.rows_affected == 1
+
+        # Verify the insert worked
+        select_result = driver.select_one("SELECT * FROM test_none_numeric WHERE col1 = $1", ("test_value",))
+
+        assert select_result is not None
+        assert select_result["col1"] == "test_value"
+        assert select_result["col2"] is None
+        assert select_result["col3"] is None
+
+
+@pytest.mark.duckdb
+def test_duckdb_all_none_parameters() -> None:
+    """Test when all parameter values are None."""
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_all_none_test"})
+
+    with config.provide_session() as driver:
+        # Create test table with auto-increment ID
+        driver.execute("""
+            CREATE SEQUENCE test_all_none_seq;
+            CREATE TABLE test_all_none (
+                id INTEGER PRIMARY KEY DEFAULT nextval('test_all_none_seq'),
+                col1 VARCHAR,
+                col2 INTEGER,
+                col3 BOOLEAN
+            )
+        """)
+
+        # Insert with all None values using named parameters
+        params = {"col1": None, "col2": None, "col3": None}
+
+        result = driver.execute(
+            """
+            INSERT INTO test_all_none (col1, col2, col3)
+            VALUES ($col1, $col2, $col3)
+        """,
+            **params,
+        )
+
+        assert isinstance(result, SQLResult)
+        assert result.rows_affected == 1
+
+        # Verify the insert worked - find the most recent row
+        select_result = driver.select_one("SELECT * FROM test_all_none ORDER BY id DESC LIMIT 1")
+
+        assert select_result is not None
+        assert select_result["id"] is not None  # Auto-generated
+        assert select_result["col1"] is None
+        assert select_result["col2"] is None
+        assert select_result["col3"] is None
+
+
+@pytest.mark.duckdb
+def test_duckdb_none_with_execute_many() -> None:
+    """Test None values work correctly with execute_many."""
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_many_test"})
+
+    with config.provide_session() as driver:
+        # Create test table
+        driver.execute("""
+            CREATE TABLE test_none_many (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR,
+                value INTEGER
+            )
+        """)
+
+        # Test execute_many with some None values
+        params = [
+            (1, "first", 10),
+            (2, None, 20),  # None name
+            (3, "third", None),  # None value
+            (4, None, None),  # Both None
+        ]
+
+        result = driver.execute_many("INSERT INTO test_none_many (id, name, value) VALUES (?, ?, ?)", params)
+
+        assert isinstance(result, SQLResult)
+        assert result.rows_affected == 4
+
+        # Verify all rows were inserted correctly
+        select_result = driver.execute("SELECT * FROM test_none_many ORDER BY id")
+        assert isinstance(select_result, SQLResult)
+        assert select_result.data is not None
+        assert len(select_result.data) == 4
+
+        # Check specific None handling
+        rows = select_result.data
+        assert rows[0]["name"] == "first" and rows[0]["value"] == 10
+        assert rows[1]["name"] is None and rows[1]["value"] == 20
+        assert rows[2]["name"] == "third" and rows[2]["value"] is None
+        assert rows[3]["name"] is None and rows[3]["value"] is None
+
+
+@pytest.mark.duckdb
+def test_duckdb_none_in_where_clause() -> None:
+    """Test None values in WHERE clauses work correctly."""
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_where_test"})
+
+    with config.provide_session() as driver:
+        # Create test table
+        driver.execute("""
+            CREATE TABLE test_none_where (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR,
+                category VARCHAR
+            )
+        """)
+
+        # Insert test data
+        test_data = [(1, "item1", "A"), (2, "item2", None), (3, "item3", "B"), (4, "item4", None)]
+        driver.execute_many("INSERT INTO test_none_where (id, name, category) VALUES (?, ?, ?)", test_data)
+
+        # Test WHERE with None parameter using IS NULL comparison
+        result = driver.execute("SELECT * FROM test_none_where WHERE category IS NULL")
+
+        assert isinstance(result, SQLResult)
+        assert result.data is not None
+        assert len(result.data) == 2  # Two rows with NULL category
+
+        # Verify the correct rows were found
+        found_ids = {row["id"] for row in result.data}
+        assert found_ids == {2, 4}
+
+        # Test direct comparison with None parameter (should work with parameters)
+        none_result = driver.execute("SELECT * FROM test_none_where WHERE category = ? OR ? IS NULL", (None, None))
+
+        # The second condition should be TRUE since None IS NULL
+        assert isinstance(none_result, SQLResult)
+        assert none_result.data is not None
+        assert len(none_result.data) == 4  # All rows because condition is always true
+
+
+@pytest.mark.duckdb
+def test_duckdb_none_complex_parameter_scenarios() -> None:
+    """Test complex scenarios with None parameters that might cause issues."""
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_complex_test"})
+
+    with config.provide_session() as driver:
+        # Create test table
+        driver.execute("""
+            CREATE TABLE test_complex_none (
+                id INTEGER,
+                col1 VARCHAR,
+                col2 INTEGER,
+                col3 REAL,
+                col4 BOOLEAN,
+                col5 DATE,
+                col6 VARCHAR[]
+            )
+        """)
+
+        # Test 1: Mix of None and complex values
+        complex_params = {
+            "id": 1,
+            "col1": "complex_test",
+            "col2": None,
+            "col3": 3.14159,
+            "col4": None,
+            "col5": date(2025, 1, 21),
+            "col6": ["array", "with", "values"],
+        }
+
+        result = driver.execute(
+            """
+            INSERT INTO test_complex_none (id, col1, col2, col3, col4, col5, col6)
+            VALUES ($id, $col1, $col2, $col3, $col4, $col5, $col6)
+        """,
+            statement_config=None,
+            **complex_params,
+        )
+
+        assert isinstance(result, SQLResult)
+        assert result.rows_affected == 1
+
+        # Test 2: Correct parameter count with None values
+        params_for_count_test = (2, "test2", None, None, None)  # 5 parameters for 5 placeholders
+
+        # Should NOT raise a parameter count error
+        driver.execute(
+            "INSERT INTO test_complex_none (id, col1, col2, col3, col4) VALUES (?, ?, ?, ?, ?)", params_for_count_test
+        )
+
+        # Test 3: Verify complex insert worked correctly
+        verify_result = driver.select_one("SELECT * FROM test_complex_none WHERE id = ?", (1,))
+
+        assert verify_result is not None
+        assert verify_result["col1"] == "complex_test"
+        assert verify_result["col2"] is None
+        assert abs(verify_result["col3"] - 3.14159) < 0.00001
+        assert verify_result["col4"] is None
+        assert verify_result["col5"] is not None
+        assert verify_result["col6"] == ["array", "with", "values"]
+
+
+@pytest.mark.duckdb
+def test_duckdb_none_parameter_edge_cases() -> None:
+    """Test edge cases that might reveal parameter handling bugs."""
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_edge_test"})
+
+    with config.provide_session() as driver:
+        # Test 1: Empty parameter list with None
+        driver.execute("CREATE TABLE test_edge (id INTEGER)")
+
+        # Test 2: Single None parameter
+        driver.execute("CREATE TABLE test_single_none (id INTEGER, value VARCHAR)")
+        driver.execute("INSERT INTO test_single_none VALUES (1, ?)", (None,))
+
+        result = driver.select_one("SELECT * FROM test_single_none WHERE id = 1")
+        assert result is not None
+        assert result["value"] is None
+
+        # Test 3: Multiple consecutive None parameters
+        driver.execute("CREATE TABLE test_consecutive_none (a INTEGER, b VARCHAR, c VARCHAR, d VARCHAR)")
+        driver.execute("INSERT INTO test_consecutive_none VALUES (?, ?, ?, ?)", (1, None, None, None))
+
+        result = driver.select_one("SELECT * FROM test_consecutive_none WHERE a = 1")
+        assert result is not None
+        assert result["b"] is None
+        assert result["c"] is None
+        assert result["d"] is None
+
+        # Test 4: None at beginning, middle, and end positions
+        driver.execute("CREATE TABLE test_position_none (a VARCHAR, b VARCHAR, c VARCHAR)")
+        test_cases = [
+            (None, "middle", "end"),  # None at start
+            ("start", None, "end"),  # None at middle
+            ("start", "middle", None),  # None at end
+            (None, None, "end"),  # Multiple None at start
+            ("start", None, None),  # Multiple None at end
+        ]
+
+        for i, params in enumerate(test_cases):
+            driver.execute("INSERT INTO test_position_none VALUES (?, ?, ?)", params)
+
+        # Verify all rows were inserted
+        all_results = driver.execute("SELECT COUNT(*) as count FROM test_position_none")
+        assert all_results.data[0]["count"] == 5
+
+
+@pytest.mark.duckdb
+def test_duckdb_parameter_count_mismatch_with_none() -> None:
+    """Test that parameter count mismatches are properly detected even when None values are involved.
+
+    This test verifies the bug mentioned in the original issue where parameter
+    count mismatches might be missed when None values are present.
+    """
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_db_param_count_test"})
+
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE test_param_count (col1 VARCHAR, col2 INTEGER)")
+
+        # Test: Too many parameters - should raise an error
+        with pytest.raises(Exception) as exc_info:
+            driver.execute(
+                "INSERT INTO test_param_count (col1, col2) VALUES (?, ?)",  # 2 placeholders
+                ("value1", None, "extra_param"),  # 3 parameters
+            )
+
+        # Should be a parameter count error
+        assert "mismatch" in str(exc_info.value).lower()
+
+        # Test: Too few parameters - should raise an error
+        with pytest.raises(Exception) as exc_info:
+            driver.execute(
+                "INSERT INTO test_param_count (col1, col2) VALUES (?, ?)",  # 2 placeholders
+                ("value1",),  # Only 1 parameter
+            )
+
+        # Should be a parameter count error
+        assert "mismatch" in str(exc_info.value).lower() or "parameter" in str(exc_info.value).lower()
+
+        # Test: Correct count with None should work fine
+        result = driver.execute("INSERT INTO test_param_count (col1, col2) VALUES (?, ?)", ("value1", None))
+        assert isinstance(result, SQLResult)
+        assert result.rows_affected == 1

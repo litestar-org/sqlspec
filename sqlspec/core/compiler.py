@@ -17,6 +17,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import Literal
 
 from sqlspec.core.parameters import ParameterProcessor
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -261,6 +262,9 @@ class SQLProcessor:
                 supports_many=isinstance(final_params, list) and len(final_params) > 0,
             )
 
+        except SQLSpecError:
+            # Re-raise SQLSpecError (validation errors, parameter mismatches) - these should fail hard
+            raise
         except Exception as e:
             logger.warning("Compilation failed, using fallback: %s", e)
             return CompiledSQL(compiled_sql=sql, execution_parameters=parameters, operation_type="UNKNOWN")

@@ -10,6 +10,7 @@ import datetime
 import decimal
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+from adbc_driver_manager.dbapi import DatabaseError, IntegrityError, OperationalError, ProgrammingError
 from sqlglot import exp
 
 from sqlspec.core.cache import get_cache_config
@@ -53,21 +54,92 @@ DIALECT_PARAMETER_STYLES = {
 }
 
 
-def _adbc_ast_transformer(expression: Any, parameters: Any) -> tuple[Any, Any]:
+def _count_placeholders(expression: Any) -> int:
+    """Count the number of unique parameter placeholders in a SQLGlot expression.
+
+    For PostgreSQL ($1, $2) style: counts highest numbered parameter (e.g., $1, $1, $2 = 2)
+    For QMARK (?) style: counts total occurrences (each ? is a separate parameter)
+    For named (:name) style: counts unique parameter names
+
+    Supports complex SQL including filters, GROUP BY, HAVING, ORDER BY, LIMIT/OFFSET, and pagination.
+
+    Args:
+        expression: SQLGlot AST expression
+
+    Returns:
+        Number of unique parameter placeholders expected
+    """
+    numeric_params = set()  # For $1, $2 style
+    qmark_count = 0  # For ? style
+    named_params = set()  # For :name style
+
+    def count_node(node: Any) -> Any:
+        nonlocal qmark_count
+        if isinstance(node, exp.Parameter):
+            # PostgreSQL style: $1, $2, etc.
+            param_str = str(node)
+            if param_str.startswith("$") and param_str[1:].isdigit():
+                numeric_params.add(int(param_str[1:]))
+            elif ":" in param_str:
+                # Named parameter: :name
+                named_params.add(param_str)
+            else:
+                # Other parameter formats
+                named_params.add(param_str)
+        elif isinstance(node, exp.Placeholder):
+            # QMARK style: ?
+            qmark_count += 1
+        return node
+
+    expression.transform(count_node)
+
+    # Return the appropriate count based on parameter style detected
+    if numeric_params:
+        # PostgreSQL style: return highest numbered parameter
+        return max(numeric_params)
+    if named_params:
+        # Named parameters: return count of unique names
+        return len(named_params)
+    # QMARK style: return total count
+    return qmark_count
+
+
+def _adbc_ast_transformer(expression: Any, parameters: Any, dialect: str = "postgres") -> tuple[Any, Any]:
     """AST transformer for NULL parameter handling.
 
     For PostgreSQL, replaces NULL parameter placeholders with NULL literals
     in the AST to prevent Arrow from inferring 'na' types which cause binding errors.
 
+    Validates parameter count before transformation to prevent silent parameter mismatches.
+    Supports complex SQL with filters, GROUP BY, HAVING, ORDER BY, LIMIT/OFFSET, and pagination.
+
     Args:
-        expression: SQLGlot AST expression
+        expression: SQLGlot AST expression parsed with proper dialect
         parameters: Parameter values that may contain None
+        dialect: SQLGlot dialect used for parsing (default: "postgres")
 
     Returns:
         Tuple of (modified_expression, cleaned_parameters)
+
+    Raises:
+        SQLSpecError: If parameter count doesn't match placeholder count
     """
     if not parameters:
         return expression, parameters
+
+    # Validate parameter count before transformation
+    placeholder_count = _count_placeholders(expression)
+    param_count = (
+        len(parameters)
+        if isinstance(parameters, (list, tuple))
+        else len(parameters)
+        if isinstance(parameters, dict)
+        else 0
+    )
+
+    if param_count != placeholder_count:
+        msg = f"Parameter count mismatch: {param_count} parameters provided but {placeholder_count} placeholders in SQL (dialect: {dialect})"
+        raise SQLSpecError(msg)
 
     null_positions = set()
     if isinstance(parameters, (list, tuple)):
@@ -245,8 +317,6 @@ class AdbcExceptionHandler:
             return
 
         try:
-            from adbc_driver_manager.dbapi import DatabaseError, IntegrityError, OperationalError, ProgrammingError
-
             if issubclass(exc_type, IntegrityError):
                 e = exc_val
                 msg = f"Integrity constraint violation: {e}"
