@@ -12,9 +12,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import unquote, urlparse
 
-from sqlspec.core.cache import get_cache, get_cache_config
-from sqlspec.core.statement import SQL
-from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, StorageOperationFailedError
+from sqlspec.core import SQL, StatementConfig
+from sqlspec.core.cache import CacheKey, get_cache, get_cache_config, get_default_cache
+from sqlspec.exceptions import (
+    MissingDependencyError,
+    SQLFileNotFoundError,
+    SQLFileParseError,
+    StorageOperationFailedError,
+)
 from sqlspec.storage.registry import storage_registry as default_storage_registry
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
@@ -529,6 +534,49 @@ class SQLFileLoader:
         self._queries[normalized_name] = statement
         self._query_to_file[normalized_name] = "<directly added>"
 
+<<<<<<< HEAD
+=======
+    def get_sql(self, name: str) -> "SQL":
+        """Get a SQL object by statement name.
+
+        Args:
+            name: Name of the statement (from -- name: in SQL file).
+                  Hyphens in names are converted to underscores.
+
+        Returns:
+            SQL object ready for execution.
+
+        Raises:
+            SQLFileNotFoundError: If statement name not found.
+        """
+        correlation_id = CorrelationContext.get()
+
+        safe_name = _normalize_query_name(name)
+
+        if safe_name not in self._queries:
+            available = ", ".join(sorted(self._queries.keys())) if self._queries else "none"
+            logger.error(
+                "Statement not found: %s",
+                name,
+                extra={
+                    "statement_name": name,
+                    "safe_name": safe_name,
+                    "available_statements": len(self._queries),
+                    "correlation_id": correlation_id,
+                },
+            )
+            raise SQLFileNotFoundError(name, path=f"Statement '{name}' not found. Available statements: {available}")
+
+        parsed_statement = self._queries[safe_name]
+        sqlglot_dialect = None
+        statement_config = None
+        if parsed_statement.dialect:
+            sqlglot_dialect = _normalize_dialect_for_sqlglot(parsed_statement.dialect)
+            statement_config = StatementConfig(dialect=sqlglot_dialect)
+
+        return SQL(parsed_statement.sql, statement_config=statement_config)
+
+>>>>>>> cfc92e30 (wip)
     def get_file(self, path: Union[str, Path]) -> "Optional[SQLFile]":
         """Get a loaded SQLFile object by path.
 
