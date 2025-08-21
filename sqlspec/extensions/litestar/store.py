@@ -22,14 +22,14 @@ if TYPE_CHECKING:
 
 logger = get_logger("extensions.litestar.store")
 
-__all__ = ("SessionStore", "SessionStoreError")
+__all__ = ("SQLSpecSessionStore", "SQLSpecSessionStoreError")
 
 
-class SessionStoreError(SQLSpecError):
+class SQLSpecSessionStoreError(SQLSpecError):
     """Exception raised by session store operations."""
 
 
-class SessionStore(Store):
+class SQLSpecSessionStore(Store):
     """SQLSpec-based session store for Litestar.
 
     This store uses SQLSpec's builder API to create dialect-aware SQL operations
@@ -129,7 +129,7 @@ class SessionStore(Store):
         except Exception as e:
             msg = f"Failed to create session table: {e}"
             logger.exception("Failed to create session table %s", self._table_name)
-            raise SessionStoreError(msg) from e
+            raise SQLSpecSessionStoreError(msg) from e
 
     def _get_dialect_upsert_sql(self, dialect: str, session_id: str, data: str, expires_at: datetime) -> Any:
         """Generate dialect-specific upsert SQL using SQL builder API.
@@ -152,12 +152,10 @@ class SessionStore(Store):
                 .columns(self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column)
                 .values(session_id, data, expires_at, current_time)
                 .on_conflict(self._session_id_column)
-                .do_update(
-                    **{
-                        self._data_column: sql.raw("EXCLUDED." + self._data_column),
-                        self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
-                    }
-                )
+                .do_update(**{
+                    self._data_column: sql.raw("EXCLUDED." + self._data_column),
+                    self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
+                })
             )
 
         if dialect in {"mysql", "mariadb"}:
@@ -166,12 +164,10 @@ class SessionStore(Store):
                 sql.insert(self._table_name)
                 .columns(self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column)
                 .values(session_id, data, expires_at, current_time)
-                .on_duplicate_key_update(
-                    **{
-                        self._data_column: sql.raw(f"VALUES({self._data_column})"),
-                        self._expires_at_column: sql.raw(f"VALUES({self._expires_at_column})"),
-                    }
-                )
+                .on_duplicate_key_update(**{
+                    self._data_column: sql.raw(f"VALUES({self._data_column})"),
+                    self._expires_at_column: sql.raw(f"VALUES({self._expires_at_column})"),
+                })
             )
 
         if dialect == "sqlite":
@@ -181,12 +177,10 @@ class SessionStore(Store):
                 .columns(self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column)
                 .values(session_id, data, expires_at, current_time)
                 .on_conflict(self._session_id_column)
-                .do_update(
-                    **{
-                        self._data_column: sql.raw("EXCLUDED." + self._data_column),
-                        self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
-                    }
-                )
+                .do_update(**{
+                    self._data_column: sql.raw("EXCLUDED." + self._data_column),
+                    self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
+                })
             )
 
         if dialect == "oracle":
@@ -363,7 +357,7 @@ class SessionStore(Store):
         except Exception as e:
             msg = f"Failed to store session: {e}"
             logger.exception("Failed to store session %s", key)
-            raise SessionStoreError(msg) from e
+            raise SQLSpecSessionStoreError(msg) from e
 
     async def delete(self, key: str) -> None:
         """Delete session data.
@@ -392,7 +386,7 @@ class SessionStore(Store):
         except Exception as e:
             msg = f"Failed to delete session: {e}"
             logger.exception("Failed to delete session %s", key)
-            raise SessionStoreError(msg) from e
+            raise SQLSpecSessionStoreError(msg) from e
 
     async def exists(self, key: str) -> bool:
         """Check if a session exists and is not expired.
@@ -469,11 +463,9 @@ class SessionStore(Store):
                 delta = expires_at - current_time
                 return max(0, int(delta.total_seconds()))
 
-            return 0
-
         except Exception:
             logger.exception("Failed to get expires_in for session %s", key)
-            return 0
+        return 0
 
     async def delete_all(self, pattern: str = "*") -> None:
         """Delete all sessions matching pattern.
@@ -499,7 +491,7 @@ class SessionStore(Store):
         except Exception as e:
             msg = f"Failed to delete all sessions: {e}"
             logger.exception("Failed to delete all sessions")
-            raise SessionStoreError(msg) from e
+            raise SQLSpecSessionStoreError(msg) from e
 
     async def delete_expired(self) -> None:
         """Delete expired sessions."""
