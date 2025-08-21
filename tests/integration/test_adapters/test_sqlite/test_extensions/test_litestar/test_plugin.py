@@ -1,0 +1,613 @@
+"""Comprehensive Litestar integration tests for SQLite adapter."""
+
+import time
+from datetime import timedelta
+from typing import Any
+
+import pytest
+from litestar import Litestar, delete, get, post, put
+from litestar.middleware.session.server_side import ServerSideSessionConfig
+from litestar.status_codes import HTTP_200_OK, HTTP_404_NOT_FOUND
+from litestar.testing import TestClient
+
+from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionStore
+from sqlspec.utils.sync_tools import run_
+
+pytestmark = [pytest.mark.sqlite, pytest.mark.integration]
+
+
+@pytest.fixture
+def session_store(sqlite_config_regular_memory) -> SQLSpecSessionStore:
+    """Create a session store using the regular memory config from conftest.py."""
+    store = SQLSpecSessionStore(
+        config=sqlite_config_regular_memory,
+        table_name="litestar_test_sessions",
+        session_id_column="session_id",
+        data_column="data",
+        expires_at_column="expires_at",
+        created_at_column="created_at",
+    )
+    # Ensure table exists - the store handles sync/async conversion internally
+    with sqlite_config_regular_memory.provide_session() as driver:
+        run_(store._ensure_table_exists)(driver)
+    return store
+
+
+@pytest.fixture
+def session_backend(sqlite_config_regular_memory) -> SQLSpecSessionBackend:
+    """Create a session backend using the regular memory config from conftest.py."""
+    backend = SQLSpecSessionBackend(
+        config=sqlite_config_regular_memory, table_name="litestar_backend_sessions", session_lifetime=3600
+    )
+    # Ensure table exists - the store handles sync/async conversion internally
+    with sqlite_config_regular_memory.provide_session() as driver:
+        run_(backend.store._ensure_table_exists)(driver)
+    return backend
+
+
+@pytest.fixture
+def litestar_app(session_backend: SQLSpecSessionBackend) -> Litestar:
+    """Create a Litestar app with session middleware for testing."""
+
+    @get("/session/set/{key:str}")
+    async def set_session_value(request: Any, key: str) -> dict:
+        """Set a session value."""
+        value = request.query_params.get("value", "default")
+        request.session[key] = value
+        return {"status": "set", "key": key, "value": value}
+
+    @get("/session/get/{key:str}")
+    async def get_session_value(request: Any, key: str) -> dict:
+        """Get a session value."""
+        value = request.session.get(key)
+        return {"key": key, "value": value}
+
+    @post("/session/bulk")
+    async def set_bulk_session(request: Any) -> dict:
+        """Set multiple session values."""
+        data = await request.json()
+        for key, value in data.items():
+            request.session[key] = value
+        return {"status": "bulk set", "count": len(data)}
+
+    @get("/session/all")
+    async def get_all_session(request: Any) -> dict:
+        """Get all session data."""
+        return dict(request.session)
+
+    @delete("/session/clear")
+    async def clear_session(request: Any) -> dict:
+        """Clear all session data."""
+        request.session.clear()
+        return {"status": "cleared"}
+
+    @delete("/session/key/{key:str}")
+    async def delete_session_key(request: Any, key: str) -> dict:
+        """Delete a specific session key."""
+        if key in request.session:
+            del request.session[key]
+            return {"status": "deleted", "key": key}
+        return {"status": "not found", "key": key}
+
+    @get("/counter")
+    async def counter(request: Any) -> dict:
+        """Increment a counter in session."""
+        count = request.session.get("count", 0)
+        count += 1
+        request.session["count"] = count
+        return {"count": count}
+
+    @put("/user/profile")
+    async def set_user_profile(request: Any) -> dict:
+        """Set user profile data."""
+        profile = await request.json()
+        request.session["profile"] = profile
+        return {"status": "profile set", "profile": profile}
+
+    @get("/user/profile")
+    async def get_user_profile(request: Any) -> dict:
+        """Get user profile data."""
+        profile = request.session.get("profile")
+        if not profile:
+            return {"error": "No profile found"}, HTTP_404_NOT_FOUND
+        return {"profile": profile}
+
+    session_config = ServerSideSessionConfig(backend=session_backend, key="test-session-key", max_age=3600)
+
+    return Litestar(
+        route_handlers=[
+            set_session_value,
+            get_session_value,
+            set_bulk_session,
+            get_all_session,
+            clear_session,
+            delete_session_key,
+            counter,
+            set_user_profile,
+            get_user_profile,
+        ],
+        middleware=[session_config.middleware],
+    )
+
+
+def test_basic_session_operations(litestar_app: Litestar) -> None:
+    """Test basic session get/set/delete operations."""
+    with TestClient(app=litestar_app) as client:
+        # Set a simple value
+        response = client.get("/session/set/username?value=testuser")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"status": "set", "key": "username", "value": "testuser"}
+
+        # Get the value back
+        response = client.get("/session/get/username")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"key": "username", "value": "testuser"}
+
+        # Set another value
+        response = client.get("/session/set/user_id?value=12345")
+        assert response.status_code == HTTP_200_OK
+
+        # Get all session data
+        response = client.get("/session/all")
+        assert response.status_code == HTTP_200_OK
+        data = response.json()
+        assert data["username"] == "testuser"
+        assert data["user_id"] == "12345"
+
+        # Delete a specific key
+        response = client.delete("/session/key/username")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"status": "deleted", "key": "username"}
+
+        # Verify it's gone
+        response = client.get("/session/get/username")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"key": "username", "value": None}
+
+        # user_id should still exist
+        response = client.get("/session/get/user_id")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"key": "user_id", "value": "12345"}
+
+
+def test_bulk_session_operations(litestar_app: Litestar) -> None:
+    """Test bulk session operations."""
+    with TestClient(app=litestar_app) as client:
+        # Set multiple values at once
+        bulk_data = {
+            "user_id": 42,
+            "username": "alice",
+            "email": "alice@example.com",
+            "preferences": {"theme": "dark", "notifications": True, "language": "en"},
+            "roles": ["user", "admin"],
+            "last_login": "2024-01-15T10:30:00Z",
+        }
+
+        response = client.post("/session/bulk", json=bulk_data)
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"status": "bulk set", "count": 6}
+
+        # Verify all data was set
+        response = client.get("/session/all")
+        assert response.status_code == HTTP_200_OK
+        data = response.json()
+
+        for key, expected_value in bulk_data.items():
+            assert data[key] == expected_value
+
+
+def test_session_persistence_across_requests(litestar_app: Litestar) -> None:
+    """Test that sessions persist across multiple requests."""
+    with TestClient(app=litestar_app) as client:
+        # Test counter functionality across multiple requests
+        expected_counts = [1, 2, 3, 4, 5]
+
+        for expected_count in expected_counts:
+            response = client.get("/counter")
+            assert response.status_code == HTTP_200_OK
+            assert response.json() == {"count": expected_count}
+
+        # Verify count persists after setting other data
+        response = client.get("/session/set/other_data?value=some_value")
+        assert response.status_code == HTTP_200_OK
+
+        response = client.get("/counter")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"count": 6}
+
+
+def test_session_expiration(sqlite_config_regular_memory) -> None:
+    """Test session expiration handling."""
+    # Create backend with very short lifetime
+    backend = SQLSpecSessionBackend(
+        config=sqlite_config_regular_memory,
+        table_name="expiring_sessions",
+        session_lifetime=1,  # 1 second
+    )
+    
+    # Ensure table exists
+    with sqlite_config_regular_memory.provide_session() as driver:
+        run_(backend.store._ensure_table_exists)(driver)
+
+    @get("/set-temp")
+    async def set_temp_data(request: Any) -> dict:
+        request.session["temp_data"] = "will_expire"
+        return {"status": "set"}
+
+    @get("/get-temp")
+    async def get_temp_data(request: Any) -> dict:
+        return {"temp_data": request.session.get("temp_data")}
+
+    session_config = ServerSideSessionConfig(backend=backend, key="expiring-session", max_age=1)
+
+    app = Litestar(route_handlers=[set_temp_data, get_temp_data], middleware=[session_config.middleware])
+
+    with TestClient(app=app) as client:
+        # Set temporary data
+        response = client.get("/set-temp")
+        assert response.json() == {"status": "set"}
+
+        # Data should be available immediately
+        response = client.get("/get-temp")
+        assert response.json() == {"temp_data": "will_expire"}
+
+        # Wait for expiration
+        time.sleep(2)
+
+        # Data should be expired (new session created)
+        response = client.get("/get-temp")
+        assert response.json() == {"temp_data": None}
+
+
+def test_concurrent_sessions(session_backend: SQLSpecSessionBackend) -> None:
+    """Test handling of concurrent sessions with different clients."""
+
+    @get("/user/login/{user_id:int}")
+    async def login_user(request: Any, user_id: int) -> dict:
+        request.session["user_id"] = user_id
+        request.session["login_time"] = time.time()
+        return {"status": "logged in", "user_id": user_id}
+
+    @get("/user/whoami")
+    async def whoami(request: Any) -> dict:
+        user_id = request.session.get("user_id")
+        login_time = request.session.get("login_time")
+        return {"user_id": user_id, "login_time": login_time}
+
+    @post("/user/update-profile")
+    async def update_profile(request: Any) -> dict:
+        profile_data = await request.json()
+        request.session["profile"] = profile_data
+        return {"status": "profile updated"}
+
+    session_config = ServerSideSessionConfig(backend=session_backend, key="concurrent-session")
+
+    app = Litestar(route_handlers=[login_user, whoami, update_profile], middleware=[session_config.middleware])
+
+    # Use separate clients to simulate different browsers/users
+    with (
+        TestClient(app=app) as client1,
+        TestClient(app=app) as client2,
+        TestClient(app=app) as client3,
+    ):
+        # Each client logs in as different user
+        response1 = client1.get("/user/login/100")
+        assert response1.json()["user_id"] == 100
+
+        response2 = client2.get("/user/login/200")
+        assert response2.json()["user_id"] == 200
+
+        response3 = client3.get("/user/login/300")
+        assert response3.json()["user_id"] == 300
+
+        # Each client should maintain separate session
+        who1 = client1.get("/user/whoami")
+        assert who1.json()["user_id"] == 100
+
+        who2 = client2.get("/user/whoami")
+        assert who2.json()["user_id"] == 200
+
+        who3 = client3.get("/user/whoami")
+        assert who3.json()["user_id"] == 300
+
+        # Update profiles independently
+        client1.post("/user/update-profile", json={"name": "User One", "age": 25})
+        client2.post("/user/update-profile", json={"name": "User Two", "age": 30})
+
+        # Verify isolation - get all session data
+        response1 = client1.get("/session/all")
+        data1 = response1.json()
+        assert data1["user_id"] == 100
+        assert data1["profile"]["name"] == "User One"
+
+        response2 = client2.get("/session/all")
+        data2 = response2.json()
+        assert data2["user_id"] == 200
+        assert data2["profile"]["name"] == "User Two"
+
+        # Client3 should not have profile data
+        response3 = client3.get("/session/all")
+        data3 = response3.json()
+        assert data3["user_id"] == 300
+        assert "profile" not in data3
+
+
+def test_store_crud_operations(session_store: SQLSpecSessionStore) -> None:
+    """Test direct store CRUD operations."""
+    session_id = "test-session-crud"
+
+    # Test data with various types
+    test_data = {
+        "user_id": 12345,
+        "username": "testuser",
+        "preferences": {"theme": "dark", "language": "en", "notifications": True},
+        "tags": ["admin", "user", "premium"],
+        "metadata": {"last_login": "2024-01-15T10:30:00Z", "login_count": 42, "is_verified": True},
+    }
+
+    # CREATE
+    run_(session_store.set)(session_id, test_data, expires_in=3600)
+
+    # READ
+    retrieved_data = run_(session_store.get)(session_id)
+    assert retrieved_data == test_data
+
+    # UPDATE (overwrite)
+    updated_data = {**test_data, "last_activity": "2024-01-15T11:00:00Z"}
+    run_(session_store.set)(session_id, updated_data, expires_in=3600)
+
+    retrieved_updated = run_(session_store.get)(session_id)
+    assert retrieved_updated == updated_data
+    assert "last_activity" in retrieved_updated
+
+    # EXISTS
+    assert run_(session_store.exists)(session_id) is True
+    assert run_(session_store.exists)("nonexistent") is False
+
+    # EXPIRES_IN
+    expires_in = run_(session_store.expires_in)(session_id)
+    assert 3500 < expires_in <= 3600  # Should be close to 3600
+
+    # DELETE
+    run_(session_store.delete)(session_id)
+
+    # Verify deletion
+    assert run_(session_store.get)(session_id) is None
+    assert run_(session_store.exists)(session_id) is False
+
+
+def test_large_data_handling(session_store: SQLSpecSessionStore) -> None:
+    """Test handling of large session data."""
+    session_id = "test-large-data"
+
+    # Create large data structure
+    large_data = {
+        "large_list": list(range(10000)),  # 10k integers
+        "large_text": "x" * 50000,  # 50k character string
+        "nested_structure": {
+            f"key_{i}": {"value": f"data_{i}", "numbers": list(range(i, i + 100)), "text": f"{'content_' * 100}{i}"}
+            for i in range(100)  # 100 nested objects
+        },
+        "metadata": {"size": "large", "created_at": "2024-01-15T10:30:00Z", "version": 1},
+    }
+
+    # Store large data
+    run_(session_store.set)(session_id, large_data, expires_in=3600)
+
+    # Retrieve and verify
+    retrieved_data = run_(session_store.get)(session_id)
+    assert retrieved_data == large_data
+    assert len(retrieved_data["large_list"]) == 10000
+    assert len(retrieved_data["large_text"]) == 50000
+    assert len(retrieved_data["nested_structure"]) == 100
+
+    # Cleanup
+    run_(session_store.delete)(session_id)
+
+
+def test_special_characters_handling(session_store: SQLSpecSessionStore) -> None:
+    """Test handling of special characters in keys and values."""
+
+    # Test data with various special characters
+    test_cases = [
+        ("unicode_🔑", {"message": "Hello 🌍 World! 你好世界"}),
+        ("special-chars!@#$%", {"data": "Value with special chars: !@#$%^&*()"}),
+        ("json_escape", {"quotes": '"double"', "single": "'single'", "backslash": "\\path\\to\\file"}),
+        ("newlines_tabs", {"multi_line": "Line 1\nLine 2\tTabbed"}),
+        ("empty_values", {"empty_string": "", "empty_list": [], "empty_dict": {}}),
+        ("null_values", {"null_value": None, "false_value": False, "zero_value": 0}),
+    ]
+
+    for session_id, test_data in test_cases:
+        # Store data with special characters
+        run_(session_store.set)(session_id, test_data, expires_in=3600)
+
+        # Retrieve and verify
+        retrieved_data = run_(session_store.get)(session_id)
+        assert retrieved_data == test_data, f"Failed for session_id: {session_id}"
+
+        # Cleanup
+        run_(session_store.delete)(session_id)
+
+
+def test_session_cleanup_operations(session_store: SQLSpecSessionStore) -> None:
+    """Test session cleanup and maintenance operations."""
+
+    # Create multiple sessions with different expiration times
+    sessions_data = [
+        ("short_lived_1", {"data": "expires_soon_1"}, 1),  # 1 second
+        ("short_lived_2", {"data": "expires_soon_2"}, 1),  # 1 second
+        ("medium_lived", {"data": "expires_medium"}, 10),  # 10 seconds
+        ("long_lived", {"data": "expires_long"}, 3600),  # 1 hour
+    ]
+
+    # Set all sessions
+    for session_id, data, expires_in in sessions_data:
+        run_(session_store.set)(session_id, data, expires_in=expires_in)
+
+    # Verify all sessions exist
+    for session_id, _, _ in sessions_data:
+        assert run_(session_store.exists)(session_id), f"Session {session_id} should exist"
+
+    # Wait for short-lived sessions to expire
+    time.sleep(2)
+
+    # Delete expired sessions
+    run_(session_store.delete_expired)()
+
+    # Check which sessions remain
+    assert run_(session_store.exists)("short_lived_1") is False
+    assert run_(session_store.exists)("short_lived_2") is False
+    assert run_(session_store.exists)("medium_lived") is True
+    assert run_(session_store.exists)("long_lived") is True
+
+    # Test get_all functionality
+    all_sessions = []
+    
+    async def collect_sessions():
+        async for session_id, session_data in session_store.get_all():
+            all_sessions.append((session_id, session_data))
+    
+    run_(collect_sessions)()
+
+    # Should have 2 remaining sessions
+    assert len(all_sessions) == 2
+    session_ids = {session_id for session_id, _ in all_sessions}
+    assert "medium_lived" in session_ids
+    assert "long_lived" in session_ids
+
+    # Test delete_all
+    run_(session_store.delete_all)()
+
+    # Verify all sessions are gone
+    for session_id, _, _ in sessions_data:
+        assert run_(session_store.exists)(session_id) is False
+
+
+def test_session_renewal(session_store: SQLSpecSessionStore) -> None:
+    """Test session renewal functionality."""
+    session_id = "renewal_test"
+    test_data = {"user_id": 123, "activity": "browsing"}
+
+    # Set session with short expiration
+    run_(session_store.set)(session_id, test_data, expires_in=5)
+
+    # Get initial expiration time
+    initial_expires_in = run_(session_store.expires_in)(session_id)
+    assert 4 <= initial_expires_in <= 5
+
+    # Get session data with renewal
+    retrieved_data = run_(session_store.get)(session_id, renew_for=timedelta(hours=1))
+    assert retrieved_data == test_data
+
+    # Check that expiration time was extended
+    new_expires_in = run_(session_store.expires_in)(session_id)
+    assert new_expires_in > 3500  # Should be close to 3600 (1 hour)
+
+    # Cleanup
+    run_(session_store.delete)(session_id)
+
+
+def test_error_handling_and_edge_cases(session_store: SQLSpecSessionStore) -> None:
+    """Test error handling and edge cases."""
+
+    # Test getting non-existent session
+    result = run_(session_store.get)("non_existent_session")
+    assert result is None
+
+    # Test deleting non-existent session (should not raise error)
+    run_(session_store.delete)("non_existent_session")
+
+    # Test expires_in for non-existent session
+    expires_in = run_(session_store.expires_in)("non_existent_session")
+    assert expires_in == 0
+
+    # Test empty session data
+    run_(session_store.set)("empty_session", {}, expires_in=3600)
+    empty_data = run_(session_store.get)("empty_session")
+    assert empty_data == {}
+
+    # Test very large expiration time
+    run_(session_store.set)("long_expiry", {"data": "test"}, expires_in=365 * 24 * 60 * 60)  # 1 year
+    long_expires_in = run_(session_store.expires_in)("long_expiry")
+    assert long_expires_in > 365 * 24 * 60 * 60 - 10  # Should be close to 1 year
+
+    # Cleanup
+    run_(session_store.delete)("empty_session")
+    run_(session_store.delete)("long_expiry")
+
+
+def test_complex_user_workflow(litestar_app: Litestar) -> None:
+    """Test a complex user workflow combining multiple operations."""
+    with TestClient(app=litestar_app) as client:
+        # User registration workflow
+        user_profile = {
+            "user_id": 12345,
+            "username": "complex_user",
+            "email": "complex@example.com",
+            "profile": {
+                "first_name": "Complex",
+                "last_name": "User",
+                "age": 25,
+                "preferences": {
+                    "theme": "dark",
+                    "language": "en",
+                    "notifications": {"email": True, "push": False, "sms": True},
+                },
+            },
+            "permissions": ["read", "write", "admin"],
+            "last_login": "2024-01-15T10:30:00Z",
+        }
+
+        # Set user profile
+        response = client.put("/user/profile", json=user_profile)
+        assert response.status_code == HTTP_200_OK
+
+        # Verify profile was set
+        response = client.get("/user/profile")
+        assert response.status_code == HTTP_200_OK
+        assert response.json()["profile"] == user_profile
+
+        # Update session with additional activity data
+        activity_data = {
+            "page_views": 15,
+            "session_start": "2024-01-15T10:30:00Z",
+            "cart_items": [
+                {"id": 1, "name": "Product A", "price": 29.99},
+                {"id": 2, "name": "Product B", "price": 19.99},
+            ],
+        }
+
+        response = client.post("/session/bulk", json=activity_data)
+        assert response.status_code == HTTP_200_OK
+
+        # Test counter functionality within complex session
+        for i in range(1, 6):
+            response = client.get("/counter")
+            assert response.json()["count"] == i
+
+        # Get all session data to verify everything is maintained
+        response = client.get("/session/all")
+        all_data = response.json()
+
+        # Verify all data components are present
+        assert "profile" in all_data
+        assert all_data["profile"] == user_profile
+        assert all_data["page_views"] == 15
+        assert len(all_data["cart_items"]) == 2
+        assert all_data["count"] == 5
+
+        # Test selective data removal
+        response = client.delete("/session/key/cart_items")
+        assert response.json()["status"] == "deleted"
+
+        # Verify cart_items removed but other data persists
+        response = client.get("/session/all")
+        updated_data = response.json()
+        assert "cart_items" not in updated_data
+        assert "profile" in updated_data
+        assert updated_data["count"] == 5
+
+        # Final counter increment to ensure functionality still works
+        response = client.get("/counter")
+        assert response.json()["count"] == 6
