@@ -1176,7 +1176,7 @@ class ParameterProcessor:
                 return value
 
             if isinstance(value, TypedParameter):
-                wrapped_value = value.value
+                wrapped_value: Any = value.value
                 # Skip coercion for None values even when wrapped
                 if wrapped_value is None:
                     return wrapped_value
