@@ -24,6 +24,8 @@ from sqlspec.utils.fixtures import (
     write_fixture_async,
 )
 
+pytestmark = pytest.mark.xdist_group("utils")
+
 
 def test_find_fixture_file_json() -> None:
     """Test finding regular .json fixture file."""
@@ -228,10 +230,6 @@ def test_serialize_primitive_none() -> None:
     data = None
     result = _serialize_data(data)
     assert json.loads(result) == data
-
-pytestmark = pytest.mark.xdist_group("utils")
-
-pytestmark = pytest.mark.xdist_group("utils")
 
 
 def test_open_fixture_valid_file() -> None:
