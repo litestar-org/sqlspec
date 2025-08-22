@@ -1,7 +1,6 @@
-"""Safe SQL query builder with validation and parameter binding.
+"""Base query builder with validation and parameter binding.
 
-This module provides a fluent interface for building SQL queries with
-parameter binding and validation.
+Provides abstract base classes and core functionality for SQL query builders.
 """
 
 from abc import ABC, abstractmethod
@@ -31,7 +30,7 @@ logger = get_logger(__name__)
 
 
 class SafeQuery:
-    """A safely constructed SQL query with bound parameters."""
+    """SQL query with bound parameters."""
 
     __slots__ = ("dialect", "parameters", "sql")
 
@@ -44,7 +43,7 @@ class SafeQuery:
 
 
 class QueryBuilder(ABC):
-    """Abstract base class for SQL query builders with SQLGlot optimization.
+    """Abstract base class for SQL query builders.
 
     Provides common functionality for dialect handling, parameter management,
     and query construction using SQLGlot.

@@ -1,4 +1,8 @@
-"""Order, Limit, Offset and Returning operations mixins for SQL builders."""
+"""ORDER BY, LIMIT, OFFSET, and RETURNING clause mixins.
+
+Provides mixins for query result ordering, limiting, and result
+returning functionality.
+"""
 
 from typing import TYPE_CHECKING, Optional, Union, cast
 

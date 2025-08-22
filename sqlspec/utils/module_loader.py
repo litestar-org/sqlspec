@@ -1,4 +1,8 @@
-"""General utility functions."""
+"""Module loading utilities for SQLSpec.
+
+Provides functions for dynamic module imports and path resolution.
+Used for loading modules from dotted paths and converting module paths to filesystem paths.
+"""
 
 import importlib
 from importlib.util import find_spec

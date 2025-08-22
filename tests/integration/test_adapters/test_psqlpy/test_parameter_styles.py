@@ -142,7 +142,7 @@ async def test_parameters_in_crud_operations(psqlpy_session: PsqlpyDriver) -> No
 
 
 async def test_parameters_with_sql_object(psqlpy_session: PsqlpyDriver) -> None:
-    """Test parameter handling with CORE_ROUND_3 SQL objects."""
+    """Test parameter handling with SQL objects."""
 
     sql_obj = SQL("INSERT INTO test_table (name) VALUES ($1) RETURNING id, name", ("sql_object_test",))
 

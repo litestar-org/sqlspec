@@ -1,17 +1,4 @@
-"""DuckDB driver implementation.
-
-This driver provides:
-- SQL compilation with single-pass processing
-- Memory-efficient design with __slots__
-- Statement caching for repeated execution
-- Backward compatibility with existing functionality
-
-Features:
-- Integration with sqlspec.core modules
-- Parameter processing with type coercion
-- DuckDB resource management
-- Multi-parameter style support
-"""
+"""DuckDB driver implementation."""
 
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -80,7 +67,11 @@ class DuckDBCursor:
 
 
 class DuckDBExceptionHandler:
-    """Custom sync context manager for handling DuckDB database exceptions."""
+    """Context manager for handling DuckDB database exceptions.
+
+    Catches DuckDB-specific exceptions and converts them to appropriate
+    SQLSpec exception types for consistent error handling.
+    """
 
     __slots__ = ()
 
@@ -126,33 +117,14 @@ class DuckDBExceptionHandler:
 
 
 class DuckDBDriver(SyncDriverAdapterBase):
-    """DuckDB driver implementation.
+    """Synchronous DuckDB database driver.
 
-    This driver uses the core module system for SQL processing:
+    Provides SQL statement execution, transaction management, and result handling
+    for DuckDB databases. Supports multiple parameter styles including QMARK,
+    NUMERIC, and NAMED_DOLLAR formats.
 
-    Features:
-    - SQL compilation with single-pass processing
-    - Memory-efficient design with __slots__
-    - Statement caching for repeated execution
-    - Parameter processing with type coercion
-    - DuckDB resource management
-
-    Core Integration:
-    - sqlspec.core.statement for SQL processing
-    - sqlspec.core.parameters for parameter handling
-    - sqlspec.core.cache for statement caching
-    - sqlspec.core.config for configuration management
-
-    DuckDB Support:
-    - Multi-parameter style support (QMARK, NUMERIC, NAMED_DOLLAR)
-    - Script execution with statement splitting
-    - Batch operations with row counting
-    - DuckDB-specific exception handling
-
-    Compatibility:
-    - Backward compatibility with existing DuckDB driver interface
-    - StatementConfig API compatibility
-    - Transaction management patterns
+    The driver handles script execution, batch operations, and integrates with
+    the sqlspec.core modules for statement processing and caching.
     """
 
     __slots__ = ()
@@ -177,34 +149,45 @@ class DuckDBDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
-        """Create context manager for DuckDB cursor."""
+        """Create context manager for DuckDB cursor.
+
+        Args:
+            connection: DuckDB connection instance
+
+        Returns:
+            DuckDBCursor context manager instance
+        """
         return DuckDBCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
-        """Handle database-specific exceptions and wrap them appropriately."""
+        """Handle database-specific exceptions and wrap them appropriately.
+
+        Returns:
+            Context manager that catches and converts DuckDB exceptions
+        """
         return DuckDBExceptionHandler()
 
     def _try_special_handling(self, cursor: Any, statement: SQL) -> "Optional[SQLResult]":
         """Handle DuckDB-specific special operations.
 
-        DuckDB doesn't have special operations like PostgreSQL COPY,
-        so this always returns None to proceed with standard execution.
+        DuckDB does not require special operation handling, so this method
+        returns None to indicate standard execution should proceed.
 
         Args:
             cursor: DuckDB cursor object
             statement: SQL statement to analyze
 
         Returns:
-            None for standard execution (no special operations)
+            None to indicate no special handling required
         """
         _ = (cursor, statement)
         return None
 
     def _is_modifying_operation(self, statement: SQL) -> bool:
-        """Check if the SQL statement is a modifying operation.
+        """Check if the SQL statement modifies data.
 
-        Uses both AST-based detection (when available) and SQL text analysis
-        to identify operation type.
+        Determines if a statement is an INSERT, UPDATE, or DELETE operation
+        using AST analysis when available, falling back to text parsing.
 
         Args:
             statement: SQL statement to analyze
@@ -223,8 +206,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def _execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
-        Uses core module for statement parsing and parameter processing.
-        Handles DuckDB script execution requirements with parameter support.
+        Parses multi-statement scripts and executes each statement sequentially
+        with the provided parameters.
 
         Args:
             cursor: DuckDB cursor object
@@ -250,8 +233,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def _execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using batch processing.
 
-        Uses DuckDB's executemany for batch operations with
-        row counting for both modifying and non-modifying operations.
+        Uses DuckDB's executemany method for batch operations and calculates
+        row counts for both data modification and query operations.
 
         Args:
             cursor: DuckDB cursor object
@@ -281,8 +264,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def _execute_statement(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement with data handling.
 
-        Uses core processing for parameter handling and result processing.
-        Handles both SELECT queries and non-SELECT operations.
+        Executes a SQL statement with parameter binding and processes the results.
+        Handles both data-returning queries and data modification operations.
 
         Args:
             cursor: DuckDB cursor object

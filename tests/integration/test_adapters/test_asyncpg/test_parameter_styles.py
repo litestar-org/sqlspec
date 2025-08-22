@@ -17,10 +17,7 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 @pytest.fixture(scope="function")
 async def asyncpg_parameters_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
-    """Create an AsyncPG session for parameter style testing.
-
-    Optimized to avoid connection pool exhaustion.
-    """
+    """Create an AsyncPG session for parameter style testing."""
     config = AsyncpgConfig(
         pool_config={
             "host": postgres_service.host,

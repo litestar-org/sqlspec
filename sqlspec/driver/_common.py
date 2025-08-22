@@ -190,6 +190,15 @@ class CommonDriverAttributesMixin:
         """Build SQL statement from various input types.
 
         Ensures dialect is set and preserves existing state when rebuilding SQL objects.
+
+        Args:
+            statement: SQL statement or QueryBuilder to prepare
+            parameters: Parameters for the SQL statement
+            statement_config: Statement configuration
+            kwargs: Additional keyword arguments
+
+        Returns:
+            Prepared SQL statement
         """
         kwargs = kwargs or {}
 
@@ -291,8 +300,8 @@ class CommonDriverAttributesMixin:
     def _format_parameter_set_for_many(self, parameters: Any, statement_config: "StatementConfig") -> Any:
         """Prepare a single parameter set for execute_many operations.
 
-        Unlike _format_parameter_set, this method handles parameter sets without
-        converting the structure itself to array format.
+        Handles parameter sets without converting the structure to array format,
+        applying type coercion to individual values while preserving structure.
 
         Args:
             parameters: Single parameter set (tuple, list, or dict)
@@ -394,7 +403,7 @@ class CommonDriverAttributesMixin:
 
         Args:
             statement: SQL statement to compile
-            statement_config: Complete statement configuration including parameter config, dialect, etc.
+            statement_config: Statement configuration including parameter config and dialect
             flatten_single_parameters: If True, flatten single-element lists for scalar parameters
 
         Returns:

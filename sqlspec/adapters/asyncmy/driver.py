@@ -51,7 +51,10 @@ asyncmy_statement_config = StatementConfig(
 
 
 class AsyncmyCursor:
-    """Async context manager for AsyncMy cursor management."""
+    """Context manager for AsyncMy cursor operations.
+
+    Provides automatic cursor acquisition and cleanup for database operations.
+    """
 
     __slots__ = ("connection", "cursor")
 
@@ -70,7 +73,11 @@ class AsyncmyCursor:
 
 
 class AsyncmyExceptionHandler:
-    """Custom async context manager for handling AsyncMy database exceptions."""
+    """Context manager for AsyncMy database exception handling.
+
+    Converts AsyncMy-specific exceptions to SQLSpec exceptions with appropriate
+    error categorization and context preservation.
+    """
 
     __slots__ = ()
 
@@ -116,10 +123,11 @@ class AsyncmyExceptionHandler:
 
 
 class AsyncmyDriver(AsyncDriverAdapterBase):
-    """AsyncMy MySQL/MariaDB driver.
+    """MySQL/MariaDB database driver using AsyncMy client library.
 
-    Provides MySQL/MariaDB connectivity with parameter style conversion,
-    type coercion, error handling, and transaction management.
+    Implements asynchronous database operations for MySQL and MariaDB servers
+    with support for parameter style conversion, type coercion, error handling,
+    and transaction management.
     """
 
     __slots__ = ()
@@ -143,22 +151,33 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
-        """Create context manager for AsyncMy cursor."""
+        """Create cursor context manager for the connection.
+
+        Args:
+            connection: AsyncMy database connection
+
+        Returns:
+            AsyncmyCursor: Context manager for cursor operations
+        """
         return AsyncmyCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
-        """Handle database-specific exceptions and wrap them appropriately."""
+        """Provide exception handling context manager.
+
+        Returns:
+            AbstractAsyncContextManager[None]: Context manager for AsyncMy exception handling
+        """
         return AsyncmyExceptionHandler()
 
     async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
-        """Hook for AsyncMy-specific special operations.
+        """Handle AsyncMy-specific operations before standard execution.
 
         Args:
             cursor: AsyncMy cursor object
             statement: SQL statement to analyze
 
         Returns:
-            None - always proceeds with standard execution for AsyncMy
+            Optional[SQLResult]: None, always proceeds with standard execution
         """
         _ = (cursor, statement)
         return None
@@ -166,7 +185,15 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
+        Splits multi-statement scripts and executes each statement sequentially.
         Parameters are embedded as static values for script execution compatibility.
+
+        Args:
+            cursor: AsyncMy cursor object
+            statement: SQL script to execute
+
+        Returns:
+            ExecutionResult: Script execution results with statement count
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -183,9 +210,20 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using AsyncMy batch processing.
+        """Execute SQL statement with multiple parameter sets.
 
-        Handles MySQL type conversion and parameter processing.
+        Uses AsyncMy's executemany for batch operations with MySQL type conversion
+        and parameter processing.
+
+        Args:
+            cursor: AsyncMy cursor object
+            statement: SQL statement with multiple parameter sets
+
+        Returns:
+            ExecutionResult: Batch execution results
+
+        Raises:
+            ValueError: If no parameters provided for executemany operation
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -200,9 +238,17 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with AsyncMy MySQL data handling.
+        """Execute single SQL statement.
 
-        Handles parameter processing and MySQL result processing.
+        Handles parameter processing, result fetching, and data transformation
+        for MySQL/MariaDB operations.
+
+        Args:
+            cursor: AsyncMy cursor object
+            statement: SQL statement to execute
+
+        Returns:
+            ExecutionResult: Statement execution results with data or row counts
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters or None)
@@ -228,6 +274,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """Begin a database transaction.
 
         Explicitly starts a MySQL transaction to ensure proper transaction boundaries.
+
+        Raises:
+            SQLSpecError: If transaction initialization fails
         """
         try:
             async with AsyncmyCursor(self.connection) as cursor:
@@ -237,7 +286,11 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def rollback(self) -> None:
-        """Rollback the current transaction."""
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction rollback fails
+        """
         try:
             await self.connection.rollback()
         except asyncmy.errors.MySQLError as e:
@@ -245,7 +298,11 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def commit(self) -> None:
-        """Commit the current transaction."""
+        """Commit the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction commit fails
+        """
         try:
             await self.connection.commit()
         except asyncmy.errors.MySQLError as e:

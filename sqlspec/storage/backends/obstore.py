@@ -1,7 +1,7 @@
 """Object storage backend using obstore.
 
 Implements the ObjectStoreProtocol using obstore for S3, GCS, Azure,
-and local file storage with Arrow support.
+and local file storage.
 """
 
 from __future__ import annotations
@@ -58,8 +58,6 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     Uses obstore's Rust-based implementation for storage operations.
     Supports AWS S3, Google Cloud Storage, Azure Blob Storage,
     local filesystem, and HTTP endpoints.
-
-    Includes Arrow support.
     """
 
     capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(

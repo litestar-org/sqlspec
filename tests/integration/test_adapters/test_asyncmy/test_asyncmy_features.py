@@ -1,4 +1,4 @@
-"""AsyncMy-specific feature tests with CORE_ROUND_3 architecture.
+"""AsyncMy-specific feature tests.
 
 This test suite focuses on AsyncMy adapter specific functionality including:
 - Connection pooling behavior

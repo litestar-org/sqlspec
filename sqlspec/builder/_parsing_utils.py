@@ -1,7 +1,7 @@
-"""Centralized parsing utilities for SQLSpec builders.
+"""Parsing utilities for SQL builders.
 
-This module provides common parsing functions to handle complex SQL expressions
-that users might pass as strings to various builder methods.
+Provides common parsing functions to handle SQL expressions
+passed as strings to builder methods.
 """
 
 import contextlib

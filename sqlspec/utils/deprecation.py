@@ -1,3 +1,9 @@
+"""Deprecation utilities for SQLSpec.
+
+Provides decorators and warning functions for marking deprecated functionality.
+Used to communicate API changes and migration paths to users.
+"""
+
 import inspect
 from functools import wraps
 from typing import Callable, Literal, Optional

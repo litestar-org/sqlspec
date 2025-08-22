@@ -1,4 +1,4 @@
-"""Test Oracle parameter style conversion with CORE_ROUND_3 architecture."""
+"""Test Oracle parameter style conversion."""
 
 from typing import Any, Union
 

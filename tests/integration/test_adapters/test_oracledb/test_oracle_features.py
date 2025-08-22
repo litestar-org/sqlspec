@@ -1,4 +1,4 @@
-"""Test Oracle-specific features with CORE_ROUND_3 architecture."""
+"""Test Oracle-specific features."""
 
 import operator
 from pathlib import Path

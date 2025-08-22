@@ -1,7 +1,7 @@
-"""Safe SQL query builder with validation and parameter binding.
+"""UPDATE statement builder.
 
-This module provides a fluent interface for building SQL queries safely,
-with automatic parameter binding and validation.
+Provides a fluent interface for building SQL UPDATE queries with
+parameter binding and validation.
 """
 
 from typing import TYPE_CHECKING, Any, Optional, Union
@@ -36,8 +36,7 @@ class Update(
 ):
     """Builder for UPDATE statements.
 
-    This builder provides a fluent interface for constructing SQL UPDATE statements
-    with automatic parameter binding and validation.
+    Constructs SQL UPDATE statements with parameter binding and validation.
 
     Example:
         ```python

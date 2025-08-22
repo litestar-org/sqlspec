@@ -180,17 +180,11 @@ class PsycopgSyncExceptionHandler:
 class PsycopgSyncDriver(SyncDriverAdapterBase):
     """PostgreSQL psycopg synchronous driver.
 
-    Provides synchronous database operations for PostgreSQL using psycopg3:
-    - SQL statement execution with parameter binding
-    - Transaction management (begin, commit, rollback)
-    - Result processing with column metadata
-    - PostgreSQL-specific features support
-
-    PostgreSQL Features:
-    - Parameter styles ($1, %s, %(name)s)
-    - PostgreSQL arrays and JSON handling
-    - COPY operations for bulk data transfer
-    - PostgreSQL-specific error handling
+    Provides synchronous database operations for PostgreSQL using psycopg3.
+    Supports SQL statement execution with parameter binding, transaction
+    management, result processing with column metadata, parameter style
+    conversion, PostgreSQL arrays and JSON handling, COPY operations for
+    bulk data transfer, and PostgreSQL-specific error handling.
     """
 
     __slots__ = ()
@@ -486,18 +480,12 @@ class PsycopgAsyncExceptionHandler:
 class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     """PostgreSQL psycopg asynchronous driver.
 
-    Provides asynchronous database operations for PostgreSQL using psycopg3:
-    - Async SQL statement execution with parameter binding
-    - Async transaction management (begin, commit, rollback)
-    - Async result processing with column metadata
-    - PostgreSQL-specific features support
-
-    PostgreSQL Features:
-    - Parameter styles ($1, %s, %(name)s)
-    - PostgreSQL arrays and JSON handling
-    - COPY operations for bulk data transfer
-    - PostgreSQL-specific error handling
-    - Async pub/sub support (LISTEN/NOTIFY)
+    Provides asynchronous database operations for PostgreSQL using psycopg3.
+    Supports async SQL statement execution with parameter binding, async
+    transaction management, async result processing with column metadata,
+    parameter style conversion, PostgreSQL arrays and JSON handling, COPY
+    operations for bulk data transfer, PostgreSQL-specific error handling,
+    and async pub/sub support.
     """
 
     __slots__ = ()

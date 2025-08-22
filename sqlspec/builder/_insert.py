@@ -1,7 +1,7 @@
-"""Safe SQL query builder with validation and parameter binding.
+"""INSERT statement builder.
 
-This module provides a fluent interface for building SQL queries safely,
-with automatic parameter binding and validation.
+Provides a fluent interface for building SQL INSERT queries with
+parameter binding and validation.
 """
 
 from typing import TYPE_CHECKING, Any, Final, Optional
@@ -31,8 +31,7 @@ ERR_MSG_EXPRESSION_NOT_INITIALIZED: Final[str] = "Internal error: base expressio
 class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin):
     """Builder for INSERT statements.
 
-    This builder facilitates the construction of SQL INSERT queries
-    in a safe and dialect-agnostic manner with automatic parameter binding.
+    Constructs SQL INSERT queries with parameter binding and validation.
     """
 
     __slots__ = ("_columns", "_table", "_values_added_count")
@@ -316,8 +315,8 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
 class ConflictBuilder:
     """Builder for ON CONFLICT clauses in INSERT statements.
 
-    This builder provides a fluent interface for constructing conflict resolution
-    clauses using PostgreSQL-style syntax, which SQLGlot can transpile to other dialects.
+    Constructs conflict resolution clauses using PostgreSQL-style syntax,
+    which SQLGlot can transpile to other dialects.
     """
 
     __slots__ = ("_columns", "_insert_builder")

@@ -48,7 +48,7 @@ logger = get_logger("config")
 
 
 class LifecycleConfig(TypedDict, total=False):
-    """Lifecycle hooks for all adapters.
+    """Lifecycle hooks for database adapters.
 
     Each hook accepts a list of callables to support multiple handlers.
     """
@@ -67,7 +67,7 @@ class LifecycleConfig(TypedDict, total=False):
 class MigrationConfig(TypedDict, total=False):
     """Configuration options for database migrations.
 
-    All fields are optional with sensible defaults.
+    All fields are optional with default values.
     """
 
     script_location: NotRequired[str]
@@ -160,9 +160,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for this database configuration.
 
-        This method returns a dictionary of type names to types that should be
-        registered with Litestar's signature namespace to prevent serialization
-        attempts on database-specific types.
+        Returns a dictionary of type names to types that should be registered
+        with Litestar's signature namespace to prevent serialization attempts
+        on database-specific types.
 
         Returns:
             Dictionary mapping type names to types.
@@ -172,8 +172,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     def _initialize_migration_components(self) -> None:
         """Initialize migration loader and commands with necessary imports.
 
-        This method handles the circular import between config and commands
-        by importing at runtime when needed.
+        Handles the circular import between config and commands by importing
+        at runtime when needed.
         """
         from sqlspec.loader import SQLFileLoader
         from sqlspec.migrations.commands import MigrationCommands
@@ -185,7 +185,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Get the migration SQL loader and auto-load files if needed.
 
         Returns:
-            The SQLFileLoader instance for migration files.
+            SQLFileLoader instance for migration files.
         """
         # Auto-load migration files from configured migration path if it exists
         migration_config = self.migration_config or {}
@@ -204,14 +204,14 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Get the migration commands instance.
 
         Returns:
-            The MigrationCommands instance for this config.
+            MigrationCommands instance for this config.
         """
         return self._migration_commands
 
     def get_migration_loader(self) -> "SQLFileLoader":
         """Get the SQL loader for migration files.
 
-        This provides access to migration SQL files loaded from the configured
+        Provides access to migration SQL files loaded from the configured
         script_location directory. Files are loaded lazily on first access.
 
         Returns:
@@ -269,7 +269,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             verbose: Whether to show detailed migration history.
 
         Returns:
-            The current migration version or None if no migrations applied.
+            Current migration version or None if no migrations applied.
         """
         commands = self._ensure_migration_commands()
         return commands.current(verbose=verbose)
@@ -301,7 +301,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
 
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
-    """Base class for a sync database configurations that do not implement a pool."""
+    """Base class for sync database configurations that do not implement a pool."""
 
     __slots__ = ("connection_config",)
     is_async: "ClassVar[bool]" = False
@@ -355,7 +355,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 
 
 class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
-    """Base class for an async database configurations that do not implement a pool."""
+    """Base class for async database configurations that do not implement a pool."""
 
     __slots__ = ("connection_config",)
     is_async: "ClassVar[bool]" = True
@@ -409,7 +409,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 
 
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
-    """Generic Sync Database Configuration."""
+    """Base class for sync database configurations with connection pooling."""
 
     __slots__ = ("pool_config",)
     is_async: "ClassVar[bool]" = False
@@ -486,7 +486,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 
 
 class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
-    """Generic Async Database Configuration."""
+    """Base class for async database configurations with connection pooling."""
 
     __slots__ = ("pool_config",)
     is_async: "ClassVar[bool]" = True

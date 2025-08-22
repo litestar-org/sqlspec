@@ -1,4 +1,4 @@
-"""Integration tests for SQLite driver implementation with CORE_ROUND_3 architecture."""
+"""Integration tests for SQLite driver implementation."""
 
 import math
 from typing import Any, Literal

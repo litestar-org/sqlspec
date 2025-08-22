@@ -1,7 +1,6 @@
-"""Comprehensive unit tests for the core.compiler module.
+"""Unit tests for the core.compiler module.
 
-This module tests the enhanced SQLProcessor and CompiledSQL classes that provide
-5-10x performance improvement over the current multi-pass processing system.
+This module tests the SQLProcessor and CompiledSQL classes.
 
 Test Coverage:
 1. CompiledSQL class - Immutable compiled SQL results with complete information
@@ -12,8 +11,6 @@ Test Coverage:
 6. Dialect-specific compilation - Compilation for different database dialects
 7. Error handling - Compilation error scenarios and fallbacks
 8. Performance characteristics - Compilation speed and efficiency testing
-
-Based on CORE_ROUND_3 architecture and existing patterns from tests/unit_old.
 """
 
 import threading

@@ -6,8 +6,6 @@ Tests various SQL file loading patterns including:
 - File filtering and pattern matching
 - Error handling for various file scenarios
 - URI-based loading patterns
-
-Uses CORE_ROUND_3 architecture with proper error handling and logging.
 """
 
 import tempfile

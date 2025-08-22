@@ -1,4 +1,4 @@
-"""Test OracleDB async driver implementation with CORE_ROUND_3 architecture."""
+"""Test OracleDB async driver implementation."""
 
 from typing import Any, Literal
 

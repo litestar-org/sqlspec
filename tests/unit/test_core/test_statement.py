@@ -1,7 +1,6 @@
-"""Comprehensive unit tests for sqlspec.core.statement module.
+"""Unit tests for sqlspec.core.statement module.
 
-This test module validates the enhanced SQL class and StatementConfig implementations
-that provide 100% backward compatibility while internally using optimized processing.
+This test module validates the SQL class and StatementConfig implementations.
 
 Key Test Coverage:
 1. SQL class single-pass processing - Verify SQL is parsed exactly once

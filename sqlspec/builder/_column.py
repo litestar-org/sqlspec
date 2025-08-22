@@ -1,7 +1,7 @@
-"""Pythonic column expressions for query building.
+"""Column expressions for query building.
 
-This module provides Column objects that support native Python operators
-for building SQL conditions with type safety and parameter binding.
+Provides Column objects that support Python operators for building
+SQL conditions with parameter binding.
 """
 
 from collections.abc import Iterable

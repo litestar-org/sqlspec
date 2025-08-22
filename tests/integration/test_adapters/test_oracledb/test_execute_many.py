@@ -1,4 +1,4 @@
-"""Test Oracle execute_many functionality with CORE_ROUND_3 architecture."""
+"""Test Oracle execute_many functionality."""
 
 from typing import Any, Union
 

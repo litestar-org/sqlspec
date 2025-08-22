@@ -1,4 +1,4 @@
-"""BigQuery-specific feature tests with CORE_ROUND_3 architecture."""
+"""BigQuery-specific feature tests."""
 
 import pytest
 from pytest_databases.docker.bigquery import BigQueryService
@@ -39,25 +39,6 @@ def test_bigquery_standard_sql_functions(bigquery_session: BigQueryDriver) -> No
     assert string_result.data[0]["lower_str"] == "world"
     assert string_result.data[0]["str_length"] == 8
     assert string_result.data[0]["concatenated"] == "Hello World"
-
-
-@pytest.mark.xfail(reason="BigQuery emulator has issues with DATETIME function - requires DATE or TIMESTAMP type")
-def test_bigquery_date_time_functions(bigquery_session: BigQueryDriver) -> None:
-    """Test BigQuery date and time functions."""
-
-    result = bigquery_session.execute("""
-        SELECT
-            DATE('2024-01-15') as test_date,
-            DATETIME('2024-01-15 10:30:00') as test_datetime,
-            DATE_DIFF(DATE('2024-01-20'), DATE('2024-01-15'), DAY) as day_diff,
-            EXTRACT(YEAR FROM DATE('2024-01-15')) as year_part,
-            EXTRACT(MONTH FROM DATE('2024-01-15')) as month_part
-    """)
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert result.data[0]["day_diff"] == 5
-    assert result.data[0]["year_part"] == 2024
-    assert result.data[0]["month_part"] == 1
 
 
 def test_bigquery_conditional_functions(bigquery_session: BigQueryDriver) -> None:
@@ -129,22 +110,11 @@ def test_bigquery_aggregate_functions(bigquery_session: BigQueryDriver, bigquery
     assert group_result.data[0]["sum_value"] == 30
 
 
-def test_bigquery_join_operations(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+def test_bigquery_join_operations(
+    bigquery_session: BigQueryDriver, bigquery_test_table: str, bigquery_service: BigQueryService
+) -> None:
     """Test BigQuery JOIN operations."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
-
-    try:
-        bigquery_session.execute_script(f"DROP TABLE {table_name}")
-    except Exception:
-        pass
-
-    bigquery_session.execute_script(f"""
-        CREATE TABLE {table_name} (
-            id INT64,
-            name STRING,
-            value INT64
-        )
-    """)
+    table_name = bigquery_test_table
 
     bigquery_session.execute_script(f"""
         CREATE TABLE IF NOT EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.join_table` (
@@ -196,25 +166,17 @@ def test_bigquery_join_operations(bigquery_session: BigQueryDriver, bigquery_ser
     assert left_result.data[2]["name"] == "Item C"
     assert left_result.data[2]["category"] is None
 
-    bigquery_session.execute_script(f"DROP TABLE `{bigquery_service.project}.{bigquery_service.dataset}.join_table`")
-
-
-def test_bigquery_subqueries(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
-    """Test BigQuery subquery operations."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
-
     try:
-        bigquery_session.execute_script(f"DROP TABLE {table_name}")
+        bigquery_session.execute_script(
+            f"DROP TABLE IF EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.join_table`"
+        )
     except Exception:
         pass
 
-    bigquery_session.execute_script(f"""
-        CREATE TABLE {table_name} (
-            id INT64,
-            name STRING,
-            value INT64
-        )
-    """)
+
+def test_bigquery_subqueries(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
+    """Test BigQuery subquery operations."""
+    table_name = bigquery_test_table
 
     test_data = [(1, "High", 80), (2, "Medium", 60), (3, "Low", 40), (4, "High", 90)]
     bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", test_data)
@@ -259,24 +221,9 @@ def test_bigquery_subqueries(bigquery_session: BigQueryDriver, bigquery_service:
     assert len(in_result.data) == 3
 
 
-def test_bigquery_cte_common_table_expressions(
-    bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
-) -> None:
+def test_bigquery_cte_common_table_expressions(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test BigQuery Common Table Expressions (CTEs)."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
-
-    try:
-        bigquery_session.execute_script(f"DROP TABLE {table_name}")
-    except Exception:
-        pass
-
-    bigquery_session.execute_script(f"""
-        CREATE TABLE {table_name} (
-            id INT64,
-            name STRING,
-            value INT64
-        )
-    """)
+    table_name = bigquery_test_table
 
     test_data = [(1, "Dept A", 50), (2, "Dept A", 60), (3, "Dept B", 70), (4, "Dept B", 80)]
     bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", test_data)

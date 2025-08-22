@@ -1,4 +1,8 @@
-"""SELECT clause mixins consolidated into a single module."""
+"""SELECT clause mixins.
+
+Provides mixins for SELECT statement functionality including column selection,
+CASE expressions, subqueries, and window functions.
+"""
 
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 

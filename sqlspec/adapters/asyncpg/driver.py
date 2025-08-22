@@ -1,10 +1,7 @@
 """AsyncPG PostgreSQL driver implementation for async PostgreSQL operations.
 
-Provides async PostgreSQL connectivity with:
-- Parameter processing with type coercion
-- Resource management
-- PostgreSQL COPY operation support
-- Transaction management
+Provides async PostgreSQL connectivity with parameter processing, resource management,
+PostgreSQL COPY operation support, and transaction management.
 """
 
 import re
@@ -102,13 +99,9 @@ class AsyncpgExceptionHandler:
 class AsyncpgDriver(AsyncDriverAdapterBase):
     """AsyncPG PostgreSQL driver for async database operations.
 
-    Features:
-    - COPY operation support
-    - Numeric parameter style handling
-    - PostgreSQL exception handling
-    - Transaction management
-    - SQL statement compilation and caching
-    - Parameter processing and type coercion
+    Supports COPY operations, numeric parameter style handling, PostgreSQL
+    exception handling, transaction management, SQL statement compilation
+    and caching, and parameter processing with type coercion.
     """
 
     __slots__ = ()
@@ -193,7 +186,15 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             await cursor.execute(sql_text)
 
     async def _execute_script(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling."""
+        """Execute SQL script with statement splitting and parameter handling.
+
+        Args:
+            cursor: AsyncPG connection object
+            statement: SQL statement containing multiple statements
+
+        Returns:
+            ExecutionResult with script execution details
+        """
         sql, _ = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -210,7 +211,15 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using AsyncPG's executemany."""
+        """Execute SQL with multiple parameter sets using AsyncPG's executemany.
+
+        Args:
+            cursor: AsyncPG connection object
+            statement: SQL statement with multiple parameter sets
+
+        Returns:
+            ExecutionResult with batch execution details
+        """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         if prepared_parameters:
@@ -226,6 +235,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Execute single SQL statement.
 
         Handles both SELECT queries and non-SELECT operations.
+
+        Args:
+            cursor: AsyncPG connection object
+            statement: SQL statement to execute
+
+        Returns:
+            ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 

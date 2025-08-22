@@ -1,4 +1,4 @@
-"""Storage Registry for ObjectStore backends.
+"""Storage registry for ObjectStore backends.
 
 Provides a storage registry that supports URI-first access
 pattern with automatic backend detection, ObStore preferred with FSSpec fallback,

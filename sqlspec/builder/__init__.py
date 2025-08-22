@@ -1,6 +1,6 @@
 """SQL query builders for safe SQL construction.
 
-This package provides fluent interfaces for building SQL queries with
+Provides fluent interfaces for building SQL queries with
 parameter binding and validation.
 """
 

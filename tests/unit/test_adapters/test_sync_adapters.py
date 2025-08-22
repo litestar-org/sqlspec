@@ -1,4 +1,4 @@
-"""Tests for synchronous database adapters based on CORE_ROUND_3 architecture."""
+"""Tests for synchronous database adapters."""
 
 from typing import Any
 from unittest.mock import Mock, patch

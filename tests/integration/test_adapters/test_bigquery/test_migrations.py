@@ -9,7 +9,7 @@ from pytest_databases.docker.bigquery import BigQueryService
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.migrations.commands import MigrationCommands
 
-pytestmark = pytest.mark.xdist_group("bigquery")
+pytestmark = [pytest.mark.xdist_group("bigquery")]
 
 
 def test_bigquery_migration_full_workflow(bigquery_service: BigQueryService) -> None:

@@ -1,13 +1,11 @@
 """Unit tests for SQLFileLoader class.
 
-Tests focused on SQLFileLoader core functionality including:
+Tests for SQLFileLoader core functionality including:
 - SQL file parsing and statement extraction
 - Query name normalization and validation
 - Cache integration and file content checksums
 - Error handling and validation
 - Parameter style detection and preservation
-
-Uses CORE_ROUND_3 architecture with core.statement.SQL and related modules.
 """
 
 import tempfile

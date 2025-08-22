@@ -1,4 +1,4 @@
-"""Test OracleDB connection mechanisms with CORE_ROUND_3 architecture."""
+"""Test OracleDB connection mechanisms."""
 
 import pytest
 from pytest_databases.docker.oracle import OracleService

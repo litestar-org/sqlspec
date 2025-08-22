@@ -1,5 +1,9 @@
 # ruff: noqa: PLR2004
-"""Consolidated WHERE and HAVING clause mixins."""
+"""WHERE and HAVING clause mixins.
+
+Provides mixins for WHERE and HAVING clause functionality with
+parameter binding and various condition operators.
+"""
 
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 

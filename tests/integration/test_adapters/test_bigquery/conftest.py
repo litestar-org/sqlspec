@@ -1,4 +1,4 @@
-"""BigQuery integration test fixtures with CORE_ROUND_3 architecture."""
+"""BigQuery integration test fixtures."""
 
 from collections.abc import Generator
 from typing import TYPE_CHECKING, Any
@@ -40,7 +40,6 @@ def bigquery_session(bigquery_config: BigQueryConfig) -> Generator[BigQueryDrive
         with bigquery_config.provide_session() as session:
             yield session
     finally:
-        # Cleanup if needed
         pass
 
 

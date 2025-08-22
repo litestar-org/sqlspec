@@ -1,4 +1,4 @@
-"""Integration tests for SQLite parameter style handling with CORE_ROUND_3 architecture."""
+"""Integration tests for SQLite parameter style handling."""
 
 import math
 from datetime import date

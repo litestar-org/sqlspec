@@ -1,13 +1,11 @@
 """Unit tests for Migration class functionality.
 
-Tests focused on Migration core functionality including:
+Tests for Migration core functionality including:
 - Migration creation and metadata management
 - Version extraction and validation
 - Checksum calculation and content verification
 - Migration file structure and organization
 - Error handling and validation
-
-Uses CORE_ROUND_3 architecture with core.statement.SQL and related modules.
 """
 
 from __future__ import annotations

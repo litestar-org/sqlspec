@@ -1,4 +1,4 @@
-"""BigQuery parameter style tests with CORE_ROUND_3 architecture."""
+"""BigQuery parameter style tests."""
 
 import math
 
@@ -7,7 +7,7 @@ import pytest
 from sqlspec.adapters.bigquery import BigQueryDriver
 from sqlspec.core.result import SQLResult
 
-pytestmark = pytest.mark.xdist_group("bigquery")
+pytestmark = [pytest.mark.xdist_group("bigquery")]
 
 
 def test_bigquery_named_at_parameters(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:

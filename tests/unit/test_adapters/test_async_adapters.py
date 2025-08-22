@@ -1,4 +1,4 @@
-"""Tests for asynchronous database adapters based on CORE_ROUND_3 architecture."""
+"""Tests for asynchronous database adapters."""
 
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -512,7 +512,7 @@ async def test_async_driver_error_handling_in_dispatch(mock_async_driver: MockAs
 
 @pytest.mark.asyncio
 async def test_async_driver_statement_processing_integration(mock_async_driver: MockAsyncDriver) -> None:
-    """Test async driver statement processing integration with CORE_ROUND_3."""
+    """Test async driver statement processing integration."""
     statement = SQL("SELECT * FROM users WHERE active = ?", True, statement_config=mock_async_driver.statement_config)
 
     with patch.object(SQL, "compile") as mock_compile:

@@ -1,4 +1,4 @@
-"""Comprehensive tests for sqlspec.utils.correlation module.
+"""Tests for sqlspec.utils.correlation module.
 
 Tests correlation ID tracking for distributed tracing across database operations.
 Covers context management, thread safety, and logging integration.

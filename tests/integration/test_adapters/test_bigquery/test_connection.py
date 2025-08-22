@@ -1,4 +1,4 @@
-"""BigQuery connection tests with CORE_ROUND_3 architecture."""
+"""BigQuery connection tests."""
 
 import pytest
 

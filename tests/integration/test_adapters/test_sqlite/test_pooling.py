@@ -1,4 +1,4 @@
-"""Integration tests for SQLite connection pooling with CORE_ROUND_3 architecture."""
+"""Integration tests for SQLite connection pooling."""
 
 import pytest
 

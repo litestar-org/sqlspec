@@ -1,4 +1,4 @@
-"""Comprehensive tests for sqlspec.utils.logging module.
+"""Tests for sqlspec.utils.logging module.
 
 Tests for structured logging utilities with correlation ID support.
 Covers logger configuration, structured formatting, and context tracking.

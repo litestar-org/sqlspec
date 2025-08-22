@@ -1,13 +1,11 @@
 """Unit tests for MigrationRunner functionality.
 
-Tests focused on MigrationRunner core functionality including:
+Tests for MigrationRunner core functionality including:
 - Migration discovery and loading
 - Migration execution coordination
 - Upgrade and downgrade operations
 - Migration metadata management
 - Error handling and validation
-
-Uses CORE_ROUND_3 architecture with core.statement.SQL and related modules.
 """
 
 import tempfile

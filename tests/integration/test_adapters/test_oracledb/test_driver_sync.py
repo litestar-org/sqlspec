@@ -1,4 +1,4 @@
-"""Test OracleDB sync driver implementation with CORE_ROUND_3 architecture."""
+"""Test OracleDB sync driver implementation."""
 
 from typing import Any, Literal
 

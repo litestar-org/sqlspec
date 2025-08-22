@@ -1,4 +1,4 @@
-"""Integration tests for SQLite driver with query mixin functionality using CORE_ROUND_3."""
+"""Integration tests for SQLite driver with query mixin functionality."""
 
 from typing import Any
 
@@ -140,7 +140,7 @@ def test_complex_query_with_joins(sqlite_driver: SqliteDriver) -> None:
 
 
 def test_query_mixin_with_core_round_3_sql_object(sqlite_driver: SqliteDriver) -> None:
-    """Test query mixin methods work properly with CORE_ROUND_3 SQL objects."""
+    """Test query mixin methods work properly with SQL objects."""
 
     sql_obj = SQL(
         "SELECT * FROM users WHERE age BETWEEN :min_age AND :max_age ORDER BY age LIMIT 1", min_age=25, max_age=32
@@ -151,7 +151,7 @@ def test_query_mixin_with_core_round_3_sql_object(sqlite_driver: SqliteDriver) -
 
 
 def test_query_mixin_error_handling_with_core_sql(sqlite_driver: SqliteDriver) -> None:
-    """Test error handling in query mixin methods with CORE_ROUND_3 SQL objects."""
+    """Test error handling in query mixin methods with SQL objects."""
 
     sql_no_rows = SQL("SELECT * FROM users WHERE age > :max_age", max_age=100)
     with pytest.raises(NotFoundError):

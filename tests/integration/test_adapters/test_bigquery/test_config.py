@@ -1,4 +1,4 @@
-"""BigQuery configuration tests with CORE_ROUND_3 architecture."""
+"""BigQuery configuration tests."""
 
 import pytest
 from google.api_core.client_options import ClientOptions

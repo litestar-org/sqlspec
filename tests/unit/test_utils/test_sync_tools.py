@@ -368,8 +368,8 @@ def test_sync_tools_error_handling() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_tools_comprehensive() -> None:
-    """Test async tools work together comprehensively."""
+async def test_async_tools_integration() -> None:
+    """Test async tools work together."""
 
     def blocking_operation(x: int) -> int:
         return x**2

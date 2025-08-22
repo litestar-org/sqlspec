@@ -1,3 +1,9 @@
+"""Fixture loading utilities for SQLSpec.
+
+Provides functions for loading and parsing JSON fixture files
+used in testing and development. Supports both sync and async operations.
+"""
+
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +26,6 @@ def open_fixture(fixtures_path: Any, fixture_name: str) -> Any:
     Returns:
         The parsed JSON data
     """
-
     fixture = Path(fixtures_path / f"{fixture_name}.json")
     if fixture.exists():
         with fixture.open(mode="r", encoding="utf-8") as f:

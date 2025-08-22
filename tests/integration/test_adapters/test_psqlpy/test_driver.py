@@ -379,7 +379,7 @@ async def test_delete_operation(psqlpy_session: PsqlpyDriver) -> None:
 
 
 async def test_core_round_3_integration(psqlpy_session: PsqlpyDriver) -> None:
-    """Test integration with CORE_ROUND_3 SQL object."""
+    """Test integration with SQL object."""
 
     sql_obj = SQL("SELECT $1::text as test_value, $2::int as test_number")
 

@@ -1,4 +1,4 @@
-"""Comprehensive tests for sqlspec.utils.serializers module.
+"""Tests for sqlspec.utils.serializers module.
 
 Tests for JSON serialization utilities that are re-exported from sqlspec._serialization.
 Covers all serialization scenarios including edge cases and type handling.

@@ -8,7 +8,7 @@ AsyncMy Parameter Conversion Requirements:
 - Input: NAMED (%(name)s) -> Output: PYFORMAT (%s)
 - Input: PYFORMAT (%s) -> Output: PYFORMAT (%s) (no conversion)
 
-This implements MySQL's 2-phase parameter processing with CORE_ROUND_3 architecture.
+This implements MySQL's 2-phase parameter processing.
 """
 
 from collections.abc import AsyncGenerator

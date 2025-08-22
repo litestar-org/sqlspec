@@ -4,7 +4,6 @@ from collections.abc import Generator
 from typing import Any, Literal
 
 import pytest
-from pytest_databases.docker.bigquery import BigQueryService
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
@@ -75,27 +74,6 @@ def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        yield session
-
-
-@pytest.fixture
-def adbc_bigquery_session(bigquery_service: BigQueryService) -> Generator[AdbcDriver, None, None]:
-    """Create an ADBC BigQuery session using emulator."""
-
-    config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": bigquery_service.project,
-            "dataset_id": bigquery_service.dataset,
-            "db_kwargs": {
-                "project_id": bigquery_service.project,
-                "client_options": {"api_endpoint": f"http://{bigquery_service.host}:{bigquery_service.port}"},
-                "credentials": None,
-            },
-        }
-    )
-
-    with config.provide_session() as session:
         yield session
 
 

@@ -33,6 +33,11 @@ class CapacityLimiter:
     """Limits the number of concurrent operations using a semaphore."""
 
     def __init__(self, total_tokens: int) -> None:
+        """Initialize the capacity limiter.
+
+        Args:
+            total_tokens: Maximum number of concurrent operations allowed
+        """
         self._total_tokens = total_tokens
         self._semaphore_instance: Optional[asyncio.Semaphore] = None
 
@@ -44,13 +49,16 @@ class CapacityLimiter:
         return self._semaphore_instance
 
     async def acquire(self) -> None:
+        """Acquire a token from the semaphore."""
         await self._semaphore.acquire()
 
     def release(self) -> None:
+        """Release a token back to the semaphore."""
         self._semaphore.release()
 
     @property
     def total_tokens(self) -> int:
+        """Get the total number of tokens available."""
         return self._total_tokens
 
     @total_tokens.setter
@@ -59,6 +67,7 @@ class CapacityLimiter:
         self._semaphore_instance = None
 
     async def __aenter__(self) -> None:
+        """Async context manager entry."""
         await self.acquire()
 
     async def __aexit__(
@@ -67,6 +76,7 @@ class CapacityLimiter:
         exc_val: "Optional[BaseException]",
         exc_tb: "Optional[TracebackType]",
     ) -> None:
+        """Async context manager exit."""
         self.release()
 
 
@@ -225,7 +235,6 @@ def with_ensure_async_(
     Returns:
         An async context manager that runs the original context manager.
     """
-
     if isinstance(obj, AbstractContextManager):
         return cast("AbstractAsyncContextManager[T]", _ContextManagerWrapper(obj))
     return obj

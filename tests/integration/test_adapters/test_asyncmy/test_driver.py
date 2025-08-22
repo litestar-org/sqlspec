@@ -352,7 +352,7 @@ async def test_asyncmy_result_metadata(asyncmy_driver: AsyncmyDriver) -> None:
 
 @pytest.mark.asyncio
 async def test_asyncmy_sql_object_execution(asyncmy_driver: AsyncmyDriver) -> None:
-    """Test execution of SQL objects with CORE_ROUND_3 architecture."""
+    """Test execution of SQL objects."""
     driver = asyncmy_driver
 
     sql_obj = SQL("INSERT INTO test_table (name, value) VALUES (?, ?)", "sql_obj_test", 999)

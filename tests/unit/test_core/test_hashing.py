@@ -1,4 +1,4 @@
-"""Comprehensive tests for sqlspec.utils.statement_hashing module.
+"""Tests for sqlspec.utils.statement_hashing module.
 
 Tests for SQL statement and expression hashing utilities used for cache key generation.
 Covers all hashing functions with edge cases, performance considerations, and circular reference handling.
