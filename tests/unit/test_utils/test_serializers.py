@@ -128,7 +128,7 @@ def test_from_json_basic_types() -> None:
     assert from_json('"hello"') == "hello"
 
     assert from_json("42") == 42
-    assert from_json("3.14") == math.pi
+    assert from_json("3.14") == 3.14
 
     assert from_json("true") is True
     assert from_json("false") is False
@@ -192,7 +192,7 @@ def test_from_json_numeric_edge_cases() -> None:
     assert from_json("9223372036854775807") == 9223372036854775807
 
     assert from_json("-42") == -42
-    assert from_json("-3.14") == -math.pi
+    assert from_json("-3.14") == -3.14
 
     assert from_json("0") == 0
     assert from_json("0.0") == 0.0

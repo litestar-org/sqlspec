@@ -70,6 +70,36 @@ class MockConnection:
         """Mock close method."""
         self.closed = True
 
+    def cursor(self) -> "MockCursor":
+        """Mock cursor method for aiosqlite compatibility."""
+        if self.closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database")
+        return MockCursor()
+
+
+class MockCursor:
+    """Mock cursor for SQLite connection."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def execute(self, sql: str, parameters: Any = None) -> None:
+        """Mock cursor execute."""
+        if self.closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed cursor")
+
+    def fetchall(self) -> list[Any]:
+        """Mock fetchall."""
+        return []
+
+    def fetchone(self) -> Any:
+        """Mock fetchone."""
+        return None
+
+    def close(self) -> None:
+        """Mock cursor close."""
+        self.closed = True
+
 
 def _cast_mock_connection(mock_conn: MockConnection) -> sqlite3.Connection:
     """Helper to cast mock connection to the proper type."""
@@ -381,10 +411,10 @@ def test_pragma_execution_failure(mock_connect: MagicMock, file_connection_param
 
     original_execute = mock_connection.execute
 
-    def failing_execute(sql: str) -> None:
+    def failing_execute(sql: str, parameters: Any = None) -> None:
         if "journal_mode" in sql:
             raise sqlite3.Error("PRAGMA failed")
-        original_execute(sql)
+        original_execute(sql, parameters)
 
     mock_connection.execute = failing_execute
     mock_connect.return_value = mock_connection
