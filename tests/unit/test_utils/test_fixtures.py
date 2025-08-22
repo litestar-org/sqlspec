@@ -231,6 +231,8 @@ def test_serialize_primitive_none() -> None:
 
 pytestmark = pytest.mark.xdist_group("utils")
 
+pytestmark = pytest.mark.xdist_group("utils")
+
 
 def test_open_fixture_valid_file() -> None:
     """Test open_fixture with valid JSON fixture file."""
