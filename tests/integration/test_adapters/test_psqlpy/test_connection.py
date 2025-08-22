@@ -12,7 +12,7 @@ from sqlspec.core.result import SQLResult
 if TYPE_CHECKING:
     pass
 
-pytestmark = [pytest.mark.psqlpy, pytest.mark.postgres, pytest.mark.integration]
+pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.mark.asyncio

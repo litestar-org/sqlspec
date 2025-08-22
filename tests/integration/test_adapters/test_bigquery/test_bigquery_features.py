@@ -6,8 +6,9 @@ from pytest_databases.docker.bigquery import BigQueryService
 from sqlspec.adapters.bigquery import BigQueryDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("bigquery")
 
-@pytest.mark.xdist_group("bigquery")
+
 def test_bigquery_standard_sql_functions(bigquery_session: BigQueryDriver) -> None:
     """Test BigQuery standard SQL functions."""
 
@@ -40,7 +41,6 @@ def test_bigquery_standard_sql_functions(bigquery_session: BigQueryDriver) -> No
     assert string_result.data[0]["concatenated"] == "Hello World"
 
 
-@pytest.mark.xdist_group("bigquery")
 @pytest.mark.xfail(reason="BigQuery emulator has issues with DATETIME function - requires DATE or TIMESTAMP type")
 def test_bigquery_date_time_functions(bigquery_session: BigQueryDriver) -> None:
     """Test BigQuery date and time functions."""
@@ -60,7 +60,6 @@ def test_bigquery_date_time_functions(bigquery_session: BigQueryDriver) -> None:
     assert result.data[0]["month_part"] == 1
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_conditional_functions(bigquery_session: BigQueryDriver) -> None:
     """Test BigQuery conditional functions."""
 
@@ -85,7 +84,6 @@ def test_bigquery_conditional_functions(bigquery_session: BigQueryDriver) -> Non
     assert result.data[0]["coalesce_result"] == "first_non_null"
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_aggregate_functions(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test BigQuery aggregate functions."""
     table_name = bigquery_test_table
@@ -131,7 +129,6 @@ def test_bigquery_aggregate_functions(bigquery_session: BigQueryDriver, bigquery
     assert group_result.data[0]["sum_value"] == 30
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_join_operations(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test BigQuery JOIN operations."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
@@ -202,7 +199,6 @@ def test_bigquery_join_operations(bigquery_session: BigQueryDriver, bigquery_ser
     bigquery_session.execute_script(f"DROP TABLE `{bigquery_service.project}.{bigquery_service.dataset}.join_table`")
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_subqueries(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test BigQuery subquery operations."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
@@ -263,7 +259,6 @@ def test_bigquery_subqueries(bigquery_session: BigQueryDriver, bigquery_service:
     assert len(in_result.data) == 3
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_cte_common_table_expressions(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:

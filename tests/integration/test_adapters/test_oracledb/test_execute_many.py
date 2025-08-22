@@ -8,9 +8,9 @@ from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 
 BatchParameters = Union[list[tuple[Any, ...]], list[dict[str, Any]], list[list[Any]]]
+pytestmark = pytest.mark.xdist_group("oracle")
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_execute_many_insert_batch(oracle_sync_session: OracleSyncDriver) -> None:
     """Test execute_many with batch INSERT operations using positional parameters."""
 
@@ -69,7 +69,6 @@ def test_sync_execute_many_insert_batch(oracle_sync_session: OracleSyncDriver) -
 
 
 @pytest.mark.asyncio(loop_scope="function")
-@pytest.mark.xdist_group("oracle")
 async def test_async_execute_many_update_batch(oracle_async_session: OracleAsyncDriver) -> None:
     """Test execute_many with batch UPDATE operations."""
 
@@ -129,7 +128,6 @@ async def test_async_execute_many_update_batch(oracle_async_session: OracleAsync
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_execute_many_with_named_parameters(oracle_sync_session: OracleSyncDriver) -> None:
     """Test execute_many with named parameters using dictionary format."""
 
@@ -195,7 +193,6 @@ def test_sync_execute_many_with_named_parameters(oracle_sync_session: OracleSync
 
 
 @pytest.mark.asyncio(loop_scope="function")
-@pytest.mark.xdist_group("oracle")
 async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsyncDriver) -> None:
     """Test execute_many with Oracle sequences for auto-incrementing IDs."""
 
@@ -275,7 +272,6 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
     """)
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_execute_many_error_handling(oracle_sync_session: OracleSyncDriver) -> None:
     """Test execute_many error handling with constraint violations."""
 

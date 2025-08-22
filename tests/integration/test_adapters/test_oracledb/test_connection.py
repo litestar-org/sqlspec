@@ -5,8 +5,9 @@ from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
 
+pytestmark = pytest.mark.xdist_group("oracle")
 
-@pytest.mark.xdist_group("oracle")
+
 async def test_async_connection(oracle_23ai_service: OracleService) -> None:
     """Test async connection components for OracleDB."""
     async_config = OracleAsyncConfig(
@@ -57,7 +58,6 @@ async def test_async_connection(oracle_23ai_service: OracleService) -> None:
         await pool.close()
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_connection(oracle_23ai_service: OracleService) -> None:
     """Test sync connection components for OracleDB."""
     sync_config = OracleSyncConfig(

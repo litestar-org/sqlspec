@@ -9,8 +9,9 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
+pytestmark = pytest.mark.xdist_group("postgres")
 
-@pytest.mark.xdist_group("migrations")
+
 async def test_psqlpy_migration_full_workflow(postgres_service: PostgresService) -> None:
     """Test full Psqlpy migration workflow: init -> create -> upgrade -> downgrade."""
 
@@ -87,7 +88,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_psqlpy_multiple_migrations_workflow(postgres_service: PostgresService) -> None:
     """Test Psqlpy workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
@@ -197,7 +197,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_psqlpy_migration_current_command(postgres_service: PostgresService) -> None:
     """Test the current migration command shows correct version for Psqlpy."""
 
@@ -255,7 +254,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_psqlpy_migration_error_handling(postgres_service: PostgresService) -> None:
     """Test Psqlpy migration error handling."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -300,7 +298,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_psqlpy_migration_with_transactions(postgres_service: PostgresService) -> None:
     """Test Psqlpy migrations work properly with transactions."""
 

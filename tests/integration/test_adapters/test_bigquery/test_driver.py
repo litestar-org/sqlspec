@@ -12,6 +12,8 @@ from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
+pytestmark = pytest.mark.xdist_group("bigquery")
+
 
 @pytest.fixture
 def bigquery_session(bigquery_service: BigQueryService) -> Generator[BigQueryDriver, None, None]:
@@ -44,7 +46,6 @@ def bigquery_session(bigquery_service: BigQueryService) -> Generator[BigQueryDri
         )
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test basic CRUD operations."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
@@ -81,7 +82,6 @@ def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service:
     assert empty_result.data[0]["count"] == 0
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_parameter_styles(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test BigQuery named parameter binding (only supported style)."""
 
@@ -101,7 +101,6 @@ def test_bigquery_parameter_styles(bigquery_session: BigQueryDriver, bigquery_se
     assert result.data[0]["name"] == "test_value"
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_execute_many(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test execute_many functionality."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
@@ -127,7 +126,6 @@ def test_bigquery_execute_many(bigquery_session: BigQueryDriver, bigquery_servic
     assert ordered_result.data[0]["value"] == 1
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_execute_script(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test execute_script functionality."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
@@ -154,7 +152,6 @@ def test_bigquery_execute_script(bigquery_session: BigQueryDriver, bigquery_serv
     assert select_result.data[1]["value"] == 888
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_result_methods(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test SQLResult methods."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
@@ -181,7 +178,6 @@ def test_bigquery_result_methods(bigquery_session: BigQueryDriver, bigquery_serv
     assert empty_result.get_first() is None
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_error_handling(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test error handling and exception propagation."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
@@ -195,7 +191,6 @@ def test_bigquery_error_handling(bigquery_session: BigQueryDriver, bigquery_serv
         bigquery_session.execute(f"SELECT nonexistent_column FROM {table_name}")
 
 
-@pytest.mark.xdist_group("bigquery")
 @pytest.mark.xfail(
     reason="BigQuery emulator has issues with complex data types and parameter marshaling (JSON unmarshaling errors)"
 )
@@ -259,7 +254,6 @@ def test_bigquery_data_types(bigquery_session: BigQueryDriver, bigquery_service:
     )
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test complex SQL queries."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
@@ -308,7 +302,6 @@ def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, bigquery_ser
     assert subquery_result.data[1]["name"] == "Charlie"
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_schema_operations(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test schema operations (DDL)."""
 
@@ -330,7 +323,6 @@ def test_bigquery_schema_operations(bigquery_session: BigQueryDriver, bigquery_s
     bigquery_session.execute_script(f"DROP TABLE `{bigquery_service.project}.{bigquery_service.dataset}.schema_test`")
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_column_names_and_metadata(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:
@@ -355,7 +347,6 @@ def test_bigquery_column_names_and_metadata(
     assert "created_at" in row
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_performance_bulk_operations(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:
@@ -387,7 +378,6 @@ def test_bigquery_performance_bulk_operations(
     assert page_result.data[0]["name"] == "bulk_user_21"
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_specific_features(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test BigQuery-specific features."""
 
@@ -423,7 +413,6 @@ def test_bigquery_specific_features(bigquery_session: BigQueryDriver, bigquery_s
     assert struct_result.data[0]["person_name"] == "Alice"
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_analytical_functions(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test BigQuery analytical and window functions."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"

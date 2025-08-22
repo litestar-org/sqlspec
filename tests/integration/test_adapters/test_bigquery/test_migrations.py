@@ -9,8 +9,9 @@ from pytest_databases.docker.bigquery import BigQueryService
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.migrations.commands import MigrationCommands
 
+pytestmark = pytest.mark.xdist_group("bigquery")
 
-@pytest.mark.xdist_group("migrations")
+
 def test_bigquery_migration_full_workflow(bigquery_service: BigQueryService) -> None:
     """Test full BigQuery migration workflow: init -> create -> upgrade -> downgrade."""
     pytest.skip("BigQuery migration tests require real BigQuery backend (emulator has SQL syntax limitations)")
@@ -97,7 +98,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 def test_bigquery_multiple_migrations_workflow(bigquery_service: BigQueryService) -> None:
     """Test BigQuery workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
     pytest.skip("BigQuery migration tests require real BigQuery backend (emulator has SQL syntax limitations)")
@@ -204,7 +204,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 def test_bigquery_migration_current_command(bigquery_service: BigQueryService) -> None:
     """Test the current migration command shows correct version for BigQuery."""
     pytest.skip("BigQuery migration tests require real BigQuery backend (emulator has SQL syntax limitations)")
@@ -269,7 +268,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 def test_bigquery_migration_error_handling(bigquery_service: BigQueryService) -> None:
     """Test BigQuery migration error handling."""
     pytest.skip("BigQuery migration tests require real BigQuery backend (emulator has SQL syntax limitations)")
@@ -324,7 +322,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 def test_bigquery_migration_with_transactions(bigquery_service: BigQueryService) -> None:
     """Test BigQuery migrations work properly with transactions."""
     pytest.skip("BigQuery migration tests require real BigQuery backend (emulator has SQL syntax limitations)")

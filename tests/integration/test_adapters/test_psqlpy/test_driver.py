@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
-pytestmark = [pytest.mark.psqlpy, pytest.mark.postgres, pytest.mark.integration]
+pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.mark.parametrize(

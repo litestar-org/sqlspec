@@ -5,8 +5,9 @@ import pytest
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("sqlite")
 
-@pytest.mark.xdist_group("sqlite")
+
 def test_shared_memory_pooling(sqlite_config_shared_memory: SqliteConfig) -> None:
     """Test that shared memory databases allow pooling."""
     config = sqlite_config_shared_memory
@@ -34,7 +35,6 @@ def test_shared_memory_pooling(sqlite_config_shared_memory: SqliteConfig) -> Non
     config.close_pool()
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_regular_memory_auto_conversion(sqlite_config_regular_memory: SqliteConfig) -> None:
     """Test that regular memory databases are auto-converted to shared memory with pooling enabled."""
     config = sqlite_config_regular_memory
@@ -66,7 +66,6 @@ def test_regular_memory_auto_conversion(sqlite_config_regular_memory: SqliteConf
     config.close_pool()
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_file_database_pooling_enabled(sqlite_temp_file_config: SqliteConfig) -> None:
     """Test that file-based databases allow pooling."""
     config = sqlite_temp_file_config
@@ -94,7 +93,6 @@ def test_file_database_pooling_enabled(sqlite_temp_file_config: SqliteConfig) ->
     config.close_pool()
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_pool_session_isolation(sqlite_config_shared_memory: SqliteConfig) -> None:
     """Test that sessions from the pool share thread-local connections as expected.
 
@@ -136,7 +134,6 @@ def test_pool_session_isolation(sqlite_config_shared_memory: SqliteConfig) -> No
         config.close_pool()
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_pool_error_handling(sqlite_config_shared_memory: SqliteConfig) -> None:
     """Test pool behavior with errors and exceptions."""
     config = sqlite_config_shared_memory
@@ -173,7 +170,6 @@ def test_pool_error_handling(sqlite_config_shared_memory: SqliteConfig) -> None:
         config.close_pool()
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_pool_transaction_rollback(sqlite_config_shared_memory: SqliteConfig) -> None:
     """Test transaction rollback behavior with pooled connections."""
     config = sqlite_config_shared_memory
@@ -214,7 +210,6 @@ def test_pool_transaction_rollback(sqlite_config_shared_memory: SqliteConfig) ->
         config.close_pool()
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_config_with_pool_config_parameter() -> None:
     """Test that SqliteConfig correctly accepts pool_config parameter."""
 
@@ -240,7 +235,6 @@ def test_config_with_pool_config_parameter() -> None:
         config._close_pool()
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_config_memory_database_conversion() -> None:
     """Test that :memory: databases are converted to shared memory."""
 
@@ -260,7 +254,6 @@ def test_config_memory_database_conversion() -> None:
         config._close_pool()
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_config_default_database() -> None:
     """Test that default database is shared memory."""
 

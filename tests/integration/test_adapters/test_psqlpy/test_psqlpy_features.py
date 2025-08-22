@@ -8,7 +8,7 @@ from sqlspec.adapters.psqlpy import PsqlpyDriver
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL
 
-pytestmark = [pytest.mark.psqlpy, pytest.mark.postgres, pytest.mark.integration]
+pytestmark = pytest.mark.xdist_group("postgres")
 
 
 async def test_psqlpy_performance_features(psqlpy_session: PsqlpyDriver) -> None:

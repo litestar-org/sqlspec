@@ -9,8 +9,9 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
+pytestmark = pytest.mark.xdist_group("postgres")
 
-@pytest.mark.xdist_group("migrations")
+
 async def test_asyncpg_migration_full_workflow(postgres_service: PostgresService) -> None:
     """Test full AsyncPG migration workflow: init -> create -> upgrade -> downgrade."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -89,7 +90,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_asyncpg_multiple_migrations_workflow(postgres_service: PostgresService) -> None:
     """Test AsyncPG workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -200,7 +200,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_asyncpg_migration_current_command(postgres_service: PostgresService) -> None:
     """Test the current migration command shows correct version for AsyncPG."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -260,7 +259,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_asyncpg_migration_error_handling(postgres_service: PostgresService) -> None:
     """Test AsyncPG migration error handling."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -312,7 +310,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_asyncpg_migration_with_transactions(postgres_service: PostgresService) -> None:
     """Test AsyncPG migrations work properly with transactions."""
     with tempfile.TemporaryDirectory() as temp_dir:

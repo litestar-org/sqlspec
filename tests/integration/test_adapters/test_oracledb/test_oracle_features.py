@@ -9,8 +9,9 @@ from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
 
+pytestmark = pytest.mark.xdist_group("oracle")
 
-@pytest.mark.xdist_group("oracle")
+
 def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> None:
     """Test PL/SQL block execution with variables and control structures."""
 
@@ -73,7 +74,6 @@ def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> No
 
 
 @pytest.mark.asyncio(loop_scope="function")
-@pytest.mark.xdist_group("oracle")
 async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsyncDriver) -> None:
     """Test creation and execution of PL/SQL stored procedures."""
 
@@ -146,7 +146,6 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
     """Test Oracle-specific data types (NUMBER, VARCHAR2, CLOB, DATE)."""
 
@@ -199,7 +198,6 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
 
 
 @pytest.mark.asyncio(loop_scope="function")
-@pytest.mark.xdist_group("oracle")
 async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle's analytic/window functions."""
 
@@ -261,7 +259,6 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncDriver) -> None:
     """Test that Oracle DDL script can be parsed and prepared for execution."""
 
@@ -302,7 +299,6 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncDriver) -> Non
 
 
 @pytest.mark.asyncio(loop_scope="function")
-@pytest.mark.xdist_group("oracle")
 async def test_async_oracle_exception_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle-specific exception handling in PL/SQL."""
 

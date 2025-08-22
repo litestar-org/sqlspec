@@ -10,8 +10,9 @@ import pytest
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("sqlite")
 
-@pytest.mark.xdist_group("aiosqlite")
+
 async def test_shared_memory_pooling() -> None:
     """Test that shared memory databases allow pooling."""
 
@@ -48,7 +49,6 @@ async def test_shared_memory_pooling() -> None:
         await config.close_pool()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_regular_memory_auto_converted_pooling() -> None:
     """Test that regular memory databases are auto-converted and pooling works."""
 
@@ -85,7 +85,6 @@ async def test_regular_memory_auto_converted_pooling() -> None:
         await config.close_pool()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_file_database_pooling_enabled() -> None:
     """Test that file-based databases allow pooling."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -119,7 +118,6 @@ async def test_file_database_pooling_enabled() -> None:
             pass
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_pooling_with_core_round_3(aiosqlite_config: AiosqliteConfig) -> None:
     """Test pooling integration."""
     from sqlspec.core.statement import SQL
@@ -155,7 +153,6 @@ async def test_pooling_with_core_round_3(aiosqlite_config: AiosqliteConfig) -> N
         await session2.commit()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_pool_concurrent_access(aiosqlite_config_file: AiosqliteConfig) -> None:
     """Test concurrent pool access with multiple sessions."""
     import asyncio

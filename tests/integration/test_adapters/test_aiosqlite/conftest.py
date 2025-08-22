@@ -9,6 +9,8 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 
+pytestmark = pytest.mark.xdist_group("sqlite")
+
 
 @pytest.fixture
 async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:

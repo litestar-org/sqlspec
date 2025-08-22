@@ -9,6 +9,8 @@ from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.adapters.psycopg.driver import psycopg_statement_config
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("postgres")
+
 
 @pytest.fixture
 def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[PsycopgSyncDriver, None, None]":
@@ -45,7 +47,6 @@ def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[Psyco
         config.close_pool()
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_basic(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test basic execute_many with Psycopg."""
     parameters = [
@@ -68,7 +69,6 @@ def test_psycopg_execute_many_basic(psycopg_batch_session: PsycopgSyncDriver) ->
     assert count_result.data[0]["count"] == 5
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many for UPDATE operations with Psycopg."""
 
@@ -89,7 +89,6 @@ def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgSyncDriver) -
     assert all(row["value"] in (100, 200, 300) for row in check_result.data)
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_empty(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with empty parameter list on Psycopg."""
     result = psycopg_batch_session.execute_many(
@@ -103,7 +102,6 @@ def test_psycopg_execute_many_empty(psycopg_batch_session: PsycopgSyncDriver) ->
     assert count_result.data[0]["count"] == 0
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with mixed parameter types on Psycopg."""
     parameters = [
@@ -129,7 +127,6 @@ def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgSyncDriv
     assert negative_result.data[0]["value"] == -50
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many for DELETE operations with Psycopg."""
 
@@ -159,7 +156,6 @@ def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -
     assert remaining_names == ["Delete 3", "Keep 1"]
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with large batch size on Psycopg."""
 
@@ -184,7 +180,6 @@ def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriv
     assert sample_result.data[2]["value"] == 9990
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with SQL object on Psycopg."""
     from sqlspec.core.statement import SQL
@@ -204,7 +199,6 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSync
     assert check_result.data[0]["count"] == 3
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with RETURNING clause on Psycopg."""
     parameters = [("Return 1", 111, "RET"), ("Return 2", 222, "RET"), ("Return 3", 333, "RET")]
@@ -230,7 +224,6 @@ def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncD
         assert check_result.data[0]["count"] == 3
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with PostgreSQL array types on Psycopg."""
 
@@ -266,7 +259,6 @@ def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgSyncDriv
     assert check_result.data[2]["tag_count"] == 3
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with JSON data on Psycopg."""
     import json
@@ -301,7 +293,6 @@ def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver
     assert check_result.data[1]["value"] == 200
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with PostgreSQL UPSERT (ON CONFLICT) on Psycopg."""
 

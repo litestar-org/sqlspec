@@ -100,6 +100,7 @@ def adbc_bigquery_session(bigquery_service: BigQueryService) -> Generator[AdbcDr
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
     """Test basic CRUD operations with ADBC PostgreSQL."""
     insert_result = adbc_postgresql_session.execute(
@@ -138,7 +139,8 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
     assert empty_result.data[0]["count"] == 0
 
 
-@pytest.mark.xdist_group("adbc_sqlite")
+@pytest.mark.xdist_group("sqlite")
+@pytest.mark.adbc
 def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     """Test basic CRUD operations with ADBC SQLite."""
     insert_result = adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_name", 42))
@@ -171,7 +173,8 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     assert empty_result.data[0]["count"] == 0
 
 
-@pytest.mark.xdist_group("adbc_duckdb")
+@pytest.mark.xdist_group("duckdb")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     """Test basic CRUD operations with ADBC DuckDB."""
@@ -215,6 +218,7 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     ],
 )
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_postgresql_parameter_styles(
     adbc_postgresql_session: AdbcDriver, parameters: Any, style: ParamStyle
 ) -> None:
@@ -235,6 +239,7 @@ def test_adbc_postgresql_parameter_styles(
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_postgresql_execute_many(adbc_postgresql_session: AdbcDriver) -> None:
     """Test execute_many functionality with ADBC PostgreSQL."""
     parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
@@ -259,6 +264,7 @@ def test_adbc_postgresql_execute_many(adbc_postgresql_session: AdbcDriver) -> No
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_postgresql_execute_script(adbc_postgresql_session: AdbcDriver) -> None:
     """Test execute_script functionality with ADBC PostgreSQL."""
     script = """
@@ -283,6 +289,7 @@ def test_adbc_postgresql_execute_script(adbc_postgresql_session: AdbcDriver) -> 
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_postgresql_result_methods(adbc_postgresql_session: AdbcDriver) -> None:
     """Test SQLResult methods with ADBC PostgreSQL."""
     adbc_postgresql_session.execute_many(
@@ -307,6 +314,7 @@ def test_adbc_postgresql_result_methods(adbc_postgresql_session: AdbcDriver) -> 
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_postgresql_error_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test error handling and exception propagation with ADBC PostgreSQL."""
     try:
@@ -336,6 +344,7 @@ def test_adbc_postgresql_error_handling(adbc_postgresql_session: AdbcDriver) -> 
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None:
     """Test PostgreSQL data type handling with ADBC."""
     adbc_postgresql_session.execute_script("""
@@ -380,6 +389,7 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_postgresql_performance_bulk_operations(adbc_postgresql_session: AdbcDriver) -> None:
     """Test performance with bulk operations using ADBC PostgreSQL."""
     bulk_data = [(f"bulk_user_{i}", i * 10) for i in range(100)]
@@ -404,7 +414,8 @@ def test_adbc_postgresql_performance_bulk_operations(adbc_postgresql_session: Ad
     assert page_result.data[0]["name"] == "bulk_user_20"
 
 
-@pytest.mark.xdist_group("adbc_sqlite")
+@pytest.mark.xdist_group("sqlite")
+@pytest.mark.adbc
 def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> None:
     """Test consistency across different ADBC backends."""
     test_data = [("backend_test1", 100), ("backend_test2", 200)]

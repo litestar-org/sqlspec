@@ -8,6 +8,8 @@ from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.core.statement import SQL
 from sqlspec.exceptions import NotFoundError
 
+pytestmark = pytest.mark.xdist_group("sqlite")
+
 
 def test_select_one_success(sqlite_driver: SqliteDriver) -> None:
     """Test select_one returns exactly one row."""

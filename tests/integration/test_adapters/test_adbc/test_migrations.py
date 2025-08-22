@@ -8,8 +8,10 @@ import pytest
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.migrations.commands import MigrationCommands
 
+# xdist_group is assigned per test based on database backend to enable parallel execution
 
-@pytest.mark.xdist_group("migrations")
+
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_sqlite_migration_full_workflow() -> None:
     """Test full ADBC SQLite migration workflow: init -> create -> upgrade -> downgrade."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -70,13 +72,13 @@ def down():
             assert len(result.data) == 0
 
 
-@pytest.mark.xdist_group("migrations")
+@pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_migration_workflow() -> None:
     """Test ADBC PostgreSQL migration workflow with test database."""
     pytest.skip("PostgreSQL ADBC driver tests require running PostgreSQL instance")
 
 
-@pytest.mark.xdist_group("migrations")
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_multiple_migrations_workflow() -> None:
     """Test ADBC workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -170,7 +172,7 @@ def down():
             assert len(table_names) == 0
 
 
-@pytest.mark.xdist_group("migrations")
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_migration_current_command() -> None:
     """Test the current migration command shows correct version for ADBC."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -207,7 +209,7 @@ def down():
         commands.current(verbose=True)
 
 
-@pytest.mark.xdist_group("migrations")
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_migration_error_handling() -> None:
     """Test ADBC migration error handling."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -241,7 +243,7 @@ def down():
             commands.upgrade()
 
 
-@pytest.mark.xdist_group("migrations")
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_migration_with_transactions() -> None:
     """Test ADBC migrations work properly with transactions."""
     with tempfile.TemporaryDirectory() as temp_dir:

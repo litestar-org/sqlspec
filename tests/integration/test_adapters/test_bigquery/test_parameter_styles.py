@@ -7,8 +7,9 @@ import pytest
 from sqlspec.adapters.bigquery import BigQueryDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("bigquery")
 
-@pytest.mark.xdist_group("bigquery")
+
 def test_bigquery_named_at_parameters(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test BigQuery NAMED_AT parameter style (@param)."""
     table_name = bigquery_test_table
@@ -40,7 +41,6 @@ def test_bigquery_named_at_parameters(bigquery_session: BigQueryDriver, bigquery
     assert len(result.data) == 1
 
 
-@pytest.mark.xdist_group("bigquery")
 @pytest.mark.xfail(reason="BigQuery emulator expects all parameter values as strings, not numbers")
 def test_bigquery_parameter_type_conversion(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test BigQuery parameter type handling and conversion."""
@@ -59,7 +59,6 @@ def test_bigquery_parameter_type_conversion(bigquery_session: BigQueryDriver, bi
     assert result.data[0]["name"] == "type_test"
 
 
-@pytest.mark.xdist_group("bigquery")
 @pytest.mark.xfail(reason="BigQuery emulator has issues with NULL parameter handling")
 def test_bigquery_null_parameter_handling(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test BigQuery NULL parameter handling."""
@@ -79,7 +78,6 @@ def test_bigquery_null_parameter_handling(bigquery_session: BigQueryDriver, bigq
     assert result.data[0]["value"] is None
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_parameter_escaping(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test BigQuery parameter escaping and SQL injection prevention."""
     table_name = bigquery_test_table
@@ -99,7 +97,6 @@ def test_bigquery_parameter_escaping(bigquery_session: BigQueryDriver, bigquery_
     assert result.data[0]["name"] == special_name
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_complex_parameter_queries(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test complex queries with BigQuery parameters."""
     table_name = bigquery_test_table
@@ -139,7 +136,6 @@ def test_bigquery_complex_parameter_queries(bigquery_session: BigQueryDriver, bi
     assert agg_result.data[0]["avg_value"] == (1000 + 1500 + 2000) / 3
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_parameter_edge_cases(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test BigQuery parameter edge cases and boundary conditions."""
     table_name = bigquery_test_table
@@ -174,7 +170,6 @@ def test_bigquery_parameter_edge_cases(bigquery_session: BigQueryDriver, bigquer
     assert result.data[0]["value"] == large_number
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_comprehensive_none_parameter_handling(
     bigquery_session: BigQueryDriver, bigquery_test_table: str
 ) -> None:
@@ -234,7 +229,6 @@ def test_bigquery_comprehensive_none_parameter_handling(
     assert result.data[0]["value"] is None or result.data[0]["value"] == 0
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_none_parameters_with_execute_many(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test None parameter handling in execute_many operations."""
     table_name = bigquery_test_table
@@ -270,7 +264,6 @@ def test_bigquery_none_parameters_with_execute_many(bigquery_session: BigQueryDr
     assert rows[3]["id"] == 2004 and rows[3]["name"] == "fourth" and rows[3]["value"] == 400
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_all_none_parameters(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test when all parameter values are None."""
     table_name = bigquery_test_table
@@ -306,7 +299,6 @@ def test_bigquery_all_none_parameters(bigquery_session: BigQueryDriver, bigquery
     bigquery_session.execute(f"DROP TABLE {base_table}")
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_none_parameter_type_coercion(bigquery_session: BigQueryDriver, bigquery_test_table: str) -> None:
     """Test that None values are properly type-coerced by BigQuery's parameter system."""
     table_name = bigquery_test_table
@@ -338,7 +330,6 @@ def test_bigquery_none_parameter_type_coercion(bigquery_session: BigQueryDriver,
             assert row["value"] is None or row["value"] == 0  # Emulator may convert NULL int to 0
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_parameter_count_validation_with_none(
     bigquery_session: BigQueryDriver, bigquery_test_table: str
 ) -> None:

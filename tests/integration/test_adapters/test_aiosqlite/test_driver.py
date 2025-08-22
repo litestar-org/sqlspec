@@ -11,10 +11,10 @@ from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL
 
+pytestmark = pytest.mark.xdist_group("sqlite")
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
     """Test basic CRUD operations."""
 
@@ -59,7 +59,6 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_parameter_styles(
     aiosqlite_session: AiosqliteDriver, parameters: Any, style: ParamStyle
 ) -> None:
@@ -82,7 +81,6 @@ async def test_aiosqlite_parameter_styles(
     assert result.data[0]["name"] == "test_value"
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_execute_many(aiosqlite_session: AiosqliteDriver) -> None:
     """Test execute_many functionality."""
 
@@ -108,7 +106,6 @@ async def test_aiosqlite_execute_many(aiosqlite_session: AiosqliteDriver) -> Non
     assert ordered_result.data[0]["value"] == 1
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_execute_script(aiosqlite_session: AiosqliteDriver) -> None:
     """Test execute_script functionality."""
     script = """
@@ -134,7 +131,6 @@ async def test_aiosqlite_execute_script(aiosqlite_session: AiosqliteDriver) -> N
     assert select_result.data[1]["value"] == 888
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_result_methods(aiosqlite_session: AiosqliteDriver) -> None:
     """Test SelectResult and ExecuteResult methods."""
 
@@ -162,7 +158,6 @@ async def test_aiosqlite_result_methods(aiosqlite_session: AiosqliteDriver) -> N
     assert empty_result.get_first() is None
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_error_handling(aiosqlite_session: AiosqliteDriver) -> None:
     """Test error handling and exception propagation."""
 
@@ -175,7 +170,6 @@ async def test_aiosqlite_error_handling(aiosqlite_session: AiosqliteDriver) -> N
         await aiosqlite_session.execute("SELECT nonexistent_column FROM test_table")
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     """Test SQLite data type handling with aiosqlite."""
 
@@ -216,7 +210,6 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     await aiosqlite_session.execute_script("DROP TABLE data_types_test_unique")
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_transactions(aiosqlite_session: AiosqliteDriver) -> None:
     """Test transaction behavior."""
 
@@ -230,7 +223,6 @@ async def test_aiosqlite_transactions(aiosqlite_session: AiosqliteDriver) -> Non
     assert result.data[0]["count"] == 1
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_complex_queries(aiosqlite_session: AiosqliteDriver) -> None:
     """Test complex SQL queries."""
 
@@ -281,7 +273,6 @@ async def test_aiosqlite_complex_queries(aiosqlite_session: AiosqliteDriver) -> 
     assert subquery_result.data[1]["name"] == "Charlie"
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_schema_operations(aiosqlite_session: AiosqliteDriver) -> None:
     """Test schema operations (DDL)."""
 
@@ -311,7 +302,6 @@ async def test_aiosqlite_schema_operations(aiosqlite_session: AiosqliteDriver) -
     assert drop_result.operation_type == "SCRIPT"
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_column_names_and_metadata(aiosqlite_session: AiosqliteDriver) -> None:
     """Test column names and result metadata."""
 
@@ -332,7 +322,6 @@ async def test_aiosqlite_column_names_and_metadata(aiosqlite_session: AiosqliteD
     assert row["created_at"] is not None
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_performance_bulk_operations(aiosqlite_session: AiosqliteDriver) -> None:
     """Test performance with bulk operations."""
 
@@ -358,7 +347,6 @@ async def test_aiosqlite_performance_bulk_operations(aiosqlite_session: Aiosqlit
     assert page_result.data[0]["name"] == "bulk_user_20"
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDriver) -> None:
     """Test SQLite-specific features with aiosqlite."""
 
@@ -402,7 +390,6 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
         pass
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_sql_object_integration(aiosqlite_session: AiosqliteDriver) -> None:
     """Test integration with SQL object."""
 
@@ -418,7 +405,6 @@ async def test_aiosqlite_sql_object_integration(aiosqlite_session: AiosqliteDriv
     assert result.data[0]["value"] == 50
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_core_result_features(aiosqlite_session: AiosqliteDriver) -> None:
     """Test SQLResult features."""
 

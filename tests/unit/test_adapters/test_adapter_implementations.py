@@ -13,7 +13,7 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import SQLSpecError
 
-pytestmark = pytest.mark.xdist_group("adapter_unit")
+pytestmark = pytest.mark.xdist_group("unit")
 
 __all__ = ()
 

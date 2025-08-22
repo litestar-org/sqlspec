@@ -13,6 +13,8 @@ from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
+pytestmark = pytest.mark.xdist_group("postgres")
+
 
 @pytest.fixture
 async def asyncpg_session(postgres_service: PostgresService) -> AsyncGenerator[AsyncpgDriver, None]:
@@ -42,7 +44,6 @@ async def asyncpg_session(postgres_service: PostgresService) -> AsyncGenerator[A
         await config.close_pool()
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
     """Test basic CRUD operations."""
 
@@ -87,7 +88,6 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_styles(asyncpg_session: AsyncpgDriver, parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
 
@@ -106,7 +106,6 @@ async def test_asyncpg_parameter_styles(asyncpg_session: AsyncpgDriver, paramete
     assert result[0]["name"] == "test_value"
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many(asyncpg_session: AsyncpgDriver) -> None:
     """Test execute_many functionality."""
     parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
@@ -128,7 +127,6 @@ async def test_asyncpg_execute_many(asyncpg_session: AsyncpgDriver) -> None:
     assert ordered_result[0]["value"] == 1
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
     """Test execute_script functionality."""
     import random
@@ -165,7 +163,6 @@ async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
     await asyncpg_session.execute(f"DELETE FROM test_table WHERE name LIKE 'script_test%_{test_suffix}'")
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_result_methods(asyncpg_session: AsyncpgDriver) -> None:
     """Test SQLResult methods."""
 
@@ -190,7 +187,6 @@ async def test_asyncpg_result_methods(asyncpg_session: AsyncpgDriver) -> None:
     assert empty_result.get_first() is None
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_error_handling(asyncpg_session: AsyncpgDriver) -> None:
     """Test error handling and exception propagation."""
 
@@ -203,7 +199,6 @@ async def test_asyncpg_error_handling(asyncpg_session: AsyncpgDriver) -> None:
         await asyncpg_session.execute("SELECT nonexistent_column FROM test_table")
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
     """Test PostgreSQL data type handling."""
     import datetime
@@ -262,7 +257,6 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
     await asyncpg_session.execute_script("DROP TABLE data_types_test")
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_transactions(asyncpg_session: AsyncpgDriver) -> None:
     """Test transaction behavior."""
 
@@ -276,7 +270,6 @@ async def test_asyncpg_transactions(asyncpg_session: AsyncpgDriver) -> None:
     assert result[0]["count"] == 1
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
     """Test complex SQL queries."""
 
@@ -324,7 +317,6 @@ async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
     assert subquery_result[1]["name"] == "Charlie"
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_schema_operations(asyncpg_session: AsyncpgDriver) -> None:
     """Test schema operations (DDL)."""
 
@@ -355,7 +347,6 @@ async def test_asyncpg_schema_operations(asyncpg_session: AsyncpgDriver) -> None
     await asyncpg_session.execute_script("DROP TABLE schema_test")
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_column_names_and_metadata(asyncpg_session: AsyncpgDriver) -> None:
     """Test column names and result metadata."""
 
@@ -376,7 +367,6 @@ async def test_asyncpg_column_names_and_metadata(asyncpg_session: AsyncpgDriver)
     assert row["created_at"] is not None
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_performance_bulk_operations(asyncpg_session: AsyncpgDriver) -> None:
     """Test performance with bulk operations."""
 
@@ -402,7 +392,6 @@ async def test_asyncpg_performance_bulk_operations(asyncpg_session: AsyncpgDrive
     assert page_result[0]["name"] == "bulk_user_20"
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_postgresql_specific_features(asyncpg_session: AsyncpgDriver) -> None:
     """Test PostgreSQL-specific features."""
 
@@ -435,7 +424,6 @@ async def test_asyncpg_postgresql_specific_features(asyncpg_session: AsyncpgDriv
     assert window_result[0]["prev_value"] is None
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_json_operations(asyncpg_session: AsyncpgDriver) -> None:
     """Test PostgreSQL JSON operations."""
 
@@ -459,7 +447,6 @@ async def test_asyncpg_json_operations(asyncpg_session: AsyncpgDriver) -> None:
     await asyncpg_session.execute_script("DROP TABLE json_test")
 
 
-@pytest.mark.xdist_group("postgres")
 async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDriver) -> None:
     """Test the exact asset_maintenance_alert query with full PostgreSQL features.
 

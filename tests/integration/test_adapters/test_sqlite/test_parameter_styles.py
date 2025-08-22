@@ -1,5 +1,6 @@
 """Integration tests for SQLite parameter style handling with CORE_ROUND_3 architecture."""
 
+import math
 from datetime import date
 from typing import Any
 from uuid import uuid4
@@ -10,8 +11,9 @@ from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL
 
+pytestmark = pytest.mark.xdist_group("sqlite")
 
-@pytest.mark.xdist_group("sqlite")
+
 def test_qmark_parameter_style(sqlite_session: SqliteDriver) -> None:
     """Test qmark (?) parameter style - SQLite default."""
 
@@ -32,7 +34,6 @@ def test_qmark_parameter_style(sqlite_session: SqliteDriver) -> None:
     assert select_result.data[0]["value"] == 42
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_named_colon_parameter_style(sqlite_session: SqliteDriver) -> None:
     """Test named colon (:name) parameter style."""
 
@@ -55,7 +56,6 @@ def test_named_colon_parameter_style(sqlite_session: SqliteDriver) -> None:
     assert select_result.data[0]["value"] == 123
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_mixed_parameter_scenarios(sqlite_session: SqliteDriver) -> None:
     """Test edge cases and mixed parameter scenarios."""
 
@@ -75,7 +75,6 @@ def test_mixed_parameter_scenarios(sqlite_session: SqliteDriver) -> None:
     assert verify_result.data[0]["value"] == 999
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_parameter_type_coercion(sqlite_session: SqliteDriver) -> None:
     """Test parameter type coercion and handling."""
 
@@ -85,7 +84,7 @@ def test_parameter_type_coercion(sqlite_session: SqliteDriver) -> None:
     test_cases = [
         ("string_value", "test_string"),
         ("integer_value", 42),
-        ("float_value", 3.14),
+        ("float_value", math.pi),
         ("boolean_value", True),
         ("none_value", None),
     ]
@@ -107,7 +106,6 @@ def test_parameter_type_coercion(sqlite_session: SqliteDriver) -> None:
     assert none_row["value"] is None
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_execute_many_parameter_styles(sqlite_session: SqliteDriver) -> None:
     """Test execute_many with different parameter styles."""
 
@@ -136,7 +134,6 @@ def test_execute_many_parameter_styles(sqlite_session: SqliteDriver) -> None:
     assert count_result.data[0]["count"] == 6
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_parameter_edge_cases(sqlite_session: SqliteDriver) -> None:
     """Test parameter handling edge cases."""
 
@@ -160,7 +157,6 @@ def test_parameter_edge_cases(sqlite_session: SqliteDriver) -> None:
     assert len(select_result.data) == 1
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_parameter_escaping_and_sql_injection_protection(sqlite_session: SqliteDriver) -> None:
     """Test that parameters properly prevent SQL injection."""
 
@@ -191,7 +187,6 @@ def test_parameter_escaping_and_sql_injection_protection(sqlite_session: SqliteD
         ("SELECT * FROM test_table WHERE name = :target", {"target": "test1"}, 1),
     ],
 )
-@pytest.mark.xdist_group("sqlite")
 def test_parameterized_query_patterns(
     sqlite_session: SqliteDriver, sql_template: str, params: Any, expected_count: int
 ) -> None:
@@ -213,7 +208,6 @@ def test_parameterized_query_patterns(
 # Tests consolidated from test_none_parameters.py
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_none_parameters() -> None:
     """Test that None values in named parameters are handled correctly by SQLite."""
     config = SqliteConfig(pool_config={"database": ":memory:"})
@@ -282,7 +276,6 @@ def test_sqlite_none_parameters() -> None:
         assert select_result["nullable_date"] is None
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_none_parameters_qmark_style() -> None:
     """Test None values with QMARK (?) parameter style - SQLite default."""
     config = SqliteConfig(pool_config={"database": ":memory:"})
@@ -315,7 +308,6 @@ def test_sqlite_none_parameters_qmark_style() -> None:
         assert select_result["col3"] is None
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_all_none_parameters() -> None:
     """Test when all parameter values are None."""
     config = SqliteConfig(pool_config={"database": ":memory:"})
@@ -355,7 +347,6 @@ def test_sqlite_all_none_parameters() -> None:
         assert select_result["col3"] is None
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_none_with_execute_many() -> None:
     """Test None values work correctly with execute_many."""
     config = SqliteConfig(pool_config={"database": ":memory:"})
@@ -397,7 +388,6 @@ def test_sqlite_none_with_execute_many() -> None:
         assert rows[3]["name"] is None and rows[3]["value"] is None
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_none_in_where_clause() -> None:
     """Test None values in WHERE clauses work correctly."""
     config = SqliteConfig(pool_config={"database": ":memory:"})

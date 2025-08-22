@@ -2,4 +2,4 @@
 
 import pytest
 
-pytestmark = [pytest.mark.oracle, pytest.mark.oracledb]
+pytestmark = pytest.mark.xdist_group("oracle")

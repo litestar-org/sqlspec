@@ -7,8 +7,9 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig
 
+pytestmark = pytest.mark.xdist_group("duckdb")
 
-@pytest.mark.xdist_group("duckdb")
+
 def test_shared_memory_pooling() -> None:
     """Test that shared memory databases allow pooling."""
 
@@ -33,7 +34,6 @@ def test_shared_memory_pooling() -> None:
         session2.execute("DROP TABLE shared_test")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_regular_memory_auto_conversion() -> None:
     """Test that regular memory databases are auto-converted to shared memory with pooling enabled."""
 
@@ -59,7 +59,6 @@ def test_regular_memory_auto_conversion() -> None:
         session2.execute("DROP TABLE converted_test")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_file_database_pooling() -> None:
     """Test that file databases work with pooling (no changes needed)."""
     import os
@@ -90,7 +89,6 @@ def test_file_database_pooling() -> None:
         pass
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_connection_pool_health_checks() -> None:
     """Test that the connection pool performs health checks correctly."""
     config = DuckDBConfig(pool_config={"database": ":memory:health_test", "pool_min_size": 1, "pool_max_size": 3})
@@ -104,7 +102,6 @@ def test_connection_pool_health_checks() -> None:
     assert pool.size() >= 0
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_empty_database_conversion() -> None:
     """Test that empty database string gets converted properly."""
     config = DuckDBConfig(pool_config={"database": ""})
@@ -118,7 +115,6 @@ def test_empty_database_conversion() -> None:
         assert result[0]["test"] == "empty_test"
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_default_config_conversion() -> None:
     """Test that default config (no connection_config) works with shared memory."""
     config = DuckDBConfig()

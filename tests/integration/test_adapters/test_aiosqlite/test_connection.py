@@ -7,8 +7,9 @@ import pytest
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("sqlite")
 
-@pytest.mark.xdist_group("aiosqlite")
+
 async def test_basic_connection(aiosqlite_config: AiosqliteConfig) -> None:
     """Test basic connection establishment."""
     async with aiosqlite_config.provide_session() as driver:
@@ -22,7 +23,6 @@ async def test_basic_connection(aiosqlite_config: AiosqliteConfig) -> None:
         assert result.data[0]["test_value"] == 1
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_connection_reuse(aiosqlite_config: AiosqliteConfig) -> None:
     """Test connection reuse in pool."""
 
@@ -42,7 +42,6 @@ async def test_connection_reuse(aiosqlite_config: AiosqliteConfig) -> None:
         await driver2.commit()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_connection_error_handling(aiosqlite_config: AiosqliteConfig) -> None:
     """Test connection error handling."""
     async with aiosqlite_config.provide_session() as driver:
@@ -55,7 +54,6 @@ async def test_connection_error_handling(aiosqlite_config: AiosqliteConfig) -> N
         assert result.data[0]["status"] == "still_working"
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_connection_with_transactions(aiosqlite_config: AiosqliteConfig) -> None:
     """Test connection behavior with transactions."""
     async with aiosqlite_config.provide_session() as driver:
@@ -88,7 +86,6 @@ async def test_connection_with_transactions(aiosqlite_config: AiosqliteConfig) -
         await driver.commit()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_connection_context_manager_cleanup() -> None:
     """Test proper cleanup of connection context manager."""
     from uuid import uuid4
@@ -113,7 +110,6 @@ async def test_connection_context_manager_cleanup() -> None:
         await config.close_pool()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_provide_connection_direct() -> None:
     """Test direct connection provision without session wrapper."""
     from uuid import uuid4
@@ -137,7 +133,6 @@ async def test_provide_connection_direct() -> None:
         await config.close_pool()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_config_with_pool_config() -> None:
     """Test that AiosqliteConfig correctly accepts pool_config parameter."""
     from uuid import uuid4
@@ -169,7 +164,6 @@ async def test_config_with_pool_config() -> None:
         await config.close_pool()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_config_with_kwargs_override() -> None:
     """Test that kwargs properly override pool_config values."""
     from uuid import uuid4
@@ -195,7 +189,6 @@ async def test_config_with_kwargs_override() -> None:
         await config.close_pool()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_config_memory_database_conversion() -> None:
     """Test that :memory: databases are converted to shared memory."""
 
@@ -215,7 +208,6 @@ async def test_config_memory_database_conversion() -> None:
         await config.close_pool()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_config_default_database() -> None:
     """Test that default database is shared memory."""
 
@@ -235,7 +227,6 @@ async def test_config_default_database() -> None:
         await config.close_pool()
 
 
-@pytest.mark.xdist_group("aiosqlite")
 async def test_config_parameter_preservation() -> None:
     """Test that aiosqlite config properly preserves parameters."""
 

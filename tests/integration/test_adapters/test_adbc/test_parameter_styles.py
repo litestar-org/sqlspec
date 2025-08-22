@@ -58,6 +58,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> "Generator[Adb
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_numeric_parameter_style_basic(adbc_postgresql_session: AdbcDriver) -> None:
     """Test basic PostgreSQL numeric parameter style with ADBC."""
     # Insert test data
@@ -80,6 +81,7 @@ def test_adbc_numeric_parameter_style_basic(adbc_postgresql_session: AdbcDriver)
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_none_parameters_single_none(adbc_postgresql_session: AdbcDriver) -> None:
     """Test ADBC handling of single None parameter.
 
@@ -106,6 +108,7 @@ def test_adbc_none_parameters_single_none(adbc_postgresql_session: AdbcDriver) -
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_none_parameters_multiple_none(adbc_postgresql_session: AdbcDriver) -> None:
     """Test ADBC handling of multiple None parameters.
 
@@ -135,6 +138,7 @@ def test_adbc_none_parameters_multiple_none(adbc_postgresql_session: AdbcDriver)
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_all_none_parameters(adbc_postgresql_session: AdbcDriver) -> None:
     """Test ADBC when all parameters are None except the required ones.
 
@@ -166,6 +170,7 @@ def test_adbc_all_none_parameters(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_none_in_where_clause(adbc_postgresql_session: AdbcDriver) -> None:
     """Test None parameters in WHERE clauses.
 
@@ -198,6 +203,7 @@ def test_adbc_none_in_where_clause(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_none_with_execute_many(adbc_postgresql_session: AdbcDriver) -> None:
     """Test None parameters work correctly with execute_many.
 
@@ -237,6 +243,7 @@ def test_adbc_none_with_execute_many(adbc_postgresql_session: AdbcDriver) -> Non
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_none_parameter_reuse(adbc_postgresql_session: AdbcDriver) -> None:
     """Test None parameters when the same parameter is used multiple times.
 
@@ -267,6 +274,7 @@ def test_adbc_none_parameter_reuse(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_mixed_none_and_complex_types(adbc_postgresql_session: AdbcDriver) -> None:
     """Test None mixed with various data types.
 
@@ -308,6 +316,7 @@ def test_adbc_mixed_none_and_complex_types(adbc_postgresql_session: AdbcDriver) 
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_parameter_count_validation_with_none(adbc_postgresql_session: AdbcDriver) -> None:
     """Test parameter count validation with None values.
 
@@ -351,6 +360,7 @@ def test_adbc_parameter_count_validation_with_none(adbc_postgresql_session: Adbc
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_none_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     """Test edge cases with None parameters that might reveal bugs.
 
@@ -393,6 +403,7 @@ def test_adbc_none_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_none_with_returning_clause(adbc_postgresql_session: AdbcDriver) -> None:
     """Test None parameters with PostgreSQL RETURNING clause.
 
@@ -418,7 +429,8 @@ def test_adbc_none_with_returning_clause(adbc_postgresql_session: AdbcDriver) ->
     assert returned_row["bool_col"] is None
 
 
-@pytest.mark.xdist_group("adbc_sqlite")
+@pytest.mark.xdist_group("sqlite")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 def test_adbc_sqlite_none_parameters() -> None:
     """Test None parameter handling with SQLite ADBC driver.
@@ -459,6 +471,7 @@ def test_adbc_sqlite_none_parameters() -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_parameter_style_consistency(adbc_postgresql_session: AdbcDriver) -> None:
     """Test that parameter handling is consistent across different query types.
 
@@ -508,6 +521,7 @@ def test_adbc_parameter_style_consistency(adbc_postgresql_session: AdbcDriver) -
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_parameter_count_validation_fixed(adbc_postgresql_session: AdbcDriver) -> None:
     """FIXED: ADBC AST transformer now properly validates parameter count.
 
@@ -556,6 +570,7 @@ def test_adbc_parameter_count_validation_fixed(adbc_postgresql_session: AdbcDriv
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_ast_transformer_validation_fixed(adbc_postgresql_session: AdbcDriver) -> None:
     """FIXED: AST transformer now properly validates parameter count before transformation.
 
@@ -598,6 +613,7 @@ def test_adbc_ast_transformer_validation_fixed(adbc_postgresql_session: AdbcDriv
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_adbc_repeated_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test that repeated parameters ($1 appearing multiple times) work correctly.
 

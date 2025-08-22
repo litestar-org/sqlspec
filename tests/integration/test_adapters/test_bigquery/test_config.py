@@ -8,8 +8,9 @@ from pytest_databases.docker.bigquery import BigQueryService
 from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("bigquery")
 
-@pytest.mark.xdist_group("bigquery")
+
 def test_bigquery_config_creation(bigquery_service: BigQueryService) -> None:
     """Test BigQuery configuration creation."""
     config = BigQueryConfig(
@@ -25,7 +26,6 @@ def test_bigquery_config_creation(bigquery_service: BigQueryService) -> None:
     assert config.connection_config["dataset_id"] == bigquery_service.dataset
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_config_session_context_manager(bigquery_service: BigQueryService) -> None:
     """Test BigQuery session context manager."""
     config = BigQueryConfig(
@@ -46,7 +46,6 @@ def test_bigquery_config_session_context_manager(bigquery_service: BigQueryServi
         assert result.data[0]["test_value"] == 1
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_config_with_query_job_config(bigquery_service: BigQueryService) -> None:
     """Test BigQuery configuration with query job configuration."""
     config = BigQueryConfig(
@@ -66,7 +65,6 @@ def test_bigquery_config_with_query_job_config(bigquery_service: BigQueryService
         assert result.data[0]["message"] == "BigQuery Config Test"
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_config_connection_reuse(bigquery_service: BigQueryService) -> None:
     """Test BigQuery configuration connection reuse."""
     config = BigQueryConfig(
@@ -92,7 +90,6 @@ def test_bigquery_config_connection_reuse(bigquery_service: BigQueryService) -> 
         assert result2.data[0]["session_name"] == "Session 2"
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_config_error_handling(bigquery_service: BigQueryService) -> None:
     """Test BigQuery configuration error handling."""
     # Test with invalid project
@@ -111,7 +108,6 @@ def test_bigquery_config_error_handling(bigquery_service: BigQueryService) -> No
         assert isinstance(session, BigQueryDriver)
 
 
-@pytest.mark.xdist_group("bigquery")
 def test_bigquery_config_dataset_scoping(bigquery_service: BigQueryService) -> None:
     """Test BigQuery dataset scoping in configuration."""
     config = BigQueryConfig(

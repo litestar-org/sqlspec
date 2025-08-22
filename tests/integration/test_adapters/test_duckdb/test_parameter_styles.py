@@ -11,6 +11,8 @@ import pytest
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("duckdb")
+
 
 @pytest.fixture
 def duckdb_parameters_session() -> "Generator[DuckDBDriver, None, None]":
@@ -494,7 +496,6 @@ def test_duckdb_parameter_performance(duckdb_parameters_session: DuckDBDriver) -
 # Tests consolidated from test_none_parameters.py
 
 
-@pytest.mark.duckdb
 def test_duckdb_none_parameters() -> None:
     """Test that None values in named parameters are handled correctly by DuckDB."""
     config = DuckDBConfig(pool_config={"database": ":memory:shared_db_none_test"})
@@ -562,7 +563,6 @@ def test_duckdb_none_parameters() -> None:
         assert select_result["nullable_date"] is None
 
 
-@pytest.mark.duckdb
 def test_duckdb_none_parameters_qmark_style() -> None:
     """Test None values with QMARK (?) parameter style - DuckDB default."""
     config = DuckDBConfig(pool_config={"database": ":memory:shared_db_qmark_test"})
@@ -595,7 +595,6 @@ def test_duckdb_none_parameters_qmark_style() -> None:
         assert select_result["col3"] is None
 
 
-@pytest.mark.duckdb
 def test_duckdb_none_parameters_numeric_style() -> None:
     """Test None values with NUMERIC ($1, $2) parameter style."""
     config = DuckDBConfig(pool_config={"database": ":memory:shared_db_numeric_test"})
@@ -628,7 +627,6 @@ def test_duckdb_none_parameters_numeric_style() -> None:
         assert select_result["col3"] is None
 
 
-@pytest.mark.duckdb
 def test_duckdb_all_none_parameters() -> None:
     """Test when all parameter values are None."""
     config = DuckDBConfig(pool_config={"database": ":memory:shared_db_all_none_test"})
@@ -669,7 +667,6 @@ def test_duckdb_all_none_parameters() -> None:
         assert select_result["col3"] is None
 
 
-@pytest.mark.duckdb
 def test_duckdb_none_with_execute_many() -> None:
     """Test None values work correctly with execute_many."""
     config = DuckDBConfig(pool_config={"database": ":memory:shared_db_many_test"})
@@ -711,7 +708,6 @@ def test_duckdb_none_with_execute_many() -> None:
         assert rows[3]["name"] is None and rows[3]["value"] is None
 
 
-@pytest.mark.duckdb
 def test_duckdb_none_in_where_clause() -> None:
     """Test None values in WHERE clauses work correctly."""
     config = DuckDBConfig(pool_config={"database": ":memory:shared_db_where_test"})
@@ -750,7 +746,6 @@ def test_duckdb_none_in_where_clause() -> None:
         assert len(none_result.data) == 4  # All rows because condition is always true
 
 
-@pytest.mark.duckdb
 def test_duckdb_none_complex_parameter_scenarios() -> None:
     """Test complex scenarios with None parameters that might cause issues."""
     config = DuckDBConfig(pool_config={"database": ":memory:shared_db_complex_test"})
@@ -812,7 +807,6 @@ def test_duckdb_none_complex_parameter_scenarios() -> None:
         assert verify_result["col6"] == ["array", "with", "values"]
 
 
-@pytest.mark.duckdb
 def test_duckdb_none_parameter_edge_cases() -> None:
     """Test edge cases that might reveal parameter handling bugs."""
     config = DuckDBConfig(pool_config={"database": ":memory:shared_db_edge_test"})
@@ -857,7 +851,6 @@ def test_duckdb_none_parameter_edge_cases() -> None:
         assert all_results.data[0]["count"] == 5
 
 
-@pytest.mark.duckdb
 def test_duckdb_parameter_count_mismatch_with_none() -> None:
     """Test that parameter count mismatches are properly detected even when None values are involved.
 

@@ -5,8 +5,9 @@ import pytest
 from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("bigquery")
 
-@pytest.mark.xdist_group("bigquery")
+
 def test_connection(bigquery_config: BigQueryConfig) -> None:
     """Test database connection."""
 
