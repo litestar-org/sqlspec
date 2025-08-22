@@ -41,16 +41,21 @@ These are just a few examples that demonstrate SQLSpec's flexibility. Each of th
 ```python
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
-from pydantic import BaseModel
+
 # Create SQLSpec instance and configure database
-sql = SQLSpec()
-config = sql.add_config(SqliteConfig(database=":memory:"))
+db_manager = SQLSpec()
+config = SqliteConfig(pool_config={"database": ":memory:"}) # Thread local pooling
+db_manager.add_config(config)
 
 # Execute queries with automatic result mapping
-with sql.provide_session(config) as session:
+with db_manager.provide_session(config) as session:
     # Simple query
     result = session.execute("SELECT 'Hello, SQLSpec!' as message")
     print(result.get_first())  # {'message': 'Hello, SQLSpec!'}
+
+    # Type-safe single row query
+    row = session.select_one("SELECT 'Hello, SQLSpec!' as message")
+    print(row)  # {'message': 'Hello, SQLSpec!'}
 ```
 
 ### SQL Builder Example (Experimental)
@@ -61,30 +66,94 @@ with sql.provide_session(config) as session:
 from sqlspec import sql
 
 # Build a simple query
-query = sql.select("id", "name", "email").from_("users").where("active = ?", True)
-print(query.build().sql)  # SELECT id, name, email FROM users WHERE active = ?
+query = sql.select("id", "name", "email").from_("users").where("active = ?")
+statement = query.to_statement()
+print(statement.sql)  # SELECT id, name, email FROM users WHERE active = ?
 
 # More complex example with joins
 query = (
     sql.select("u.name", "COUNT(o.id) as order_count")
     .from_("users u")
     .left_join("orders o", "u.id = o.user_id")
-    .where("u.created_at > ?", "2024-01-01")
+    .where("u.created_at > ?")
     .group_by("u.name")
-    .having("COUNT(o.id) > ?", 5)
+    .having("COUNT(o.id) > ?")
     .order_by("order_count", desc=True)
 )
 
-# Execute the built query
-with sql.provide_session(config) as session:
-    results = session.execute(query.build())
+# Execute the built query with parameters
+with db_manager.provide_session(config) as session:
+    results = session.execute(query, "2024-01-01", 5)
 ```
 
-### DuckDB LLM
+### Type-Safe Result Mapping
+
+SQLSpec supports automatic mapping to typed models using popular libraries:
+
+```python
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+from pydantic import BaseModel
+
+class User(BaseModel):
+    id: int
+    name: str
+    email: str
+
+db_manager = SQLSpec()
+config = SqliteConfig(pool_config={"database": ":memory:"})
+db_manager.add_config(config)
+
+with db_manager.provide_session(config) as session:
+    # Create and populate test data
+    session.execute_script("""
+        CREATE TABLE users (id INTEGER, name TEXT, email TEXT);
+        INSERT INTO users VALUES (1, 'Alice', 'alice@example.com');
+    """)
+    # Map single result to typed model
+    user = session.select_one("SELECT * FROM users WHERE id = ?", 1, schema_type=User)
+    print(f"User: {user.name} ({user.email})")
+
+    # Map multiple results
+    users = session.select("SELECT * FROM users", schema_type=User)
+    for user in users:
+        print(f"User: {user.name}")
+```
+
+### Session Methods Overview
+
+SQLSpec provides several convenient methods for executing queries:
+
+```python
+with db_manager.provide_session(config) as session:
+    # Execute any SQL and get full result set
+    result = session.execute("SELECT * FROM users")
+
+    # Get single row (raises error if not found)
+    user = session.select_one("SELECT * FROM users WHERE id = ?", 1)
+
+    # Get single row or None (no error if not found)
+    maybe_user = session.select_one_or_none("SELECT * FROM users WHERE id = ?", 999)
+
+    # Execute with many parameter sets (bulk operations)
+    session.execute_many(
+        "INSERT INTO users (name, email) VALUES (?, ?)",
+        [("Bob", "bob@example.com"), ("Carol", "carol@example.com")]
+    )
+
+    # Execute multiple statements as a script
+    session.execute_script("""
+        CREATE TABLE IF NOT EXISTS logs (id INTEGER, message TEXT);
+        INSERT INTO logs (message) VALUES ('System started');
+    """)
+```
+
+<details>
+<summary>🦆 DuckDB LLM Integration Example</summary>
 
 This is a quick implementation using some of the built-in Secret and Extension management features of SQLSpec's DuckDB integration.
 
-It allows you to communicate with any compatible OpenAPI conversations endpoint (such as Ollama). This example:
+It allows you to communicate with any compatible OpenAI conversations endpoint (such as Ollama). This example:
 
 - auto installs the `open_prompt` DuckDB extensions
 - automatically creates the correct `open_prompt` compatible secret required to use the extension
@@ -104,11 +173,12 @@ from pydantic import BaseModel
 class ChatMessage(BaseModel):
     message: str
 
-sql = SQLSpec()
-etl_config = sql.add_config(
-    DuckDBConfig(
-        extensions=[{"name": "open_prompt"}],
-        secrets=[
+db_manager = SQLSpec()
+config = DuckDBConfig(
+    pool_config={"database": ":memory:"},
+    driver_features={
+        "extensions": [{"name": "open_prompt"}],
+        "secrets": [
             {
                 "secret_type": "open_prompt",
                 "name": "open_prompt",
@@ -119,9 +189,11 @@ etl_config = sql.add_config(
                 },
             }
         ],
-    )
+    },
 )
-with sql.provide_session(etl_config) as session:
+db_manager.add_config(config)
+
+with db_manager.provide_session(config) as session:
     result = session.select_one(
         "SELECT open_prompt(?)",
         "Can you write a haiku about DuckDB?",
@@ -130,7 +202,10 @@ with sql.provide_session(etl_config) as session:
     print(result) # result is a ChatMessage pydantic model
 ```
 
-### DuckDB Gemini Embeddings
+</details>
+
+<details>
+<summary>🔗 DuckDB Gemini Embeddings Example</summary>
 
 In this example, we are again using DuckDB. However, we are going to use the built-in to call the Google Gemini embeddings service directly from the database.
 
@@ -157,11 +232,12 @@ API_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{EMBEDDING_MODEL}:embedContent?key=${GOOGLE_API_KEY}"
 )
 
-sql = SQLSpec()
-etl_config = sql.add_config(
-    DuckDBConfig(
-        extensions=[{"name": "vss"}, {"name": "http_client"}],
-        on_connection_create=lambda connection: connection.execute(f"""
+db_manager = SQLSpec()
+config = DuckDBConfig(
+    pool_config={"database": ":memory:"},
+    driver_features={
+        "extensions": [{"name": "vss"}, {"name": "http_client"}],
+        "on_connection_create": lambda connection: connection.execute(f"""
             CREATE IF NOT EXISTS MACRO generate_embedding(q) AS (
                 WITH  __request AS (
                     SELECT http_post(
@@ -180,16 +256,77 @@ etl_config = sql.add_config(
                 FROM __request,
             );
         """),
-    )
+    },
 )
-with sql.provide_session(etl_config) as session:
+db_manager.add_config(config)
+
+with db_manager.provide_session(config) as session:
     result = session.execute("SELECT generate_embedding('example text')")
     print(result.get_first()) # result is a dictionary when `schema_type` is omitted.
 ```
 
+</details>
+
+### SQL File Loading
+
+SQLSpec can load and manage SQL queries from files using aiosql-style named queries:
+
+```python
+from sqlspec import SQLSpec
+from sqlspec.loader import SQLFileLoader
+from sqlspec.adapters.sqlite import SqliteConfig
+
+# Initialize with SQL file loader
+db_manager = SQLSpec(loader=SQLFileLoader())
+config = SqliteConfig(pool_config={"database": ":memory:"})
+db_manager.add_config(config)
+
+# Load SQL files from directory
+db_manager.load_sql_files("./sql")
+
+# SQL file: ./sql/users.sql
+# -- name: get_user
+# SELECT * FROM users WHERE id = ?
+#
+# -- name: create_user
+# INSERT INTO users (name, email) VALUES (?, ?)
+
+with db_manager.provide_session(config) as session:
+    # Use named queries from files
+    user = session.execute(db_manager.get_sql("get_user"), 1)
+    session.execute(db_manager.get_sql("create_user"), "Alice", "alice@example.com")
+```
+
+### Database Migrations
+
+SQLSpec includes a built-in migration system for managing schema changes. After configuring your database with migration settings, use the CLI commands:
+
+```bash
+# Initialize migration directory
+sqlspec db init migrations
+
+# Generate new migration file
+sqlspec db make-migrations "Add user table"
+
+# Apply all pending migrations
+sqlspec db upgrade
+
+# Show current migration status
+sqlspec db show-current-revision
+```
+
+For Litestar applications, replace `sqlspec` with your application command:
+
+```bash
+# Using Litestar CLI integration
+litestar db make-migrations "Add user table"
+litestar db upgrade
+litestar db show-current-revision
+```
+
 ### Basic Litestar Integration
 
-In this example we are going to demonstrate how to create a basic configuration that integrates into Litestar.
+In this example we demonstrate how to create a basic configuration that integrates into Litestar:
 
 ```py
 # /// script
@@ -212,7 +349,7 @@ async def simple_sqlite(db_session: AiosqliteDriver) -> dict[str, str]:
 
 sqlspec = SQLSpec(
     config=DatabaseConfig(
-        config=AiosqliteConfig(),
+        config=AiosqliteConfig(pool_config={"database": ":memory:"}), # built in local pooling
         commit_mode="autocommit"
     )
 )
@@ -230,6 +367,41 @@ The primary goal at this stage is to establish a **native connectivity interface
 ## Adapters: Completed, In Progress, and Planned
 
 This list is not final. If you have a driver you'd like to see added, please open an issue or submit a PR!
+
+### Configuration Examples
+
+Each adapter uses a consistent configuration pattern with `pool_config` for connection parameters:
+
+```python
+# SQLite
+SqliteConfig(pool_config={"database": "/path/to/database.db"})
+AiosqliteConfig(pool_config={"database": "/path/to/database.db"})  # Async
+AdbcConfig(connection_config={"uri": "sqlite:///path/to/database.db"})  # ADBC
+
+# PostgreSQL (multiple drivers available)
+PsycopgSyncConfig(pool_config={"host": "localhost", "database": "mydb", "user": "user", "password": "pass"})
+PsycopgAsyncConfig(pool_config={"host": "localhost", "database": "mydb", "user": "user", "password": "pass"})  # Async
+AsyncpgConfig(pool_config={"host": "localhost", "database": "mydb", "user": "user", "password": "pass"})
+PsqlpyConfig(pool_config={"dsn": "postgresql://user:pass@localhost/mydb"})
+AdbcConfig(connection_config={"uri": "postgresql://user:pass@localhost/mydb"})  # ADBC
+
+# DuckDB
+DuckDBConfig(pool_config={"database": ":memory:"})  # or file path
+AdbcConfig(connection_config={"uri": "duckdb:///path/to/database.duckdb"})  # ADBC
+
+# MySQL
+AsyncmyConfig(pool_config={"host": "localhost", "database": "mydb", "user": "user", "password": "pass"})  # Async
+
+# Oracle
+OracleSyncConfig(pool_config={"host": "localhost", "service_name": "XEPDB1", "user": "user", "password": "pass"})
+OracleAsyncConfig(pool_config={"host": "localhost", "service_name": "XEPDB1", "user": "user", "password": "pass"})  # Async
+
+# BigQuery
+BigQueryConfig(pool_config={"project": "my-project", "dataset": "my_dataset"})
+AdbcConfig(connection_config={"driver_name": "adbc_driver_bigquery", "project_id": "my-project", "dataset_id": "my_dataset"})  # ADBC
+```
+
+### Supported Drivers
 
 | Driver                                                                                                       | Database   | Mode    | Status     |
 | :----------------------------------------------------------------------------------------------------------- | :--------- | :------ | :--------- |
@@ -253,21 +425,35 @@ This list is not final. If you have a driver you'd like to see added, please ope
 | [`asyncmy`](https://github.com/long2ice/asyncmy)                                                           | MySQL      | Async   | ✅         |
 | [`snowflake`](https://docs.snowflake.com)                                                                    | Snowflake  | Sync    | 🗓️  |
 
-## Proposed Project Structure
+## Project Structure
 
 - `sqlspec/`:
-    - `adapters/`: Contains all database drivers and associated configuration.
-    - `extensions/`:
-        - `litestar/`: Litestar framework integration ✅
-        - `fastapi/`: Future home of `fastapi` integration.
-        - `flask/`: Future home of `flask` integration.
-        - `*/`: Future home of your favorite framework integration
-    - `base.py`: Contains base protocols for database configurations.
-    - `statement/`: Contains the SQL statement system with builders, validation, and transformation.
-    - `storage/`: Contains unified storage operations for data import/export.
-    - `utils/`: Contains utility functions used throughout the project.
-    - `exceptions.py`: Contains custom exceptions for SQLSpec.
-    - `typing.py`: Contains type hints, type guards and several facades for optional libraries that are not required for the core functionality of SQLSpec.
+    - `adapters/`: Database-specific drivers and configuration classes for all supported databases
+    - `extensions/`: Framework integrations and external library adapters
+        - `litestar/`: Litestar web framework integration with dependency injection ✅
+        - `aiosql/`: Integration with aiosql for SQL file loading ✅
+        - Future integrations: `fastapi/`, `flask/`, etc.
+    - `builder/`: Fluent SQL query builder with method chaining and type safety
+        - `mixins/`: Composable query building operations (WHERE, JOIN, ORDER BY, etc.)
+    - `core/`: Core query processing infrastructure
+        - `statement.py`: SQL statement wrapper with metadata and type information
+        - `parameters.py`: Parameter style conversion and validation
+        - `result.py`: Result set handling and type mapping
+        - `compiler.py`: SQL compilation and validation using SQLGlot
+        - `cache.py`: Statement caching for performance optimization
+    - `driver/`: Base driver system with sync/async support and transaction management
+        - `mixins/`: Shared driver capabilities (result processing, SQL translation)
+    - `migrations/`: Database migration system with CLI commands
+    - `storage/`: Unified data import/export operations with multiple backends
+        - `backends/`: Storage backend implementations (fsspec, obstore)
+    - `utils/`: Utility functions, type guards, and helper tools
+    - `base.py`: Main SQLSpec registry and configuration manager
+    - `loader.py`: SQL file loading system for `.sql` files
+    - `cli.py`: Command-line interface for migrations and database operations
+    - `config.py`: Base configuration classes and protocols
+    - `protocols.py`: Type protocols for runtime type checking
+    - `exceptions.py`: Custom exception hierarchy for SQLSpec
+    - `typing.py`: Type definitions, guards, and optional dependency facades
 
 ## Get Involved
 
