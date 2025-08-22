@@ -1,5 +1,6 @@
 """BigQuery integration test fixtures."""
 
+import contextlib
 from collections.abc import Generator
 from typing import TYPE_CHECKING, Any
 
@@ -50,25 +51,21 @@ def bigquery_test_table(
     """Create and cleanup test table."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
 
-    # Drop table if exists and recreate
-    try:
+    with contextlib.suppress(Exception):
         bigquery_session.execute_script(f"DROP TABLE {table_name}")
-    except Exception:
-        pass  # Table doesn't exist, ignore
 
-    bigquery_session.execute_script(f"""
-        CREATE TABLE {table_name} (
-            id INT64,
-            name STRING NOT NULL,
-            value INT64,
-            created_at TIMESTAMP
-        )
-    """)
-
-    yield table_name
-
-    # Cleanup
     try:
-        bigquery_session.execute_script(f"DROP TABLE {table_name}")
-    except Exception:
-        pass  # Already dropped or doesn't exist
+        bigquery_session.execute_script(f"""
+            CREATE TABLE {table_name} (
+                id INT64,
+                name STRING NOT NULL,
+                value INT64,
+                created_at TIMESTAMP
+            )
+        """)
+
+        yield table_name
+
+    finally:
+        with contextlib.suppress(Exception):
+            bigquery_session.execute_script(f"DROP TABLE {table_name}")

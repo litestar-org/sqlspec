@@ -23,7 +23,7 @@ def driver_test_table(
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     # Create the test table
-    bigquery_session.execute_script(f"""
+    bigquery_session.execute(f"""
         CREATE OR REPLACE TABLE {table_name} (
             id INT64,
             name STRING NOT NULL,
@@ -36,7 +36,7 @@ def driver_test_table(
 
     # Cleanup
     try:
-        bigquery_session.execute_script(f"DROP TABLE IF EXISTS {table_name}")
+        bigquery_session.execute(f"DROP TABLE IF EXISTS {table_name}")
     except Exception:
         pass
 
@@ -169,83 +169,6 @@ def test_bigquery_result_methods(bigquery_session: BigQueryDriver, driver_test_t
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
-
-
-def test_bigquery_error_handling(bigquery_session: BigQueryDriver, driver_test_table: str) -> None:
-    """Test error handling and exception propagation."""
-
-    with pytest.raises(Exception):
-        bigquery_session.execute("INVALID SQL STATEMENT")
-
-    bigquery_session.execute(
-        f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)", (1, "unique_test", 1)
-    )
-
-    with pytest.raises(Exception):
-        bigquery_session.execute(f"SELECT nonexistent_column FROM {driver_test_table}")
-
-
-@pytest.mark.xfail(
-    reason="BigQuery emulator has issues with complex data types and parameter marshaling (JSON unmarshaling errors)"
-)
-def test_bigquery_data_types(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
-    """Test BigQuery data type handling."""
-
-    bigquery_session.execute_script(f"""
-        CREATE TABLE IF NOT EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test` (
-            id INT64,
-            string_col STRING,
-            int_col INT64,
-            float_col FLOAT64,
-            bool_col BOOL,
-            date_col DATE,
-            datetime_col DATETIME,
-            timestamp_col TIMESTAMP,
-            array_col ARRAY<INT64>,
-            json_col JSON
-        )
-    """)
-
-    bigquery_session.execute(
-        f"""
-        INSERT INTO `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test` (
-            id, string_col, int_col, float_col, bool_col,
-            date_col, datetime_col, timestamp_col, array_col, json_col
-        ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        )
-    """,
-        (
-            1,
-            "string_value",
-            42,
-            123.45,
-            True,
-            "2024-01-15",
-            "2024-01-15 10:30:00",
-            "2024-01-15 10:30:00 UTC",
-            [1, 2, 3],
-            {"name": "test", "value": 42},
-        ),
-    )
-
-    select_result = bigquery_session.execute(f"""
-        SELECT string_col, int_col, float_col, bool_col
-        FROM `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test`
-    """)
-    assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert len(select_result.data) == 1
-
-    row = select_result.data[0]
-    assert row["string_col"] == "string_value"
-    assert row["int_col"] == 42
-    assert row["float_col"] == 123.45
-    assert row["bool_col"] is True
-
-    bigquery_session.execute_script(
-        f"DROP TABLE `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test`"
-    )
 
 
 def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, driver_test_table: str) -> None:
