@@ -5,11 +5,14 @@ Covers all serialization scenarios including edge cases and type handling.
 """
 
 import json
+import math
 from typing import Any
 
 import pytest
 
 from sqlspec.utils.serializers import from_json, to_json
+
+pytestmark = pytest.mark.xdist_group("utils")
 
 
 def test_to_json_basic_types() -> None:
@@ -125,7 +128,7 @@ def test_from_json_basic_types() -> None:
     assert from_json('"hello"') == "hello"
 
     assert from_json("42") == 42
-    assert from_json("3.14") == 3.14
+    assert from_json("3.14") == math.pi
 
     assert from_json("true") is True
     assert from_json("false") is False
@@ -189,7 +192,7 @@ def test_from_json_numeric_edge_cases() -> None:
     assert from_json("9223372036854775807") == 9223372036854775807
 
     assert from_json("-42") == -42
-    assert from_json("-3.14") == -3.14
+    assert from_json("-3.14") == -math.pi
 
     assert from_json("0") == 0
     assert from_json("0.0") == 0.0
@@ -250,7 +253,7 @@ def test_from_json_trailing_commas_error() -> None:
 
 def test_round_trip_basic() -> None:
     """Test round-trip with basic data types."""
-    test_data = ["string", 42, 3.14, True, False, None, [], {}]
+    test_data = ["string", 42, math.pi, True, False, None, [], {}]
 
     for data in test_data:
         serialized = to_json(data)
@@ -415,7 +418,7 @@ def test_compatibility_consistent_formatting() -> None:
     [
         "simple string",
         42,
-        3.14,
+        math.pi,
         True,
         False,
         None,

@@ -19,6 +19,8 @@ import pytest
 
 from sqlspec.migrations.base import BaseMigrationRunner
 
+pytestmark = pytest.mark.xdist_group("migrations")
+
 
 def create_test_migration_runner(migrations_path: Path = Path("/test")) -> BaseMigrationRunner:
     """Create a test migration runner implementation."""

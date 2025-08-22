@@ -124,12 +124,32 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         config = self._get_pool_config_dict()
 
         if "init" not in config:
-            config["init"] = self._init_pgvector_connection
+            config["init"] = self._init_connection
 
         return await asyncpg_create_pool(**config)
 
-    async def _init_pgvector_connection(self, connection: "AsyncpgConnection") -> None:
-        """Initialize pgvector support for asyncpg connections."""
+    async def _init_connection(self, connection: "AsyncpgConnection") -> None:
+        """Initialize connection with JSON codecs and pgvector support."""
+
+        try:
+            # Set up JSON type codec
+            await connection.set_type_codec(
+                "json",
+                encoder=self.driver_features.get("json_serializer", to_json),
+                decoder=self.driver_features.get("json_deserializer", from_json),
+                schema="pg_catalog",
+            )
+            # Set up JSONB type codec
+            await connection.set_type_codec(
+                "jsonb",
+                encoder=self.driver_features.get("json_serializer", to_json),
+                decoder=self.driver_features.get("json_deserializer", from_json),
+                schema="pg_catalog",
+            )
+        except Exception as e:
+            logger.debug("Failed to configure JSON type codecs for asyncpg: %s", e)
+
+        # Initialize pgvector support
         try:
             import pgvector.asyncpg
 

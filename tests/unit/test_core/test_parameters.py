@@ -27,6 +27,8 @@ from sqlspec.core.parameters import (
     wrap_with_type,
 )
 
+pytestmark = pytest.mark.xdist_group("core")
+
 
 @pytest.mark.parametrize(
     "style,expected_value",

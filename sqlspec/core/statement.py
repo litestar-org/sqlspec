@@ -212,6 +212,9 @@ class SQL:
                     if self._is_many:
                         self._positional_parameters = list(param)
                     else:
+                        # For drivers with native list expansion support, each item in the tuple/list
+                        # should be treated as a separate parameter (but preserve inner lists/arrays)
+                        # This allows passing arrays/lists as single JSONB parameters
                         self._positional_parameters.extend(param)
                 else:
                     self._positional_parameters.append(param)

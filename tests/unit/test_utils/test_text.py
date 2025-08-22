@@ -8,6 +8,8 @@ import pytest
 
 from sqlspec.utils.text import camelize, check_email, slugify, snake_case
 
+pytestmark = pytest.mark.xdist_group("utils")
+
 
 def test_check_email_valid() -> None:
     """Test check_email with valid email addresses."""

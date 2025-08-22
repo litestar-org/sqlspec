@@ -4,7 +4,11 @@ This module tests that all SQL builder operations use descriptive, column-based
 parameter names instead of generic param_1, param_2, etc.
 """
 
+import pytest
+
 from sqlspec import sql
+
+pytestmark = pytest.mark.xdist_group("builder")
 
 
 def test_update_set_uses_column_names() -> None:
@@ -48,9 +52,12 @@ def test_insert_with_columns_uses_column_names() -> None:
 
 def test_insert_values_from_dict_uses_column_names() -> None:
     """Test that INSERT values_from_dict uses column names for parameters."""
-    query = sql.insert("orders").values_from_dict(
-        {"customer_id": 123, "product_name": "Laptop", "quantity": 2, "total": 1999.98}
-    )
+    query = sql.insert("orders").values_from_dict({
+        "customer_id": 123,
+        "product_name": "Laptop",
+        "quantity": 2,
+        "total": 1999.98,
+    })
     stmt = query.build()
 
     assert "customer_id" in stmt.parameters or any("customer_id" in key for key in stmt.parameters.keys())

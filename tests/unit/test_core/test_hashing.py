@@ -25,6 +25,8 @@ from sqlspec.core.hashing import (
     hash_sql_statement,
 )
 
+pytestmark = pytest.mark.xdist_group("core")
+
 
 def test_hash_expression_none() -> None:
     """Test hash_expression handles None input."""

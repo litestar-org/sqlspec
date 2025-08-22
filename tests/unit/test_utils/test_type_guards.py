@@ -60,6 +60,8 @@ from sqlspec.utils.type_guards import (
     schema_dump,
 )
 
+pytestmark = pytest.mark.xdist_group("utils")
+
 
 @dataclass
 class SampleDataclass:

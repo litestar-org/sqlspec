@@ -439,14 +439,15 @@ def test_psycopg_json_operations(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL JSON operations with psycopg."""
 
     psycopg_session.execute_script("""
-        CREATE TABLE json_test (
+        CREATE TABLE IF NOT EXISTS json_test (
             id SERIAL PRIMARY KEY,
             data JSONB
-        )
+        );
+        DELETE FROM json_test;
     """)
 
-    json_data = '{"name": "test", "age": 30, "tags": ["postgres", "json"]}'
-    psycopg_session.execute("INSERT INTO json_test (data) VALUES (%s)", json_data)
+    json_data = {"name": "test", "age": 30, "tags": ["postgres", "json"]}
+    psycopg_session.execute("INSERT INTO json_test (data) VALUES (%s)", (json_data,))
 
     json_result = psycopg_session.execute("SELECT data->>'name' as name, data->>'age' as age FROM json_test")
     assert isinstance(json_result, SQLResult)

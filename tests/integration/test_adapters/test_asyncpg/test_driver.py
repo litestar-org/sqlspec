@@ -440,13 +440,14 @@ async def test_asyncpg_json_operations(asyncpg_session: AsyncpgDriver) -> None:
     """Test PostgreSQL JSON operations."""
 
     await asyncpg_session.execute_script("""
-        CREATE TABLE json_test (
+        CREATE TABLE IF NOT EXISTS json_test (
             id SERIAL PRIMARY KEY,
             data JSONB
-        )
+        );
+        DELETE FROM json_test;
     """)
 
-    json_data = '{"name": "test", "age": 30, "tags": ["postgres", "json"]}'
+    json_data = {"name": "test", "age": 30, "tags": ["postgres", "json"]}
     await asyncpg_session.execute("INSERT INTO json_test (data) VALUES ($1)", (json_data,))
 
     json_result = await asyncpg_session.execute("SELECT data->>'name' as name, data->>'age' as age FROM json_test")

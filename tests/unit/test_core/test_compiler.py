@@ -32,6 +32,8 @@ from sqlspec.core.compiler import CompiledSQL, OperationType, SQLProcessor
 from sqlspec.core.parameters import ParameterProcessor, ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
 
+pytestmark = pytest.mark.xdist_group("core")
+
 
 @pytest.fixture
 def basic_statement_config() -> "StatementConfig":

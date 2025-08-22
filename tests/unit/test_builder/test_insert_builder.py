@@ -5,6 +5,8 @@ import pytest
 from sqlspec import sql
 from sqlspec.exceptions import SQLBuilderError
 
+pytestmark = pytest.mark.xdist_group("builder")
+
 
 def test_insert_basic_functionality() -> None:
     """Test basic INSERT builder functionality."""

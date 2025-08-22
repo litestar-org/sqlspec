@@ -14,7 +14,7 @@ Key Test Coverage:
 8. Edge cases - Complex queries, comments, string literals
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,9 +31,7 @@ from sqlspec.core.statement import (
 )
 from sqlspec.typing import Empty
 
-if TYPE_CHECKING:
-    pass
-
+pytestmark = pytest.mark.xdist_group("core")
 
 DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
     default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}

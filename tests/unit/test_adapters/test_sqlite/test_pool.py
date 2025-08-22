@@ -12,6 +12,8 @@ import pytest
 
 from sqlspec.adapters.sqlite.pool import SqliteConnectionParams, SqliteConnectionPool
 
+pytestmark = pytest.mark.xdist_group("adapter_unit")
+
 
 @pytest.fixture
 def mock_sqlite_connection() -> MagicMock:
@@ -48,11 +50,21 @@ class MockConnection:
         self.execute_calls: list[str] = []
         self.closed = False
 
-    def execute(self, sql: str) -> None:
+    def execute(self, sql: str, parameters: Any = None) -> None:
         """Mock execute that tracks calls."""
         if self.closed:
             raise sqlite3.ProgrammingError("Cannot operate on a closed database")
         self.execute_calls.append(sql)
+
+    def commit(self) -> None:
+        """Mock commit method."""
+        if self.closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database")
+
+    def rollback(self) -> None:
+        """Mock rollback method."""
+        if self.closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database")
 
     def close(self) -> None:
         """Mock close method."""

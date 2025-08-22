@@ -16,6 +16,8 @@ from sqlspec.adapters.aiosqlite.pool import (
     AiosqlitePoolConnection,
 )
 
+pytestmark = pytest.mark.xdist_group("adapter_unit")
+
 
 class MockAiosqliteConnection:
     """Mock aiosqlite connection for testing."""
@@ -42,7 +44,7 @@ class MockAiosqliteConnection:
         """Mock is_alive method."""
         return not self.closed
 
-    async def execute(self, sql: str) -> None:
+    async def execute(self, sql: str, parameters: Any = None) -> None:
         """Mock execute method."""
         if self.closed:
             raise Exception("Connection is closed")
@@ -328,10 +330,10 @@ class TestAiosqliteConnectionPool:
 
         original_execute = mock_connection.execute
 
-        async def failing_execute(sql: str) -> None:
+        async def failing_execute(sql: str, parameters: Any = None) -> None:
             if "journal_mode" in sql:
                 raise Exception("PRAGMA failed")
-            await original_execute(sql)
+            await original_execute(sql, parameters)
 
         mock_connection.execute = failing_execute
         mock_connect.return_value = mock_connection
@@ -384,7 +386,7 @@ class TestAiosqliteConnectionPool:
         """Test claiming connection with health check timeout."""
         mock_connection = MockAiosqliteConnection()
 
-        async def slow_execute(sql: str) -> None:
+        async def slow_execute(sql: str, parameters: Any = None) -> None:
             await asyncio.sleep(1.0)
 
         mock_connection.execute = slow_execute

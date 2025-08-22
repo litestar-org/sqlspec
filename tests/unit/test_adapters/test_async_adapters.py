@@ -1,6 +1,6 @@
 """Tests for asynchronous database adapters based on CORE_ROUND_3 architecture."""
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -12,8 +12,7 @@ from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
 from tests.unit.test_adapters.conftest import MockAsyncConnection, MockAsyncCursor, MockAsyncDriver
 
-if TYPE_CHECKING:
-    pass
+pytestmark = pytest.mark.xdist_group("adapter_unit")
 
 __all__ = ()
 

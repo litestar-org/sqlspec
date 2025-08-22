@@ -23,6 +23,8 @@ import pytest
 from sqlspec.driver import ExecutionResult
 from sqlspec.migrations.base import BaseMigrationRunner, BaseMigrationTracker
 
+pytestmark = pytest.mark.xdist_group("migrations")
+
 
 @pytest.fixture
 def temp_workspace() -> Generator[Path, None, None]:

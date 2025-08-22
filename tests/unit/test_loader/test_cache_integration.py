@@ -20,6 +20,8 @@ import pytest
 
 from sqlspec.loader import CachedSQLFile, NamedStatement, SQLFile, SQLFileLoader
 
+pytestmark = pytest.mark.xdist_group("loader")
+
 
 @patch("sqlspec.loader.get_cache_config")
 @patch("sqlspec.loader.SQLFileLoader._load_file_without_cache")

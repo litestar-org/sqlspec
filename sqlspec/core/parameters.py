@@ -1179,8 +1179,16 @@ class ParameterProcessor:
         """
 
         def coerce_value(value: Any) -> Any:
+            # Skip coercion for None values to preserve NULL semantics
+            if value is None:
+                return value
+
             if isinstance(value, TypedParameter):
                 wrapped_value = value.value
+                # Skip coercion for None values even when wrapped
+                if wrapped_value is None:
+                    return wrapped_value
+
                 original_type = value.original_type
                 if original_type in type_coercion_map:
                     coerced = type_coercion_map[original_type](wrapped_value)

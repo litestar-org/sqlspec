@@ -21,6 +21,8 @@ from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import SQLFileLoader
 
+pytestmark = pytest.mark.xdist_group("loader")
+
 
 @pytest.fixture
 def temp_directory_structure() -> Generator[Path, None, None]:

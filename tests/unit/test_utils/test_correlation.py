@@ -16,6 +16,8 @@ import pytest
 
 from sqlspec.utils.correlation import CorrelationContext, correlation_context, get_correlation_adapter
 
+pytestmark = pytest.mark.xdist_group("utils")
+
 
 def setup_function() -> None:
     """Clean up correlation context before each test."""

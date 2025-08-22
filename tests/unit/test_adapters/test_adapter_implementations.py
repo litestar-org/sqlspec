@@ -2,7 +2,7 @@
 
 import operator
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 
@@ -13,8 +13,7 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import SQLSpecError
 
-if TYPE_CHECKING:
-    pass
+pytestmark = pytest.mark.xdist_group("adapter_unit")
 
 __all__ = ()
 

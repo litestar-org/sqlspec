@@ -10,6 +10,8 @@ import pytest
 
 from sqlspec.utils.module_loader import import_string, module_to_os_path
 
+pytestmark = pytest.mark.xdist_group("utils")
+
 
 def test_import_string_basic_module() -> None:
     """Test import_string with basic module import."""

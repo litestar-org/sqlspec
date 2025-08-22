@@ -273,8 +273,6 @@ async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDr
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with JSON data on AsyncPG."""
-    import json
-
     await asyncpg_batch_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_json (
             id SERIAL PRIMARY KEY,
@@ -285,9 +283,9 @@ async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriv
     """)
 
     parameters = [
-        ("JSON 1", json.dumps({"type": "test", "value": 100, "active": True})),
-        ("JSON 2", json.dumps({"type": "prod", "value": 200, "active": False})),
-        ("JSON 3", json.dumps({"type": "test", "value": 300, "tags": ["a", "b"]})),
+        ("JSON 1", {"type": "test", "value": 100, "active": True}),
+        ("JSON 2", {"type": "prod", "value": 200, "active": False}),
+        ("JSON 3", {"type": "test", "value": 300, "tags": ["a", "b"]}),
     ]
 
     result = await asyncpg_batch_session.execute_many(

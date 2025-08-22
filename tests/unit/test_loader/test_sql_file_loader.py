@@ -21,6 +21,8 @@ from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import CachedSQLFile, NamedStatement, SQLFile, SQLFileLoader
 
+pytestmark = pytest.mark.xdist_group("loader")
+
 
 def test_named_statement_creation() -> None:
     """Test basic NamedStatement creation."""

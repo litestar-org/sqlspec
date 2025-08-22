@@ -29,6 +29,8 @@ except ImportError:
 
     console = MockConsole()
 
+pytestmark = pytest.mark.xdist_group("loader")
+
 
 @pytest.fixture
 def fixtures_path() -> Path:
