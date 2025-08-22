@@ -104,6 +104,57 @@ def _count_placeholders(expression: Any) -> int:
     return qmark_count
 
 
+def _is_execute_many_parameters(parameters: Any) -> bool:
+    """Check if parameters are in execute_many format (list/tuple of lists/tuples)."""
+    return isinstance(parameters, (list, tuple)) and len(parameters) > 0 and isinstance(parameters[0], (list, tuple))
+
+
+def _validate_parameter_counts(expression: Any, parameters: Any, dialect: str) -> None:
+    """Validate parameter count against placeholder count in SQL."""
+    placeholder_count = _count_placeholders(expression)
+    is_execute_many = _is_execute_many_parameters(parameters)
+
+    if is_execute_many:
+        # For execute_many, validate each inner parameter set
+        for i, param_set in enumerate(parameters):
+            param_count = len(param_set) if isinstance(param_set, (list, tuple)) else 0
+            if param_count != placeholder_count:
+                msg = f"Parameter count mismatch in set {i}: {param_count} parameters provided but {placeholder_count} placeholders in SQL (dialect: {dialect})"
+                raise SQLSpecError(msg)
+    else:
+        # For single execution, validate the parameter set directly
+        param_count = (
+            len(parameters)
+            if isinstance(parameters, (list, tuple))
+            else len(parameters)
+            if isinstance(parameters, dict)
+            else 0
+        )
+
+        if param_count != placeholder_count:
+            msg = f"Parameter count mismatch: {param_count} parameters provided but {placeholder_count} placeholders in SQL (dialect: {dialect})"
+            raise SQLSpecError(msg)
+
+
+def _find_null_positions(parameters: Any) -> set[int]:
+    """Find positions of None values in parameters for single execution."""
+    null_positions = set()
+    if isinstance(parameters, (list, tuple)):
+        for i, param in enumerate(parameters):
+            if param is None:
+                null_positions.add(i)
+    elif isinstance(parameters, dict):
+        for key, param in parameters.items():
+            if param is None:
+                try:
+                    if isinstance(key, str) and key.lstrip("$").isdigit():
+                        param_num = int(key.lstrip("$"))
+                        null_positions.add(param_num - 1)
+                except ValueError:
+                    pass
+    return null_positions
+
+
 def _adbc_ast_transformer(expression: Any, parameters: Any, dialect: str = "postgres") -> tuple[Any, Any]:
     """AST transformer for NULL parameter handling.
 
@@ -120,42 +171,20 @@ def _adbc_ast_transformer(expression: Any, parameters: Any, dialect: str = "post
 
     Returns:
         Tuple of (modified_expression, cleaned_parameters)
-
-    Raises:
-        SQLSpecError: If parameter count doesn't match placeholder count
     """
     if not parameters:
         return expression, parameters
 
     # Validate parameter count before transformation
-    placeholder_count = _count_placeholders(expression)
-    param_count = (
-        len(parameters)
-        if isinstance(parameters, (list, tuple))
-        else len(parameters)
-        if isinstance(parameters, dict)
-        else 0
-    )
+    _validate_parameter_counts(expression, parameters, dialect)
 
-    if param_count != placeholder_count:
-        msg = f"Parameter count mismatch: {param_count} parameters provided but {placeholder_count} placeholders in SQL (dialect: {dialect})"
-        raise SQLSpecError(msg)
+    # For execute_many operations, skip AST transformation as different parameter
+    # sets may have None values in different positions, making transformation complex
+    if _is_execute_many_parameters(parameters):
+        return expression, parameters
 
-    null_positions = set()
-    if isinstance(parameters, (list, tuple)):
-        for i, param in enumerate(parameters):
-            if param is None:
-                null_positions.add(i)
-    elif isinstance(parameters, dict):
-        for key, param in parameters.items():
-            if param is None:
-                try:
-                    if isinstance(key, str) and key.lstrip("$").isdigit():
-                        param_num = int(key.lstrip("$"))
-                        null_positions.add(param_num - 1)
-                except ValueError:
-                    pass
-
+    # Find positions of None values for single execution
+    null_positions = _find_null_positions(parameters)
     if not null_positions:
         return expression, parameters
 
