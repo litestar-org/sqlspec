@@ -8,8 +8,9 @@ import pytest
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.migrations.commands import MigrationCommands
 
+pytestmark = pytest.mark.xdist_group("duckdb")
 
-@pytest.mark.xdist_group("migrations")
+
 def test_duckdb_migration_full_workflow() -> None:
     """Test full DuckDB migration workflow: init -> create -> upgrade -> downgrade."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -70,7 +71,6 @@ def down():
             assert len(result.data) == 0
 
 
-@pytest.mark.xdist_group("migrations")
 def test_duckdb_multiple_migrations_workflow() -> None:
     """Test DuckDB workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -168,7 +168,6 @@ def down():
             assert len(table_names) == 0
 
 
-@pytest.mark.xdist_group("migrations")
 def test_duckdb_migration_current_command() -> None:
     """Test the current migration command shows correct version for DuckDB."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -205,7 +204,6 @@ def down():
         commands.current(verbose=True)
 
 
-@pytest.mark.xdist_group("migrations")
 def test_duckdb_migration_error_handling() -> None:
     """Test DuckDB migration error handling."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -239,7 +237,6 @@ def down():
             commands.upgrade()
 
 
-@pytest.mark.xdist_group("migrations")
 def test_duckdb_migration_with_transactions() -> None:
     """Test DuckDB migrations work properly with transactions."""
     with tempfile.TemporaryDirectory() as temp_dir:

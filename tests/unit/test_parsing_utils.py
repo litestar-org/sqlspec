@@ -5,9 +5,12 @@ specifically focusing on the parameter style conversion functionality that
 was added to fix QueryBuilder parameter handling issues.
 """
 
+import pytest
 from sqlglot import exp
 
 from sqlspec.builder._parsing_utils import parse_column_expression, parse_condition_expression
+
+pytestmark = pytest.mark.xdist_group("utils")
 
 
 def test_parse_condition_expression_with_dollar_parameters() -> None:

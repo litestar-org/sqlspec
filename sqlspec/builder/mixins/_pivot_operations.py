@@ -1,4 +1,7 @@
-"""Pivot and Unpivot operations mixins for SQL builders."""
+"""PIVOT and UNPIVOT operation mixins.
+
+Provides mixins for PIVOT and UNPIVOT operations in SELECT statements.
+"""
 
 from typing import TYPE_CHECKING, Optional, Union, cast
 

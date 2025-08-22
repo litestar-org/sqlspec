@@ -1,10 +1,14 @@
-"""Unit tests for comprehensive parameter naming across all SQL builder operations.
+"""Unit tests for parameter naming across all SQL builder operations.
 
 This module tests that all SQL builder operations use descriptive, column-based
 parameter names instead of generic param_1, param_2, etc.
 """
 
+import pytest
+
 from sqlspec import sql
+
+pytestmark = pytest.mark.xdist_group("builder")
 
 
 def test_update_set_uses_column_names() -> None:

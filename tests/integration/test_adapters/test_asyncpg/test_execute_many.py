@@ -8,6 +8,8 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("postgres")
+
 
 @pytest.fixture
 async def asyncpg_batch_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
@@ -44,7 +46,6 @@ async def asyncpg_batch_session(postgres_service: PostgresService) -> "AsyncGene
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_basic(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test basic execute_many with AsyncPG."""
     parameters = [
@@ -68,7 +69,6 @@ async def test_asyncpg_execute_many_basic(asyncpg_batch_session: AsyncpgDriver) 
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_update(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many for UPDATE operations with AsyncPG."""
 
@@ -91,7 +91,6 @@ async def test_asyncpg_execute_many_update(asyncpg_batch_session: AsyncpgDriver)
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_empty(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with empty parameter list on AsyncPG."""
     result = await asyncpg_batch_session.execute_many(
@@ -106,7 +105,6 @@ async def test_asyncpg_execute_many_empty(asyncpg_batch_session: AsyncpgDriver) 
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_mixed_types(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with mixed parameter types on AsyncPG."""
     parameters = [
@@ -132,7 +130,6 @@ async def test_asyncpg_execute_many_mixed_types(asyncpg_batch_session: AsyncpgDr
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_delete(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many for DELETE operations with AsyncPG."""
 
@@ -162,7 +159,6 @@ async def test_asyncpg_execute_many_delete(asyncpg_batch_session: AsyncpgDriver)
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with large batch size on AsyncPG."""
 
@@ -187,7 +183,6 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with SQL object on AsyncPG."""
     from sqlspec.core.statement import SQL
@@ -207,7 +202,6 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with RETURNING clause on AsyncPG."""
     parameters = [("Return 1", 111, "RET"), ("Return 2", 222, "RET"), ("Return 3", 333, "RET")]
@@ -234,7 +228,6 @@ async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: Asyncp
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with PostgreSQL array types on AsyncPG."""
 
@@ -270,11 +263,8 @@ async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDr
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with JSON data on AsyncPG."""
-    import json
-
     await asyncpg_batch_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_json (
             id SERIAL PRIMARY KEY,
@@ -285,9 +275,9 @@ async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriv
     """)
 
     parameters = [
-        ("JSON 1", json.dumps({"type": "test", "value": 100, "active": True})),
-        ("JSON 2", json.dumps({"type": "prod", "value": 200, "active": False})),
-        ("JSON 3", json.dumps({"type": "test", "value": 300, "tags": ["a", "b"]})),
+        ("JSON 1", {"type": "test", "value": 100, "active": True}),
+        ("JSON 2", {"type": "prod", "value": 200, "active": False}),
+        ("JSON 3", {"type": "test", "value": 300, "tags": ["a", "b"]}),
     ]
 
     result = await asyncpg_batch_session.execute_many(

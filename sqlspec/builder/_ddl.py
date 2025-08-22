@@ -1,4 +1,8 @@
-"""DDL builders for SQLSpec: DROP, CREATE INDEX, TRUNCATE, etc."""
+"""DDL statement builders.
+
+Provides builders for DDL operations including CREATE, DROP, ALTER,
+TRUNCATE, and other schema manipulation statements.
+"""
 
 from typing import TYPE_CHECKING, Any, Optional, Union
 

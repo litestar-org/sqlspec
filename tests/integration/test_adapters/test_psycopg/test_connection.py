@@ -3,8 +3,9 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 
+pytestmark = pytest.mark.xdist_group("postgres")
 
-@pytest.mark.xdist_group("postgres")
+
 async def test_async_connection(postgres_service: PostgresService) -> None:
     """Test async connection components."""
     # Test direct connection
@@ -46,7 +47,6 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
     await another_config.close_pool()
 
 
-@pytest.mark.xdist_group("postgres")
 def test_sync_connection(postgres_service: PostgresService) -> None:
     """Test sync connection components."""
     # Test direct connection

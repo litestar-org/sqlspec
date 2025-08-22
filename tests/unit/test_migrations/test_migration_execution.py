@@ -6,8 +6,6 @@ Tests migration execution including:
 - Migration state tracking and version management
 - Error handling and validation scenarios
 - Migration file processing
-
-Uses CORE_ROUND_3 architecture with mocked database operations.
 """
 
 from __future__ import annotations
@@ -22,6 +20,8 @@ import pytest
 
 from sqlspec.driver import ExecutionResult
 from sqlspec.migrations.base import BaseMigrationRunner, BaseMigrationTracker
+
+pytestmark = pytest.mark.xdist_group("migrations")
 
 
 @pytest.fixture

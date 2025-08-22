@@ -1,4 +1,4 @@
-"""Test Oracle parameter style conversion with CORE_ROUND_3 architecture."""
+"""Test Oracle parameter style conversion."""
 
 from typing import Any, Union
 
@@ -6,6 +6,8 @@ import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
+
+pytestmark = pytest.mark.xdist_group("oracle")
 
 OracleParamData = Union[tuple[Any, ...], list[Any], dict[str, Any]]
 
@@ -23,7 +25,6 @@ OracleParamData = Union[tuple[Any, ...], list[Any], dict[str, Any]]
         ("SELECT :num1 + :num2 as sum FROM dual", {"num1": 10, "num2": 20}, [{"SUM": 30}]),
     ],
 )
-@pytest.mark.xdist_group("oracle")
 def test_sync_oracle_parameter_styles(
     oracle_sync_session: OracleSyncDriver, sql: str, params: OracleParamData, expected_rows: list[dict[str, Any]]
 ) -> None:
@@ -57,7 +58,6 @@ def test_sync_oracle_parameter_styles(
     ],
 )
 @pytest.mark.asyncio(loop_scope="function")
-@pytest.mark.xdist_group("oracle")
 async def test_async_oracle_parameter_styles(
     oracle_async_session: OracleAsyncDriver, sql: str, params: OracleParamData, expected_rows: list[dict[str, Any]]
 ) -> None:
@@ -73,7 +73,6 @@ async def test_async_oracle_parameter_styles(
             assert actual_row[key] == expected_value
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_oracle_insert_with_named_params(oracle_sync_session: OracleSyncDriver) -> None:
     """Test INSERT operations using Oracle named parameters."""
 
@@ -114,7 +113,6 @@ def test_sync_oracle_insert_with_named_params(oracle_sync_session: OracleSyncDri
 
 
 @pytest.mark.asyncio(loop_scope="function")
-@pytest.mark.xdist_group("oracle")
 async def test_async_oracle_update_with_mixed_params(oracle_async_session: OracleAsyncDriver) -> None:
     """Test UPDATE operations using mixed parameter styles."""
 
@@ -164,7 +162,6 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_oracle_in_clause_with_params(oracle_sync_session: OracleSyncDriver) -> None:
     """Test IN clause with Oracle parameter binding."""
 
@@ -207,7 +204,6 @@ def test_sync_oracle_in_clause_with_params(oracle_sync_session: OracleSyncDriver
 
 
 @pytest.mark.asyncio(loop_scope="function")
-@pytest.mark.xdist_group("oracle")
 async def test_async_oracle_null_parameter_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test handling of NULL parameters in Oracle."""
 
@@ -255,7 +251,6 @@ async def test_async_oracle_null_parameter_handling(oracle_async_session: Oracle
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_oracle_date_parameter_handling(oracle_sync_session: OracleSyncDriver) -> None:
     """Test Oracle DATE parameter handling and formatting."""
 
@@ -316,7 +311,6 @@ def test_sync_oracle_date_parameter_handling(oracle_sync_session: OracleSyncDriv
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_oracle_comprehensive_none_parameter_handling(oracle_sync_session: OracleSyncDriver) -> None:
     """Test comprehensive None parameter handling with various Oracle data types."""
 
@@ -383,7 +377,6 @@ def test_sync_oracle_comprehensive_none_parameter_handling(oracle_sync_session: 
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_oracle_all_none_parameters(oracle_sync_session: OracleSyncDriver) -> None:
     """Test Oracle parameter handling when all parameters are None."""
 
@@ -425,7 +418,6 @@ def test_sync_oracle_all_none_parameters(oracle_sync_session: OracleSyncDriver) 
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_oracle_none_parameters_with_execute_many(oracle_sync_session: OracleSyncDriver) -> None:
     """Test None parameter handling with execute_many operations."""
 
@@ -488,7 +480,6 @@ def test_sync_oracle_none_parameters_with_execute_many(oracle_sync_session: Orac
 
 
 @pytest.mark.asyncio(loop_scope="function")
-@pytest.mark.xdist_group("oracle")
 async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle LOB (CLOB/RAW) None parameter handling in async operations."""
 
@@ -591,7 +582,6 @@ async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: Or
 
 
 @pytest.mark.asyncio(loop_scope="function")
-@pytest.mark.xdist_group("oracle")
 async def test_async_oracle_json_none_parameter_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle JSON column None parameter handling (Oracle 21+ and constraint-based)."""
 
@@ -706,7 +696,6 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_oracle_parameter_count_validation_with_none(oracle_sync_session: OracleSyncDriver) -> None:
     """Test Oracle parameter count validation when None values are present."""
 

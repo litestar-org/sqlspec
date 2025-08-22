@@ -1,4 +1,8 @@
-"""Insert operation mixins for SQL builders."""
+"""INSERT operation mixins.
+
+Provides mixins for INSERT statement functionality including
+INTO clauses, VALUES clauses, and INSERT FROM SELECT operations.
+"""
 
 from collections.abc import Sequence
 from typing import Any, Optional, TypeVar, Union

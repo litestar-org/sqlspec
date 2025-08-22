@@ -1,4 +1,4 @@
-"""Test OracleDB sync driver implementation with CORE_ROUND_3 architecture."""
+"""Test OracleDB sync driver implementation."""
 
 from typing import Any, Literal
 
@@ -6,6 +6,8 @@ import pytest
 
 from sqlspec.adapters.oracledb import OracleSyncDriver
 from sqlspec.core.result import SQLResult
+
+pytestmark = pytest.mark.xdist_group("oracle")
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
 
@@ -17,7 +19,6 @@ ParamStyle = Literal["positional_binds", "dict_binds"]
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("oracle")
 def test_sync_select(oracle_sync_session: OracleSyncDriver, parameters: Any, style: ParamStyle) -> None:
     """Test synchronous select functionality with Oracle parameter styles."""
 
@@ -66,7 +67,6 @@ def test_sync_select(oracle_sync_session: OracleSyncDriver, parameters: Any, sty
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("oracle")
 def test_sync_select_value(oracle_sync_session: OracleSyncDriver, parameters: Any, style: ParamStyle) -> None:
     """Test synchronous select_value functionality with Oracle parameter styles."""
 
@@ -106,7 +106,6 @@ def test_sync_select_value(oracle_sync_session: OracleSyncDriver, parameters: An
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_insert_with_sequence(oracle_sync_session: OracleSyncDriver) -> None:
     """Test Oracle's sequences and NEXTVAL/CURRVAL functionality."""
 
@@ -161,7 +160,6 @@ def test_sync_insert_with_sequence(oracle_sync_session: OracleSyncDriver) -> Non
     """)
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_execute_many_insert(oracle_sync_session: OracleSyncDriver) -> None:
     """Test execute_many functionality for batch inserts."""
 
@@ -195,7 +193,6 @@ def test_sync_execute_many_insert(oracle_sync_session: OracleSyncDriver) -> None
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_execute_script(oracle_sync_session: OracleSyncDriver) -> None:
     """Test execute_script functionality for multi-statement scripts."""
 
@@ -225,7 +222,6 @@ def test_sync_execute_script(oracle_sync_session: OracleSyncDriver) -> None:
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_update_operation(oracle_sync_session: OracleSyncDriver) -> None:
     """Test UPDATE operations."""
 
@@ -261,7 +257,6 @@ def test_sync_update_operation(oracle_sync_session: OracleSyncDriver) -> None:
     )
 
 
-@pytest.mark.xdist_group("oracle")
 def test_sync_delete_operation(oracle_sync_session: OracleSyncDriver) -> None:
     """Test DELETE operations."""
 

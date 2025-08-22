@@ -1,3 +1,9 @@
+"""Singleton pattern implementation for SQLSpec.
+
+Provides a thread-safe metaclass for implementing the singleton pattern.
+Used for creating classes that should have only one instance per class type.
+"""
+
 import threading
 from typing import Any, TypeVar
 

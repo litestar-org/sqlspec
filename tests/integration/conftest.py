@@ -31,7 +31,7 @@ def bulk_data() -> list[tuple[str, int]]:
 
 @pytest.fixture
 def complex_data() -> list[dict[str, Any]]:
-    """Complex data with various types for comprehensive testing."""
+    """Complex data with various types for testing."""
     return [
         {"name": "test1", "value": 100, "data": {"key": "value1"}, "tags": ["tag1", "tag2"]},
         {"name": "test2", "value": 200, "data": {"key": "value2"}, "tags": ["tag2", "tag3"]},

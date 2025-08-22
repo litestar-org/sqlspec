@@ -8,6 +8,8 @@ import pytest
 
 from sqlspec.utils.text import camelize, check_email, slugify, snake_case
 
+pytestmark = pytest.mark.xdist_group("utils")
+
 
 def test_check_email_valid() -> None:
     """Test check_email with valid email addresses."""
@@ -77,10 +79,6 @@ def test_slugify_edge_cases() -> None:
     assert slugify("---") == ""
     assert slugify("   ") == ""
     assert slugify("test---string") == "test-string"
-
-
-def test_slugify_comprehensive_edge_cases() -> None:
-    """Test slugify with comprehensive edge cases."""
 
     assert slugify("!@#$%^&*()") == ""
     assert slugify("Version 2.0.1") == "version-2-0-1"
@@ -167,6 +165,17 @@ def test_snake_case_edge_cases() -> None:
     assert snake_case("test__string") == "test_string"
     assert snake_case("_test_") == "test"
 
+    assert snake_case("!!!") == ""
+    assert snake_case("...") == ""
+    assert snake_case("___") == ""
+    assert snake_case("---") == ""
+
+    assert snake_case("X") == "x"
+    assert snake_case("1") == "1"
+    assert snake_case("_") == ""
+
+    assert snake_case("   ") == ""
+
 
 def test_snake_case_unicode_handling() -> None:
     """Test snake_case with Unicode characters."""
@@ -183,21 +192,6 @@ def test_snake_case_numbers_and_special_handling() -> None:
 
     assert snake_case("file_name-v2.txt") == "file_name_v2_txt"
     assert snake_case("my@email.com") == "my_email_com"
-
-
-def test_snake_case_comprehensive_edge_cases() -> None:
-    """Test snake_case with comprehensive edge cases."""
-
-    assert snake_case("!!!") == ""
-    assert snake_case("...") == ""
-    assert snake_case("___") == ""
-    assert snake_case("---") == ""
-
-    assert snake_case("X") == "x"
-    assert snake_case("1") == "1"
-    assert snake_case("_") == ""
-
-    assert snake_case("   ") == ""
 
 
 def test_snake_case_caching() -> None:

@@ -1,4 +1,4 @@
-"""Comprehensive tests for loading entire fixtures directory.
+"""Tests for loading entire fixtures directory.
 
 Tests the SQLFileLoader's ability to handle real-world SQL files including:
 - Complex PostgreSQL and MySQL queries
@@ -28,6 +28,8 @@ except ImportError:
             pass
 
     console = MockConsole()
+
+pytestmark = pytest.mark.xdist_group("loader")
 
 
 @pytest.fixture

@@ -1,3 +1,5 @@
+"""Result handling and schema conversion mixins for database drivers."""
+
 import datetime
 import logging
 from collections.abc import Sequence
@@ -41,7 +43,16 @@ _DEFAULT_TYPE_DECODERS: Final[list[tuple[Callable[[Any], bool], Callable[[Any, A
 def _default_msgspec_deserializer(
     target_type: Any, value: Any, type_decoders: "Optional[Sequence[tuple[Any, Any]]]" = None
 ) -> Any:
-    """Default msgspec deserializer with type conversion support."""
+    """Convert msgspec types with type decoder support.
+
+    Args:
+        target_type: Type to convert to
+        value: Value to convert
+        type_decoders: Optional sequence of (predicate, decoder) pairs
+
+    Returns:
+        Converted value or original value if conversion not applicable
+    """
     if type_decoders:
         for predicate, decoder in type_decoders:
             if predicate(target_type):
@@ -74,6 +85,8 @@ def _default_msgspec_deserializer(
 
 @trait
 class ToSchemaMixin:
+    """Mixin providing data transformation methods for various schema types."""
+
     __slots__ = ()
 
     @overload
@@ -114,11 +127,15 @@ class ToSchemaMixin:
     def to_schema(data: Any, *, schema_type: "Optional[type[ModelDTOT]]" = None) -> Any:
         """Convert data to a specified schema type.
 
-        Raises:
-            SQLSpecError if `schema_type` is not a valid type.
+        Args:
+            data: Input data to convert
+            schema_type: Target schema type for conversion
 
         Returns:
-            Converted data in the specified schema type.
+            Converted data in the specified schema type
+
+        Raises:
+            SQLSpecError: If schema_type is not a supported type
         """
         if schema_type is None:
             return data

@@ -1,7 +1,7 @@
-"""Safe SQL query builder with validation and parameter binding.
+"""MERGE statement builder.
 
-This module provides a fluent interface for building SQL queries safely,
-with automatic parameter binding and validation.
+Provides a fluent interface for building SQL MERGE queries with
+parameter binding and validation.
 """
 
 from typing import Any, Optional
@@ -33,8 +33,8 @@ class Merge(
 ):
     """Builder for MERGE statements.
 
-    This builder provides a fluent interface for constructing SQL MERGE statements
-    (also known as UPSERT in some databases) with automatic parameter binding and validation.
+    Constructs SQL MERGE statements (also known as UPSERT in some databases)
+    with parameter binding and validation.
     """
 
     __slots__ = ()

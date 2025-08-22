@@ -8,7 +8,7 @@ AsyncMy Parameter Conversion Requirements:
 - Input: NAMED (%(name)s) -> Output: PYFORMAT (%s)
 - Input: PYFORMAT (%s) -> Output: PYFORMAT (%s) (no conversion)
 
-This implements MySQL's 2-phase parameter processing with CORE_ROUND_3 architecture.
+This implements MySQL's 2-phase parameter processing.
 """
 
 from collections.abc import AsyncGenerator
@@ -19,6 +19,8 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL
+
+pytestmark = pytest.mark.xdist_group("mysql")
 
 
 @pytest.fixture
@@ -66,7 +68,6 @@ async def asyncmy_parameter_session(mysql_service: MySQLService) -> AsyncGenerat
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_qmark_to_pyformat_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test that ? placeholders get converted to %s placeholders."""
     driver = asyncmy_parameter_session
@@ -82,7 +83,6 @@ async def test_asyncmy_qmark_to_pyformat_conversion(asyncmy_parameter_session: A
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_pyformat_no_conversion_needed(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test that %s placeholders are used directly without conversion (native format)."""
     driver = asyncmy_parameter_session
@@ -100,7 +100,6 @@ async def test_asyncmy_pyformat_no_conversion_needed(asyncmy_parameter_session: 
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_named_to_pyformat_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test that %(name)s placeholders get converted to %s placeholders."""
     driver = asyncmy_parameter_session
@@ -119,7 +118,6 @@ async def test_asyncmy_named_to_pyformat_conversion(asyncmy_parameter_session: A
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_sql_object_conversion_validation(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test parameter conversion with SQL object containing different parameter styles."""
     driver = asyncmy_parameter_session
@@ -144,7 +142,6 @@ async def test_asyncmy_sql_object_conversion_validation(asyncmy_parameter_sessio
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_mixed_parameter_types_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test conversion with different parameter value types."""
     driver = asyncmy_parameter_session
@@ -166,7 +163,6 @@ async def test_asyncmy_mixed_parameter_types_conversion(asyncmy_parameter_sessio
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test parameter conversion in execute_many operations."""
     driver = asyncmy_parameter_session
@@ -189,7 +185,6 @@ async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_sessi
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_parameter_conversion_edge_cases(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test edge cases in parameter conversion."""
     driver = asyncmy_parameter_session
@@ -211,7 +206,6 @@ async def test_asyncmy_parameter_conversion_edge_cases(asyncmy_parameter_session
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_parameter_style_consistency_validation(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test that the parameter conversion maintains consistency."""
     driver = asyncmy_parameter_session
@@ -235,7 +229,6 @@ async def test_asyncmy_parameter_style_consistency_validation(asyncmy_parameter_
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test parameter conversion in complex queries with multiple operations."""
     driver = asyncmy_parameter_session
@@ -268,7 +261,6 @@ async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_sess
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_mysql_parameter_style_specifics(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test MySQL-specific parameter handling requirements."""
     driver = asyncmy_parameter_session
@@ -300,7 +292,6 @@ async def test_asyncmy_mysql_parameter_style_specifics(asyncmy_parameter_session
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_2phase_parameter_processing(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test the 2-phase parameter processing system specific to AsyncMy/MySQL."""
     driver = asyncmy_parameter_session
@@ -334,7 +325,6 @@ async def test_asyncmy_2phase_parameter_processing(asyncmy_parameter_session: As
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_none_parameters_pyformat(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test None values with PYFORMAT (%s) parameter style."""
     driver = asyncmy_parameter_session
@@ -374,7 +364,6 @@ async def test_asyncmy_none_parameters_pyformat(asyncmy_parameter_session: Async
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_none_parameters_qmark(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test None values with QMARK (?) parameter style."""
     driver = asyncmy_parameter_session
@@ -408,7 +397,6 @@ async def test_asyncmy_none_parameters_qmark(asyncmy_parameter_session: AsyncmyD
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_none_parameters_named_pyformat(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test None values with named PYFORMAT %(name)s parameter style."""
     driver = asyncmy_parameter_session
@@ -453,7 +441,6 @@ async def test_asyncmy_none_parameters_named_pyformat(asyncmy_parameter_session:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_all_none_parameters(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test when all parameter values are None."""
     driver = asyncmy_parameter_session
@@ -492,7 +479,6 @@ async def test_asyncmy_all_none_parameters(asyncmy_parameter_session: AsyncmyDri
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_none_with_execute_many(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test None values work correctly with execute_many."""
     driver = asyncmy_parameter_session
@@ -538,7 +524,6 @@ async def test_asyncmy_none_with_execute_many(asyncmy_parameter_session: Asyncmy
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_none_parameter_count_validation(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test that parameter count mismatches are properly detected with None values.
 
@@ -586,7 +571,6 @@ async def test_asyncmy_none_parameter_count_validation(asyncmy_parameter_session
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_none_in_where_clauses(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test None values in WHERE clauses work correctly."""
     driver = asyncmy_parameter_session
@@ -631,7 +615,6 @@ async def test_asyncmy_none_in_where_clauses(asyncmy_parameter_session: AsyncmyD
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_none_complex_scenarios(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test complex scenarios with None parameters."""
     driver = asyncmy_parameter_session
@@ -690,7 +673,6 @@ async def test_asyncmy_none_complex_scenarios(asyncmy_parameter_session: Asyncmy
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_none_edge_cases(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test edge cases that might reveal None parameter handling bugs."""
     driver = asyncmy_parameter_session

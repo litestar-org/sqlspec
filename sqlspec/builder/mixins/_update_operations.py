@@ -1,4 +1,8 @@
-"""Update operation mixins for SQL builders."""
+"""UPDATE operation mixins.
+
+Provides mixins for UPDATE statement functionality including
+table specification, SET clauses, and FROM clauses.
+"""
 
 from collections.abc import Mapping
 from typing import Any, Optional, Union, cast

@@ -1,4 +1,4 @@
-"""Comprehensive tests for sqlspec.utils.type_guards module.
+"""Tests for sqlspec.utils.type_guards module.
 
 Tests all protocol type guards, validation functions, edge cases, and performance.
 Uses function-based pytest approach as per CLAUDE.md requirements.
@@ -59,6 +59,8 @@ from sqlspec.utils.type_guards import (
     is_string_literal,
     schema_dump,
 )
+
+pytestmark = pytest.mark.xdist_group("utils")
 
 
 @dataclass

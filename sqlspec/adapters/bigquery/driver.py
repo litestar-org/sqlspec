@@ -50,7 +50,11 @@ _BQ_TYPE_MAP: dict[type, tuple[str, Optional[str]]] = {
 def _get_bq_param_type(value: Any) -> tuple[Optional[str], Optional[str]]:
     """Determine BigQuery parameter type from Python value.
 
-    Returns the appropriate BigQuery type for common Python types.
+    Args:
+        value: Python value to determine BigQuery type for
+
+    Returns:
+        Tuple of (parameter_type, array_element_type)
     """
     if value is None:
         return ("STRING", None)
@@ -88,7 +92,11 @@ _BQ_PARAM_CREATOR_MAP: dict[str, Any] = {
 def _create_bq_parameters(parameters: Any) -> "list[Union[ArrayQueryParameter, ScalarQueryParameter]]":
     """Create BigQuery QueryParameter objects from parameters.
 
-    Handles both dict-style (named) and list-style (positional) parameters.
+    Args:
+        parameters: Dict of named parameters or list of positional parameters
+
+    Returns:
+        List of BigQuery QueryParameter objects
     """
     if not parameters:
         return []
@@ -170,7 +178,16 @@ class BigQueryCursor:
         return self.connection
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _ = (exc_type, exc_val, exc_tb)
+        """Clean up cursor resources including active QueryJobs."""
+        if self.job is not None:
+            try:
+                # Cancel the job if it's still running to free up resources
+                if self.job.state in {"PENDING", "RUNNING"}:
+                    self.job.cancel()
+                # Clear the job reference
+                self.job = None
+            except Exception:
+                logger.exception("Failed to cancel BigQuery job during cursor cleanup")
 
 
 class BigQueryExceptionHandler:
@@ -258,7 +275,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return BigQueryExceptionHandler()
 
     def _copy_job_config_attrs(self, source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
-        """Copy non-private attributes from source config to target config."""
+        """Copy non-private attributes from source config to target config.
+
+        Args:
+            source_config: Configuration to copy attributes from
+            target_config: Configuration to copy attributes to
+        """
         for attr in dir(source_config):
             if attr.startswith("_"):
                 continue
@@ -276,7 +298,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
         connection: Optional[BigQueryConnection] = None,
         job_config: Optional[QueryJobConfig] = None,
     ) -> QueryJob:
-        """Execute a BigQuery job with configuration support."""
+        """Execute a BigQuery job with configuration support.
+
+        Args:
+            sql_str: SQL string to execute
+            parameters: Query parameters
+            connection: Optional BigQuery connection override
+            job_config: Optional job configuration
+
+        Returns:
+            QueryJob object representing the executed job
+        """
         conn = connection or self.connection
 
         final_job_config = QueryJobConfig()
@@ -294,7 +326,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     @staticmethod
     def _rows_to_results(rows_iterator: Any) -> list[dict[str, Any]]:
-        """Convert BigQuery rows to dictionary format."""
+        """Convert BigQuery rows to dictionary format.
+
+        Args:
+            rows_iterator: BigQuery rows iterator
+
+        Returns:
+            List of dictionaries representing the rows
+        """
         return [dict(row) for row in rows_iterator]
 
     def _try_special_handling(self, cursor: "Any", statement: "SQL") -> "Optional[SQLResult]":
@@ -316,7 +355,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def _transform_ast_with_literals(self, sql: str, parameters: Any) -> str:
         """Transform SQL AST by replacing placeholders with literal values.
 
-        Uses AST transformation instead of string manipulation.
+        Args:
+            sql: SQL string to transform
+            parameters: Parameters to embed as literals
+
+        Returns:
+            Transformed SQL string with literals embedded
         """
         if not parameters:
             return sql
@@ -367,7 +411,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return transformed_ast.sql(dialect="bigquery")
 
     def _create_literal_node(self, value: Any) -> "exp.Expression":
-        """Create a SQLGlot literal expression from a Python value."""
+        """Create a SQLGlot literal expression from a Python value.
+
+        Args:
+            value: Python value to convert to SQLGlot literal
+
+        Returns:
+            SQLGlot expression representing the literal value
+        """
         if value is None:
             return exp.Null()
         if isinstance(value, bool):
@@ -389,6 +440,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
+
+        Args:
+            cursor: BigQuery cursor object
+            statement: SQL statement to execute
+
+        Returns:
+            ExecutionResult with script execution details
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -414,6 +472,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
         BigQuery doesn't support traditional execute_many with parameter batching.
         Instead, we generate a script with multiple INSERT statements using
         AST transformation to embed literals safely.
+
+        Args:
+            cursor: BigQuery cursor object
+            statement: SQL statement to execute with multiple parameter sets
+
+        Returns:
+            ExecutionResult with batch execution details
         """
 
         parameters_list = statement.parameters
@@ -441,7 +506,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.
 
-        Handles parameter processing and BigQuery result processing.
+        Args:
+            cursor: BigQuery cursor object
+            statement: SQL statement to execute
+
+        Returns:
+            ExecutionResult with query results and metadata
         """
         sql, parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.job = self._run_query_job(sql, parameters, connection=cursor)

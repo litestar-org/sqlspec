@@ -12,7 +12,7 @@ from sqlspec.core.result import SQLResult
 if TYPE_CHECKING:
     pass
 
-pytestmark = [pytest.mark.psqlpy, pytest.mark.postgres, pytest.mark.integration]
+pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.mark.asyncio
@@ -73,7 +73,7 @@ async def test_connection_error_handling(psqlpy_config: PsqlpyConfig) -> None:
 
 @pytest.mark.asyncio
 async def test_connection_with_core_round_3(psqlpy_config: PsqlpyConfig) -> None:
-    """Test connection integration with CORE_ROUND_3 architecture."""
+    """Test connection integration."""
     from sqlspec.core.statement import SQL
 
     test_sql = SQL("SELECT $1::text as test_value")

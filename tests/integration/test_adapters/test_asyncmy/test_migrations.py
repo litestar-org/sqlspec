@@ -9,8 +9,9 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
+pytestmark = pytest.mark.xdist_group("mysql")
 
-@pytest.mark.xdist_group("migrations")
+
 async def test_asyncmy_migration_full_workflow(mysql_service: MySQLService) -> None:
     """Test full Asyncmy migration workflow: init -> create -> upgrade -> downgrade."""
 
@@ -94,7 +95,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_asyncmy_multiple_migrations_workflow(mysql_service: MySQLService) -> None:
     """Test Asyncmy workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
@@ -215,7 +215,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_asyncmy_migration_current_command(mysql_service: MySQLService) -> None:
     """Test the current migration command shows correct version for Asyncmy."""
 
@@ -278,7 +277,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_asyncmy_migration_error_handling(mysql_service: MySQLService) -> None:
     """Test Asyncmy migration error handling."""
 
@@ -332,7 +330,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_asyncmy_migration_with_transactions(mysql_service: MySQLService) -> None:
     """Test Asyncmy migrations work properly with transactions."""
 

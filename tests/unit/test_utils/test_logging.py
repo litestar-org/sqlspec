@@ -1,4 +1,4 @@
-"""Comprehensive tests for sqlspec.utils.logging module.
+"""Tests for sqlspec.utils.logging module.
 
 Tests for structured logging utilities with correlation ID support.
 Covers logger configuration, structured formatting, and context tracking.
@@ -24,6 +24,8 @@ from sqlspec.utils.logging import (
     log_with_context,
     set_correlation_id,
 )
+
+pytestmark = pytest.mark.xdist_group("utils")
 
 
 def setup_function() -> None:

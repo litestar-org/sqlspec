@@ -9,8 +9,9 @@ import pytest
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("sqlite")
 
-@pytest.mark.aiosqlite
+
 async def test_aiosqlite_none_parameters() -> None:
     """Test that None values in named parameters are handled correctly by AIOSQLite."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -78,7 +79,6 @@ async def test_aiosqlite_none_parameters() -> None:
         assert select_result["nullable_date"] is None
 
 
-@pytest.mark.aiosqlite
 async def test_aiosqlite_none_parameters_qmark_style() -> None:
     """Test None values with QMARK (?) parameter style - AIOSQLite default."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -111,7 +111,6 @@ async def test_aiosqlite_none_parameters_qmark_style() -> None:
         assert select_result["col3"] is None
 
 
-@pytest.mark.aiosqlite
 async def test_aiosqlite_all_none_parameters() -> None:
     """Test when all parameter values are None."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -154,7 +153,6 @@ async def test_aiosqlite_all_none_parameters() -> None:
         assert row["col3"] is None
 
 
-@pytest.mark.aiosqlite
 async def test_aiosqlite_none_with_execute_many() -> None:
     """Test None values work correctly with execute_many."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -196,7 +194,6 @@ async def test_aiosqlite_none_with_execute_many() -> None:
         assert rows[3]["name"] is None and rows[3]["value"] is None
 
 
-@pytest.mark.aiosqlite
 async def test_aiosqlite_none_in_where_clause() -> None:
     """Test None values in WHERE clauses work correctly."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -237,7 +234,6 @@ async def test_aiosqlite_none_in_where_clause() -> None:
         assert len(none_result.data) == 4  # All rows because condition is always true
 
 
-@pytest.mark.aiosqlite
 async def test_aiosqlite_none_complex_parameter_scenarios() -> None:
     """Test complex scenarios with None parameters that might cause issues."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -298,7 +294,6 @@ async def test_aiosqlite_none_complex_parameter_scenarios() -> None:
         assert verify_result["col6"] == '["array", "with", "values"]'
 
 
-@pytest.mark.aiosqlite
 async def test_aiosqlite_none_parameter_edge_cases() -> None:
     """Test edge cases that might reveal parameter handling bugs."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -345,7 +340,6 @@ async def test_aiosqlite_none_parameter_edge_cases() -> None:
         assert all_results.data[0]["count"] == 5
 
 
-@pytest.mark.aiosqlite
 async def test_aiosqlite_parameter_count_mismatch_with_none() -> None:
     """Test that parameter count mismatches are properly detected even when None values are involved.
 

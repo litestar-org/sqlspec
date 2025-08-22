@@ -1,8 +1,7 @@
 """ADBC driver implementation for Arrow Database Connectivity.
 
-Provides ADBC driver integration with multi-dialect database connections,
-Arrow-native data handling with type coercion, parameter style conversion
-for different database backends, and transaction management.
+Provides database connectivity through ADBC with support for multiple
+database dialects, parameter style conversion, and transaction management.
 """
 
 import contextlib
@@ -61,8 +60,6 @@ def _count_placeholders(expression: Any) -> int:
     For QMARK (?) style: counts total occurrences (each ? is a separate parameter)
     For named (:name) style: counts unique parameter names
 
-    Supports complex SQL including filters, GROUP BY, HAVING, ORDER BY, LIMIT/OFFSET, and pagination.
-
     Args:
         expression: SQLGlot AST expression
 
@@ -104,43 +101,40 @@ def _count_placeholders(expression: Any) -> int:
     return qmark_count
 
 
-def _adbc_ast_transformer(expression: Any, parameters: Any, dialect: str = "postgres") -> tuple[Any, Any]:
-    """AST transformer for NULL parameter handling.
+def _is_execute_many_parameters(parameters: Any) -> bool:
+    """Check if parameters are in execute_many format (list/tuple of lists/tuples)."""
+    return isinstance(parameters, (list, tuple)) and len(parameters) > 0 and isinstance(parameters[0], (list, tuple))
 
-    For PostgreSQL, replaces NULL parameter placeholders with NULL literals
-    in the AST to prevent Arrow from inferring 'na' types which cause binding errors.
 
-    Validates parameter count before transformation to prevent silent parameter mismatches.
-    Supports complex SQL with filters, GROUP BY, HAVING, ORDER BY, LIMIT/OFFSET, and pagination.
-
-    Args:
-        expression: SQLGlot AST expression parsed with proper dialect
-        parameters: Parameter values that may contain None
-        dialect: SQLGlot dialect used for parsing (default: "postgres")
-
-    Returns:
-        Tuple of (modified_expression, cleaned_parameters)
-
-    Raises:
-        SQLSpecError: If parameter count doesn't match placeholder count
-    """
-    if not parameters:
-        return expression, parameters
-
-    # Validate parameter count before transformation
+def _validate_parameter_counts(expression: Any, parameters: Any, dialect: str) -> None:
+    """Validate parameter count against placeholder count in SQL."""
     placeholder_count = _count_placeholders(expression)
-    param_count = (
-        len(parameters)
-        if isinstance(parameters, (list, tuple))
-        else len(parameters)
-        if isinstance(parameters, dict)
-        else 0
-    )
+    is_execute_many = _is_execute_many_parameters(parameters)
 
-    if param_count != placeholder_count:
-        msg = f"Parameter count mismatch: {param_count} parameters provided but {placeholder_count} placeholders in SQL (dialect: {dialect})"
-        raise SQLSpecError(msg)
+    if is_execute_many:
+        # For execute_many, validate each inner parameter set
+        for i, param_set in enumerate(parameters):
+            param_count = len(param_set) if isinstance(param_set, (list, tuple)) else 0
+            if param_count != placeholder_count:
+                msg = f"Parameter count mismatch in set {i}: {param_count} parameters provided but {placeholder_count} placeholders in SQL (dialect: {dialect})"
+                raise SQLSpecError(msg)
+    else:
+        # For single execution, validate the parameter set directly
+        param_count = (
+            len(parameters)
+            if isinstance(parameters, (list, tuple))
+            else len(parameters)
+            if isinstance(parameters, dict)
+            else 0
+        )
 
+        if param_count != placeholder_count:
+            msg = f"Parameter count mismatch: {param_count} parameters provided but {placeholder_count} placeholders in SQL (dialect: {dialect})"
+            raise SQLSpecError(msg)
+
+
+def _find_null_positions(parameters: Any) -> set[int]:
+    """Find positions of None values in parameters for single execution."""
     null_positions = set()
     if isinstance(parameters, (list, tuple)):
         for i, param in enumerate(parameters):
@@ -155,7 +149,37 @@ def _adbc_ast_transformer(expression: Any, parameters: Any, dialect: str = "post
                         null_positions.add(param_num - 1)
                 except ValueError:
                     pass
+    return null_positions
 
+
+def _adbc_ast_transformer(expression: Any, parameters: Any, dialect: str = "postgres") -> tuple[Any, Any]:
+    """Transform AST to handle NULL parameters.
+
+    Replaces NULL parameter placeholders with NULL literals in the AST
+    to prevent Arrow from inferring 'na' types which cause binding errors.
+    Validates parameter count before transformation.
+
+    Args:
+        expression: SQLGlot AST expression parsed with proper dialect
+        parameters: Parameter values that may contain None
+        dialect: SQLGlot dialect used for parsing (default: "postgres")
+
+    Returns:
+        Tuple of (modified_expression, cleaned_parameters)
+    """
+    if not parameters:
+        return expression, parameters
+
+    # Validate parameter count before transformation
+    _validate_parameter_counts(expression, parameters, dialect)
+
+    # For execute_many operations, skip AST transformation as different parameter
+    # sets may have None values in different positions, making transformation complex
+    if _is_execute_many_parameters(parameters):
+        return expression, parameters
+
+    # Find positions of None values for single execution
+    null_positions = _find_null_positions(parameters)
     if not null_positions:
         return expression, parameters
 
@@ -255,14 +279,28 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
 
 
 def _convert_array_for_postgres_adbc(value: Any) -> Any:
-    """Convert array values for PostgreSQL compatibility."""
+    """Convert array values for PostgreSQL compatibility.
+
+    Args:
+        value: Value to convert
+
+    Returns:
+        Converted value (tuples become lists)
+    """
     if isinstance(value, tuple):
         return list(value)
     return value
 
 
 def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
-    """Get type coercion map for Arrow type handling."""
+    """Get type coercion map for Arrow type handling.
+
+    Args:
+        dialect: Database dialect name
+
+    Returns:
+        Mapping of Python types to conversion functions
+    """
     type_map = {
         datetime.datetime: lambda x: x,
         datetime.date: lambda x: x,
@@ -352,9 +390,8 @@ class AdbcExceptionHandler:
 class AdbcDriver(SyncDriverAdapterBase):
     """ADBC driver for Arrow Database Connectivity.
 
-    Provides database connectivity through ADBC with multi-database dialect
-    support, Arrow-native data handling with type coercion, parameter style
-    conversion for different backends, and transaction management.
+    Provides database connectivity through ADBC with support for multiple
+    database dialects, parameter style conversion, and transaction management.
     """
 
     __slots__ = ("_detected_dialect", "dialect")
@@ -379,7 +416,11 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     @staticmethod
     def _ensure_pyarrow_installed() -> None:
-        """Ensure PyArrow is installed."""
+        """Ensure PyArrow is installed.
+
+        Raises:
+            MissingDependencyError: If PyArrow is not installed
+        """
         from sqlspec.typing import PYARROW_INSTALLED
 
         if not PYARROW_INSTALLED:
@@ -387,7 +428,14 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:
-        """Detect database dialect from connection information."""
+        """Detect database dialect from connection information.
+
+        Args:
+            connection: ADBC connection
+
+        Returns:
+            Detected dialect name (defaults to 'postgres')
+        """
         try:
             driver_info = connection.adbc_get_info()
             vendor_name = driver_info.get("vendor_name", "").lower()
@@ -404,31 +452,53 @@ class AdbcDriver(SyncDriverAdapterBase):
         return "postgres"
 
     def _handle_postgres_rollback(self, cursor: "Cursor") -> None:
-        """Execute rollback for PostgreSQL after transaction failure."""
+        """Execute rollback for PostgreSQL after transaction failure.
+
+        Args:
+            cursor: Database cursor
+        """
         if self.dialect == "postgres":
             with contextlib.suppress(Exception):
                 cursor.execute("ROLLBACK")
                 logger.debug("PostgreSQL rollback executed after transaction failure")
 
     def _handle_postgres_empty_parameters(self, parameters: Any) -> Any:
-        """Process empty parameters for PostgreSQL compatibility."""
+        """Process empty parameters for PostgreSQL compatibility.
+
+        Args:
+            parameters: Parameter values
+
+        Returns:
+            Processed parameters
+        """
         if self.dialect == "postgres" and isinstance(parameters, dict) and not parameters:
             return None
         return parameters
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
-        """Create context manager for cursor."""
+        """Create context manager for cursor.
+
+        Args:
+            connection: Database connection
+
+        Returns:
+            Cursor context manager
+        """
         return AdbcCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
-        """Handle database-specific exceptions and wrap them appropriately."""
+        """Handle database-specific exceptions and wrap them appropriately.
+
+        Returns:
+            Exception handler context manager
+        """
         return AdbcExceptionHandler()
 
     def _try_special_handling(self, cursor: "Cursor", statement: SQL) -> "Optional[SQLResult]":
         """Handle special operations.
 
         Args:
-            cursor: Cursor object
+            cursor: Database cursor
             statement: SQL statement to analyze
 
         Returns:
@@ -438,7 +508,15 @@ class AdbcDriver(SyncDriverAdapterBase):
         return None
 
     def _execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets."""
+        """Execute SQL with multiple parameter sets.
+
+        Args:
+            cursor: Database cursor
+            statement: SQL statement to execute
+
+        Returns:
+            Execution result with row counts
+        """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         try:
@@ -468,7 +546,15 @@ class AdbcDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
     def _execute_statement(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
-        """Execute single SQL statement."""
+        """Execute single SQL statement.
+
+        Args:
+            cursor: Database cursor
+            statement: SQL statement to execute
+
+        Returns:
+            Execution result with data or row count
+        """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         try:
@@ -500,7 +586,15 @@ class AdbcDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def _execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script."""
+        """Execute SQL script containing multiple statements.
+
+        Args:
+            cursor: Database cursor
+            statement: SQL script to execute
+
+        Returns:
+            Execution result with statement counts
+        """
         if statement.is_script:
             sql = statement._raw_sql
             prepared_parameters: list[Any] = []

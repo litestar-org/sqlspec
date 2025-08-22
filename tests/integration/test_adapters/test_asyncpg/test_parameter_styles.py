@@ -12,13 +12,12 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("postgres")
+
 
 @pytest.fixture(scope="function")
 async def asyncpg_parameters_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
-    """Create an AsyncPG session for parameter style testing.
-
-    Optimized to avoid connection pool exhaustion.
-    """
+    """Create an AsyncPG session for parameter style testing."""
     config = AsyncpgConfig(
         pool_config={
             "host": postgres_service.host,
@@ -58,7 +57,6 @@ async def asyncpg_parameters_session(postgres_service: PostgresService) -> "Asyn
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 @pytest.mark.parametrize("parameters,expected_count", [(("test1",), 1), (["test1"], 1)])
 async def test_asyncpg_numeric_parameter_types(
     asyncpg_parameters_session: AsyncpgDriver, parameters: Any, expected_count: int
@@ -74,7 +72,6 @@ async def test_asyncpg_numeric_parameter_types(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_numeric_parameter_style(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test PostgreSQL numeric parameter style with AsyncPG."""
     result = await asyncpg_parameters_session.execute("SELECT * FROM test_parameters WHERE name = $1", ("test1",))
@@ -86,7 +83,6 @@ async def test_asyncpg_numeric_parameter_style(asyncpg_parameters_session: Async
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_multiple_parameters_numeric(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test queries with multiple parameters using numeric style."""
     result = await asyncpg_parameters_session.execute(
@@ -102,7 +98,6 @@ async def test_asyncpg_multiple_parameters_numeric(asyncpg_parameters_session: A
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_null_parameters(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test handling of NULL parameters on AsyncPG."""
 
@@ -126,7 +121,6 @@ async def test_asyncpg_null_parameters(asyncpg_parameters_session: AsyncpgDriver
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_escaping(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameter escaping prevents SQL injection."""
 
@@ -145,7 +139,6 @@ async def test_asyncpg_parameter_escaping(asyncpg_parameters_session: AsyncpgDri
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_with_like(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with LIKE operations."""
     result = await asyncpg_parameters_session.execute("SELECT * FROM test_parameters WHERE name LIKE $1", ("test%",))
@@ -162,7 +155,6 @@ async def test_asyncpg_parameter_with_like(asyncpg_parameters_session: AsyncpgDr
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_with_any_array(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL ANY and arrays."""
 
@@ -184,7 +176,6 @@ async def test_asyncpg_parameter_with_any_array(asyncpg_parameters_session: Asyn
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_with_sql_object(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with SQL object."""
     from sqlspec.core.statement import SQL
@@ -199,7 +190,6 @@ async def test_asyncpg_parameter_with_sql_object(asyncpg_parameters_session: Asy
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_data_types(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test different parameter data types with AsyncPG."""
 
@@ -237,7 +227,6 @@ async def test_asyncpg_parameter_data_types(asyncpg_parameters_session: AsyncpgD
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_edge_cases(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test edge cases for AsyncPG parameters."""
 
@@ -262,7 +251,6 @@ async def test_asyncpg_parameter_edge_cases(asyncpg_parameters_session: AsyncpgD
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_with_postgresql_functions(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL functions."""
 
@@ -289,7 +277,6 @@ async def test_asyncpg_parameter_with_postgresql_functions(asyncpg_parameters_se
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_with_json(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL JSON operations."""
 
@@ -302,8 +289,6 @@ async def test_asyncpg_parameter_with_json(asyncpg_parameters_session: AsyncpgDr
         TRUNCATE TABLE test_json RESTART IDENTITY;
     """)
 
-    import json
-
     json_data = [
         ("JSON 1", {"type": "test", "value": 100, "active": True}),
         ("JSON 2", {"type": "prod", "value": 200, "active": False}),
@@ -312,7 +297,7 @@ async def test_asyncpg_parameter_with_json(asyncpg_parameters_session: AsyncpgDr
 
     for name, metadata in json_data:
         await asyncpg_parameters_session.execute(
-            "INSERT INTO test_json (name, metadata) VALUES ($1, $2)", (name, json.dumps(metadata))
+            "INSERT INTO test_json (name, metadata) VALUES ($1, $2)", (name, metadata)
         )
 
     result = await asyncpg_parameters_session.execute(
@@ -325,7 +310,6 @@ async def test_asyncpg_parameter_with_json(asyncpg_parameters_session: AsyncpgDr
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_with_arrays(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL array operations."""
 
@@ -362,7 +346,6 @@ async def test_asyncpg_parameter_with_arrays(asyncpg_parameters_session: Asyncpg
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_with_window_functions(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL window functions."""
 
@@ -399,7 +382,6 @@ async def test_asyncpg_parameter_with_window_functions(asyncpg_parameters_sessio
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_none_values_in_named_parameters(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test that None values in named parameters are handled correctly."""
     await asyncpg_parameters_session.execute("""
@@ -463,7 +445,6 @@ async def test_asyncpg_none_values_in_named_parameters(asyncpg_parameters_sessio
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_all_none_parameters(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test when all parameter values are None."""
     await asyncpg_parameters_session.execute("""
@@ -497,10 +478,8 @@ async def test_asyncpg_all_none_parameters(asyncpg_parameters_session: AsyncpgDr
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("postgres")
 async def test_asyncpg_jsonb_none_parameters(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test JSONB column None parameter handling comprehensively."""
-    import json
 
     await asyncpg_parameters_session.execute("""
         CREATE TABLE IF NOT EXISTS test_jsonb_none (
@@ -532,17 +511,14 @@ async def test_asyncpg_jsonb_none_parameters(asyncpg_parameters_session: Asyncpg
 
     result2 = await asyncpg_parameters_session.execute(
         "INSERT INTO test_jsonb_none (name, metadata, config, tags) VALUES ($1, $2, $3, $4) RETURNING id, metadata, config, tags",
-        ("test_mixed_jsonb", json.dumps(json_data), None, json.dumps(complex_json)),
+        ("test_mixed_jsonb", json_data, None, complex_json),
     )
 
     assert isinstance(result2, SQLResult)
     assert result2 is not None
     assert len(result2) == 1
-    # AsyncPG automatically parses JSONB, so we get back dict objects
-    assert isinstance(result2[0]["metadata"], dict)
     assert result2[0]["metadata"]["user_id"] == 123
     assert result2[0]["config"] is None
-    assert isinstance(result2[0]["tags"], dict)
     assert result2[0]["tags"]["total"] == 2
 
     # Test 3: Query JSONB columns with None values using positional parameters
@@ -566,9 +542,9 @@ async def test_asyncpg_jsonb_none_parameters(asyncpg_parameters_session: Asyncpg
     # Test 5: Insert using named parameters with JSONB and None
     params = {
         "name": "named_jsonb_test",
-        "metadata": json.dumps({"type": "test", "version": "1.0"}),
+        "metadata": {"type": "test", "version": "1.0"},
         "config": None,
-        "tags": json.dumps(["tag1", "tag2", "tag3"]),
+        "tags": ["tag1", "tag2", "tag3"],
     }
 
     result5 = await asyncpg_parameters_session.execute(
@@ -583,14 +559,17 @@ async def test_asyncpg_jsonb_none_parameters(asyncpg_parameters_session: Asyncpg
     assert result5 is not None
     assert len(result5) == 1
     assert result5[0]["name"] == "named_jsonb_test"
+
     assert result5[0]["metadata"]["type"] == "test"
+
     assert result5[0]["config"] is None
+
     assert result5[0]["tags"] == ["tag1", "tag2", "tag3"]
 
     # Test 6: Update JSONB columns with None values
     await asyncpg_parameters_session.execute(
         "UPDATE test_jsonb_none SET metadata = $1, config = $2 WHERE name = $3",
-        (None, json.dumps({"updated": True}), "named_jsonb_test"),
+        (None, {"updated": True}, "named_jsonb_test"),
     )
 
     result6 = await asyncpg_parameters_session.execute(
@@ -601,6 +580,7 @@ async def test_asyncpg_jsonb_none_parameters(asyncpg_parameters_session: Asyncpg
     assert result6 is not None
     assert len(result6) == 1
     assert result6[0]["metadata"] is None
+
     assert result6[0]["config"]["updated"] is True
 
     # Test 7: Test JSONB operations with None parameters
@@ -616,7 +596,7 @@ async def test_asyncpg_jsonb_none_parameters(asyncpg_parameters_session: Asyncpg
     # Test 8: Test COALESCE with JSONB and None values
     result8 = await asyncpg_parameters_session.execute(
         "SELECT name, COALESCE(metadata, $1::jsonb) as metadata_or_default FROM test_jsonb_none WHERE name = $2",
-        (json.dumps({"default": "value"}), "test_none_jsonb"),
+        ({"default": "value"}, "test_none_jsonb"),
     )
 
     assert isinstance(result8, SQLResult)
@@ -626,8 +606,8 @@ async def test_asyncpg_jsonb_none_parameters(asyncpg_parameters_session: Asyncpg
 
     # Test 9: execute_many with JSONB None values
     batch_data = [
-        ("batch1", json.dumps({"batch": 1}), None, json.dumps(["batch"])),
-        ("batch2", None, json.dumps({"config": "batch2"}), None),
+        ("batch1", {"batch": 1}, None, ["batch"]),
+        ("batch2", None, {"config": "batch2"}, None),
         ("batch3", None, None, None),
     ]
 
@@ -649,14 +629,18 @@ async def test_asyncpg_jsonb_none_parameters(asyncpg_parameters_session: Asyncpg
 
     # Verify batch1
     assert result10[0]["name"] == "batch1"
+
     assert result10[0]["metadata"]["batch"] == 1
     assert result10[0]["config"] is None
+
     assert result10[0]["tags"] == ["batch"]
 
     # Verify batch2
     assert result10[1]["name"] == "batch2"
     assert result10[1]["metadata"] is None
+
     assert result10[1]["config"]["config"] == "batch2"
+
     assert result10[1]["tags"] is None
 
     # Verify batch3

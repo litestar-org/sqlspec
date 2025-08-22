@@ -3,8 +3,9 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
+pytestmark = pytest.mark.xdist_group("postgres")
 
-@pytest.mark.xdist_group("postgres")
+
 async def test_async_connection(postgres_service: PostgresService) -> None:
     """Test asyncpg connection components."""
     # Test direct connection

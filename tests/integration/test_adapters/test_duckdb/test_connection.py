@@ -7,6 +7,8 @@ import pytest
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("duckdb")
+
 
 def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     """Create a DuckDB config with permissive SQL settings."""
@@ -38,7 +40,6 @@ def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     return DuckDBConfig(**kwargs)
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_basic_connection() -> None:
     """Test basic DuckDB connection functionality."""
     config = create_permissive_config()
@@ -63,7 +64,6 @@ def test_basic_connection() -> None:
         assert result in (1, "1")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_memory_database_connection() -> None:
     """Test DuckDB in-memory database connection."""
     config = create_permissive_config()
@@ -80,7 +80,6 @@ def test_memory_database_connection() -> None:
         assert select_result.data[0]["name"] == "test"
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_connection_with_performance_settings() -> None:
     """Test DuckDB connection with performance optimization settings."""
     config = create_permissive_config(memory_limit="512MB", threads=2, enable_object_cache=True)
@@ -91,7 +90,6 @@ def test_connection_with_performance_settings() -> None:
         assert result.data[0]["test_value"] in (42, "42")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_connection_with_data_processing_settings() -> None:
     """Test DuckDB connection with data processing settings."""
     config = create_permissive_config(
@@ -112,7 +110,6 @@ def test_connection_with_data_processing_settings() -> None:
         assert result.data[2]["value"] == 10
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_connection_with_instrumentation() -> None:
     """Test DuckDB connection with instrumentation configuration."""
     config = DuckDBConfig(pool_config={"database": ":memory:"})
@@ -123,7 +120,6 @@ def test_connection_with_instrumentation() -> None:
         assert result.data[0]["test_value"] == 42
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_connection_with_hook() -> None:
     """Test DuckDB connection with connection creation hook."""
     hook_executed = False
@@ -146,7 +142,6 @@ def test_connection_with_hook() -> None:
         assert setting_value == 1 or setting_value == "1"
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_connection_read_only_mode() -> None:
     """Test DuckDB connection in read-only mode."""
     import os
@@ -189,7 +184,6 @@ def test_connection_read_only_mode() -> None:
             os.unlink(temp_db_path)
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_connection_with_logging_settings() -> None:
     """Test DuckDB connection with logging configuration."""
     config = create_permissive_config()
@@ -200,7 +194,6 @@ def test_connection_with_logging_settings() -> None:
         assert result.data[0]["message"] == "logging_test"
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_connection_with_extension_settings() -> None:
     """Test DuckDB connection with extension-related settings."""
     config = create_permissive_config(
@@ -213,7 +206,6 @@ def test_connection_with_extension_settings() -> None:
         assert result.data[0]["message"] == "extension_test"
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_multiple_concurrent_connections() -> None:
     """Test multiple concurrent DuckDB connections."""
     config1 = DuckDBConfig()
@@ -245,7 +237,6 @@ def test_multiple_concurrent_connections() -> None:
             pass
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_config_with_pool_config_parameter() -> None:
     """Test that DuckDBConfig correctly accepts pool_config parameter."""
 
@@ -271,7 +262,6 @@ def test_config_with_pool_config_parameter() -> None:
         config._close_pool()
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_config_memory_database_shared_conversion() -> None:
     """Test that :memory: databases are converted to shared memory."""
 
@@ -289,7 +279,6 @@ def test_config_memory_database_shared_conversion() -> None:
         config._close_pool()
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_config_empty_database_conversion() -> None:
     """Test that empty database string is converted to shared memory."""
 
@@ -307,7 +296,6 @@ def test_config_empty_database_conversion() -> None:
         config._close_pool()
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_config_default_database_shared() -> None:
     """Test that default database is shared memory."""
 
@@ -325,7 +313,6 @@ def test_config_default_database_shared() -> None:
         config._close_pool()
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_config_consistency_with_other_adapters() -> None:
     """Test that DuckDB config behaves consistently with SQLite/aiosqlite."""
 

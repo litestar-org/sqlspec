@@ -44,6 +44,7 @@ def duckdb_session() -> Generator[AdbcDriver, None, None]:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
     """Test PostgreSQL-specific features with ADBC."""
     postgresql_session.execute_script("""
@@ -98,7 +99,8 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
     postgresql_session.execute_script("DROP TABLE IF EXISTS pg_test")
 
 
-@pytest.mark.xdist_group("adbc_sqlite")
+@pytest.mark.xdist_group("sqlite")
+@pytest.mark.adbc
 def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
     """Test SQLite-specific features with ADBC."""
     sqlite_session.execute_script("""
@@ -158,7 +160,8 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
     assert func_result.data[0]["version"] is not None
 
 
-@pytest.mark.xdist_group("adbc_duckdb")
+@pytest.mark.xdist_group("duckdb")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
     """Test DuckDB-specific features with ADBC."""
@@ -216,6 +219,7 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_postgresql_dialect_detection(postgresql_session: AdbcDriver) -> None:
     """Test PostgreSQL dialect detection in ADBC driver."""
     assert hasattr(postgresql_session, "dialect")
@@ -227,7 +231,8 @@ def test_postgresql_dialect_detection(postgresql_session: AdbcDriver) -> None:
     assert result.data[0]["param_value"] == "postgresql_test"
 
 
-@pytest.mark.xdist_group("adbc_sqlite")
+@pytest.mark.xdist_group("sqlite")
+@pytest.mark.adbc
 def test_sqlite_dialect_detection(sqlite_session: AdbcDriver) -> None:
     """Test SQLite dialect detection in ADBC driver."""
     assert hasattr(sqlite_session, "dialect")
@@ -239,7 +244,8 @@ def test_sqlite_dialect_detection(sqlite_session: AdbcDriver) -> None:
     assert result.data[0]["param_value"] == "test_sqlite"
 
 
-@pytest.mark.xdist_group("adbc_duckdb")
+@pytest.mark.xdist_group("duckdb")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 def test_duckdb_dialect_detection(duckdb_session: AdbcDriver) -> None:
     """Test DuckDB dialect detection in ADBC driver."""

@@ -125,7 +125,7 @@ class SQLSpec:
             config: The configuration instance to add.
 
         Returns:
-            The type of the added configuration, annotated with its ID for potential use in type systems.
+            The type of the added configuration for use as a registry key.
         """
         config_type = type(config)
         if config_type in self._configs:
@@ -330,7 +330,6 @@ class SQLSpec:
             name: The configuration name or instance.
             *args: Positional arguments to pass to the config's provide_connection.
             **kwargs: Keyword arguments to pass to the config's provide_connection.
-
 
         Returns:
             A sync or async context manager yielding a connection.
@@ -564,12 +563,12 @@ class SQLSpec:
         """Update cache configuration with partial values.
 
         Args:
-            sql_cache_size: Size of the SQL statement cache
-            fragment_cache_size: Size of the AST fragment cache
-            optimized_cache_size: Size of the optimized expression cache
-            sql_cache_enabled: Enable/disable SQL cache
-            fragment_cache_enabled: Enable/disable fragment cache
-            optimized_cache_enabled: Enable/disable optimized cache
+            sql_cache_size: Size of the SQL statement cache.
+            fragment_cache_size: Size of the AST fragment cache.
+            optimized_cache_size: Size of the optimized expression cache.
+            sql_cache_enabled: Enable/disable SQL cache.
+            fragment_cache_enabled: Enable/disable fragment cache.
+            optimized_cache_enabled: Enable/disable optimized cache.
         """
         current_config = get_cache_config()
         update_cache_config(
@@ -627,7 +626,7 @@ class SQLSpec:
         """Get a SQL object by name.
 
         Args:
-            name: Name of the statement (from -- name: in SQL file).
+            name: Name of the statement from SQL file comments.
                   Hyphens in names are converted to underscores.
 
         Returns:
@@ -657,7 +656,7 @@ class SQLSpec:
             name: Query name to check.
 
         Returns:
-            True if query exists.
+            True if the query exists in the loader.
         """
         if self._sql_loader is None:
             return False
@@ -672,7 +671,8 @@ class SQLSpec:
     def reload_sql_files(self) -> None:
         """Reload all SQL files.
 
-        Note: This clears the cache and requires calling load_sql_files again.
+        Note:
+            This clears the cache and requires calling load_sql_files again.
         """
         if self._sql_loader is not None:
             self._sql_loader.clear_cache()

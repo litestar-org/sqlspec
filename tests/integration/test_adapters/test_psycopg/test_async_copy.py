@@ -10,6 +10,8 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("postgres")
+
 
 @pytest.fixture
 async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGenerator[PsycopgAsyncDriver, None]:
@@ -43,7 +45,6 @@ async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGener
         await config.close_pool()
 
 
-@pytest.mark.xdist_group("postgres")
 @pytest.mark.asyncio
 async def test_psycopg_async_copy_operations_positional(psycopg_async_session: PsycopgAsyncDriver) -> None:
     """Test PostgreSQL COPY operations with async psycopg driver using positional parameters."""
@@ -72,7 +73,6 @@ async def test_psycopg_async_copy_operations_positional(psycopg_async_session: P
     await psycopg_async_session.execute_script("DROP TABLE copy_test_async")
 
 
-@pytest.mark.xdist_group("postgres")
 @pytest.mark.asyncio
 async def test_psycopg_async_copy_operations_keyword(psycopg_async_session: PsycopgAsyncDriver) -> None:
     """Test PostgreSQL COPY operations with async psycopg driver using keyword parameters."""
@@ -101,7 +101,6 @@ async def test_psycopg_async_copy_operations_keyword(psycopg_async_session: Psyc
     await psycopg_async_session.execute_script("DROP TABLE copy_test_async_kw")
 
 
-@pytest.mark.xdist_group("postgres")
 @pytest.mark.asyncio
 async def test_psycopg_async_copy_csv_format_positional(psycopg_async_session: PsycopgAsyncDriver) -> None:
     """Test PostgreSQL COPY operations with CSV format using async driver and positional parameters."""
@@ -129,7 +128,6 @@ async def test_psycopg_async_copy_csv_format_positional(psycopg_async_session: P
     await psycopg_async_session.execute_script("DROP TABLE copy_csv_async_pos")
 
 
-@pytest.mark.xdist_group("postgres")
 @pytest.mark.asyncio
 async def test_psycopg_async_copy_csv_format_keyword(psycopg_async_session: PsycopgAsyncDriver) -> None:
     """Test PostgreSQL COPY operations with CSV format using async driver and keyword parameters."""

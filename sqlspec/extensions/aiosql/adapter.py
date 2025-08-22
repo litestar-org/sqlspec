@@ -2,7 +2,7 @@
 
 This module provides adapter classes that implement the aiosql adapter protocols
 while using SQLSpec drivers under the hood. This enables users to load SQL queries
-from files using aiosql while leveraging all of SQLSpec's advanced features.
+from files using aiosql while using SQLSpec's features for execution and type mapping.
 """
 
 import logging

@@ -1,7 +1,7 @@
-"""Safe SQL query builder with validation and parameter binding.
+"""DELETE statement builder.
 
-This module provides a fluent interface for building SQL queries safely,
-with automatic parameter binding and validation.
+Provides a fluent interface for building SQL DELETE queries with
+parameter binding and validation.
 """
 
 from typing import Any, Optional
@@ -19,9 +19,8 @@ __all__ = ("Delete",)
 class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromClauseMixin):
     """Builder for DELETE statements.
 
-    This builder provides a fluent interface for constructing SQL DELETE statements
-    with automatic parameter binding and validation. It does not support JOIN
-    operations to maintain cross-dialect compatibility and safety.
+    Constructs SQL DELETE statements with parameter binding and validation.
+    Does not support JOIN operations to maintain cross-dialect compatibility.
     """
 
     __slots__ = ("_table",)

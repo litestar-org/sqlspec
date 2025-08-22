@@ -9,8 +9,9 @@ from pytest_databases.docker.oracle import OracleService
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands, MigrationCommands
 
+pytestmark = pytest.mark.xdist_group("oracle")
 
-@pytest.mark.xdist_group("migrations")
+
 def test_oracledb_sync_migration_full_workflow(oracle_23ai_service: OracleService) -> None:
     """Test full OracleDB sync migration workflow: init -> create -> upgrade -> downgrade."""
 
@@ -91,7 +92,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_oracledb_async_migration_full_workflow(oracle_23ai_service: OracleService) -> None:
     """Test full OracleDB async migration workflow: init -> create -> upgrade -> downgrade."""
 
@@ -174,7 +174,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 def test_oracledb_sync_multiple_migrations_workflow(oracle_23ai_service: OracleService) -> None:
     """Test OracleDB sync workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
@@ -289,7 +288,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_oracledb_async_multiple_migrations_workflow(oracle_23ai_service: OracleService) -> None:
     """Test OracleDB async workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
@@ -406,7 +404,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 def test_oracledb_sync_migration_current_command(oracle_23ai_service: OracleService) -> None:
     """Test the current migration command shows correct version for OracleDB sync."""
 
@@ -468,7 +465,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_oracledb_async_migration_current_command(oracle_23ai_service: OracleService) -> None:
     """Test the current migration command shows correct version for OracleDB async."""
 
@@ -532,7 +528,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 def test_oracledb_sync_migration_error_handling(oracle_23ai_service: OracleService) -> None:
     """Test OracleDB sync migration error handling."""
 
@@ -585,7 +580,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_oracledb_async_migration_error_handling(oracle_23ai_service: OracleService) -> None:
     """Test OracleDB async migration error handling."""
 
@@ -640,7 +634,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 def test_oracledb_sync_migration_with_transactions(oracle_23ai_service: OracleService) -> None:
     """Test OracleDB sync migrations work properly with transactions."""
 
@@ -725,7 +718,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_oracledb_async_migration_with_transactions(oracle_23ai_service: OracleService) -> None:
     """Test OracleDB async migrations work properly with transactions."""
 

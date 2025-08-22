@@ -10,6 +10,8 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver, psycopg_statement_config
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("postgres")
+
 
 @pytest.fixture
 def psycopg_parameters_session(postgres_service: PostgresService) -> "Generator[PsycopgSyncDriver, None, None]":
@@ -57,7 +59,6 @@ def psycopg_parameters_session(postgres_service: PostgresService) -> "Generator[
         config.close_pool()
 
 
-@pytest.mark.xdist_group("postgres")
 @pytest.mark.parametrize("parameters,expected_count", [(("test1"), 1), (["test1"], 1)])
 def test_psycopg_pyformat_parameter_types(
     psycopg_parameters_session: PsycopgSyncDriver, parameters: Any, expected_count: int
@@ -72,7 +73,6 @@ def test_psycopg_pyformat_parameter_types(
         assert result.data[0]["name"] == "test1"
 
 
-@pytest.mark.xdist_group("postgres")
 @pytest.mark.parametrize(
     "parameters,style,query",
     [
@@ -92,7 +92,6 @@ def test_psycopg_parameter_styles(
     assert result.data[0]["name"] == "test1"
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_multiple_parameters_pyformat(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test queries with multiple parameters using pyformat style."""
     result = psycopg_parameters_session.execute(
@@ -105,7 +104,6 @@ def test_psycopg_multiple_parameters_pyformat(psycopg_parameters_session: Psycop
     assert result.data[0]["value"] == 100
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_multiple_parameters_named(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test queries with multiple parameters using named style."""
     result = psycopg_parameters_session.execute(
@@ -119,7 +117,6 @@ def test_psycopg_multiple_parameters_named(psycopg_parameters_session: PsycopgSy
     assert result.data[0]["value"] == 100
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test handling of NULL parameters on Psycopg."""
 
@@ -142,7 +139,6 @@ def test_psycopg_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) 
     assert null_result.data[0]["description"] is None
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_escaping(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameter escaping prevents SQL injection."""
 
@@ -158,7 +154,6 @@ def test_psycopg_parameter_escaping(psycopg_parameters_session: PsycopgSyncDrive
     assert count_result.data[0]["count"] >= 3
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_like(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with LIKE operations."""
     result = psycopg_parameters_session.execute("SELECT * FROM test_parameters WHERE name LIKE %s", ("test%"))
@@ -174,7 +169,6 @@ def test_psycopg_parameter_with_like(psycopg_parameters_session: PsycopgSyncDriv
     assert named_result.data[0]["name"] == "test1"
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_any_array(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL ANY and arrays."""
 
@@ -195,7 +189,6 @@ def test_psycopg_parameter_with_any_array(psycopg_parameters_session: PsycopgSyn
     assert result.data[2]["name"] == "test1"
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with SQL object."""
     from sqlspec.core.statement import SQL
@@ -217,7 +210,6 @@ def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSy
     assert all(row["value"] < 150 for row in named_result.data)
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_data_types(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test different parameter data types with Psycopg."""
 
@@ -257,7 +249,6 @@ def test_psycopg_parameter_data_types(psycopg_parameters_session: PsycopgSyncDri
     assert abs(result.data[0]["real_val"] - math.pi) < 0.001
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_edge_cases(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test edge cases for Psycopg parameters."""
 
@@ -281,7 +272,6 @@ def test_psycopg_parameter_edge_cases(psycopg_parameters_session: PsycopgSyncDri
     assert len(long_result.data[0]["description"]) == 1000
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_postgresql_functions(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL functions."""
 
@@ -304,7 +294,6 @@ def test_psycopg_parameter_with_postgresql_functions(psycopg_parameters_session:
         assert row["multiplied"] == expected
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_json(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL JSON operations."""
 
@@ -344,7 +333,6 @@ def test_psycopg_parameter_with_json(psycopg_parameters_session: PsycopgSyncDriv
     assert len(named_result.data) >= 1
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_arrays(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL array operations."""
 
@@ -380,7 +368,6 @@ def test_psycopg_parameter_with_arrays(psycopg_parameters_session: PsycopgSyncDr
     assert len(named_result.data) == 2
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_window_functions(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL window functions."""
 
@@ -416,7 +403,6 @@ def test_psycopg_parameter_with_window_functions(psycopg_parameters_session: Psy
     assert group_a_rows[1]["row_num"] == 2
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_copy_operations(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters in queries alongside COPY operations."""
 
@@ -437,7 +423,6 @@ def test_psycopg_parameter_with_copy_operations(psycopg_parameters_session: Psyc
     assert verify_result.data[0]["count"] >= 8
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_mixed_styles_same_query(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test edge case where mixing parameter styles might occur."""
 
@@ -453,7 +438,6 @@ def test_psycopg_parameter_mixed_styles_same_query(psycopg_parameters_session: P
     assert result.data[0]["value"] == 100
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_named_pyformat_parameter_conversion(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test that NAMED_PYFORMAT parameters are converted correctly through the pipeline."""
 
@@ -469,7 +453,6 @@ def test_psycopg_named_pyformat_parameter_conversion(psycopg_parameters_session:
     assert result.data[0]["value"] == 100
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_mixed_null_parameters(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test edge cases with mixed NULL and non-NULL parameters."""
 
@@ -489,7 +472,6 @@ def test_psycopg_mixed_null_parameters(psycopg_parameters_session: PsycopgSyncDr
     assert result.data[0]["count"] == 1
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_consistency_check(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test that different parameter styles produce consistent results."""
 
@@ -504,7 +486,6 @@ def test_psycopg_parameter_consistency_check(psycopg_parameters_session: Psycopg
     assert named_result.data[0]["count"] == positional_result.data[0]["count"]
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_none_values_in_named_parameters(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test that None values in named parameters are handled correctly."""
     from datetime import date
@@ -570,7 +551,6 @@ def test_psycopg_none_values_in_named_parameters(psycopg_parameters_session: Psy
     psycopg_parameters_session.execute("DROP TABLE IF EXISTS test_none_values")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_all_none_parameters(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test when all parameter values are None."""
     psycopg_parameters_session.execute("""
@@ -603,7 +583,6 @@ def test_psycopg_all_none_parameters(psycopg_parameters_session: PsycopgSyncDriv
     psycopg_parameters_session.execute("DROP TABLE IF EXISTS test_all_none")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_none_with_execute_many(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test None values work correctly with execute_many."""
     psycopg_parameters_session.execute("""
@@ -645,7 +624,6 @@ def test_psycopg_none_with_execute_many(psycopg_parameters_session: PsycopgSyncD
     psycopg_parameters_session.execute("DROP TABLE IF EXISTS test_none_many")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_none_in_where_clause(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test None values in WHERE clauses work correctly."""
     psycopg_parameters_session.execute("""
@@ -695,7 +673,6 @@ def test_psycopg_none_in_where_clause(psycopg_parameters_session: PsycopgSyncDri
     psycopg_parameters_session.execute("DROP TABLE IF EXISTS test_none_where")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_count_mismatch_with_none(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test that parameter count mismatches are properly detected even when None values are involved.
 
@@ -736,7 +713,6 @@ def test_psycopg_parameter_count_mismatch_with_none(psycopg_parameters_session: 
     psycopg_parameters_session.execute("DROP TABLE IF EXISTS test_param_count")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_none_complex_parameter_scenarios(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test complex scenarios with None parameters that might cause issues."""
     from datetime import date
@@ -758,7 +734,7 @@ def test_psycopg_none_complex_parameter_scenarios(psycopg_parameters_session: Ps
         "id": 1,
         "col1": "complex_test",
         "col2": None,
-        "col3": 3.14159,
+        "col3": math.pi,
         "col4": None,
         "col5": date(2025, 1, 21),
         "col6": ["array", "with", "values"],
@@ -790,7 +766,7 @@ def test_psycopg_none_complex_parameter_scenarios(psycopg_parameters_session: Ps
     assert verify_result is not None
     assert verify_result["col1"] == "complex_test"
     assert verify_result["col2"] is None
-    assert abs(verify_result["col3"] - 3.14159) < 0.00001
+    assert abs(verify_result["col3"] - math.pi) < 0.00001
     assert verify_result["col4"] is None
     assert verify_result["col5"] is not None
     assert verify_result["col6"] == ["array", "with", "values"]
@@ -798,7 +774,6 @@ def test_psycopg_none_complex_parameter_scenarios(psycopg_parameters_session: Ps
     psycopg_parameters_session.execute("DROP TABLE IF EXISTS test_complex_none")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_none_parameter_edge_cases(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test edge cases that might reveal parameter handling bugs."""
     # Test 1: Empty parameter list with None
@@ -849,19 +824,20 @@ def test_psycopg_none_parameter_edge_cases(psycopg_parameters_session: PsycopgSy
     psycopg_parameters_session.execute("DROP TABLE IF EXISTS test_position_none")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_jsonb_none_parameters(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test JSONB column None parameter handling comprehensively."""
     import json
 
-    psycopg_parameters_session.execute("""
+    psycopg_parameters_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_jsonb_none (
             id SERIAL PRIMARY KEY,
             name TEXT,
             metadata JSONB,
             config JSONB,
             tags JSONB
-        )
+        );
+        delete from test_jsonb_none;
+        commit;
     """)
 
     # Test 1: Insert None values into JSONB columns using positional parameters

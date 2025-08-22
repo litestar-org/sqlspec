@@ -10,6 +10,8 @@ from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.core.result import SQLResult
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
+# xdist_group is assigned per test based on database backend to enable parallel execution
+
 
 @pytest.fixture
 def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
@@ -35,6 +37,7 @@ def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test NULL parameter handling edge cases with ADBC."""
 
@@ -99,6 +102,7 @@ def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None:
     """Test parameter style handling variations with ADBC."""
 
@@ -155,6 +159,7 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 @pytest.mark.xfail(reason="ADBC PostgreSQL driver cannot handle multi-statement prepared statements")
 def test_execute_script_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     """Test execute_script edge cases with ADBC."""
@@ -217,6 +222,7 @@ def test_execute_script_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
     """Test RETURNING clause support with ADBC."""
 
@@ -282,6 +288,7 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_data_type_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     """Test edge cases in data type handling with ADBC."""
 
@@ -353,7 +360,8 @@ def test_data_type_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS data_type_edge_test")
 
 
-@pytest.mark.xdist_group("adbc_sqlite")
+@pytest.mark.xdist_group("sqlite")
+@pytest.mark.adbc
 def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
     """Test SQLite-specific edge cases with ADBC."""
 
@@ -411,7 +419,8 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
     assert func_row["sqlite_ver"] is not None
 
 
-@pytest.mark.xdist_group("adbc_duckdb")
+@pytest.mark.xdist_group("duckdb")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 def test_duckdb_specific_edge_cases() -> None:
     """Test DuckDB-specific edge cases with ADBC."""
@@ -466,6 +475,7 @@ def test_duckdb_specific_edge_cases() -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_connection_resilience(adbc_postgresql_session: AdbcDriver) -> None:
     """Test connection resilience and error recovery with ADBC."""
 

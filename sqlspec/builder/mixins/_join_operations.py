@@ -1,3 +1,8 @@
+"""JOIN operation mixins.
+
+Provides mixins for JOIN operations in SELECT statements.
+"""
+
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from mypy_extensions import trait

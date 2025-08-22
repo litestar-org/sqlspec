@@ -229,6 +229,8 @@ def test_serialize_primitive_none() -> None:
     result = _serialize_data(data)
     assert json.loads(result) == data
 
+pytestmark = pytest.mark.xdist_group("utils")
+
 
 def test_open_fixture_valid_file() -> None:
     """Test open_fixture with valid JSON fixture file."""

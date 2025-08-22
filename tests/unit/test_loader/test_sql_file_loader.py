@@ -1,13 +1,11 @@
 """Unit tests for SQLFileLoader class.
 
-Tests focused on SQLFileLoader core functionality including:
+Tests for SQLFileLoader core functionality including:
 - SQL file parsing and statement extraction
 - Query name normalization and validation
 - Cache integration and file content checksums
 - Error handling and validation
 - Parameter style detection and preservation
-
-Uses CORE_ROUND_3 architecture with core.statement.SQL and related modules.
 """
 
 import tempfile
@@ -20,6 +18,8 @@ import pytest
 from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import CachedSQLFile, NamedStatement, SQLFile, SQLFileLoader
+
+pytestmark = pytest.mark.xdist_group("loader")
 
 
 def test_named_statement_creation() -> None:

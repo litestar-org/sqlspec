@@ -1,4 +1,4 @@
-"""Comprehensive tests for sqlspec.utils.statement_hashing module.
+"""Tests for sqlspec.utils.statement_hashing module.
 
 Tests for SQL statement and expression hashing utilities used for cache key generation.
 Covers all hashing functions with edge cases, performance considerations, and circular reference handling.
@@ -24,6 +24,8 @@ from sqlspec.core.hashing import (
     hash_parameters,
     hash_sql_statement,
 )
+
+pytestmark = pytest.mark.xdist_group("core")
 
 
 def test_hash_expression_none() -> None:

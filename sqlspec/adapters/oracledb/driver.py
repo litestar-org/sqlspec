@@ -1,26 +1,4 @@
-"""Enhanced Oracle driver with CORE_ROUND_3 architecture integration.
-
-This driver implements the complete CORE_ROUND_3 architecture for Oracle Database connections:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Complete backward compatibility with existing Oracle functionality
-
-Architecture Features:
-- Direct integration with sqlspec.core modules
-- Enhanced Oracle parameter processing with QMARK/COLON conversion
-- Thread-safe unified caching system
-- MyPyC-optimized performance patterns
-- Zero-copy data access where possible
-- Both sync and async context management
-
-Oracle Features:
-- Parameter style conversion (QMARK to NAMED_COLON/POSITIONAL_COLON)
-- Oracle-specific type coercion and data handling
-- Enhanced error categorization for Oracle database errors
-- Transaction management with automatic commit/rollback
-- Support for both sync and async execution modes
-"""
+"""Oracle Driver"""
 
 import logging
 from typing import TYPE_CHECKING, Any, Optional
@@ -53,20 +31,18 @@ __all__ = (
 )
 
 
-# Enhanced Oracle statement configuration using core modules with performance optimizations
 oracledb_statement_config = StatementConfig(
     dialect="oracle",
     parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.POSITIONAL_COLON,  # Oracle's :1, :2 style
+        default_parameter_style=ParameterStyle.POSITIONAL_COLON,
         supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.POSITIONAL_COLON,  # Keep Oracle's native :1, :2
+        default_execution_parameter_style=ParameterStyle.POSITIONAL_COLON,
         supported_execution_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
         type_coercion_map={},
         has_native_list_expansion=False,
         needs_static_script_compilation=True,
         preserve_parameter_format=True,
     ),
-    # Core processing features enabled for performance
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,
@@ -75,7 +51,7 @@ oracledb_statement_config = StatementConfig(
 
 
 class OracleSyncCursor:
-    """Sync context manager for Oracle cursor management with enhanced error handling."""
+    """Sync context manager for Oracle cursor management."""
 
     __slots__ = ("connection", "cursor")
 
@@ -94,7 +70,7 @@ class OracleSyncCursor:
 
 
 class OracleAsyncCursor:
-    """Async context manager for Oracle cursor management with enhanced error handling."""
+    """Async context manager for Oracle cursor management."""
 
     __slots__ = ("connection", "cursor")
 
@@ -113,7 +89,7 @@ class OracleAsyncCursor:
 
 
 class OracleSyncExceptionHandler:
-    """Custom sync context manager for handling Oracle database exceptions."""
+    """Context manager for handling Oracle database exceptions in synchronous operations."""
 
     __slots__ = ()
 
@@ -160,7 +136,7 @@ class OracleSyncExceptionHandler:
 
 
 class OracleAsyncExceptionHandler:
-    """Custom async context manager for handling Oracle database exceptions."""
+    """Context manager for handling Oracle database exceptions in asynchronous operations."""
 
     __slots__ = ()
 
@@ -222,21 +198,26 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Configure with default settings
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = oracledb_statement_config.replace(
+            statement_config = oracledb_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,
                 enable_validation=True,
                 dialect="oracle",
             )
-            statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: OracleSyncConnection) -> OracleSyncCursor:
-        """Create sync context manager for Oracle cursor with enhanced resource management."""
+        """Create context manager for Oracle cursor.
+
+        Args:
+            connection: Oracle database connection
+
+        Returns:
+            Context manager for cursor operations
+        """
         return OracleSyncCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
@@ -260,10 +241,16 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         return None
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script using enhanced statement splitting and parameter handling.
+        """Execute SQL script with statement splitting and parameter handling.
 
-        Uses core module optimization for statement parsing and parameter processing.
         Parameters are embedded as static values for script execution compatibility.
+
+        Args:
+            cursor: Oracle cursor object
+            statement: SQL script statement to execute
+
+        Returns:
+            Execution result containing statement count and success information
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -280,9 +267,17 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized Oracle batch processing.
+        """Execute SQL with multiple parameter sets using Oracle batch processing.
 
-        Leverages core parameter processing for enhanced Oracle type handling and parameter conversion.
+        Args:
+            cursor: Oracle cursor object
+            statement: SQL statement with multiple parameter sets
+
+        Returns:
+            Execution result with affected row count
+
+        Raises:
+            ValueError: If no parameters are provided
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -299,9 +294,14 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with enhanced Oracle data handling and performance optimization.
+        """Execute single SQL statement with Oracle data handling.
 
-        Uses core processing for optimal parameter handling and Oracle result processing.
+        Args:
+            cursor: Oracle cursor object
+            statement: SQL statement to execute
+
+        Returns:
+            Execution result containing data for SELECT statements or row count for others
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters or {})
@@ -324,14 +324,18 @@ class OracleSyncDriver(SyncDriverAdapterBase):
 
     # Oracle transaction management
     def begin(self) -> None:
-        """Begin a database transaction with enhanced error handling.
+        """Begin a database transaction.
 
         Oracle handles transactions automatically, so this is a no-op.
         """
         # Oracle handles transactions implicitly
 
     def rollback(self) -> None:
-        """Rollback the current transaction with enhanced error handling."""
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If rollback fails
+        """
         try:
             self.connection.rollback()
         except oracledb.Error as e:
@@ -339,7 +343,11 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
-        """Commit the current transaction with enhanced error handling."""
+        """Commit the current transaction.
+
+        Raises:
+            SQLSpecError: If commit fails
+        """
         try:
             self.connection.commit()
         except oracledb.Error as e:
@@ -363,21 +371,26 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Configure with default settings
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = oracledb_statement_config.replace(
+            statement_config = oracledb_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,
                 enable_validation=True,
                 dialect="oracle",
             )
-            statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: OracleAsyncConnection) -> OracleAsyncCursor:
-        """Create async context manager for Oracle cursor."""
+        """Create context manager for Oracle cursor.
+
+        Args:
+            connection: Oracle database connection
+
+        Returns:
+            Context manager for cursor operations
+        """
         return OracleAsyncCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
@@ -404,6 +417,13 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """Execute SQL script with statement splitting and parameter handling.
 
         Parameters are embedded as static values for script execution compatibility.
+
+        Args:
+            cursor: Oracle cursor object
+            statement: SQL script statement to execute
+
+        Returns:
+            Execution result containing statement count and success information
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -420,7 +440,18 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using Oracle batch processing."""
+        """Execute SQL with multiple parameter sets using Oracle batch processing.
+
+        Args:
+            cursor: Oracle cursor object
+            statement: SQL statement with multiple parameter sets
+
+        Returns:
+            Execution result with affected row count
+
+        Raises:
+            ValueError: If no parameters are provided
+        """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         # Parameter validation for executemany
@@ -436,7 +467,15 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with Oracle data handling."""
+        """Execute single SQL statement with Oracle data handling.
+
+        Args:
+            cursor: Oracle cursor object
+            statement: SQL statement to execute
+
+        Returns:
+            Execution result containing data for SELECT statements or row count for others
+        """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters or {})
 
@@ -465,7 +504,11 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         # Oracle handles transactions implicitly
 
     async def rollback(self) -> None:
-        """Rollback the current transaction."""
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If rollback fails
+        """
         try:
             await self.connection.rollback()
         except oracledb.Error as e:
@@ -473,7 +516,11 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def commit(self) -> None:
-        """Commit the current transaction."""
+        """Commit the current transaction.
+
+        Raises:
+            SQLSpecError: If commit fails
+        """
         try:
             await self.connection.commit()
         except oracledb.Error as e:

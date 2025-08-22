@@ -1,7 +1,7 @@
-"""Psqlpy driver implementation.
+"""Psqlpy driver implementation for PostgreSQL connectivity.
 
-Provides PostgreSQL connectivity with parameter style conversion,
-type coercion, error handling, and transaction management.
+Provides parameter style conversion, type coercion, error handling,
+and transaction management.
 """
 
 import datetime
@@ -39,7 +39,7 @@ psqlpy_statement_config = StatementConfig(
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
         type_coercion_map={tuple: list, decimal.Decimal: float},
-        has_native_list_expansion=True,
+        has_native_list_expansion=False,
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
         preserve_parameter_format=True,
@@ -72,8 +72,8 @@ SPECIAL_TYPE_REGEX: Final[re.Pattern[str]] = re.compile(
 def _detect_postgresql_type(value: str) -> Optional[str]:
     """Detect PostgreSQL data type from string value.
 
-    Detects common PostgreSQL types including UUID, IP addresses,
-    timestamps, JSON, and arrays.
+    Args:
+        value: String value to analyze
 
     Returns:
         Type name if detected, None otherwise.
@@ -101,7 +101,14 @@ def _detect_postgresql_type(value: str) -> Optional[str]:
 
 
 def _convert_uuid(value: str) -> Any:
-    """Convert UUID string to UUID object."""
+    """Convert UUID string to UUID object.
+
+    Args:
+        value: UUID string to convert
+
+    Returns:
+        UUID object or original value if conversion fails
+    """
     try:
         clean_uuid = value.replace("-", "").lower()
         uuid_length = 32
@@ -114,7 +121,14 @@ def _convert_uuid(value: str) -> Any:
 
 
 def _convert_iso_datetime(value: str) -> Any:
-    """Convert ISO datetime string to datetime object."""
+    """Convert ISO datetime string to datetime object.
+
+    Args:
+        value: ISO datetime string to convert
+
+    Returns:
+        datetime object or original value if conversion fails
+    """
     try:
         normalized = value.replace("Z", "+00:00")
         return datetime.datetime.fromisoformat(normalized)
@@ -123,7 +137,14 @@ def _convert_iso_datetime(value: str) -> Any:
 
 
 def _convert_iso_date(value: str) -> Any:
-    """Convert ISO date string to date object."""
+    """Convert ISO date string to date object.
+
+    Args:
+        value: ISO date string to convert
+
+    Returns:
+        date object or original value if conversion fails
+    """
     try:
         return datetime.date.fromisoformat(value)
     except ValueError:
@@ -131,7 +152,14 @@ def _convert_iso_date(value: str) -> Any:
 
 
 def _validate_json(value: str) -> str:
-    """Validate JSON string but keep as string for psqlpy."""
+    """Validate JSON string format.
+
+    Args:
+        value: JSON string to validate
+
+    Returns:
+        Original string value
+    """
     from sqlspec.utils.serializers import from_json
 
     try:
@@ -142,7 +170,14 @@ def _validate_json(value: str) -> str:
 
 
 def _passthrough(value: str) -> str:
-    """Pass value through unchanged."""
+    """Pass value through unchanged.
+
+    Args:
+        value: String value to pass through
+
+    Returns:
+        Original value unchanged
+    """
     return value
 
 
@@ -161,15 +196,13 @@ _PSQLPY_TYPE_CONVERTERS: dict[str, Any] = {
 
 
 def _convert_psqlpy_parameters(value: Any) -> Any:
-    """Convert parameters for Psqlpy compatibility.
-
-    Performs type conversions based on detected PostgreSQL types.
+    """Convert parameters for psqlpy compatibility.
 
     Args:
         value: Parameter value to convert
 
     Returns:
-        Converted value suitable for psqlpy/PostgreSQL
+        Converted value suitable for psqlpy execution
     """
     if isinstance(value, str):
         detected_type = _detect_postgresql_type(value)
@@ -188,7 +221,7 @@ def _convert_psqlpy_parameters(value: Any) -> Any:
 
 
 class PsqlpyCursor:
-    """Context manager for Psqlpy cursor management."""
+    """Context manager for psqlpy cursor management."""
 
     __slots__ = ("_in_use", "connection")
 
@@ -197,22 +230,36 @@ class PsqlpyCursor:
         self._in_use = False
 
     async def __aenter__(self) -> "PsqlpyConnection":
-        """Enter cursor context."""
+        """Enter cursor context.
+
+        Returns:
+            Psqlpy connection object
+        """
         self._in_use = True
         return self.connection
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Exit cursor context."""
+        """Exit cursor context.
+
+        Args:
+            exc_type: Exception type
+            exc_val: Exception value
+            exc_tb: Exception traceback
+        """
         _ = (exc_type, exc_val, exc_tb)
         self._in_use = False
 
     def is_in_use(self) -> bool:
-        """Check if cursor is currently in use."""
+        """Check if cursor is currently in use.
+
+        Returns:
+            True if cursor is in use, False otherwise
+        """
         return self._in_use
 
 
 class PsqlpyExceptionHandler:
-    """Custom async context manager for handling Psqlpy database exceptions."""
+    """Async context manager for handling psqlpy database exceptions."""
 
     __slots__ = ()
 
@@ -250,10 +297,10 @@ class PsqlpyExceptionHandler:
 
 
 class PsqlpyDriver(AsyncDriverAdapterBase):
-    """Psqlpy driver implementation.
+    """PostgreSQL driver implementation using psqlpy.
 
-    Provides PostgreSQL connectivity through psqlpy with parameter style
-    conversion, type coercion, error handling, and transaction management.
+    Provides parameter style conversion, type coercion, error handling,
+    and transaction management.
     """
 
     __slots__ = ()
@@ -277,11 +324,22 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "PsqlpyConnection") -> "PsqlpyCursor":
-        """Create context manager for psqlpy cursor."""
+        """Create context manager for psqlpy cursor.
+
+        Args:
+            connection: Psqlpy connection object
+
+        Returns:
+            PsqlpyCursor context manager
+        """
         return PsqlpyCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
-        """Handle database-specific exceptions and wrap them appropriately."""
+        """Handle database-specific exceptions.
+
+        Returns:
+            Exception handler context manager
+        """
         return PsqlpyExceptionHandler()
 
     async def _try_special_handling(self, cursor: "PsqlpyConnection", statement: SQL) -> "Optional[SQLResult]":
@@ -292,13 +350,13 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             statement: SQL statement to analyze
 
         Returns:
-            None for standard execution
+            SQLResult if special handling applied, None otherwise
         """
         _ = (cursor, statement)
         return None
 
     async def _execute_script(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling.
+        """Execute SQL script with statement splitting.
 
         Args:
             cursor: Psqlpy connection object
@@ -329,7 +387,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using batch processing.
+        """Execute SQL with multiple parameter sets.
 
         Args:
             cursor: Psqlpy connection object
@@ -358,7 +416,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=rows_affected, is_many_result=True)
 
     async def _execute_statement(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute single SQL statement with data handling.
+        """Execute single SQL statement.
 
         Args:
             cursor: Psqlpy connection object
@@ -396,7 +454,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             result: Psqlpy execution result object
 
         Returns:
-            Number of rows affected, or -1 if unable to determine
+            Number of rows affected, -1 if unable to determine
         """
         try:
             if hasattr(result, "tag") and result.tag:
@@ -416,7 +474,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             tag: PostgreSQL command tag string
 
         Returns:
-            Number of rows affected, or -1 if unable to parse
+            Number of rows affected, -1 if unable to parse
         """
         if not tag:
             return -1

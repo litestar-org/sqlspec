@@ -65,7 +65,11 @@ PROCESSED_STATE_SLOTS: Final = (
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ProcessedState:
-    """Processing results for SQL statements."""
+    """Processing results for SQL statements.
+
+    Contains the compiled SQL, execution parameters, parsed expression,
+    operation type, and validation errors for a processed SQL statement.
+    """
 
     __slots__ = PROCESSED_STATE_SLOTS
     operation_type: "OperationType"
@@ -92,7 +96,12 @@ class ProcessedState:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class SQL:
-    """SQL statement with parameter and filter support."""
+    """SQL statement with parameter and filter support.
+
+    Represents a SQL statement that can be compiled with parameters and filters.
+    Supports both positional and named parameters, statement filtering,
+    and various execution modes including batch operations.
+    """
 
     __slots__ = (
         "_dialect",
@@ -154,11 +163,27 @@ class SQL:
     def _create_auto_config(
         self, statement: "Union[str, exp.Expression, 'SQL']", parameters: tuple, kwargs: dict[str, Any]
     ) -> "StatementConfig":
-        """Create auto-detected StatementConfig when none provided."""
+        """Create default StatementConfig when none provided.
+
+        Args:
+            statement: The SQL statement
+            parameters: Statement parameters
+            kwargs: Additional keyword arguments
+
+        Returns:
+            Default StatementConfig instance
+        """
         return get_default_config()
 
     def _normalize_dialect(self, dialect: "Optional[DialectType]") -> "Optional[str]":
-        """Normalize dialect to string representation."""
+        """Convert dialect to string representation.
+
+        Args:
+            dialect: Dialect type or string
+
+        Returns:
+            String representation of the dialect or None
+        """
         if dialect is None:
             return None
         if isinstance(dialect, str):
@@ -166,7 +191,11 @@ class SQL:
         return dialect.__class__.__name__.lower()
 
     def _init_from_sql_object(self, sql_obj: "SQL") -> None:
-        """Initialize from existing SQL object."""
+        """Initialize instance attributes from existing SQL object.
+
+        Args:
+            sql_obj: Existing SQL object to copy from
+        """
         self._raw_sql = sql_obj._raw_sql
         self._filters = sql_obj._filters.copy()
         self._named_parameters = sql_obj._named_parameters.copy()
@@ -177,7 +206,14 @@ class SQL:
             self._processed_state = sql_obj._processed_state
 
     def _should_auto_detect_many(self, parameters: tuple) -> bool:
-        """Auto-detect execute_many from parameter structure."""
+        """Detect execute_many mode from parameter structure.
+
+        Args:
+            parameters: Parameter tuple to analyze
+
+        Returns:
+            True if parameters indicate batch execution
+        """
         if len(parameters) == 1 and isinstance(parameters[0], list):
             param_list = parameters[0]
             if param_list and all(isinstance(item, (tuple, list)) for item in param_list):
@@ -185,7 +221,13 @@ class SQL:
         return False
 
     def _process_parameters(self, *parameters: Any, dialect: Optional[str] = None, **kwargs: Any) -> None:
-        """Process parameters and filters."""
+        """Process and organize parameters and filters.
+
+        Args:
+            *parameters: Variable parameters and filters
+            dialect: SQL dialect override
+            **kwargs: Additional named parameters
+        """
         if dialect is not None:
             self._dialect = self._normalize_dialect(dialect)
 
@@ -212,6 +254,9 @@ class SQL:
                     if self._is_many:
                         self._positional_parameters = list(param)
                     else:
+                        # For drivers with native list expansion support, each item in the tuple/list
+                        # should be treated as a separate parameter (but preserve inner lists/arrays)
+                        # This allows passing arrays/lists as single JSONB parameters
                         self._positional_parameters.extend(param)
                 else:
                     self._positional_parameters.append(param)
@@ -289,7 +334,11 @@ class SQL:
         return len(self.validation_errors) > 0
 
     def returns_rows(self) -> bool:
-        """Check if statement returns rows."""
+        """Check if statement returns rows.
+
+        Returns:
+            True if the SQL statement returns result rows
+        """
         if self._processed_state is Empty:
             self.compile()
             if self._processed_state is Empty:
@@ -325,7 +374,11 @@ class SQL:
         return False
 
     def compile(self) -> tuple[str, Any]:
-        """Compile the SQL statement."""
+        """Compile SQL statement with parameters.
+
+        Returns:
+            Tuple of compiled SQL string and execution parameters
+        """
         if self._processed_state is Empty:
             try:
                 config = self._statement_config
@@ -356,7 +409,11 @@ class SQL:
         return self._processed_state.compiled_sql, self._processed_state.execution_parameters
 
     def as_script(self) -> "SQL":
-        """Mark as script execution."""
+        """Create copy marked for script execution.
+
+        Returns:
+            New SQL instance configured for script execution
+        """
         original_params = self._original_parameters
         config = self._statement_config
         is_many = self._is_many
@@ -370,7 +427,16 @@ class SQL:
     def copy(
         self, statement: "Optional[Union[str, exp.Expression]]" = None, parameters: Optional[Any] = None, **kwargs: Any
     ) -> "SQL":
-        """Create copy with modifications."""
+        """Create copy with modifications.
+
+        Args:
+            statement: New SQL statement to use
+            parameters: New parameters to use
+            **kwargs: Additional modifications
+
+        Returns:
+            New SQL instance with modifications applied
+        """
         new_sql = SQL(
             statement or self._raw_sql,
             *(parameters if parameters is not None else self._original_parameters),
@@ -487,7 +553,11 @@ class SQL:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class StatementConfig:
-    """Configuration for SQL statement processing."""
+    """Configuration for SQL statement processing.
+
+    Controls SQL parsing, validation, transformations, parameter handling,
+    and other processing options for SQL statements.
+    """
 
     __slots__ = SQL_CONFIG_SLOTS
 
@@ -656,12 +726,20 @@ class StatementConfig:
 
 
 def get_default_config() -> StatementConfig:
-    """Get default statement configuration."""
+    """Get default statement configuration.
+
+    Returns:
+        StatementConfig with default settings
+    """
     return StatementConfig()
 
 
 def get_default_parameter_config() -> ParameterStyleConfig:
-    """Get default parameter configuration."""
+    """Get default parameter configuration.
+
+    Returns:
+        ParameterStyleConfig with QMARK style as default
+    """
     return ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
     )

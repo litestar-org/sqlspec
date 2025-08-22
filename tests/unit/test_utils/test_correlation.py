@@ -1,4 +1,4 @@
-"""Comprehensive tests for sqlspec.utils.correlation module.
+"""Tests for sqlspec.utils.correlation module.
 
 Tests correlation ID tracking for distributed tracing across database operations.
 Covers context management, thread safety, and logging integration.
@@ -15,6 +15,8 @@ from typing import Any
 import pytest
 
 from sqlspec.utils.correlation import CorrelationContext, correlation_context, get_correlation_adapter
+
+pytestmark = pytest.mark.xdist_group("utils")
 
 
 def setup_function() -> None:
