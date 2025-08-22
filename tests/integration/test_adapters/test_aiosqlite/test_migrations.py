@@ -8,8 +8,9 @@ import pytest
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
+pytestmark = pytest.mark.xdist_group("sqlite")
 
-@pytest.mark.xdist_group("migrations")
+
 async def test_aiosqlite_migration_full_workflow() -> None:
     """Test full AioSQLite migration workflow: init -> create -> upgrade -> downgrade."""
 
@@ -83,7 +84,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_aiosqlite_multiple_migrations_workflow() -> None:
     """Test AioSQLite workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
@@ -190,7 +190,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_aiosqlite_migration_current_command() -> None:
     """Test the current migration command shows correct version for AioSQLite."""
 
@@ -236,7 +235,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_aiosqlite_migration_error_handling() -> None:
     """Test AioSQLite migration error handling."""
 
@@ -278,7 +276,6 @@ def down():
                 await config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_aiosqlite_migration_with_transactions() -> None:
     """Test AioSQLite migrations work properly with transactions."""
 

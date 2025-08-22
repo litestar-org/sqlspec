@@ -3,16 +3,10 @@
 This module provides result classes for handling SQL query execution results
 including regular results and Apache Arrow format results.
 
-Components:
-- StatementResult: Abstract base class for SQL results
-- SQLResult: Main implementation for regular results
-- ArrowResult: Arrow-based results for data interchange
-
-Features:
-- Consistent interface across all result types
-- Support for both regular and Arrow format results
-- Result metadata and statistics
-- Iterator support for result rows
+Classes:
+    StatementResult: Abstract base class for SQL results.
+    SQLResult: Standard implementation for regular results.
+    ArrowResult: Apache Arrow format results for data interchange.
 """
 
 from abc import ABC, abstractmethod
@@ -36,17 +30,17 @@ T = TypeVar("T")
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class StatementResult(ABC):
-    """Base class for SQL statement execution results.
+    """Abstract base class for SQL statement execution results.
 
     Provides a common interface for handling different types of SQL operation
-    results. Subclasses implement specific behavior for SELECT, INSERT/UPDATE/DELETE,
-    and script operations.
+    results. Subclasses implement specific behavior for SELECT, INSERT, UPDATE,
+    DELETE, and script operations.
 
-    Args:
+    Attributes:
         statement: The original SQL statement that was executed.
-        data: The result data from the operation (type varies by subclass).
-        rows_affected: Number of rows affected by the operation (if applicable).
-        last_inserted_id: Last inserted ID (if applicable).
+        data: The result data from the operation.
+        rows_affected: Number of rows affected by the operation.
+        last_inserted_id: Last inserted ID from INSERT operations.
         execution_time: Time taken to execute the statement in seconds.
         metadata: Additional metadata about the operation.
     """
@@ -131,10 +125,23 @@ class SQLResult(StatementResult):
     """Result class for SQL operations that return rows or affect rows.
 
     Handles SELECT, INSERT, UPDATE, DELETE operations. For DML operations with
-    RETURNING clauses, the returned data will be in `self.data`. The `operation_type`
-    attribute helps distinguish the nature of the operation.
+    RETURNING clauses, the returned data is stored in the data attribute.
+    The operation_type attribute indicates the nature of the operation.
 
-    For script execution, this class also tracks multiple statement results and errors.
+    For script execution, tracks multiple statement results and errors.
+
+    Attributes:
+        column_names: Names of columns in the result set.
+        error: Exception that occurred during execution.
+        errors: List of error messages for script execution.
+        has_more: Whether there are additional result pages available.
+        inserted_ids: List of IDs from INSERT operations.
+        operation_index: Index of operation in a script.
+        parameters: Parameters used for the query.
+        statement_results: Results from individual statements in a script.
+        successful_statements: Count of successful statements in a script.
+        total_count: Total number of rows in the complete result set.
+        total_statements: Total number of statements in a script.
     """
 
     __slots__ = (
@@ -175,7 +182,28 @@ class SQLResult(StatementResult):
         total_statements: int = 0,
         successful_statements: int = 0,
     ) -> None:
-        """Initialize SQL result."""
+        """Initialize SQL result.
+
+        Args:
+            statement: The original SQL statement that was executed.
+            data: The result data from the operation.
+            rows_affected: Number of rows affected by the operation.
+            last_inserted_id: Last inserted ID from the operation.
+            execution_time: Time taken to execute the statement in seconds.
+            metadata: Additional metadata about the operation.
+            error: Exception that occurred during execution.
+            operation_type: Type of SQL operation performed.
+            operation_index: Index of operation in a script.
+            parameters: Parameters used for the query.
+            column_names: Names of columns in the result set.
+            total_count: Total number of rows in the complete result set.
+            has_more: Whether there are additional result pages available.
+            inserted_ids: List of IDs from INSERT operations.
+            statement_results: Results from individual statements in a script.
+            errors: List of error messages for script execution.
+            total_statements: Total number of statements in a script.
+            successful_statements: Count of successful statements in a script.
+        """
         super().__init__(
             statement=statement,
             data=data,
@@ -205,7 +233,11 @@ class SQLResult(StatementResult):
 
     @property
     def operation_type(self) -> OperationType:
-        """Get operation type for this result."""
+        """Get operation type for this result.
+
+        Returns:
+            The type of SQL operation that produced this result.
+        """
         return self._operation_type
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
@@ -252,7 +284,8 @@ class SQLResult(StatementResult):
         """Get the data from the result.
 
         For regular operations, returns the list of rows.
-        For script operations, returns a summary dictionary.
+        For script operations, returns a summary dictionary containing
+        execution statistics and results.
 
         Returns:
             List of result rows or script summary.
@@ -479,14 +512,12 @@ class SQLResult(StatementResult):
 class ArrowResult(StatementResult):
     """Result class for SQL operations that return Apache Arrow data.
 
-    This class is used when database drivers support returning results as
-    Apache Arrow format for data interchange, especially
-    useful for analytics workloads and data science applications.
+    Used when database drivers support returning results in Apache Arrow
+    format for data interchange. Suitable for analytics workloads and
+    data science applications.
 
-    Args:
-        statement: The original SQL statement that was executed.
-        data: The Apache Arrow Table containing the result data.
-        schema: Optional Arrow schema information.
+    Attributes:
+        schema: Arrow schema information for the result data.
     """
 
     __slots__ = ("schema",)

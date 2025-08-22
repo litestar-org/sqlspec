@@ -1,4 +1,8 @@
-"""Merge operation mixins for SQL builders."""
+"""MERGE operation mixins.
+
+Provides mixins for MERGE statement functionality including INTO,
+USING, ON, WHEN MATCHED, and WHEN NOT MATCHED clauses.
+"""
 
 from typing import Any, Optional, Union
 

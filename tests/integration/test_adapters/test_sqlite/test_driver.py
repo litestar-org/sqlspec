@@ -1,4 +1,4 @@
-"""Integration tests for SQLite driver implementation with CORE_ROUND_3 architecture."""
+"""Integration tests for SQLite driver implementation."""
 
 import math
 from typing import Any, Literal
@@ -8,10 +8,10 @@ import pytest
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("sqlite")
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
     """Test basic CRUD operations."""
 
@@ -52,7 +52,6 @@ def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
 
@@ -73,7 +72,6 @@ def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, parameters: Any, 
     assert result.data[0]["name"] == "test_value"
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_execute_many(sqlite_session: SqliteDriver) -> None:
     """Test execute_many functionality."""
 
@@ -99,7 +97,6 @@ def test_sqlite_execute_many(sqlite_session: SqliteDriver) -> None:
     assert ordered_result.data[0]["value"] == 1
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
     """Test execute_script functionality."""
     script = """
@@ -131,7 +128,6 @@ def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
     assert select_result.data[1]["value"] == 888
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_result_methods(sqlite_session: SqliteDriver) -> None:
     """Test SelectResult and ExecuteResult methods."""
 
@@ -159,7 +155,6 @@ def test_sqlite_result_methods(sqlite_session: SqliteDriver) -> None:
     assert empty_result.get_first() is None
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_error_handling(sqlite_session: SqliteDriver) -> None:
     """Test error handling and exception propagation."""
 
@@ -172,7 +167,6 @@ def test_sqlite_error_handling(sqlite_session: SqliteDriver) -> None:
         sqlite_session.execute("SELECT nonexistent_column FROM test_table")
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_data_types(sqlite_session: SqliteDriver) -> None:
     """Test SQLite data type handling."""
 
@@ -211,7 +205,6 @@ def test_sqlite_data_types(sqlite_session: SqliteDriver) -> None:
     assert row["null_col"] is None
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_transactions(sqlite_session: SqliteDriver) -> None:
     """Test transaction behavior."""
 
@@ -223,7 +216,6 @@ def test_sqlite_transactions(sqlite_session: SqliteDriver) -> None:
     assert result.data[0]["count"] == 1
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_complex_queries(sqlite_session: SqliteDriver) -> None:
     """Test complex SQL queries."""
 
@@ -274,7 +266,6 @@ def test_sqlite_complex_queries(sqlite_session: SqliteDriver) -> None:
     assert subquery_result.data[1]["name"] == "Charlie"
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_schema_operations(sqlite_session: SqliteDriver) -> None:
     """Test schema operations (DDL)."""
 
@@ -302,7 +293,6 @@ def test_sqlite_schema_operations(sqlite_session: SqliteDriver) -> None:
     assert drop_result.operation_type == "SCRIPT"
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_column_names_and_metadata(sqlite_session: SqliteDriver) -> None:
     """Test column names and result metadata."""
 
@@ -323,7 +313,6 @@ def test_sqlite_column_names_and_metadata(sqlite_session: SqliteDriver) -> None:
     assert row["created_at"] is not None
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> None:
     """Test performance with bulk operations."""
 
@@ -347,7 +336,6 @@ def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> Non
     assert page_result.data[0]["name"] == "bulk_user_20"
 
 
-@pytest.mark.xdist_group("sqlite")
 def test_asset_maintenance_alert_complex_query(sqlite_session: SqliteDriver) -> None:
     """Test complex CTE query with INSERT, ON CONFLICT, RETURNING, and LEFT JOIN.
 

@@ -1,4 +1,7 @@
-"""Migration loader abstractions for SQLSpec."""
+"""Migration loader implementations for SQLSpec.
+
+This module provides loader classes for different migration file formats.
+"""
 
 import abc
 import inspect
@@ -341,7 +344,7 @@ class PythonFileLoader(BaseMigrationLoader):
         return module
 
     def _normalize_and_validate_sql(self, sql: Any, migration_path: Path) -> list[str]:
-        """Validate return type and normalize to list of strings.
+        """Validate and normalize SQL return value to list of strings.
 
         Args:
             sql: Return value from migration function.

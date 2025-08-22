@@ -8,6 +8,8 @@ from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.core.statement import SQL
 from tests.integration.test_adapters.test_duckdb.utils import get_unique_table_name
 
+pytestmark = pytest.mark.xdist_group("duckdb")
+
 
 @pytest.fixture
 def duckdb_test_setup() -> Generator[tuple[DuckDBDriver, str], None, None]:

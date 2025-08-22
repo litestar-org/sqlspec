@@ -199,6 +199,17 @@ def pool_provider_maker(
 def connection_provider_maker(
     config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", pool_key: str, connection_key: str
 ) -> "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]":
+    """Create provider for database connections with proper lifecycle management.
+
+    Args:
+        config: The database configuration object.
+        pool_key: The key used to retrieve the connection pool from `app.state`.
+        connection_key: The key used to store the connection in the ASGI scope.
+
+    Returns:
+        The connection provider function.
+    """
+
     async def provide_connection(state: "State", scope: "Scope") -> "AsyncGenerator[ConnectionT, None]":
         if (db_pool := state.get(pool_key)) is None:
             msg = f"Database pool with key '{pool_key}' not found. Cannot create a connection."
@@ -230,6 +241,16 @@ def connection_provider_maker(
 def session_provider_maker(
     config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", connection_dependency_key: str
 ) -> "Callable[[Any], AsyncGenerator[DriverT, None]]":
+    """Create provider for database driver sessions.
+
+    Args:
+        config: The database configuration object.
+        connection_dependency_key: The key used for connection dependency injection.
+
+    Returns:
+        The session provider function.
+    """
+
     async def provide_session(*args: Any, **kwargs: Any) -> "AsyncGenerator[DriverT, None]":
         yield cast("DriverT", config.driver_type(connection=args[0] if args else kwargs.get(connection_dependency_key)))  # pyright: ignore
 

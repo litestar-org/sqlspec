@@ -20,6 +20,8 @@ from sqlspec.core.statement import SQL
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
+pytestmark = pytest.mark.xdist_group("mysql")
+
 
 @pytest.fixture
 async def asyncmy_driver(asyncmy_session: AsyncmyDriver) -> AsyncmyDriver:
@@ -60,7 +62,6 @@ async def asyncmy_session(mysql_service: MySQLService) -> AsyncGenerator[Asyncmy
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_basic_crud(asyncmy_driver: AsyncmyDriver) -> None:
     """Test basic CRUD operations."""
     driver = asyncmy_driver
@@ -89,7 +90,6 @@ async def test_asyncmy_basic_crud(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_parameter_styles(asyncmy_driver: AsyncmyDriver) -> None:
     """Test different parameter binding styles."""
     driver = asyncmy_driver
@@ -109,7 +109,6 @@ async def test_asyncmy_parameter_styles(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_execute_many(asyncmy_driver: AsyncmyDriver) -> None:
     """Test execute_many functionality."""
     driver = asyncmy_driver
@@ -128,7 +127,6 @@ async def test_asyncmy_execute_many(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_execute_script(asyncmy_driver: AsyncmyDriver) -> None:
     """Test script execution with multiple statements."""
     driver = asyncmy_driver
@@ -151,7 +149,6 @@ async def test_asyncmy_execute_script(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     """Test handling of various MySQL data types."""
     driver = asyncmy_driver
@@ -193,7 +190,6 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_transaction_management(asyncmy_driver: AsyncmyDriver) -> None:
     """Test transaction management (begin, commit, rollback)."""
     driver = asyncmy_driver
@@ -214,7 +210,6 @@ async def test_asyncmy_transaction_management(asyncmy_driver: AsyncmyDriver) -> 
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_null_parameters(asyncmy_driver: AsyncmyDriver) -> None:
     """Test handling of NULL parameters."""
     driver = asyncmy_driver
@@ -229,7 +224,6 @@ async def test_asyncmy_null_parameters(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_error_handling(asyncmy_driver: AsyncmyDriver) -> None:
     """Test error handling and exception wrapping."""
     driver = asyncmy_driver
@@ -244,7 +238,6 @@ async def test_asyncmy_error_handling(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_large_result_set(asyncmy_driver: AsyncmyDriver) -> None:
     """Test handling of large result sets."""
     driver = asyncmy_driver
@@ -260,7 +253,6 @@ async def test_asyncmy_large_result_set(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_mysql_specific_features(asyncmy_driver: AsyncmyDriver) -> None:
     """Test MySQL-specific features and SQL constructs."""
     driver = asyncmy_driver
@@ -278,7 +270,6 @@ async def test_asyncmy_mysql_specific_features(asyncmy_driver: AsyncmyDriver) ->
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_complex_queries(asyncmy_driver: AsyncmyDriver) -> None:
     """Test complex SQL queries with JOINs, subqueries, etc."""
     driver = asyncmy_driver
@@ -314,7 +305,6 @@ async def test_asyncmy_complex_queries(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_edge_cases(asyncmy_driver: AsyncmyDriver) -> None:
     """Test edge cases and boundary conditions."""
     driver = asyncmy_driver
@@ -339,7 +329,6 @@ async def test_asyncmy_edge_cases(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_result_metadata(asyncmy_driver: AsyncmyDriver) -> None:
     """Test SQL result metadata and properties."""
     driver = asyncmy_driver
@@ -362,9 +351,8 @@ async def test_asyncmy_result_metadata(asyncmy_driver: AsyncmyDriver) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_sql_object_execution(asyncmy_driver: AsyncmyDriver) -> None:
-    """Test execution of SQL objects with CORE_ROUND_3 architecture."""
+    """Test execution of SQL objects."""
     driver = asyncmy_driver
 
     sql_obj = SQL("INSERT INTO test_table (name, value) VALUES (?, ?)", "sql_obj_test", 999)

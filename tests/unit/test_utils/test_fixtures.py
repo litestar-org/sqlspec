@@ -14,6 +14,8 @@ import pytest
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.utils.fixtures import open_fixture, open_fixture_async
 
+pytestmark = pytest.mark.xdist_group("utils")
+
 
 def test_open_fixture_valid_file() -> None:
     """Test open_fixture with valid JSON fixture file."""

@@ -1,4 +1,4 @@
-"""Test OracleDB async driver implementation with CORE_ROUND_3 architecture."""
+"""Test OracleDB async driver implementation."""
 
 from typing import Any, Literal
 
@@ -7,9 +7,9 @@ import pytest
 from sqlspec.adapters.oracledb import OracleAsyncDriver
 from sqlspec.core.result import SQLResult
 
-ParamStyle = Literal["positional_binds", "dict_binds"]
+pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.asyncio(loop_scope="function")]
 
-pytestmark = pytest.mark.asyncio(loop_scope="function")
+ParamStyle = Literal["positional_binds", "dict_binds"]
 
 
 @pytest.mark.parametrize(
@@ -19,7 +19,6 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("oracle")
 async def test_async_select(oracle_async_session: OracleAsyncDriver, parameters: Any, style: ParamStyle) -> None:
     """Test async select functionality with Oracle parameter styles."""
 
@@ -64,7 +63,6 @@ async def test_async_select(oracle_async_session: OracleAsyncDriver, parameters:
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("oracle")
 async def test_async_select_value(oracle_async_session: OracleAsyncDriver, parameters: Any, style: ParamStyle) -> None:
     """Test async select value functionality with Oracle parameter styles."""
 
@@ -103,7 +101,6 @@ async def test_async_select_value(oracle_async_session: OracleAsyncDriver, param
     )
 
 
-@pytest.mark.xdist_group("oracle")
 async def test_async_insert_with_sequence(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle's sequences and NEXTVAL/CURRVAL functionality."""
 
@@ -160,7 +157,6 @@ async def test_async_insert_with_sequence(oracle_async_session: OracleAsyncDrive
     """)
 
 
-@pytest.mark.xdist_group("oracle")
 async def test_async_execute_many_insert(oracle_async_session: OracleAsyncDriver) -> None:
     """Test execute_many functionality for batch inserts."""
 
@@ -194,7 +190,6 @@ async def test_async_execute_many_insert(oracle_async_session: OracleAsyncDriver
     )
 
 
-@pytest.mark.xdist_group("oracle")
 async def test_async_execute_script(oracle_async_session: OracleAsyncDriver) -> None:
     """Test execute_script functionality for multi-statement scripts."""
 
@@ -224,7 +219,6 @@ async def test_async_execute_script(oracle_async_session: OracleAsyncDriver) -> 
     )
 
 
-@pytest.mark.xdist_group("oracle")
 async def test_async_update_operation(oracle_async_session: OracleAsyncDriver) -> None:
     """Test UPDATE operations."""
 
@@ -262,7 +256,6 @@ async def test_async_update_operation(oracle_async_session: OracleAsyncDriver) -
     )
 
 
-@pytest.mark.xdist_group("oracle")
 async def test_async_delete_operation(oracle_async_session: OracleAsyncDriver) -> None:
     """Test DELETE operations."""
 

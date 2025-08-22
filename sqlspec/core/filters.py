@@ -196,7 +196,10 @@ class BeforeAfterFilter(StatementFilter):
 
 
 class OnBeforeAfterFilter(StatementFilter):
-    """Data required to filter a query on a ``datetime`` column."""
+    """Filter for inclusive datetime range queries.
+
+    Applies WHERE clauses for on-or-before/on-or-after datetime filtering.
+    """
 
     __slots__ = ("_param_name_on_or_after", "_param_name_on_or_before", "field_name", "on_or_after", "on_or_before")
 
@@ -277,7 +280,7 @@ class OnBeforeAfterFilter(StatementFilter):
 
 
 class InAnyFilter(StatementFilter, ABC, Generic[T]):
-    """Subclass for methods that have a `prefer_any` attribute."""
+    """Base class for collection-based filters that support ANY operations."""
 
     __slots__ = ()
 
@@ -346,7 +349,10 @@ class InCollectionFilter(InAnyFilter[T]):
 
 
 class NotInCollectionFilter(InAnyFilter[T]):
-    """Data required to construct a ``WHERE ... NOT IN (...)`` clause."""
+    """Filter for NOT IN clause queries.
+
+    Constructs WHERE ... NOT IN (...) clauses.
+    """
 
     __slots__ = ("_param_names", "field_name", "values")
 
@@ -401,7 +407,10 @@ class NotInCollectionFilter(InAnyFilter[T]):
 
 
 class AnyCollectionFilter(InAnyFilter[T]):
-    """Data required to construct a ``WHERE column_name = ANY (array_expression)`` clause."""
+    """Filter for PostgreSQL-style ANY clause queries.
+
+    Constructs WHERE column_name = ANY (array_expression) clauses.
+    """
 
     __slots__ = ("_param_names", "field_name", "values")
 
@@ -460,7 +469,10 @@ class AnyCollectionFilter(InAnyFilter[T]):
 
 
 class NotAnyCollectionFilter(InAnyFilter[T]):
-    """Data required to construct a ``WHERE NOT (column_name = ANY (array_expression))`` clause."""
+    """Filter for PostgreSQL-style NOT ANY clause queries.
+
+    Constructs WHERE NOT (column_name = ANY (array_expression)) clauses.
+    """
 
     __slots__ = ("_param_names", "field_name", "values")
 
@@ -514,7 +526,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
 
 
 class PaginationFilter(StatementFilter, ABC):
-    """Subclass for methods that function as a pagination type."""
+    """Base class for pagination-related filters."""
 
     __slots__ = ()
 
@@ -524,7 +536,10 @@ class PaginationFilter(StatementFilter, ABC):
 
 
 class LimitOffsetFilter(PaginationFilter):
-    """Data required to add limit/offset filtering to a query."""
+    """Filter for LIMIT and OFFSET clauses.
+
+    Adds pagination support through LIMIT/OFFSET SQL clauses.
+    """
 
     __slots__ = ("_limit_param_name", "_offset_param_name", "limit", "offset")
 
@@ -576,7 +591,10 @@ class LimitOffsetFilter(PaginationFilter):
 
 
 class OrderByFilter(StatementFilter):
-    """Data required to construct a ``ORDER BY ...`` clause."""
+    """Filter for ORDER BY clauses.
+
+    Adds sorting capability to SQL queries.
+    """
 
     __slots__ = ("field_name", "sort_order")
 
@@ -694,7 +712,10 @@ class SearchFilter(StatementFilter):
 
 
 class NotInSearchFilter(SearchFilter):
-    """Data required to construct a ``WHERE field_name NOT LIKE '%' || :value || '%'`` clause."""
+    """Filter for negated text search queries.
+
+    Constructs WHERE field_name NOT LIKE '%value%' clauses.
+    """
 
     __slots__ = ()
 

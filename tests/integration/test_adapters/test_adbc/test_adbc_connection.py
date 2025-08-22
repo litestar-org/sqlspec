@@ -6,8 +6,11 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.adbc import AdbcConfig
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
+# xdist_group is assigned per test based on database backend to enable parallel execution
+
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 def test_connection(postgres_service: PostgresService) -> None:
     """Test ADBC connection to PostgreSQL."""
@@ -25,7 +28,8 @@ def test_connection(postgres_service: PostgresService) -> None:
             assert result == (1,)
 
 
-@pytest.mark.xdist_group("adbc_duckdb")
+@pytest.mark.xdist_group("duckdb")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 def test_duckdb_connection() -> None:
     """Test ADBC connection to DuckDB."""
@@ -39,7 +43,8 @@ def test_duckdb_connection() -> None:
             assert result == (1,)
 
 
-@pytest.mark.xdist_group("adbc_sqlite")
+@pytest.mark.xdist_group("sqlite")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 def test_sqlite_connection() -> None:
     """Test ADBC connection to SQLite."""
@@ -57,7 +62,8 @@ def test_sqlite_connection() -> None:
     "not config.getoption('--run-bigquery-tests', default=False)",
     reason="BigQuery ADBC tests require --run-bigquery-tests flag and valid GCP credentials",
 )
-@pytest.mark.xdist_group("adbc_bigquery")
+@pytest.mark.xdist_group("bigquery")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 def test_bigquery_connection() -> None:
     """Test ADBC connection to BigQuery (requires valid GCP setup)."""
@@ -78,6 +84,7 @@ def test_bigquery_connection() -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_connection_info_retrieval(postgres_service: PostgresService) -> None:
     """Test ADBC connection info retrieval for dialect detection."""
     config = AdbcConfig(
@@ -97,6 +104,7 @@ def test_connection_info_retrieval(postgres_service: PostgresService) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_connection_with_session_management(postgres_service: PostgresService) -> None:
     """Test ADBC connection with session management."""
     config = AdbcConfig(
@@ -113,7 +121,8 @@ def test_connection_with_session_management(postgres_service: PostgresService) -
         assert result.data[0]["test_value"] == 1
 
 
-@pytest.mark.xdist_group("adbc_sqlite")
+@pytest.mark.xdist_group("sqlite")
+@pytest.mark.adbc
 def test_sqlite_memory_connection() -> None:
     """Test ADBC SQLite in-memory connection."""
     config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
@@ -134,7 +143,8 @@ def test_sqlite_memory_connection() -> None:
         assert result.data[0]["data"] == "test_data"
 
 
-@pytest.mark.xdist_group("adbc_duckdb")
+@pytest.mark.xdist_group("duckdb")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 def test_duckdb_connection_with_arrow_features() -> None:
     """Test ADBC DuckDB connection with Arrow-specific features."""
@@ -158,6 +168,7 @@ def test_duckdb_connection_with_arrow_features() -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_connection_transaction_handling(postgres_service: PostgresService) -> None:
     """Test ADBC connection transaction handling."""
     config = AdbcConfig(

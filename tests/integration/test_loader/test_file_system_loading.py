@@ -6,8 +6,6 @@ Tests real file system operations including:
 - Permission handling and error scenarios
 - Large file handling and performance
 - Concurrent file access patterns
-
-Uses CORE_ROUND_3 architecture with real file I/O operations.
 """
 
 import os

@@ -15,7 +15,11 @@ Tests cover:
 
 import string
 
+import pytest
+
 from sqlspec import sql
+
+pytestmark = pytest.mark.xdist_group("builder")
 
 
 def test_where_eq_uses_column_name_as_parameter() -> None:

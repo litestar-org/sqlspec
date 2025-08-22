@@ -17,6 +17,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import Literal
 
 from sqlspec.core.parameters import ParameterProcessor
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -61,6 +62,8 @@ class CompiledSQL:
     """Compiled SQL result.
 
     Contains the result of SQL compilation with information needed for execution.
+    Immutable container holding compiled SQL text, processed parameters, operation
+    type, and execution metadata.
     """
 
     __slots__ = (
@@ -133,7 +136,9 @@ class CompiledSQL:
 class SQLProcessor:
     """SQL processor with compilation and caching.
 
-    Processes SQL statements with parameter processing and caching.
+    Processes SQL statements by compiling them into executable format with
+    parameter substitution. Includes LRU-style caching for compilation results
+    to avoid re-processing identical statements.
     """
 
     __slots__ = ("_cache", "_cache_hits", "_cache_misses", "_config", "_max_cache_size", "_parameter_processor")
@@ -157,7 +162,7 @@ class SQLProcessor:
 
         Args:
             sql: SQL string for compilation
-            parameters: Parameter values
+            parameters: Parameter values for substitution
             is_many: Whether this is for execute_many operation
 
         Returns:
@@ -261,6 +266,9 @@ class SQLProcessor:
                 supports_many=isinstance(final_params, list) and len(final_params) > 0,
             )
 
+        except SQLSpecError:
+            # Re-raise SQLSpecError (validation errors, parameter mismatches) - these should fail hard
+            raise
         except Exception as e:
             logger.warning("Compilation failed, using fallback: %s", e)
             return CompiledSQL(compiled_sql=sql, execution_parameters=parameters, operation_type="UNKNOWN")
@@ -340,7 +348,7 @@ class SQLProcessor:
         return sql, parameters
 
     def clear_cache(self) -> None:
-        """Clear cache."""
+        """Clear compilation cache and reset statistics."""
         self._cache.clear()
         self._cache_hits = 0
         self._cache_misses = 0

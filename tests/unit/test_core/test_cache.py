@@ -1,9 +1,8 @@
-"""Comprehensive unit tests for the SQLSpec cache system.
+"""Unit tests for the SQLSpec cache system.
 
-This module tests the unified caching system that is critical to the CORE_ROUND_3
-architecture performance optimization. Tests cover:
+This module tests the unified caching system. Tests cover:
 
-1. CacheKey - High-performance immutable cache keys
+1. CacheKey - Immutable cache keys
 2. CacheStats - Cache statistics tracking and monitoring
 3. UnifiedCache - Main LRU cache implementation with TTL support
 4. StatementCache - Specialized caching for compiled SQL statements
@@ -13,9 +12,9 @@ architecture performance optimization. Tests cover:
 8. Thread safety - Concurrent access and operations
 9. Performance characteristics - O(1) operations and memory efficiency
 
-The cache system provides high-performance, thread-safe caching with LRU eviction,
-TTL-based expiration, and comprehensive statistics tracking for monitoring and
-optimization across the entire SQLSpec system.
+The cache system provides thread-safe caching with LRU eviction,
+TTL-based expiration, and statistics tracking for monitoring
+across the entire SQLSpec system.
 """
 
 import threading
@@ -47,6 +46,8 @@ from sqlspec.core.cache import (
     sql_cache,
     update_cache_config,
 )
+
+pytestmark = pytest.mark.xdist_group("core")
 
 
 def test_cache_key_creation_and_immutability() -> None:

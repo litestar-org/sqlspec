@@ -1,4 +1,4 @@
-"""AsyncMy-specific feature tests with CORE_ROUND_3 architecture.
+"""AsyncMy-specific feature tests.
 
 This test suite focuses on AsyncMy adapter specific functionality including:
 - Connection pooling behavior
@@ -16,6 +16,8 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL
+
+pytestmark = pytest.mark.xdist_group("mysql")
 
 
 @pytest.fixture
@@ -51,7 +53,6 @@ async def asyncmy_pooled_session(mysql_service: MySQLService) -> AsyncGenerator[
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_mysql_json_operations(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test MySQL JSON column operations."""
     driver = asyncmy_pooled_session
@@ -87,7 +88,6 @@ async def test_asyncmy_mysql_json_operations(asyncmy_pooled_session: AsyncmyDriv
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test MySQL-specific SQL features and syntax."""
     driver = asyncmy_pooled_session
@@ -132,7 +132,6 @@ async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: Async
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_transaction_isolation_levels(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test MySQL transaction isolation level handling."""
     driver = asyncmy_pooled_session
@@ -160,7 +159,6 @@ async def test_asyncmy_transaction_isolation_levels(asyncmy_pooled_session: Asyn
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_stored_procedures(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test stored procedure execution."""
     driver = asyncmy_pooled_session
@@ -188,7 +186,6 @@ async def test_asyncmy_stored_procedures(asyncmy_pooled_session: AsyncmyDriver) 
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_bulk_operations_performance(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test bulk operations for performance characteristics."""
     driver = asyncmy_pooled_session
@@ -224,7 +221,6 @@ async def test_asyncmy_bulk_operations_performance(asyncmy_pooled_session: Async
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_error_recovery(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test error handling and connection recovery."""
     driver = asyncmy_pooled_session
@@ -252,7 +248,6 @@ async def test_asyncmy_error_recovery(asyncmy_pooled_session: AsyncmyDriver) -> 
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_sql_object_advanced_features(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test SQL object integration with advanced AsyncMy features."""
     driver = asyncmy_pooled_session

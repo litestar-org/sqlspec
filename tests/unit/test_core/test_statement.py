@@ -1,7 +1,6 @@
-"""Comprehensive unit tests for sqlspec.core.statement module.
+"""Unit tests for sqlspec.core.statement module.
 
-This test module validates the enhanced SQL class and StatementConfig implementations
-that provide 100% backward compatibility while internally using optimized processing.
+This test module validates the SQL class and StatementConfig implementations.
 
 Key Test Coverage:
 1. SQL class single-pass processing - Verify SQL is parsed exactly once
@@ -14,7 +13,7 @@ Key Test Coverage:
 8. Edge cases - Complex queries, comments, string literals
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,9 +30,7 @@ from sqlspec.core.statement import (
 )
 from sqlspec.typing import Empty
 
-if TYPE_CHECKING:
-    pass
-
+pytestmark = pytest.mark.xdist_group("core")
 
 DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
     default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}

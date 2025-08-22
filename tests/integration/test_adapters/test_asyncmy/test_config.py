@@ -6,6 +6,8 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyConnectionParams, AsyncmyDriver, AsyncmyPoolParams
 from sqlspec.core.statement import StatementConfig
 
+pytestmark = pytest.mark.xdist_group("mysql")
+
 
 def test_asyncmy_typed_dict_structure() -> None:
     """Test Asyncmy TypedDict structure."""
@@ -78,7 +80,6 @@ def test_asyncmy_config_initialization() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
 async def test_asyncmy_config_provide_session(mysql_service: MySQLService) -> None:
     """Test Asyncmy config provide_session context manager."""
 

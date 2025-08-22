@@ -8,7 +8,7 @@ from sqlspec.adapters.psqlpy import PsqlpyDriver
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL
 
-pytestmark = [pytest.mark.psqlpy, pytest.mark.postgres, pytest.mark.integration]
+pytestmark = pytest.mark.xdist_group("postgres")
 
 
 async def test_psqlpy_performance_features(psqlpy_session: PsqlpyDriver) -> None:
@@ -152,7 +152,7 @@ async def test_psqlpy_transaction_behavior(psqlpy_session: PsqlpyDriver) -> None
 
 
 async def test_psqlpy_with_core_round_3_sql(psqlpy_session: PsqlpyDriver) -> None:
-    """Test PSQLPy integration with CORE_ROUND_3 SQL objects."""
+    """Test PSQLPy integration with SQL objects."""
 
     complex_sql = SQL("""
         WITH RECURSIVE series(n) AS (

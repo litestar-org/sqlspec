@@ -1,15 +1,18 @@
-"""Comprehensive tests for sqlspec.utils.serializers module.
+"""Tests for sqlspec.utils.serializers module.
 
 Tests for JSON serialization utilities that are re-exported from sqlspec._serialization.
 Covers all serialization scenarios including edge cases and type handling.
 """
 
 import json
+import math
 from typing import Any
 
 import pytest
 
 from sqlspec.utils.serializers import from_json, to_json
+
+pytestmark = pytest.mark.xdist_group("utils")
 
 
 def test_to_json_basic_types() -> None:
@@ -250,7 +253,7 @@ def test_from_json_trailing_commas_error() -> None:
 
 def test_round_trip_basic() -> None:
     """Test round-trip with basic data types."""
-    test_data = ["string", 42, 3.14, True, False, None, [], {}]
+    test_data = ["string", 42, math.pi, True, False, None, [], {}]
 
     for data in test_data:
         serialized = to_json(data)
@@ -415,7 +418,7 @@ def test_compatibility_consistent_formatting() -> None:
     [
         "simple string",
         42,
-        3.14,
+        math.pi,
         True,
         False,
         None,

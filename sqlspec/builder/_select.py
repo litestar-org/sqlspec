@@ -1,7 +1,7 @@
-"""Safe SQL query builder with validation and parameter binding.
+"""SELECT statement builder.
 
-This module provides a fluent interface for building SQL queries safely,
-with automatic parameter binding and validation.
+Provides a fluent interface for building SQL SELECT queries with
+parameter binding and validation.
 """
 
 import re
@@ -44,9 +44,10 @@ class Select(
     PivotClauseMixin,
     UnpivotClauseMixin,
 ):
-    """Type-safe builder for SELECT queries with schema/model integration.
+    """Builder for SELECT queries.
 
-    This builder provides a fluent, safe interface for constructing SQL SELECT statements.
+    Provides a fluent interface for constructing SQL SELECT statements
+    with parameter binding and validation.
 
     Example:
         >>> class User(BaseModel):

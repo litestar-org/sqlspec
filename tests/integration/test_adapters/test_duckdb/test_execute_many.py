@@ -7,6 +7,8 @@ import pytest
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("duckdb")
+
 
 @pytest.fixture
 def duckdb_batch_session() -> "Generator[DuckDBDriver, None, None]":

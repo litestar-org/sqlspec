@@ -8,6 +8,8 @@ import pytest
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.core.result import SQLResult
 
+pytestmark = pytest.mark.xdist_group("duckdb")
+
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
@@ -44,7 +46,6 @@ def duckdb_session() -> Generator[DuckDBDriver, None, None]:
         pytest.param({"name": "test_name", "id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("duckdb")
 def test_insert(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test inserting data with different parameter styles."""
     if style == "tuple_binds":
@@ -73,7 +74,6 @@ def test_insert(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle
         pytest.param({"name": "test_name", "id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("duckdb")
 def test_select(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test selecting data with different parameter styles."""
 
@@ -116,7 +116,6 @@ def test_select(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle
         pytest.param({"name": "test_name", "id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("duckdb")
 def test_select_value(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test select value with different parameter styles."""
 
@@ -148,7 +147,6 @@ def test_select_value(duckdb_session: DuckDBDriver, parameters: Any, style: Para
     duckdb_session.execute_script("DELETE FROM test_table")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_execute_many_insert(duckdb_session: DuckDBDriver) -> None:
     """Test execute_many functionality for batch inserts."""
     insert_sql = "INSERT INTO test_table (name, id) VALUES (?, ?)"
@@ -164,7 +162,6 @@ def test_execute_many_insert(duckdb_session: DuckDBDriver) -> None:
     assert select_result.data[0]["count"] == len(parameters_list)
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_execute_script(duckdb_session: DuckDBDriver) -> None:
     """Test execute_script functionality for multi-statement scripts."""
     script = """
@@ -181,7 +178,6 @@ def test_execute_script(duckdb_session: DuckDBDriver) -> None:
     assert select_result.data[0]["count"] == 2
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_update_operation(duckdb_session: DuckDBDriver) -> None:
     """Test UPDATE operations."""
 
@@ -199,7 +195,6 @@ def test_update_operation(duckdb_session: DuckDBDriver) -> None:
     assert select_result.data[0]["name"] == "updated_name"
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_delete_operation(duckdb_session: DuckDBDriver) -> None:
     """Test DELETE operations."""
 
@@ -217,7 +212,6 @@ def test_delete_operation(duckdb_session: DuckDBDriver) -> None:
     assert select_result.data[0]["count"] == 0
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB-specific data types and functionality."""
 
@@ -263,7 +257,6 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     duckdb_session.execute_script("DROP TABLE data_types_test")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:
     """Test complex SQL queries with DuckDB."""
 
@@ -321,7 +314,6 @@ def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:
     duckdb_session.execute_script("DROP TABLE employees; DROP TABLE departments;")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_duckdb_window_functions(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB window functions."""
 
@@ -362,7 +354,6 @@ def test_duckdb_window_functions(duckdb_session: DuckDBDriver) -> None:
     duckdb_session.execute_script("DROP TABLE sales_data")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_duckdb_schema_operations(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB schema operations (DDL)."""
 
@@ -395,7 +386,6 @@ def test_duckdb_schema_operations(duckdb_session: DuckDBDriver) -> None:
     duckdb_session.execute("DROP TABLE schema_test")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_duckdb_performance_bulk_operations(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB performance with bulk operations."""
 
@@ -433,7 +423,6 @@ def test_duckdb_performance_bulk_operations(duckdb_session: DuckDBDriver) -> Non
     duckdb_session.execute_script("DROP TABLE bulk_test")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_duckdb_error_handling_and_edge_cases(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB error handling and edge cases."""
 
@@ -459,7 +448,6 @@ def test_duckdb_error_handling_and_edge_cases(duckdb_session: DuckDBDriver) -> N
     duckdb_session.execute_script("DROP TABLE constraint_test")
 
 
-@pytest.mark.xdist_group("duckdb")
 def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> None:
     """Test comprehensive SQLResult methods."""
 

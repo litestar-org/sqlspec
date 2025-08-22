@@ -12,7 +12,7 @@ def get_sqlspec_scope_state(scope: "Scope", key: str, default: Any = None, pop: 
     """Get an internal value from connection scope state.
 
     Note:
-        If called with a default value, this method behaves like to `dict.set_default()`, both setting the key in the
+        If called with a default value, this method behaves like `dict.setdefault()`, both setting the key in the
         namespace to the default value, and returning it.
 
         If called without a default value, the method behaves like `dict.get()`, returning ``None`` if the key does not

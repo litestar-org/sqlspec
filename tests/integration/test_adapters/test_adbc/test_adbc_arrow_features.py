@@ -25,6 +25,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_arrow_table_metadata_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test Arrow table metadata handling with ADBC."""
     adbc_postgresql_session.execute_script("""
@@ -67,6 +68,7 @@ def test_arrow_table_metadata_handling(adbc_postgresql_session: AdbcDriver) -> N
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_arrow_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test Arrow NULL value handling with ADBC."""
     adbc_postgresql_session.execute_script("""
@@ -120,6 +122,7 @@ def test_arrow_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test Arrow handling of larger datasets with ADBC."""
     adbc_postgresql_session.execute_script("""
@@ -194,7 +197,8 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS arrow_large_test")
 
 
-@pytest.mark.xdist_group("adbc_duckdb")
+@pytest.mark.xdist_group("duckdb")
+@pytest.mark.adbc
 @xfail_if_driver_missing
 @pytest.mark.xfail(reason="DuckDB ADBC driver has not fully implemented executemany support yet")
 def test_arrow_duckdb_advanced_analytics() -> None:
@@ -267,7 +271,8 @@ def test_arrow_duckdb_advanced_analytics() -> None:
         assert len(window_query.data) == 5
 
 
-@pytest.mark.xdist_group("adbc_sqlite")
+@pytest.mark.xdist_group("sqlite")
+@pytest.mark.adbc
 def test_arrow_sqlite_binary_data() -> None:
     """Test Arrow binary data handling with SQLite."""
     config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
@@ -324,6 +329,7 @@ def test_arrow_sqlite_binary_data() -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
 @pytest.mark.xfail(reason="ADBC PostgreSQL driver has array binding issues with Arrow schema inference")
 def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) -> None:
     """Test PostgreSQL array operations with Arrow."""

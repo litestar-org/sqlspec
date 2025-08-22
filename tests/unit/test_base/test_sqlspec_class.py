@@ -1,7 +1,6 @@
-"""Comprehensive unit tests for the SQLSpec base class.
+"""Unit tests for the SQLSpec base class.
 
-This module tests the centralized cache configuration management functionality
-that is critical to the CORE_ROUND_3 architecture. Tests cover:
+This module tests the centralized cache configuration management functionality. Tests cover:
 
 1. Centralized Cache Configuration Management - Global cache configuration control
 2. Configuration methods - get_cache_config(), update_cache_config(), configure_cache()
@@ -12,8 +11,7 @@ that is critical to the CORE_ROUND_3 architecture. Tests cover:
 7. Configuration validation - Invalid configuration handling
 
 The SQLSpec class serves as the centralized manager for all cache configuration
-across the entire SQLSpec system, ensuring consistent behavior and performance
-optimization through its unified cache management approach.
+across the entire SQLSpec system.
 """
 
 import concurrent.futures
@@ -25,6 +23,8 @@ import pytest
 
 from sqlspec.base import SQLSpec
 from sqlspec.core.cache import CacheConfig
+
+pytestmark = pytest.mark.xdist_group("base")
 
 
 def test_get_cache_config_returns_default_configuration() -> None:

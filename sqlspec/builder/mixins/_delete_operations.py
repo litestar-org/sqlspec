@@ -1,4 +1,8 @@
-"""Delete operation mixins for SQL builders."""
+"""DELETE operation mixins.
+
+Provides mixins for DELETE statement functionality including
+FROM clause specification.
+"""
 
 from typing import Optional
 

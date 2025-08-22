@@ -7,6 +7,8 @@ import pytest
 from sqlspec.core.result import SQLResult, create_sql_result
 from sqlspec.core.statement import SQL
 
+pytestmark = pytest.mark.xdist_group("core")
+
 
 def test_sql_result_basic_iteration() -> None:
     """Test basic iteration over SQLResult rows."""

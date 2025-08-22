@@ -10,6 +10,8 @@ from sqlspec._sql import SQLFactory
 from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLBuilderError
 
+pytestmark = pytest.mark.xdist_group("builder")
+
 
 def test_sql_factory_instance() -> None:
     """Test that sql is an instance of SQLFactory."""
@@ -1498,8 +1500,8 @@ def test_merge_backward_compatibility() -> None:
     assert "status" in stmt.parameters
 
 
-def test_merge_comprehensive_example() -> None:
-    """Test comprehensive MERGE example with all features."""
+def test_merge_complete_example() -> None:
+    """Test MERGE example with all features."""
     query = (
         sql.merge("users")
         .using("new_users")

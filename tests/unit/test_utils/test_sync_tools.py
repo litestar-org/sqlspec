@@ -21,6 +21,8 @@ from sqlspec.utils.sync_tools import (
     with_ensure_async_,
 )
 
+pytestmark = pytest.mark.xdist_group("utils")
+
 
 def test_capacity_limiter_basic() -> None:
     """Test CapacityLimiter basic functionality."""
@@ -366,8 +368,8 @@ def test_sync_tools_error_handling() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_tools_comprehensive() -> None:
-    """Test async tools work together comprehensively."""
+async def test_async_tools_integration() -> None:
+    """Test async tools work together."""
 
     def blocking_operation(x: int) -> int:
         return x**2

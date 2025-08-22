@@ -8,8 +8,9 @@ import pytest
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.migrations.commands import MigrationCommands
 
+pytestmark = pytest.mark.xdist_group("sqlite")
 
-@pytest.mark.xdist_group("migrations")
+
 def test_sqlite_migration_full_workflow() -> None:
     """Test full SQLite migration workflow: init -> create -> upgrade -> downgrade."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -69,7 +70,6 @@ def down():
             assert len(result.data) == 0
 
 
-@pytest.mark.xdist_group("migrations")
 def test_sqlite_multiple_migrations_workflow() -> None:
     """Test SQLite workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -162,7 +162,6 @@ def down():
             assert len(table_names) == 0
 
 
-@pytest.mark.xdist_group("migrations")
 def test_sqlite_migration_current_command() -> None:
     """Test the current migration command shows correct version for SQLite."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -198,7 +197,6 @@ def down():
         commands.current(verbose=True)
 
 
-@pytest.mark.xdist_group("migrations")
 def test_sqlite_migration_error_handling() -> None:
     """Test SQLite migration error handling."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -231,7 +229,6 @@ def down():
             commands.upgrade()
 
 
-@pytest.mark.xdist_group("migrations")
 def test_sqlite_migration_with_transactions() -> None:
     """Test SQLite migrations work properly with transactions."""
     with tempfile.TemporaryDirectory() as temp_dir:

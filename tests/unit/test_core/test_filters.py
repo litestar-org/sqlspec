@@ -6,6 +6,8 @@ ORDER BY, LIMIT/OFFSET, and other SQL modifications with proper parameter naming
 
 from datetime import datetime
 
+import pytest
+
 from sqlspec.core.filters import (
     AnyCollectionFilter,
     BeforeAfterFilter,
@@ -18,6 +20,8 @@ from sqlspec.core.filters import (
 )
 from sqlspec.core.statement import SQL
 from sqlspec.driver._common import CommonDriverAttributesMixin
+
+pytestmark = pytest.mark.xdist_group("core")
 
 
 def test_before_after_filter_uses_column_based_parameters() -> None:

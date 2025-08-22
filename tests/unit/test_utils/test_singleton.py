@@ -5,7 +5,11 @@ Tests singleton pattern implementation using metaclass.
 
 import threading
 
+import pytest
+
 from sqlspec.utils.singleton import SingletonMeta
+
+pytestmark = pytest.mark.xdist_group("utils")
 
 
 class SingletonTestClass(metaclass=SingletonMeta):

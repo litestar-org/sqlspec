@@ -1,21 +1,16 @@
 """SQL statement splitter with caching and dialect support.
 
-This module provides a SQL script statement splitter with caching and
-multiple dialect support.
+This module provides SQL script statement splitting functionality
+with support for multiple SQL dialects and caching for performance.
 
 Components:
-- StatementSplitter: SQL splitter with caching
-- DialectConfig: Dialect configuration system
-- Token/TokenType: Tokenization system
-- Caching: LRU caching for split results
-- Pattern compilation caching
+    StatementSplitter: Main SQL script splitter with caching
+    DialectConfig: Base class for dialect-specific configurations
+    Token/TokenType: Token representation and classification
+    Caching: Pattern and result caching for performance
 
-Features:
-- Support for multiple SQL dialects (Oracle, T-SQL, PostgreSQL, MySQL, SQLite, DuckDB, BigQuery)
-- Cached pattern compilation
-- LRU caching for split results
-- Optimized tokenization
-- Complete preservation of split_sql_script function
+Supported dialects include Oracle PL/SQL, T-SQL, PostgreSQL,
+MySQL, SQLite, DuckDB, and BigQuery.
 """
 
 import re
@@ -166,7 +161,11 @@ class DialectConfig(ABC):
         return self._max_nesting_depth
 
     def get_all_token_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
-        """Assembles the complete, ordered list of token regex patterns."""
+        """Get the complete ordered list of token patterns for this dialect.
+
+        Returns:
+            List of tuples containing token types and their regex patterns
+        """
         patterns: list[tuple[TokenType, TokenPattern]] = [
             (TokenType.COMMENT_LINE, r"--[^\n]*"),
             (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?\*/"),
@@ -190,16 +189,36 @@ class DialectConfig(ABC):
         return patterns
 
     def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
-        """Override to add dialect-specific token patterns."""
+        """Get dialect-specific token patterns.
+
+        Returns:
+            List of dialect-specific token patterns
+        """
         return []
 
     @staticmethod
     def is_real_block_ender(tokens: list[Token], current_pos: int) -> bool:  # noqa: ARG004
-        """Check if this END keyword is actually a block ender."""
+        """Check if END keyword represents an actual block terminator.
+
+        Args:
+            tokens: List of all tokens
+            current_pos: Position of END token
+
+        Returns:
+            True if END represents a block terminator, False otherwise
+        """
         return True
 
     def should_delay_semicolon_termination(self, tokens: list[Token], current_pos: int) -> bool:
-        """Check if semicolon termination should be delayed."""
+        """Check if semicolon termination should be delayed.
+
+        Args:
+            tokens: List of all tokens
+            current_pos: Current position in token list
+
+        Returns:
+            True if termination should be delayed, False otherwise
+        """
         return False
 
 
@@ -237,7 +256,15 @@ class OracleDialectConfig(DialectConfig):
         return self._special_terminators
 
     def should_delay_semicolon_termination(self, tokens: list[Token], current_pos: int) -> bool:
-        """Check if we should delay semicolon termination to look for a slash."""
+        """Check if semicolon termination should be delayed for Oracle slash terminators.
+
+        Args:
+            tokens: List of all tokens
+            current_pos: Current position in token list
+
+        Returns:
+            True if termination should be delayed, False otherwise
+        """
         pos = current_pos - 1
         while pos >= 0:
             token = tokens[pos]
@@ -251,7 +278,15 @@ class OracleDialectConfig(DialectConfig):
         return False
 
     def _has_upcoming_slash(self, tokens: list[Token], current_pos: int) -> bool:
-        """Check if there's a / terminator coming up on its own line."""
+        """Check if there's a slash terminator on its own line ahead.
+
+        Args:
+            tokens: List of all tokens
+            current_pos: Current position in token list
+
+        Returns:
+            True if slash terminator found on its own line, False otherwise
+        """
         pos = current_pos + 1
         found_newline = False
 
@@ -273,7 +308,15 @@ class OracleDialectConfig(DialectConfig):
 
     @staticmethod
     def is_real_block_ender(tokens: list[Token], current_pos: int) -> bool:
-        """Check if this END keyword is actually a block ender for Oracle PL/SQL."""
+        """Check if END keyword represents a block terminator in Oracle PL/SQL.
+
+        Args:
+            tokens: List of all tokens
+            current_pos: Position of END token
+
+        Returns:
+            True if END represents a block terminator, False otherwise
+        """
         pos = current_pos + 1
         while pos < len(tokens):
             next_token = tokens[pos]
@@ -296,7 +339,18 @@ class OracleDialectConfig(DialectConfig):
 
     @staticmethod
     def _handle_slash_terminator(tokens: list[Token], current_pos: int) -> bool:
-        """Oracle / must be on its own line after whitespace only."""
+        """Check if Oracle slash terminator is properly positioned.
+
+        Oracle slash terminators must be on their own line with only
+        whitespace or comments preceding them on the same line.
+
+        Args:
+            tokens: List of all tokens
+            current_pos: Position of slash token
+
+        Returns:
+            True if slash is properly positioned, False otherwise
+        """
         if current_pos == 0:
             return True
 
@@ -374,12 +428,29 @@ class PostgreSQLDialectConfig(DialectConfig):
         return self._statement_terminators
 
     def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
-        """Add PostgreSQL-specific patterns like dollar-quoted strings."""
+        """Get PostgreSQL-specific token patterns.
+
+        Returns:
+        List of dialect-specific token patterns
+        """
         return [(TokenType.STRING_LITERAL, self._handle_dollar_quoted_string)]
 
     @staticmethod
     def _handle_dollar_quoted_string(text: str, position: int, line: int, column: int) -> Optional[Token]:
-        """Handle PostgreSQL dollar-quoted strings like $tag$...$tag$."""
+        """Handle PostgreSQL dollar-quoted string literals.
+
+        Parses dollar-quoted strings in the format $tag$content$tag$
+        where tag is optional.
+
+        Args:
+            text: The full SQL text being tokenized
+            position: Current position in the text
+            line: Current line number
+            column: Current column number
+
+        Returns:
+            Token representing the dollar-quoted string, or None if no match
+        """
         start_match = re.match(r"\$([a-zA-Z_][a-zA-Z0-9_]*)?\$", text[position:])
         if not start_match:
             return None
@@ -548,7 +619,11 @@ _cache_lock = threading.Lock()
 
 
 def _get_pattern_cache() -> UnifiedCache:
-    """Get or create the pattern compilation cache."""
+    """Get or create the global pattern compilation cache.
+
+    Returns:
+        The pattern cache instance
+    """
     global _pattern_cache
     if _pattern_cache is None:
         with _cache_lock:
@@ -558,7 +633,11 @@ def _get_pattern_cache() -> UnifiedCache:
 
 
 def _get_result_cache() -> UnifiedCache:
-    """Get or create the result cache."""
+    """Get or create the global result cache.
+
+    Returns:
+        The result cache instance
+    """
     global _result_cache
     if _result_cache is None:
         with _cache_lock:
@@ -574,7 +653,12 @@ class StatementSplitter:
     __slots__ = SPLITTER_SLOTS
 
     def __init__(self, dialect: DialectConfig, strip_trailing_semicolon: bool = False) -> None:
-        """Initialize the splitter with caching and dialect support."""
+        """Initialize the statement splitter.
+
+        Args:
+            dialect: The SQL dialect configuration to use
+            strip_trailing_semicolon: Whether to remove trailing semicolons from statements
+        """
         self._dialect = dialect
         self._strip_trailing_semicolon = strip_trailing_semicolon
         self._token_patterns = dialect.get_all_token_patterns()
@@ -587,7 +671,11 @@ class StatementSplitter:
         self._compiled_patterns = self._get_or_compile_patterns()
 
     def _get_or_compile_patterns(self) -> list[tuple[TokenType, CompiledTokenPattern]]:
-        """Get compiled patterns from cache or compile and cache them."""
+        """Get compiled regex patterns from cache or compile and cache them.
+
+        Returns:
+            List of compiled token patterns with their types
+        """
         cache_key = CacheKey(("pattern", self._pattern_cache_key))
 
         cached_patterns = self._pattern_cache.get(cache_key)
@@ -605,7 +693,14 @@ class StatementSplitter:
         return compiled
 
     def _tokenize(self, sql: str) -> Generator[Token, None, None]:
-        """Tokenize SQL string."""
+        """Tokenize SQL string into Token objects.
+
+        Args:
+            sql: The SQL string to tokenize
+
+        Yields:
+            Token objects representing the lexical elements
+        """
         pos = 0
         line = 1
         line_start = 0
@@ -650,7 +745,14 @@ class StatementSplitter:
                 pos += 1
 
     def split(self, sql: str) -> list[str]:
-        """Split SQL script with result caching."""
+        """Split SQL script into individual statements.
+
+        Args:
+            sql: The SQL script to split
+
+        Returns:
+            List of individual SQL statements
+        """
         script_hash = hash(sql)
         cache_key = CacheKey(("split", self._dialect.name, script_hash, self._strip_trailing_semicolon))
 
@@ -664,7 +766,14 @@ class StatementSplitter:
         return statements
 
     def _do_split(self, sql: str) -> list[str]:
-        """Perform SQL script splitting."""
+        """Perform the actual SQL script splitting logic.
+
+        Args:
+            sql: The SQL script to split
+
+        Returns:
+            List of individual SQL statements
+        """
         statements = []
         current_statement_tokens = []
         current_statement_chars = []
@@ -738,14 +847,28 @@ class StatementSplitter:
 
     @staticmethod
     def _is_plsql_block(tokens: list[Token]) -> bool:
-        """Check if the token list represents a PL/SQL block."""
+        """Check if the token list represents a PL/SQL block.
+
+        Args:
+            tokens: List of tokens to examine
+
+        Returns:
+            True if tokens represent a PL/SQL block, False otherwise
+        """
         for token in tokens:
             if token.type == TokenType.KEYWORD:
                 return token.value.upper() in {"BEGIN", "DECLARE"}
         return False
 
     def _contains_executable_content(self, statement: str) -> bool:
-        """Check if a statement contains actual executable content."""
+        """Check if a statement contains executable content.
+
+        Args:
+            statement: The SQL statement to check
+
+        Returns:
+            True if statement contains non-whitespace/non-comment content
+        """
         tokens = list(self._tokenize(statement))
 
         for token in tokens:
@@ -793,7 +916,10 @@ def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_
 
 
 def clear_splitter_caches() -> None:
-    """Clear all splitter caches for memory management."""
+    """Clear all splitter caches.
+
+    Clears both pattern and result caches to free memory.
+    """
     pattern_cache = _get_pattern_cache()
     result_cache = _get_result_cache()
     pattern_cache.clear()

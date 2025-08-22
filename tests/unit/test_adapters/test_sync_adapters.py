@@ -1,6 +1,6 @@
-"""Tests for synchronous database adapters based on CORE_ROUND_3 architecture."""
+"""Tests for synchronous database adapters."""
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -12,9 +12,7 @@ from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
 from tests.unit.test_adapters.conftest import MockSyncConnection, MockSyncDriver
 
-if TYPE_CHECKING:
-    pass
-
+pytestmark = pytest.mark.xdist_group("adapter_unit")
 __all__ = ()
 
 

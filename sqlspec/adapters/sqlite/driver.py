@@ -50,19 +50,39 @@ sqlite_statement_config = StatementConfig(
 
 
 class SqliteCursor:
-    """Context manager for SQLite cursor management."""
+    """Context manager for SQLite cursor management.
+
+    Provides automatic cursor creation and cleanup for SQLite database operations.
+    """
 
     __slots__ = ("connection", "cursor")
 
     def __init__(self, connection: "SqliteConnection") -> None:
+        """Initialize cursor manager.
+
+        Args:
+            connection: SQLite database connection
+        """
         self.connection = connection
         self.cursor: Optional[sqlite3.Cursor] = None
 
     def __enter__(self) -> "sqlite3.Cursor":
+        """Create and return a new cursor.
+
+        Returns:
+            Active SQLite cursor object
+        """
         self.cursor = self.connection.cursor()
         return self.cursor
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Clean up cursor resources.
+
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+        """
         _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
             with contextlib.suppress(Exception):
@@ -70,14 +90,33 @@ class SqliteCursor:
 
 
 class SqliteExceptionHandler:
-    """Context manager for handling SQLite database exceptions."""
+    """Context manager for handling SQLite database exceptions.
+
+    Catches SQLite-specific exceptions and converts them to appropriate SQLSpec exceptions.
+    """
 
     __slots__ = ()
 
     def __enter__(self) -> None:
-        return None
+        """Enter exception handling context.
+
+        Returns:
+            None
+        """
+        return
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Handle exceptions and convert to SQLSpec exceptions.
+
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+
+        Raises:
+            SQLSpecError: For general database errors
+            SQLParsingError: For SQL syntax or parsing errors
+        """
         if exc_type is None:
             return
 
@@ -129,6 +168,13 @@ class SqliteDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
+        """Initialize SQLite driver.
+
+        Args:
+            connection: SQLite database connection
+            statement_config: Statement configuration settings
+            driver_features: Driver-specific feature flags
+        """
         if statement_config is None:
             cache_config = get_cache_config()
             statement_config = sqlite_statement_config.replace(
@@ -141,11 +187,22 @@ class SqliteDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
-        """Create context manager for SQLite cursor."""
+        """Create context manager for SQLite cursor.
+
+        Args:
+            connection: SQLite database connection
+
+        Returns:
+            Cursor context manager for safe cursor operations
+        """
         return SqliteCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
-        """Handle database-specific exceptions and wrap them appropriately."""
+        """Handle database-specific exceptions and wrap them appropriately.
+
+        Returns:
+            Context manager that converts SQLite exceptions to SQLSpec exceptions
+        """
         return SqliteExceptionHandler()
 
     def _try_special_handling(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "Optional[SQLResult]":
@@ -233,7 +290,11 @@ class SqliteDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     def begin(self) -> None:
-        """Begin a database transaction."""
+        """Begin a database transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be started
+        """
         try:
             if not self.connection.in_transaction:
                 self.connection.execute("BEGIN")
@@ -242,7 +303,11 @@ class SqliteDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def rollback(self) -> None:
-        """Rollback the current transaction."""
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be rolled back
+        """
         try:
             self.connection.rollback()
         except sqlite3.Error as e:
@@ -250,7 +315,11 @@ class SqliteDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
-        """Commit the current transaction."""
+        """Commit the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be committed
+        """
         try:
             self.connection.commit()
         except sqlite3.Error as e:

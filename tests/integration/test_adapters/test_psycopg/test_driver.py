@@ -13,6 +13,8 @@ from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
+pytestmark = pytest.mark.xdist_group("postgres")
+
 
 @pytest.fixture
 def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncDriver, None, None]:
@@ -61,7 +63,6 @@ def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncD
         config.close_pool()
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
     """Test basic CRUD operations."""
 
@@ -102,7 +103,6 @@ def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_styles(psycopg_session: PsycopgSyncDriver, parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
 
@@ -123,7 +123,6 @@ def test_psycopg_parameter_styles(psycopg_session: PsycopgSyncDriver, parameters
     assert result.data[0]["name"] == "test_value"
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many(psycopg_session: PsycopgSyncDriver) -> None:
     """Test execute_many functionality."""
     parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
@@ -145,7 +144,6 @@ def test_psycopg_execute_many(psycopg_session: PsycopgSyncDriver) -> None:
     assert ordered_result.data[0]["value"] == 1
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_script(psycopg_session: PsycopgSyncDriver) -> None:
     """Test execute_script functionality."""
     script = """
@@ -171,7 +169,6 @@ def test_psycopg_execute_script(psycopg_session: PsycopgSyncDriver) -> None:
     assert select_result.data[1]["value"] == 888
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_result_methods(psycopg_session: PsycopgSyncDriver) -> None:
     """Test SelectResult and ExecuteResult methods."""
 
@@ -196,7 +193,6 @@ def test_psycopg_result_methods(psycopg_session: PsycopgSyncDriver) -> None:
     assert empty_result.get_first() is None
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_error_handling(psycopg_session: PsycopgSyncDriver) -> None:
     """Test error handling and exception propagation."""
 
@@ -212,7 +208,6 @@ def test_psycopg_error_handling(psycopg_session: PsycopgSyncDriver) -> None:
         psycopg_session.execute("SELECT nonexistent_column FROM test_table")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL data type handling with psycopg."""
 
@@ -267,7 +262,6 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     psycopg_session.execute_script("DROP TABLE data_types_test")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_transactions(psycopg_session: PsycopgSyncDriver) -> None:
     """Test transaction behavior."""
 
@@ -279,7 +273,6 @@ def test_psycopg_transactions(psycopg_session: PsycopgSyncDriver) -> None:
     assert result.data[0]["count"] == 1
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_complex_queries(psycopg_session: PsycopgSyncDriver) -> None:
     """Test complex SQL queries."""
 
@@ -327,7 +320,6 @@ def test_psycopg_complex_queries(psycopg_session: PsycopgSyncDriver) -> None:
     assert subquery_result.data[1]["name"] == "Charlie"
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_schema_operations(psycopg_session: PsycopgSyncDriver) -> None:
     """Test schema operations (DDL)."""
 
@@ -356,7 +348,6 @@ def test_psycopg_schema_operations(psycopg_session: PsycopgSyncDriver) -> None:
     psycopg_session.execute_script("DROP TABLE schema_test")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_column_names_and_metadata(psycopg_session: PsycopgSyncDriver) -> None:
     """Test column names and result metadata."""
 
@@ -377,7 +368,6 @@ def test_psycopg_column_names_and_metadata(psycopg_session: PsycopgSyncDriver) -
     assert row["created_at"] is not None
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_performance_bulk_operations(psycopg_session: PsycopgSyncDriver) -> None:
     """Test performance with bulk operations."""
 
@@ -401,7 +391,6 @@ def test_psycopg_performance_bulk_operations(psycopg_session: PsycopgSyncDriver)
     assert page_result.data[0]["name"] == "bulk_user_20"
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_postgresql_specific_features(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL-specific features with psycopg."""
 
@@ -434,19 +423,19 @@ def test_psycopg_postgresql_specific_features(psycopg_session: PsycopgSyncDriver
     assert window_result.data[0]["prev_value"] is None
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_json_operations(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL JSON operations with psycopg."""
 
     psycopg_session.execute_script("""
-        CREATE TABLE json_test (
+        CREATE TABLE IF NOT EXISTS json_test (
             id SERIAL PRIMARY KEY,
             data JSONB
-        )
+        );
+        DELETE FROM json_test;
     """)
 
-    json_data = '{"name": "test", "age": 30, "tags": ["postgres", "json"]}'
-    psycopg_session.execute("INSERT INTO json_test (data) VALUES (%s)", json_data)
+    json_data = {"name": "test", "age": 30, "tags": ["postgres", "json"]}
+    psycopg_session.execute("INSERT INTO json_test (data) VALUES (%s)", (json_data,))
 
     json_result = psycopg_session.execute("SELECT data->>'name' as name, data->>'age' as age FROM json_test")
     assert isinstance(json_result, SQLResult)
@@ -457,7 +446,6 @@ def test_psycopg_json_operations(psycopg_session: PsycopgSyncDriver) -> None:
     psycopg_session.execute_script("DROP TABLE json_test")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_copy_operations_positional(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL COPY operations with psycopg using positional parameters."""
 
@@ -485,7 +473,6 @@ def test_psycopg_copy_operations_positional(psycopg_session: PsycopgSyncDriver) 
     psycopg_session.execute_script("DROP TABLE copy_test_pos")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_copy_operations_keyword(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL COPY operations with psycopg using keyword parameters."""
 
@@ -513,7 +500,6 @@ def test_psycopg_copy_operations_keyword(psycopg_session: PsycopgSyncDriver) -> 
     psycopg_session.execute_script("DROP TABLE copy_test_kw")
 
 
-@pytest.mark.xdist_group("postgres")
 def test_psycopg_copy_csv_format(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL COPY operations with CSV format."""
 

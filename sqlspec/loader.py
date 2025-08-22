@@ -55,10 +55,10 @@ def _normalize_query_name(name: str) -> str:
     """Normalize query name to be a valid Python identifier.
 
     Args:
-        name: Raw query name from SQL file
+        name: Raw query name from SQL file.
 
     Returns:
-        Normalized query name suitable as Python identifier
+        Normalized query name suitable as Python identifier.
     """
     return TRIM_SPECIAL_CHARS.sub("", name).replace("-", "_")
 
@@ -67,10 +67,10 @@ def _normalize_dialect(dialect: str) -> str:
     """Normalize dialect name with aliases.
 
     Args:
-        dialect: Raw dialect name from SQL file
+        dialect: Raw dialect name from SQL file.
 
     Returns:
-        Normalized dialect name
+        Normalized dialect name.
     """
     normalized = dialect.lower().strip()
     return DIALECT_ALIASES.get(normalized, normalized)
@@ -80,10 +80,10 @@ def _normalize_dialect_for_sqlglot(dialect: str) -> str:
     """Normalize dialect name for SQLGlot compatibility.
 
     Args:
-        dialect: Dialect name from SQL file or parameter
+        dialect: Dialect name from SQL file or parameter.
 
     Returns:
-        SQLGlot-compatible dialect name
+        SQLGlot-compatible dialect name.
     """
     normalized = dialect.lower().strip()
     return DIALECT_ALIASES.get(normalized, normalized)
@@ -125,7 +125,7 @@ class SQLFile:
         """Initialize SQLFile.
 
         Args:
-            content: The raw SQL content from the file.
+            content: Raw SQL content from the file.
             path: Path where the SQL file was loaded from.
             metadata: Optional metadata associated with the SQL file.
             loaded_at: Timestamp when the file was loaded.
@@ -150,7 +150,7 @@ class CachedSQLFile:
         """Initialize cached SQL file.
 
         Args:
-            sql_file: The original SQLFile with content and metadata.
+            sql_file: Original SQLFile with content and metadata.
             parsed_statements: Named statements from the file.
         """
         self.sql_file = sql_file
@@ -291,15 +291,15 @@ class SQLFileLoader:
         """Parse SQL content and extract named statements with dialect specifications.
 
         Args:
-            content: Raw SQL file content to parse
-            file_path: File path for error reporting
+            content: Raw SQL file content to parse.
+            file_path: File path for error reporting.
 
         Returns:
-            Dictionary mapping normalized statement names to NamedStatement objects
+            Dictionary mapping normalized statement names to NamedStatement objects.
 
         Raises:
             SQLFileParseError: If no named statements found, duplicate names exist,
-                              or invalid dialect names are specified
+                              or invalid dialect names are specified.
         """
         statements: dict[str, NamedStatement] = {}
 

@@ -1,6 +1,6 @@
 """Global conftest.py for SQLSpec unit tests.
 
-Provides comprehensive fixtures for configuration, caching, SQL statements, mock databases,
+Provides fixtures for configuration, caching, SQL statements, mock databases,
 cleanup, and performance testing with proper scoping and test isolation.
 """
 
@@ -280,7 +280,7 @@ def sql_with_typed_parameters(statement_config_sqlite: StatementConfig) -> SQL:
 
 
 class MockSyncConnection:
-    """Enhanced mock sync connection with comprehensive database simulation."""
+    """Mock sync connection with database simulation."""
 
     def __init__(self, name: str = "mock_sync_connection", dialect: str = "sqlite") -> None:
         self.name = name
@@ -335,7 +335,7 @@ class MockSyncConnection:
 
 
 class MockAsyncConnection:
-    """Enhanced mock async connection with comprehensive database simulation."""
+    """Mock async connection with database simulation."""
 
     def __init__(self, name: str = "mock_async_connection", dialect: str = "sqlite") -> None:
         self.name = name
@@ -390,7 +390,7 @@ class MockAsyncConnection:
 
 
 class MockSyncCursor:
-    """Enhanced mock sync cursor with realistic database cursor behavior."""
+    """Mock sync cursor with database cursor behavior."""
 
     def __init__(self, connection: MockSyncConnection) -> None:
         self.connection = connection
@@ -468,7 +468,7 @@ class MockSyncCursor:
 
 
 class MockAsyncCursor:
-    """Enhanced mock async cursor with realistic database cursor behavior."""
+    """Mock async cursor with database cursor behavior."""
 
     def __init__(self, connection: MockAsyncConnection) -> None:
         self.connection = connection
@@ -546,7 +546,7 @@ class MockAsyncCursor:
 
 
 class MockSyncDriver(SyncDriverAdapterBase):
-    """Enhanced mock sync driver with complete adapter interface."""
+    """Mock sync driver with adapter interface."""
 
     dialect = "sqlite"
 
@@ -646,7 +646,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
 
 
 class MockAsyncDriver(AsyncDriverAdapterBase):
-    """Enhanced mock async driver with complete adapter interface."""
+    """Mock async driver with adapter interface."""
 
     dialect = "sqlite"
 

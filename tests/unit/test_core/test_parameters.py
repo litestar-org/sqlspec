@@ -1,11 +1,11 @@
-"""Comprehensive unit tests for the new sqlspec.core.parameters module.
+"""Unit tests for the sqlspec.core.parameters module.
 
-Tests the complete 2-Phase Parameter Conversion System:
+Tests the 2-Phase Parameter Conversion System:
 - Phase 1: SQLGlot compatibility conversion
 - Phase 2: Execution format conversion
 - Multi-database parameter style support (10+ styles)
 - Parameter container type preservation
-- Performance optimizations and edge cases
+- Performance and edge cases
 """
 
 import math
@@ -26,6 +26,8 @@ from sqlspec.core.parameters import (
     is_iterable_parameters,
     wrap_with_type,
 )
+
+pytestmark = pytest.mark.xdist_group("core")
 
 
 @pytest.mark.parametrize(

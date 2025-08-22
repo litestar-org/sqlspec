@@ -10,8 +10,9 @@ from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands, MigrationCommands
 
+pytestmark = pytest.mark.xdist_group("postgres")
 
-@pytest.mark.xdist_group("migrations")
+
 def test_psycopg_sync_migration_full_workflow(postgres_service: PostgresService) -> None:
     """Test full Psycopg sync migration workflow: init -> create -> upgrade -> downgrade."""
 
@@ -88,7 +89,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_psycopg_async_migration_full_workflow(postgres_service: PostgresService) -> None:
     """Test full Psycopg async migration workflow: init -> create -> upgrade -> downgrade."""
 
@@ -175,7 +175,6 @@ def down():
                     asyncio.run(config.close_pool())
 
 
-@pytest.mark.xdist_group("migrations")
 def test_psycopg_sync_multiple_migrations_workflow(postgres_service: PostgresService) -> None:
     """Test Psycopg sync workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
@@ -277,7 +276,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_psycopg_async_multiple_migrations_workflow(postgres_service: PostgresService) -> None:
     """Test Psycopg async workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
@@ -394,7 +392,6 @@ def down():
                     asyncio.run(config.close_pool())
 
 
-@pytest.mark.xdist_group("migrations")
 def test_psycopg_sync_migration_current_command(postgres_service: PostgresService) -> None:
     """Test the current migration command shows correct version for Psycopg sync."""
 
@@ -452,7 +449,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_psycopg_async_migration_current_command(postgres_service: PostgresService) -> None:
     """Test the current migration command shows correct version for Psycopg async."""
 
@@ -525,7 +521,6 @@ def down():
                     asyncio.run(config.close_pool())
 
 
-@pytest.mark.xdist_group("migrations")
 def test_psycopg_sync_migration_error_handling(postgres_service: PostgresService) -> None:
     """Test Psycopg sync migration error handling."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -573,7 +568,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_psycopg_async_migration_error_handling(postgres_service: PostgresService) -> None:
     """Test Psycopg async migration error handling."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -638,7 +632,6 @@ def down():
                     asyncio.run(config.close_pool())
 
 
-@pytest.mark.xdist_group("migrations")
 def test_psycopg_sync_migration_with_transactions(postgres_service: PostgresService) -> None:
     """Test Psycopg sync migrations work properly with transactions."""
 
@@ -719,7 +712,6 @@ def down():
                 config.close_pool()
 
 
-@pytest.mark.xdist_group("migrations")
 async def test_psycopg_async_migration_with_transactions(postgres_service: PostgresService) -> None:
     """Test Psycopg async migrations work properly with transactions."""
 

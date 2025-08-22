@@ -12,7 +12,7 @@ Components:
 - ParameterProcessor: Parameter processing coordinator
 - ParameterStyleConfig: Configuration for parameter processing
 
-Features:
+Processing:
 - Two-phase processing: compatibility and execution format
 - Type-specific parameter wrapping
 - Parameter style conversions
@@ -99,12 +99,10 @@ class TypedParameter:
     Maintains type information through parsing and execution
     format conversion.
 
-    Use Cases:
-    - Preserve boolean values through parsing
-    - Maintain Decimal precision
-    - Handle date/datetime formatting
-    - Preserve array/list structures
-    - Handle JSON serialization for dict parameters
+    Attributes:
+        value: The parameter value
+        original_type: The original Python type of the value
+        semantic_name: Optional name for debugging purposes
     """
 
     __slots__ = ("_hash", "original_type", "semantic_name", "value")
@@ -123,7 +121,7 @@ class TypedParameter:
         self._hash: Optional[int] = None
 
     def __hash__(self) -> int:
-        """Cached hash value with optimization."""
+        """Cached hash value."""
         if self._hash is None:
             value_id = id(self.value)
             self._hash = hash((value_id, self.original_type, self.semantic_name))
@@ -193,12 +191,14 @@ def _(value: bytes, semantic_name: Optional[str] = None) -> TypedParameter:
 class ParameterInfo:
     """Information about a detected parameter in SQL.
 
-    Tracks parameter metadata for conversion:
-    - name: Parameter name (for named styles)
-    - style: Parameter style
-    - position: Character position in SQL string
-    - ordinal: Order of appearance (0-indexed)
-    - placeholder_text: Original text in SQL
+    Tracks parameter metadata for conversion operations.
+
+    Attributes:
+        name: Parameter name (for named styles)
+        style: Parameter style
+        position: Character position in SQL string
+        ordinal: Order of appearance (0-indexed)
+        placeholder_text: Original text in SQL
     """
 
     __slots__ = ("name", "ordinal", "placeholder_text", "position", "style")
@@ -234,15 +234,17 @@ class ParameterInfo:
 class ParameterStyleConfig:
     """Configuration for parameter style processing.
 
-    Provides configuration for parameter processing including:
-    - default_parameter_style: Primary parsing style
-    - supported_parameter_styles: All input styles supported
-    - supported_execution_parameter_styles: Styles driver can execute
-    - default_execution_parameter_style: Target execution format
-    - type_coercion_map: Type conversions
-    - output_transformer: Final SQL/parameter transformation hook
-    - preserve_parameter_format: Maintain original parameter structure
-    - needs_static_script_compilation: Embed parameters in SQL
+    Provides configuration for parameter processing operations.
+
+    Attributes:
+        default_parameter_style: Primary parsing style
+        supported_parameter_styles: All input styles supported
+        supported_execution_parameter_styles: Styles driver can execute
+        default_execution_parameter_style: Target execution format
+        type_coercion_map: Type conversions
+        output_transformer: Final SQL/parameter transformation hook
+        preserve_parameter_format: Maintain original parameter structure
+        needs_static_script_compilation: Embed parameters in SQL
     """
 
     __slots__ = (
@@ -275,7 +277,7 @@ class ParameterStyleConfig:
         output_transformer: Optional[Callable[[str, Any], tuple[str, Any]]] = None,
         ast_transformer: Optional[Callable[[Any, Any], tuple[Any, Any]]] = None,
     ) -> None:
-        """Initialize with complete compatibility.
+        """Initialize parameter style configuration.
 
         Args:
             default_parameter_style: Primary parameter style for parsing
@@ -289,7 +291,7 @@ class ParameterStyleConfig:
             allow_mixed_parameter_styles: Support mixed styles in single query
             preserve_parameter_format: Maintain original parameter structure
             preserve_original_params_for_many: Return original list of tuples for execute_many
-            ast_transformer: AST-based transformation hook for advanced SQL/parameter manipulation
+            ast_transformer: AST-based transformation hook for SQL/parameter manipulation
         """
         self.default_parameter_style = default_parameter_style
         self.supported_parameter_styles = (
@@ -338,12 +340,7 @@ class ParameterValidator:
     """Parameter validation and extraction.
 
     Extracts parameter information from SQL strings and determines
-    compatibility.
-
-    Features:
-    - Parameter extraction results
-    - Regex-based parameter detection
-    - Dialect-specific compatibility checking
+    compatibility with target dialects.
     """
 
     __slots__ = ("_parameter_cache",)
@@ -464,11 +461,6 @@ class ParameterConverter:
     Handles two-phase parameter processing:
     - Phase 1: Compatibility normalization
     - Phase 2: Execution format conversion
-
-    Features:
-    - Converts incompatible styles to canonical format
-    - Enables parsing of problematic parameter styles
-    - Handles parameter format changes (list ↔ dict, positional ↔ named)
     """
 
     __slots__ = ("_format_converters", "_placeholder_generators", "validator")
@@ -678,7 +670,7 @@ class ParameterConverter:
 
         return None, False
 
-    def _extract_param_value_single_style(self, param: ParameterInfo, parameters: Mapping) -> Any:
+    def _extract_param_value_single_style(self, param: ParameterInfo, parameters: Mapping) -> "tuple[Any, bool]":
         """Extract parameter value for single style parameters.
 
         Args:
@@ -686,18 +678,18 @@ class ParameterConverter:
             parameters: Parameter mapping
 
         Returns:
-            Parameter value or None if not found
+            Tuple of (value, found_flag) where found_flag indicates if parameter was found
         """
         if param.name and param.name in parameters:
-            return parameters[param.name]
+            return parameters[param.name], True
         if f"param_{param.ordinal}" in parameters:
-            return parameters[f"param_{param.ordinal}"]
+            return parameters[f"param_{param.ordinal}"], True
 
         ordinal_key = str(param.ordinal + 1)
         if ordinal_key in parameters:
-            return parameters[ordinal_key]
+            return parameters[ordinal_key], True
 
-        return None
+        return None, False
 
     def _preserve_original_format(self, param_values: "list[Any]", original_parameters: Any) -> Any:
         """Preserve the original parameter container format.
@@ -771,8 +763,8 @@ class ParameterConverter:
                         param_values.append(value)
             else:
                 for param in param_info:
-                    value = self._extract_param_value_single_style(param, parameters)
-                    if value is not None:
+                    value, found = self._extract_param_value_single_style(param, parameters)
+                    if found:
                         param_values.append(value)
 
             if preserve_parameter_format and original_parameters is not None:
@@ -911,15 +903,15 @@ class ParameterConverter:
 class ParameterProcessor:
     """Parameter processing engine.
 
-    This is the main entry point for the parameter processing system
-    that coordinates Phase 1 (compatibility) and Phase 2 (execution format).
+    Main entry point for the parameter processing system that coordinates
+    Phase 1 (compatibility) and Phase 2 (execution format).
 
     Processing Pipeline:
-    1. Type wrapping for compatibility (TypedParameter)
-    2. Driver-specific type coercions (type_coercion_map)
-    3. Phase 1: Normalization if needed
-    4. Phase 2: Execution format conversion if needed
-    5. Final output transformation (output_transformer)
+        1. Type wrapping for compatibility (TypedParameter)
+        2. Driver-specific type coercions (type_coercion_map)
+        3. Phase 1: Normalization if needed
+        4. Phase 2: Execution format conversion if needed
+        5. Final output transformation (output_transformer)
     """
 
     __slots__ = ("_cache", "_cache_size", "_converter", "_validator")
@@ -1001,14 +993,14 @@ class ParameterProcessor:
         dialect: Optional[str] = None,
         is_many: bool = False,
     ) -> "tuple[str, Any]":
-        """Complete parameter processing pipeline.
+        """Process parameters through the complete pipeline.
 
-        This method coordinates the entire parameter processing workflow:
-        1. Type wrapping for compatibility
-        2. Phase 1: Normalization if needed
-        3. Phase 2: Execution format conversion
-        4. Driver-specific type coercions
-        5. Final output transformation
+        Coordinates the entire parameter processing workflow:
+            1. Type wrapping for compatibility
+            2. Phase 1: Normalization if needed
+            3. Phase 2: Execution format conversion
+            4. Driver-specific type coercions
+            5. Final output transformation
 
         Args:
             sql: Raw SQL string
@@ -1077,7 +1069,7 @@ class ParameterProcessor:
     ) -> "tuple[str, Any]":
         """Get SQL normalized for parsing only (Phase 1 only).
 
-        This method performs only Phase 1 normalization to make SQL compatible
+        Performs only Phase 1 normalization to make SQL compatible
         with parsing, without converting to execution format.
 
         Args:
@@ -1101,8 +1093,8 @@ class ParameterProcessor:
     def _needs_execution_conversion(self, param_info: "list[ParameterInfo]", config: ParameterStyleConfig) -> bool:
         """Determine if execution format conversion is needed.
 
-        Preserves the original parameter style if it's supported by the execution environment,
-        otherwise converts to the default execution style.
+        Preserves the original parameter style if it's supported by the execution
+        environment, otherwise converts to the default execution style.
         """
         if not param_info:
             return False
@@ -1141,11 +1133,11 @@ class ParameterProcessor:
         """Determine the target execution style based on original styles and config.
 
         Logic:
-        1. If there's a single original style and it's in supported execution styles, use it
-        2. Otherwise, use the default execution style
-        3. If no default execution style, use the default parameter style
+            1. If there's a single original style and it's in supported execution styles, use it
+            2. Otherwise, use the default execution style
+            3. If no default execution style, use the default parameter style
 
-        This preserves the original parameter style when possible, only converting
+        Preserves the original parameter style when possible, only converting
         when necessary for execution compatibility.
         """
 
@@ -1179,8 +1171,16 @@ class ParameterProcessor:
         """
 
         def coerce_value(value: Any) -> Any:
+            # Skip coercion for None values to preserve NULL semantics
+            if value is None:
+                return value
+
             if isinstance(value, TypedParameter):
                 wrapped_value = value.value
+                # Skip coercion for None values even when wrapped
+                if wrapped_value is None:
+                    return wrapped_value
+
                 original_type = value.original_type
                 if original_type in type_coercion_map:
                     coerced = type_coercion_map[original_type](wrapped_value)
@@ -1236,7 +1236,7 @@ def is_iterable_parameters(obj: Any) -> bool:
 
 
 def wrap_with_type(value: Any, semantic_name: Optional[str] = None) -> Any:
-    """Public API for type wrapping - preserves current interface.
+    """Public API for type wrapping.
 
     Args:
         value: Value to potentially wrap

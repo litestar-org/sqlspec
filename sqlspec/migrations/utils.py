@@ -42,7 +42,7 @@ Author: {get_author()}
 
 Migration functions can use either naming convention:
 - Preferred: up()/down()
-- Legacy: migrate_up()/migrate_down()
+- Alternate: migrate_up()/migrate_down()
 
 Both can be synchronous or asynchronous:
 - def up(): ...
@@ -71,7 +71,7 @@ def up() -> Union[str, List[str]]:
 
 
 def down() -> Union[str, List[str]]:
-    """Reverse the migration (downgrade).
+    """Reverse the migration.
 
     Returns:
         SQL statement(s) to execute for downgrade.

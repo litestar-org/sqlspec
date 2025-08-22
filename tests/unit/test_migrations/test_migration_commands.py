@@ -18,6 +18,8 @@ from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands, MigrationCommands, SyncMigrationCommands
 
+pytestmark = pytest.mark.xdist_group("migrations")
+
 
 @pytest.fixture
 def sync_config() -> SqliteConfig:
