@@ -171,12 +171,9 @@ def test_insert_with_columns_uses_column_names() -> None:
 
 def test_insert_values_from_dict_preserves_keys() -> None:
     """Test that INSERT values_from_dict preserves dictionary keys."""
-    query = sql.insert("orders").values_from_dict({
-        "customer_id": 12345,
-        "product_name": "Widget",
-        "quantity": 3,
-        "order_date": "2023-01-01",
-    })
+    query = sql.insert("orders").values_from_dict(
+        {"customer_id": 12345, "product_name": "Widget", "quantity": 3, "order_date": "2023-01-01"}
+    )
     stmt = query.build()
 
     expected_keys = ["customer_id", "product_name", "quantity", "order_date"]
