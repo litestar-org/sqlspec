@@ -42,7 +42,6 @@ class SQLSpecSessionStore(Store):
         "_data_column",
         "_expires_at_column",
         "_session_id_column",
-        "_table_created",
         "_table_name",
     )
 
@@ -72,67 +71,9 @@ class SQLSpecSessionStore(Store):
         self._data_column = data_column
         self._expires_at_column = expires_at_column
         self._created_at_column = created_at_column
-        self._table_created = False
 
-    async def _ensure_table_exists(self, driver: Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]) -> None:
-        """Ensure the session table exists with proper schema.
-
-        Args:
-            driver: Database driver instance
-        """
-        if self._table_created:
-            return
-
-        # Get the dialect for the driver
-        dialect = getattr(driver, "statement_config", StatementConfig()).dialect or "generic"
-
-        # Create table with appropriate types for the dialect
-        if dialect in {"postgres", "postgresql"}:
-            data_type = "JSONB"
-            timestamp_type = "TIMESTAMP WITH TIME ZONE"
-        elif dialect in {"mysql", "mariadb"}:
-            data_type = "JSON"
-            timestamp_type = "DATETIME"
-        elif dialect == "sqlite":
-            data_type = "TEXT"
-            timestamp_type = "DATETIME"
-        elif dialect == "oracle":
-            data_type = "JSON"  # Use native Oracle JSON column (stores as RAW internally)
-            timestamp_type = "TIMESTAMP"
-        else:
-            data_type = "TEXT"
-            timestamp_type = "TIMESTAMP"
-
-        create_table_sql = (
-            sql.create_table(self._table_name)
-            .if_not_exists()
-            .column(self._session_id_column, "VARCHAR(255)", primary_key=True)
-            .column(self._data_column, data_type, not_null=True)
-            .column(self._expires_at_column, timestamp_type, not_null=True)
-            .column(self._created_at_column, timestamp_type, not_null=True, default="CURRENT_TIMESTAMP")
-        )
-
-        try:
-            await ensure_async_(driver.execute)(create_table_sql)
-
-            # Create index on expires_at for efficient cleanup
-            index_sql = sql.raw(
-                f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_{self._expires_at_column} "
-                f"ON {self._table_name} ({self._expires_at_column})"
-            )
-
-            await ensure_async_(driver.execute)(index_sql)
-
-            self._table_created = True
-            logger.debug("Session table %s created successfully", self._table_name)
-
-        except Exception as e:
-            msg = f"Failed to create session table: {e}"
-            logger.exception("Failed to create session table %s", self._table_name)
-            raise SQLSpecSessionStoreError(msg) from e
-
-    def _get_dialect_upsert_sql(self, dialect: str, session_id: str, data: str, expires_at: datetime) -> Any:
-        """Generate dialect-specific upsert SQL using SQL builder API.
+    def _get_set_sql(self, dialect: str, session_id: str, data: str, expires_at: datetime) -> list[Any]:
+        """Generate SQL for setting session data (check, then update or insert).
 
         Args:
             dialect: Database dialect
@@ -141,93 +82,128 @@ class SQLSpecSessionStore(Store):
             expires_at: Session expiration time
 
         Returns:
-            SQL statement for upserting session data
+            List of SQL statements: [check_exists, update, insert]
         """
         current_time = datetime.now(timezone.utc)
 
+        # For SQLite, convert datetimes to ISO format strings
+        if dialect == "sqlite":
+            expires_at_value: Union[str, datetime] = expires_at.isoformat()
+            current_time_value: Union[str, datetime] = current_time.isoformat()
+        elif dialect == "oracle":
+            # Oracle needs special datetime handling - remove timezone info and use raw datetime
+            expires_at_value = expires_at.replace(tzinfo=None)
+            current_time_value = current_time.replace(tzinfo=None)
+        else:
+            expires_at_value = expires_at
+            current_time_value = current_time
+
+        # For databases that support native upsert, use those features
         if dialect in {"postgres", "postgresql"}:
             # PostgreSQL UPSERT using ON CONFLICT
-            return (
-                sql.insert(self._table_name)
-                .columns(self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column)
-                .values(session_id, data, expires_at, current_time)
-                .on_conflict(self._session_id_column)
-                .do_update(**{
-                    self._data_column: sql.raw("EXCLUDED." + self._data_column),
-                    self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
-                })
-            )
+            return [
+                (
+                    sql.insert(self._table_name)
+                    .columns(
+                        self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column
+                    )
+                    .values(session_id, data, expires_at_value, current_time_value)
+                    .on_conflict(self._session_id_column)
+                    .do_update(
+                        **{
+                            self._data_column: sql.raw("EXCLUDED." + self._data_column),
+                            self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
+                        }
+                    )
+                )
+            ]
 
         if dialect in {"mysql", "mariadb"}:
             # MySQL UPSERT using ON DUPLICATE KEY UPDATE
-            return (
-                sql.insert(self._table_name)
-                .columns(self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column)
-                .values(session_id, data, expires_at, current_time)
-                .on_duplicate_key_update(**{
-                    self._data_column: sql.raw(f"VALUES({self._data_column})"),
-                    self._expires_at_column: sql.raw(f"VALUES({self._expires_at_column})"),
-                })
-            )
+            return [
+                (
+                    sql.insert(self._table_name)
+                    .columns(
+                        self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column
+                    )
+                    .values(session_id, data, expires_at_value, current_time_value)
+                    .on_duplicate_key_update(
+                        **{
+                            self._data_column: sql.raw(f"VALUES({self._data_column})"),
+                            self._expires_at_column: sql.raw(f"VALUES({self._expires_at_column})"),
+                        }
+                    )
+                )
+            ]
 
         if dialect == "sqlite":
             # SQLite UPSERT using ON CONFLICT
-            return (
-                sql.insert(self._table_name)
-                .columns(self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column)
-                .values(session_id, data, expires_at, current_time)
-                .on_conflict(self._session_id_column)
-                .do_update(**{
-                    self._data_column: sql.raw("EXCLUDED." + self._data_column),
-                    self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
-                })
-            )
+            return [
+                (
+                    sql.insert(self._table_name)
+                    .columns(
+                        self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column
+                    )
+                    .values(session_id, data, expires_at_value, current_time_value)
+                    .on_conflict(self._session_id_column)
+                    .do_update(
+                        **{
+                            self._data_column: sql.raw("EXCLUDED." + self._data_column),
+                            self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
+                        }
+                    )
+                )
+            ]
 
         if dialect == "oracle":
-            # Oracle MERGE statement with JSON column support
-            return (
-                sql.merge()
-                .into(self._table_name, alias="t")
-                .using(
-                    sql.raw(
-                        f"(SELECT ? as {self._session_id_column}, JSON(?) as {self._data_column}, ? as {self._expires_at_column}, ? as {self._created_at_column} FROM DUAL)",
-                        parameters=[session_id, data, expires_at, current_time],
-                    ),
-                    alias="s",
-                )
-                .on(f"t.{self._session_id_column} = s.{self._session_id_column}")
-                .when_matched_then_update(
-                    set_values={
-                        self._data_column: sql.raw(f"s.{self._data_column}"),
-                        self._expires_at_column: sql.raw(f"s.{self._expires_at_column}"),
-                    }
-                )
-                .when_not_matched_then_insert(
-                    columns=[
-                        self._session_id_column,
-                        self._data_column,
-                        self._expires_at_column,
-                        self._created_at_column,
-                    ],
-                    values=[
-                        sql.raw(f"s.{self._session_id_column}"),
-                        sql.raw(f"s.{self._data_column}"),
-                        sql.raw(f"s.{self._expires_at_column}"),
-                        sql.raw(f"s.{self._created_at_column}"),
-                    ],
-                )
-            )
+            # Oracle MERGE statement implementation
+            columns = [self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column]
 
-        # Fallback: DELETE + INSERT (less efficient but works everywhere)
-        delete_sql = sql.delete().from_(self._table_name).where(sql.column(self._session_id_column) == session_id)
+            return [
+                (
+                    sql.merge()
+                    .into(self._table_name, alias="t")
+                    .using(
+                        sql.raw(
+                            f"(SELECT ? as {self._session_id_column}, JSON(?) as {self._data_column}, ? as {self._expires_at_column}, ? as {self._created_at_column} FROM DUAL)",
+                            parameters=[session_id, data, expires_at_value, current_time_value],
+                        ),
+                        alias="s",
+                    )
+                    .on(f"t.{self._session_id_column} = s.{self._session_id_column}")
+                    .when_matched_then_update(
+                        set_values={
+                            self._data_column: sql.raw(f"s.{self._data_column}"),
+                            self._expires_at_column: sql.raw(f"s.{self._expires_at_column}"),
+                        }
+                    )
+                    .when_not_matched_then_insert(
+                        columns=columns, values=[sql.raw(f"s.{column}") for column in columns]
+                    )
+                )
+            ]
+
+        # For other databases, use check-update-insert pattern
+        check_exists = (
+            sql.select(sql.count().as_("count"))
+            .from_(self._table_name)
+            .where(sql.column(self._session_id_column) == session_id)
+        )
+
+        update_sql = (
+            sql.update(self._table_name)
+            .set(self._data_column, data)
+            .set(self._expires_at_column, expires_at_value)
+            .where(sql.column(self._session_id_column) == session_id)
+        )
 
         insert_sql = (
             sql.insert(self._table_name)
             .columns(self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column)
-            .values(session_id, data, expires_at, current_time)
+            .values(session_id, data, expires_at_value, current_time_value)
         )
 
-        return [delete_sql, insert_sql]
+        return [check_exists, update_sql, insert_sql]
 
     async def get(self, key: str, renew_for: Union[int, timedelta, None] = None) -> Any:
         """Retrieve session data by session ID.
@@ -240,7 +216,6 @@ class SQLSpecSessionStore(Store):
             Session data or None if not found
         """
         async with with_ensure_async_(self._config.provide_session()) as driver:
-            await self._ensure_table_exists(driver)
             return await self._get_session_data(driver, key, renew_for)
 
     async def _get_session_data(
@@ -261,11 +236,38 @@ class SQLSpecSessionStore(Store):
         """
         current_time = datetime.now(timezone.utc)
 
-        select_sql = (
-            sql.select(self._data_column)
-            .from_(self._table_name)
-            .where((sql.column(self._session_id_column) == key) & (sql.column(self._expires_at_column) > current_time))
-        )
+        # For SQLite, use ISO format string for datetime comparison
+        dialect = driver.statement_config.dialect or "generic"
+        if dialect == "sqlite":
+            # SQLite stores datetimes as TEXT, use ISO format for comparison
+            current_time_str = current_time.isoformat()
+            select_sql = (
+                sql.select(self._data_column)
+                .from_(self._table_name)
+                .where(
+                    (sql.column(self._session_id_column) == key)
+                    & (sql.column(self._expires_at_column) > current_time_str)
+                )
+            )
+        elif dialect == "oracle":
+            # Oracle needs timezone-naive datetime for comparison
+            current_time_naive = current_time.replace(tzinfo=None)
+            select_sql = (
+                sql.select(self._data_column)
+                .from_(self._table_name)
+                .where(
+                    (sql.column(self._session_id_column) == key)
+                    & (sql.column(self._expires_at_column) > current_time_naive)
+                )
+            )
+        else:
+            select_sql = (
+                sql.select(self._data_column)
+                .from_(self._table_name)
+                .where(
+                    (sql.column(self._session_id_column) == key) & (sql.column(self._expires_at_column) > current_time)
+                )
+            )
 
         try:
             result = await ensure_async_(driver.execute)(select_sql)
@@ -305,6 +307,7 @@ class SQLSpecSessionStore(Store):
 
         try:
             await ensure_async_(driver.execute)(update_sql)
+            await ensure_async_(driver.commit)()
         except Exception:
             logger.exception("Failed to update expiration for session %s", key)
 
@@ -325,7 +328,6 @@ class SQLSpecSessionStore(Store):
         data_json = to_json(value)
 
         async with with_ensure_async_(self._config.provide_session()) as driver:
-            await self._ensure_table_exists(driver)
             await self._set_session_data(driver, key, data_json, expires_at)
 
     async def _set_session_data(
@@ -344,15 +346,29 @@ class SQLSpecSessionStore(Store):
             expires_at: Expiration time
         """
         dialect = str(getattr(driver, "statement_config", StatementConfig()).dialect or "generic")
-        upsert_sql = self._get_dialect_upsert_sql(dialect, key, data_json, expires_at)
+        sql_statements = self._get_set_sql(dialect, key, data_json, expires_at)
 
         try:
-            if isinstance(upsert_sql, list):
-                # Fallback method: execute delete then insert
-                for stmt in upsert_sql:
-                    await ensure_async_(driver.execute)(stmt)
+            # For databases with native upsert, there's only one statement
+            if len(sql_statements) == 1:
+                await ensure_async_(driver.execute)(sql_statements[0])
+
+                await ensure_async_(driver.commit)()
             else:
-                await ensure_async_(driver.execute)(upsert_sql)
+                # For other databases: check-update-insert pattern
+                check_sql, update_sql, insert_sql = sql_statements
+
+                # Check if session exists
+                result = await ensure_async_(driver.execute)(check_sql)
+                # Oracle returns uppercase column names by default
+                count_key = "COUNT" if dialect == "oracle" else "count"
+                exists = result.data[0][count_key] > 0 if result.data else False
+
+                # Execute appropriate statement
+                if exists:
+                    await ensure_async_(driver.execute)(update_sql)
+                else:
+                    await ensure_async_(driver.execute)(insert_sql)
 
         except Exception as e:
             msg = f"Failed to store session: {e}"
@@ -366,7 +382,6 @@ class SQLSpecSessionStore(Store):
             key: Session identifier
         """
         async with with_ensure_async_(self._config.provide_session()) as driver:
-            await self._ensure_table_exists(driver)
             await self._delete_session_data(driver, key)
 
     async def _delete_session_data(
@@ -382,6 +397,8 @@ class SQLSpecSessionStore(Store):
 
         try:
             await ensure_async_(driver.execute)(delete_sql)
+
+            await ensure_async_(driver.commit)()
 
         except Exception as e:
             msg = f"Failed to delete session: {e}"
@@ -407,7 +424,6 @@ class SQLSpecSessionStore(Store):
 
         try:
             async with with_ensure_async_(self._config.provide_session()) as driver:
-                await self._ensure_table_exists(driver)
                 result = await ensure_async_(driver.execute)(select_sql)
 
             return bool(result.data[0]["count"] > 0)
@@ -435,24 +451,31 @@ class SQLSpecSessionStore(Store):
 
         try:
             async with with_ensure_async_(self._config.provide_session()) as driver:
-                await self._ensure_table_exists(driver)
                 result = await ensure_async_(driver.execute)(select_sql)
 
             if result.data:
                 expires_at_str = result.data[0][self._expires_at_column]
                 # Parse the datetime string based on the format
                 if isinstance(expires_at_str, str):
-                    # Try different datetime formats
-                    for fmt in ["%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S"]:
-                        try:
-                            expires_at = datetime.strptime(expires_at_str, fmt)
-                            if expires_at.tzinfo is None:
-                                expires_at = expires_at.replace(tzinfo=timezone.utc)
-                            break
-                        except ValueError:
-                            continue
-                    else:
-                        return 0
+                    # Try parsing as ISO format first (for SQLite)
+                    try:
+                        from datetime import datetime as dt
+
+                        expires_at = dt.fromisoformat(expires_at_str)
+                        if expires_at.tzinfo is None:
+                            expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    except (ValueError, AttributeError):
+                        # Try different datetime formats
+                        for fmt in ["%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S"]:
+                            try:
+                                expires_at = datetime.strptime(expires_at_str, fmt)  # noqa: DTZ007
+                                if expires_at.tzinfo is None:
+                                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                                break
+                            except ValueError:
+                                continue
+                        else:
+                            return 0
                 elif isinstance(expires_at_str, datetime):
                     expires_at = expires_at_str
                     if expires_at.tzinfo is None:
@@ -467,14 +490,13 @@ class SQLSpecSessionStore(Store):
             logger.exception("Failed to get expires_in for session %s", key)
         return 0
 
-    async def delete_all(self, pattern: str = "*") -> None:
+    async def delete_all(self, _pattern: str = "*") -> None:
         """Delete all sessions matching pattern.
 
         Args:
-            pattern: Pattern to match session IDs (currently supports '*' for all)
+            _pattern: Pattern to match session IDs (currently supports '*' for all)
         """
         async with with_ensure_async_(self._config.provide_session()) as driver:
-            await self._ensure_table_exists(driver)
             await self._delete_all_sessions(driver)
 
     async def _delete_all_sessions(self, driver: Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]) -> None:
@@ -488,6 +510,10 @@ class SQLSpecSessionStore(Store):
         try:
             await ensure_async_(driver.execute)(delete_sql)
 
+            # Commit the transaction for databases that need it
+            if hasattr(driver, "commit"):
+                await ensure_async_(driver.commit)()
+
         except Exception as e:
             msg = f"Failed to delete all sessions: {e}"
             logger.exception("Failed to delete all sessions")
@@ -498,7 +524,6 @@ class SQLSpecSessionStore(Store):
         current_time = datetime.now(timezone.utc)
 
         async with with_ensure_async_(self._config.provide_session()) as driver:
-            await self._ensure_table_exists(driver)
             await self._delete_expired_sessions(driver, current_time)
 
     async def _delete_expired_sessions(
@@ -510,21 +535,30 @@ class SQLSpecSessionStore(Store):
             driver: Database driver
             current_time: Current timestamp
         """
-        delete_sql = sql.delete().from_(self._table_name).where(sql.column(self._expires_at_column) <= current_time)
+        # For SQLite, use ISO format string for datetime comparison
+        dialect = str(getattr(driver, "statement_config", StatementConfig()).dialect or "generic")
+        current_time_value = current_time.isoformat() if dialect == "sqlite" else current_time
+        delete_sql = (
+            sql.delete().from_(self._table_name).where(sql.column(self._expires_at_column) <= current_time_value)
+        )
 
         try:
             await ensure_async_(driver.execute)(delete_sql)
+
+            # Commit the transaction for databases that need it
+            if hasattr(driver, "commit"):
+                await ensure_async_(driver.commit)()
 
             logger.debug("Deleted expired sessions")
 
         except Exception:
             logger.exception("Failed to delete expired sessions")
 
-    async def get_all(self, pattern: str = "*") -> "AsyncIterator[tuple[str, Any]]":
+    async def get_all(self, _pattern: str = "*") -> "AsyncIterator[tuple[str, Any]]":
         """Get all sessions matching pattern.
 
         Args:
-            pattern: Pattern to match session IDs
+            _pattern: Pattern to match session IDs
 
         Yields:
             Tuples of (session_id, session_data)
@@ -532,7 +566,6 @@ class SQLSpecSessionStore(Store):
         current_time = datetime.now(timezone.utc)
 
         async with with_ensure_async_(self._config.provide_session()) as driver:
-            await self._ensure_table_exists(driver)
             async for item in self._get_all_sessions(driver, current_time):
                 yield item
 
@@ -548,10 +581,13 @@ class SQLSpecSessionStore(Store):
         Yields:
             Tuples of (session_id, session_data)
         """
+        # For SQLite, use ISO format string for datetime comparison
+        dialect = str(getattr(driver, "statement_config", StatementConfig()).dialect or "generic")
+        current_time_value = current_time.isoformat() if dialect == "sqlite" else current_time
         select_sql = (
             sql.select(sql.column(self._session_id_column), sql.column(self._data_column))
             .from_(self._table_name)
-            .where(sql.column(self._expires_at_column) > current_time)
+            .where(sql.column(self._expires_at_column) > current_time_value)
         )
 
         try:
