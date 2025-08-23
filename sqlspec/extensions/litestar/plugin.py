@@ -23,7 +23,25 @@ logger = get_logger("extensions.litestar")
 
 
 class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
-    """Litestar plugin for SQLSpec database integration."""
+    """Litestar plugin for SQLSpec database integration.
+
+    Session Table Migrations:
+        The Litestar extension includes migrations for creating session storage tables.
+        To include these migrations in your database migration workflow, add 'litestar'
+        to the include_extensions list in your migration configuration:
+
+    Example:
+            config = SqliteConfig(
+                pool_config={"database": "app.db"},
+                migration_config={
+                    "script_location": "migrations",
+                    "include_extensions": ["litestar"],  # Include Litestar migrations
+                }
+            )
+
+        The session table migration will automatically use the appropriate column types
+        for your database dialect (JSONB for PostgreSQL, JSON for MySQL, TEXT for SQLite).
+    """
 
     __slots__ = ("_plugin_configs",)
 

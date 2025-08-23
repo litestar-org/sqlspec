@@ -14,10 +14,9 @@ from litestar.testing import TestClient
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionStore
 from sqlspec.utils.sync_tools import run_
+from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
-from ...conftest import xfail_if_driver_missing
-
-pytestmark = [pytest.mark.adbc, pytest.mark.postgres, pytest.mark.integration]
+pytestmark = [pytest.mark.adbc, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
 
 @pytest.fixture
@@ -268,11 +267,9 @@ def test_session_persistence_across_requests(session_backend: SQLSpecSessionBack
         performance_metrics = request.session.get("performance_metrics", {})
 
         count += 1
-        arrow_batches.append({
-            "batch_id": count,
-            "timestamp": f"2024-01-01T12:{count:02d}:00Z",
-            "rows_processed": count * 1000,
-        })
+        arrow_batches.append(
+            {"batch_id": count, "timestamp": f"2024-01-01T12:{count:02d}:00Z", "rows_processed": count * 1000}
+        )
 
         # Simulate performance tracking
         performance_metrics[f"request_{count}"] = {
