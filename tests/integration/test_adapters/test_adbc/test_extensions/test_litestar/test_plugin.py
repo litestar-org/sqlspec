@@ -1,673 +1,657 @@
-"""Comprehensive Litestar integration tests for ADBC adapter."""
+"""Comprehensive Litestar integration tests for ADBC adapter.
 
-import math
+This test suite validates the full integration between SQLSpec's ADBC adapter
+and Litestar's session middleware, including Arrow-native database connectivity
+features across multiple database backends (PostgreSQL, SQLite, DuckDB, etc.).
+
+ADBC is a sync-only adapter that provides efficient columnar data transfer
+using the Arrow format for optimal performance.
+"""
+
+import asyncio
 import time
 from typing import Any
-from uuid import uuid4
 
 import pytest
 from litestar import Litestar, get, post
-from litestar.middleware.session.server_side import ServerSideSessionConfig
-from litestar.status_codes import HTTP_200_OK
+from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
+from litestar.stores.registry import StoreRegistry
 from litestar.testing import TestClient
 
 from sqlspec.adapters.adbc.config import AdbcConfig
-from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionStore
-from sqlspec.utils.sync_tools import run_
+from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
+from sqlspec.migrations.commands import SyncMigrationCommands
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
 pytestmark = [pytest.mark.adbc, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
 
 @pytest.fixture
-def session_store(adbc_session: AdbcConfig) -> SQLSpecSessionStore:
-    """Create a session store instance."""
-    store = SQLSpecSessionStore(
-        config=adbc_session,
-        table_name="test_adbc_litestar_sessions",
-        session_id_column="session_id",
-        data_column="session_data",
-        expires_at_column="expires_at",
-        created_at_column="created_at",
-    )
-    # Ensure table exists - the store handles sync/async conversion internally
-    with adbc_session.provide_session() as driver:
-        run_(store._ensure_table_exists)(driver)
-    return store
+def migrated_config(adbc_migration_config: AdbcConfig) -> AdbcConfig:
+    """Apply migrations once and return the config for ADBC (sync)."""
+    commands = SyncMigrationCommands(adbc_migration_config)
+    commands.init(adbc_migration_config.migration_config["script_location"], package=False)
+    commands.upgrade()
+    return adbc_migration_config
 
 
 @pytest.fixture
-def session_backend(adbc_session: AdbcConfig) -> SQLSpecSessionBackend:
-    """Create a session backend instance."""
-    backend = SQLSpecSessionBackend(config=adbc_session, table_name="test_adbc_litestar_backend")
-    # Ensure table exists - the store handles sync/async conversion internally
-    with adbc_session.provide_session() as driver:
-        run_(backend.store._ensure_table_exists)(driver)
-    return backend
+def session_store(migrated_config: AdbcConfig) -> SQLSpecSessionStore:
+    """Create a session store instance using the migrated database for ADBC."""
+    return SQLSpecSessionStore(
+        config=migrated_config,
+        table_name="litestar_sessions",  # Use the default table created by migration
+        session_id_column="session_id",
+        data_column="data",
+        expires_at_column="expires_at",
+        created_at_column="created_at",
+    )
+
+
+@pytest.fixture
+def session_config() -> SQLSpecSessionConfig:
+    """Create a session configuration instance for ADBC."""
+    return SQLSpecSessionConfig(
+        table_name="litestar_sessions",
+        store="sessions",  # This will be the key in the stores registry
+    )
 
 
 @xfail_if_driver_missing
-def test_session_store_basic_operations(session_store: SQLSpecSessionStore) -> None:
-    """Test basic session store operations with ADBC."""
-    session_id = f"test-adbc-session-{uuid4()}"
-    session_data = {
-        "user_id": 42,
-        "username": "adbc_user",
-        "preferences": {"theme": "dark", "language": "en"},
-        "roles": ["user", "admin"],
-        "metadata": {"driver": "adbc", "backend": "postgresql", "arrow_native": True},
-    }
-
-    # Set session data
-    run_(session_store.set)(session_id, session_data, expires_in=3600)
-
-    # Get session data
-    retrieved_data = run_(session_store.get)(session_id)
-    assert retrieved_data == session_data
-
-    # Update session data with Arrow-specific fields
-    updated_data = {
-        **session_data,
-        "last_login": "2024-01-01T12:00:00Z",
-        "arrow_batch_size": 1000,
-        "performance_metrics": {"query_time_ms": 250, "rows_processed": 50000, "arrow_batches": 5},
-    }
-    run_(session_store.set)(session_id, updated_data, expires_in=3600)
-
-    # Verify update
-    retrieved_data = run_(session_store.get)(session_id)
-    assert retrieved_data == updated_data
-
-    # Delete session
-    run_(session_store.delete)(session_id)
-
-    # Verify deletion
-    result = run_(session_store.get)(session_id, None)
-    assert result is None
+def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
+    """Test that SessionStore can be created with ADBC configuration."""
+    assert session_store is not None
+    assert session_store._table_name == "litestar_sessions"
+    assert session_store._session_id_column == "session_id"
+    assert session_store._data_column == "data"
+    assert session_store._expires_at_column == "expires_at"
+    assert session_store._created_at_column == "created_at"
 
 
 @xfail_if_driver_missing
-def test_session_store_arrow_format_support(session_store: SQLSpecSessionStore, adbc_session: AdbcConfig) -> None:
-    """Test ADBC Arrow format support for efficient data transfer."""
-    session_id = f"arrow-test-{uuid4()}"
-
-    # Create data that demonstrates Arrow format benefits
-    arrow_optimized_data = {
-        "user_id": 12345,
-        "columnar_data": {
-            "ids": list(range(1000)),  # Large numeric array
-            "names": [f"user_{i}" for i in range(1000)],  # String array
-            "timestamps": [f"2024-01-{(i % 31) + 1:02d}T{(i % 24):02d}:00:00Z" for i in range(1000)],
-            "scores": [round(i * 0.5, 2) for i in range(1000)],  # Float array
-            "active": [i % 2 == 0 for i in range(1000)],  # Boolean array
-        },
-        "arrow_metadata": {"format_version": "1.0", "compression": "none", "schema_validated": True},
-    }
-
-    # Store Arrow-optimized data
-    run_(session_store.set)(session_id, arrow_optimized_data, expires_in=3600)
-
-    # Retrieve and verify data integrity
-    retrieved_data = run_(session_store.get)(session_id)
-    assert retrieved_data == arrow_optimized_data
-
-    # Verify columnar data integrity
-    assert len(retrieved_data["columnar_data"]["ids"]) == 1000
-    assert retrieved_data["columnar_data"]["ids"][999] == 999
-    assert retrieved_data["columnar_data"]["names"][0] == "user_0"
-    assert retrieved_data["columnar_data"]["scores"][100] == 50.0
-    assert retrieved_data["columnar_data"]["active"][0] is True
-    assert retrieved_data["columnar_data"]["active"][1] is False
-
-    # Test with raw SQL query to verify database storage
-    with adbc_session.provide_session() as driver:
-        result = driver.execute(
-            f"SELECT session_data FROM {session_store._table_name} WHERE session_id = $1", session_id
-        )
+def test_session_store_adbc_table_structure(session_store: SQLSpecSessionStore, migrated_config: AdbcConfig) -> None:
+    """Test that session table is created with proper ADBC-compatible structure."""
+    with migrated_config.provide_session() as driver:
+        # Verify table exists with proper name
+        result = driver.execute("""
+            SELECT table_name, table_type
+            FROM information_schema.tables
+            WHERE table_name = 'litestar_sessions'
+            AND table_schema = 'public'
+        """)
         assert len(result.data) == 1
-        stored_json = result.data[0]["session_data"]
-        # For PostgreSQL with JSONB, data should be stored efficiently
-        assert isinstance(stored_json, (dict, str))
+        table_info = result.data[0]
+        assert table_info["table_name"] == "litestar_sessions"
+        assert table_info["table_type"] == "BASE TABLE"
+
+        # Verify column structure
+        result = driver.execute("""
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_name = 'litestar_sessions'
+            AND table_schema = 'public'
+            ORDER BY ordinal_position
+        """)
+        columns = {row["column_name"]: row for row in result.data}
+
+        assert "session_id" in columns
+        assert "data" in columns
+        assert "expires_at" in columns
+        assert "created_at" in columns
+
+        # Verify data types for PostgreSQL
+        assert columns["session_id"]["data_type"] == "text"
+        assert columns["data"]["data_type"] == "jsonb"  # ADBC uses JSONB for efficient storage
+        assert columns["expires_at"]["data_type"] in ("timestamp with time zone", "timestamptz")
+        assert columns["created_at"]["data_type"] in ("timestamp with time zone", "timestamptz")
+
+        # Verify index exists for expires_at
+        result = driver.execute("""
+            SELECT indexname
+            FROM pg_indexes
+            WHERE tablename = 'litestar_sessions'
+            AND schemaname = 'public'
+        """)
+        index_names = [row["indexname"] for row in result.data]
+        assert any("expires_at" in name for name in index_names)
 
 
 @xfail_if_driver_missing
-def test_session_backend_litestar_integration(session_backend: SQLSpecSessionBackend) -> None:
-    """Test SQLSpecSessionBackend integration with Litestar application using ADBC."""
+def test_basic_session_operations(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
+    """Test basic session operations through Litestar application with ADBC."""
 
-    @get("/set-adbc-user")
-    async def set_adbc_user_session(request: Any) -> dict:
-        request.session["user_id"] = 54321
+    @get("/set-session")
+    def set_session(request: Any) -> dict:
+        request.session["user_id"] = 12345
         request.session["username"] = "adbc_user"
-        request.session["roles"] = ["user", "data_analyst"]
-        request.session["adbc_features"] = {"arrow_support": True, "multi_database": True, "batch_processing": True}
-        request.session["database_configs"] = [
-            {"name": "primary", "driver": "postgresql", "batch_size": 1000},
-            {"name": "analytics", "driver": "duckdb", "batch_size": 5000},
-        ]
-        return {"status": "ADBC user session set"}
+        request.session["preferences"] = {"theme": "dark", "language": "en", "timezone": "UTC"}
+        request.session["roles"] = ["user", "editor", "adbc_admin"]
+        request.session["adbc_info"] = {"engine": "ADBC", "version": "1.x", "arrow_native": True}
+        return {"status": "session set"}
 
-    @get("/get-adbc-user")
-    async def get_adbc_user_session(request: Any) -> dict:
+    @get("/get-session")
+    def get_session(request: Any) -> dict:
         return {
             "user_id": request.session.get("user_id"),
             "username": request.session.get("username"),
+            "preferences": request.session.get("preferences"),
             "roles": request.session.get("roles"),
-            "adbc_features": request.session.get("adbc_features"),
-            "database_configs": request.session.get("database_configs"),
+            "adbc_info": request.session.get("adbc_info"),
         }
 
-    @post("/update-adbc-config")
-    async def update_adbc_config(request: Any) -> dict:
-        configs = request.session.get("database_configs", [])
-        configs.append({"name": "cache", "driver": "sqlite", "batch_size": 500, "in_memory": True})
-        request.session["database_configs"] = configs
-        request.session["last_config_update"] = "2024-01-01T12:00:00Z"
-        return {"status": "ADBC config updated"}
-
-    @post("/clear-adbc-session")
-    async def clear_adbc_session(request: Any) -> dict:
+    @post("/clear-session")
+    def clear_session(request: Any) -> dict:
         request.session.clear()
-        return {"status": "ADBC session cleared"}
+        return {"status": "session cleared"}
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="adbc-test-session", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
     app = Litestar(
-        route_handlers=[set_adbc_user_session, get_adbc_user_session, update_adbc_config, clear_adbc_session],
-        middleware=[session_config.middleware],
+        route_handlers=[set_session, get_session, clear_session], middleware=[session_config.middleware], stores=stores
     )
 
     with TestClient(app=app) as client:
-        # Set ADBC user session
-        response = client.get("/set-adbc-user")
+        # Set session data
+        response = client.get("/set-session")
         assert response.status_code == HTTP_200_OK
-        assert response.json() == {"status": "ADBC user session set"}
+        assert response.json() == {"status": "session set"}
 
-        # Get ADBC user session
-        response = client.get("/get-adbc-user")
+        # Get session data
+        response = client.get("/get-session")
         assert response.status_code == HTTP_200_OK
         data = response.json()
-        assert data["user_id"] == 54321
+        assert data["user_id"] == 12345
         assert data["username"] == "adbc_user"
-        assert data["roles"] == ["user", "data_analyst"]
-        assert data["adbc_features"]["arrow_support"] is True
-        assert data["adbc_features"]["multi_database"] is True
-        assert len(data["database_configs"]) == 2
+        assert data["preferences"]["theme"] == "dark"
+        assert data["roles"] == ["user", "editor", "adbc_admin"]
+        assert data["adbc_info"]["arrow_native"] is True
 
-        # Update ADBC configuration
-        response = client.post("/update-adbc-config")
-        assert response.status_code == HTTP_200_OK
-        assert response.json() == {"status": "ADBC config updated"}
-
-        # Verify configuration was updated
-        response = client.get("/get-adbc-user")
-        data = response.json()
-        assert len(data["database_configs"]) == 3
-        assert data["database_configs"][2]["name"] == "cache"
-        assert data["database_configs"][2]["driver"] == "sqlite"
-
-        # Clear ADBC session
-        response = client.post("/clear-adbc-session")
-        assert response.status_code == HTTP_200_OK
+        # Clear session
+        response = client.post("/clear-session")
+        assert response.status_code == HTTP_201_CREATED
+        assert response.json() == {"status": "session cleared"}
 
         # Verify session is cleared
-        response = client.get("/get-adbc-user")
-        data = response.json()
-        assert all(value is None for value in data.values())
+        response = client.get("/get-session")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {
+            "user_id": None,
+            "username": None,
+            "preferences": None,
+            "roles": None,
+            "adbc_info": None,
+        }
 
 
 @xfail_if_driver_missing
-def test_multi_database_compatibility(adbc_session: AdbcConfig) -> None:
-    """Test ADBC cross-database portability scenarios."""
+def test_session_persistence_across_requests(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+) -> None:
+    """Test that sessions persist across multiple requests with ADBC."""
 
-    # Test different database configurations
-    database_configs = [
-        {
-            "name": "postgresql_config",
-            "config": AdbcConfig(
-                connection_config={"uri": adbc_session.connection_config["uri"], "driver_name": "postgresql"}
-            ),
+    @get("/document/create/{doc_id:int}")
+    def create_document(request: Any, doc_id: int) -> dict:
+        documents = request.session.get("documents", [])
+        document = {
+            "id": doc_id,
+            "title": f"ADBC Document {doc_id}",
+            "content": f"Content for document {doc_id}. " + "ADBC Arrow-native " * 20,
+            "created_at": "2024-01-01T12:00:00Z",
+            "metadata": {"engine": "ADBC", "arrow_format": True, "columnar": True},
         }
-        # Note: In a real scenario, you'd test with actual different databases
-        # For this test, we'll simulate with different table names
-    ]
+        documents.append(document)
+        request.session["documents"] = documents
+        request.session["document_count"] = len(documents)
+        request.session["last_action"] = f"created_document_{doc_id}"
+        return {"document": document, "total_docs": len(documents)}
 
-    for db_config in database_configs:
-        config = db_config["config"]
-        table_name = f"test_multi_db_{db_config['name']}"
-
-        store = SQLSpecSessionStore(config=config, table_name=table_name)
-
-        session_id = f"multi-db-{db_config['name']}-{uuid4()}"
-        session_data = {
-            "database": db_config["name"],
-            "compatibility_test": True,
-            "features": {"arrow_native": True, "cross_db_portable": True},
-        }
-
-        # Test basic operations work across different database types
-        try:
-            run_(store.set)(session_id, session_data, expires_in=3600)
-            retrieved_data = run_(store.get)(session_id)
-            assert retrieved_data == session_data
-            run_(store.delete)(session_id)
-            result = run_(store.get)(session_id, None)
-            assert result is None
-        except Exception as e:
-            pytest.fail(f"Multi-database compatibility failed for {db_config['name']}: {e}")
-
-
-@xfail_if_driver_missing
-def test_session_persistence_across_requests(session_backend: SQLSpecSessionBackend) -> None:
-    """Test session persistence across multiple requests with ADBC."""
-
-    @get("/adbc-counter")
-    async def adbc_counter_endpoint(request: Any) -> dict:
-        count = request.session.get("count", 0)
-        arrow_batches = request.session.get("arrow_batches", [])
-        performance_metrics = request.session.get("performance_metrics", {})
-
-        count += 1
-        arrow_batches.append(
-            {"batch_id": count, "timestamp": f"2024-01-01T12:{count:02d}:00Z", "rows_processed": count * 1000}
-        )
-
-        # Simulate performance tracking
-        performance_metrics[f"request_{count}"] = {
-            "query_time_ms": count * 50,
-            "memory_usage_mb": count * 10,
-            "arrow_efficiency": 0.95 + (count * 0.001),
-        }
-
-        request.session["count"] = count
-        request.session["arrow_batches"] = arrow_batches
-        request.session["performance_metrics"] = performance_metrics
-        request.session["last_request"] = f"2024-01-01T12:{count:02d}:00Z"
-
+    @get("/documents")
+    def get_documents(request: Any) -> dict:
         return {
-            "count": count,
-            "arrow_batches": len(arrow_batches),
-            "total_rows": sum(batch["rows_processed"] for batch in arrow_batches),
-            "last_request": request.session["last_request"],
+            "documents": request.session.get("documents", []),
+            "count": request.session.get("document_count", 0),
+            "last_action": request.session.get("last_action"),
         }
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="adbc-persistence-test", max_age=3600)
+    @post("/documents/save-all")
+    def save_all_documents(request: Any) -> dict:
+        documents = request.session.get("documents", [])
 
-    app = Litestar(route_handlers=[adbc_counter_endpoint], middleware=[session_config.middleware])
+        # Simulate saving all documents with ADBC efficiency
+        saved_docs = {
+            "saved_count": len(documents),
+            "documents": documents,
+            "saved_at": "2024-01-01T12:00:00Z",
+            "adbc_arrow_batch": True,
+        }
+
+        request.session["saved_session"] = saved_docs
+        request.session["last_save"] = "2024-01-01T12:00:00Z"
+
+        # Clear working documents after save
+        request.session.pop("documents", None)
+        request.session.pop("document_count", None)
+
+        return {"status": "all documents saved", "count": saved_docs["saved_count"]}
+
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
+
+    app = Litestar(
+        route_handlers=[create_document, get_documents, save_all_documents],
+        middleware=[session_config.middleware],
+        stores=stores,
+    )
 
     with TestClient(app=app) as client:
-        # First request
-        response = client.get("/adbc-counter")
-        data = response.json()
-        assert data["count"] == 1
-        assert data["arrow_batches"] == 1
-        assert data["total_rows"] == 1000
-        assert data["last_request"] == "2024-01-01T12:01:00Z"
+        # Create multiple documents
+        response = client.get("/document/create/101")
+        assert response.json()["total_docs"] == 1
 
-        # Second request
-        response = client.get("/adbc-counter")
-        data = response.json()
-        assert data["count"] == 2
-        assert data["arrow_batches"] == 2
-        assert data["total_rows"] == 3000  # 1000 + 2000
-        assert data["last_request"] == "2024-01-01T12:02:00Z"
+        response = client.get("/document/create/102")
+        assert response.json()["total_docs"] == 2
 
-        # Third request
-        response = client.get("/adbc-counter")
+        response = client.get("/document/create/103")
+        assert response.json()["total_docs"] == 3
+
+        # Verify document persistence
+        response = client.get("/documents")
         data = response.json()
         assert data["count"] == 3
-        assert data["arrow_batches"] == 3
-        assert data["total_rows"] == 6000  # 1000 + 2000 + 3000
-        assert data["last_request"] == "2024-01-01T12:03:00Z"
+        assert len(data["documents"]) == 3
+        assert data["documents"][0]["id"] == 101
+        assert data["documents"][0]["metadata"]["arrow_format"] is True
+        assert data["last_action"] == "created_document_103"
+
+        # Save all documents
+        response = client.post("/documents/save-all")
+        assert response.status_code == HTTP_201_CREATED
+        save_data = response.json()
+        assert save_data["status"] == "all documents saved"
+        assert save_data["count"] == 3
+
+        # Verify working documents are cleared but save session persists
+        response = client.get("/documents")
+        data = response.json()
+        assert data["count"] == 0
+        assert len(data["documents"]) == 0
 
 
 @xfail_if_driver_missing
-def test_session_expiration(session_store: SQLSpecSessionStore) -> None:
-    """Test session expiration functionality with ADBC."""
-    session_id = f"adbc-expiration-test-{uuid4()}"
-    session_data = {
-        "user_id": 999,
-        "test": "expiration",
-        "adbc_metadata": {"driver": "postgresql", "arrow_format": True},
-    }
+def test_session_expiration(adbc_migration_config: AdbcConfig) -> None:
+    """Test session expiration handling with ADBC."""
+    # Apply migrations first
+    commands = SyncMigrationCommands(adbc_migration_config)
+    commands.init(adbc_migration_config.migration_config["script_location"], package=False)
+    commands.upgrade()
 
-    # Set session with very short expiration
-    run_(session_store.set)(session_id, session_data, expires_in=1)
+    # Create store and config with very short lifetime
+    session_store = SQLSpecSessionStore(
+        config=adbc_migration_config,
+        table_name="litestar_sessions",  # Use the migrated table
+    )
 
-    # Should exist immediately
-    result = run_(session_store.get)(session_id)
-    assert result == session_data
+    session_config = SQLSpecSessionConfig(
+        table_name="litestar_sessions",
+        store="sessions",
+        max_age=1,  # 1 second
+    )
 
-    # Wait for expiration
-    time.sleep(2)
+    @get("/set-expiring-data")
+    def set_data(request: Any) -> dict:
+        request.session["test_data"] = "adbc_expiring_data"
+        request.session["timestamp"] = "2024-01-01T00:00:00Z"
+        request.session["database"] = "ADBC"
+        request.session["arrow_native"] = True
+        request.session["columnar_storage"] = True
+        return {"status": "data set with short expiration"}
 
-    # Should be expired now
-    result = run_(session_store.get)(session_id, None)
-    assert result is None
-
-
-@xfail_if_driver_missing
-def test_concurrent_session_operations(session_store: SQLSpecSessionStore) -> None:
-    """Test concurrent session operations with ADBC."""
-
-    def create_adbc_session(session_num: int) -> None:
-        """Create a session with unique ADBC-specific data."""
-        session_id = f"adbc-concurrent-{session_num}"
-        session_data = {
-            "session_number": session_num,
-            "data": f"adbc_session_{session_num}_data",
-            "timestamp": f"2024-01-01T12:{session_num:02d}:00Z",
-            "adbc_config": {
-                "driver": "postgresql" if session_num % 2 == 0 else "duckdb",
-                "batch_size": 1000 + (session_num * 100),
-                "arrow_format": True,
-            },
-            "performance_data": [
-                {"metric": "query_time", "value": session_num * 10},
-                {"metric": "rows_processed", "value": session_num * 1000},
-                {"metric": "memory_usage", "value": session_num * 50},
-            ],
+    @get("/get-expiring-data")
+    def get_data(request: Any) -> dict:
+        return {
+            "test_data": request.session.get("test_data"),
+            "timestamp": request.session.get("timestamp"),
+            "database": request.session.get("database"),
+            "arrow_native": request.session.get("arrow_native"),
+            "columnar_storage": request.session.get("columnar_storage"),
         }
-        run_(session_store.set)(session_id, session_data, expires_in=3600)
 
-    def read_adbc_session(session_num: int) -> "dict[str, Any] | None":
-        """Read a session by number."""
-        session_id = f"adbc-concurrent-{session_num}"
-        return run_(session_store.get)(session_id, None)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
-    # Create multiple sessions sequentially (ADBC is sync)
-    for i in range(10):
-        create_adbc_session(i)
-
-    # Read all sessions sequentially
-    results = []
-    for i in range(10):
-        result = read_adbc_session(i)
-        results.append(result)
-
-    # Verify all sessions were created and can be read
-    assert len(results) == 10
-    for i, result in enumerate(results):
-        assert result is not None
-        assert result["session_number"] == i
-        assert result["data"] == f"adbc_session_{i}_data"
-        assert result["adbc_config"]["batch_size"] == 1000 + (i * 100)
-        assert len(result["performance_data"]) == 3
-
-
-@xfail_if_driver_missing
-def test_large_data_handling(session_store: SQLSpecSessionStore) -> None:
-    """Test handling of large session data with ADBC Arrow format."""
-    session_id = f"adbc-large-data-{uuid4()}"
-
-    # Create large session data that benefits from Arrow format
-    large_data = {
-        "user_id": 12345,
-        "large_columnar_data": {
-            "ids": list(range(10000)),  # 10K integers
-            "timestamps": [f"2024-01-{(i % 28) + 1:02d}T{(i % 24):02d}:{(i % 60):02d}:00Z" for i in range(10000)],
-            "scores": [round(i * 0.123, 3) for i in range(10000)],  # 10K floats
-            "categories": [f"category_{i % 100}" for i in range(10000)],  # 10K strings
-            "flags": [i % 3 == 0 for i in range(10000)],  # 10K booleans
-        },
-        "metadata": {
-            "total_records": 10000,
-            "data_format": "arrow_columnar",
-            "compression": "snappy",
-            "schema_version": "1.0",
-        },
-        "analytics_results": {
-            f"result_set_{i}": {
-                "query": f"SELECT * FROM table_{i} WHERE id > {i * 100}",
-                "row_count": i * 1000,
-                "execution_time_ms": i * 50,
-                "memory_usage_mb": i * 10,
-                "columns": [f"col_{j}" for j in range(20)],  # 20 columns per result
-            }
-            for i in range(50)  # 50 result sets
-        },
-        "large_text_field": "x" * 100000,  # 100KB of text
-    }
-
-    # Store large data
-    run_(session_store.set)(session_id, large_data, expires_in=3600)
-
-    # Retrieve and verify
-    retrieved_data = run_(session_store.get)(session_id)
-    assert retrieved_data == large_data
-
-    # Verify columnar data integrity
-    assert len(retrieved_data["large_columnar_data"]["ids"]) == 10000
-    assert retrieved_data["large_columnar_data"]["ids"][9999] == 9999
-    assert len(retrieved_data["large_columnar_data"]["timestamps"]) == 10000
-    assert len(retrieved_data["large_columnar_data"]["scores"]) == 10000
-    assert retrieved_data["large_columnar_data"]["scores"][1000] == round(1000 * 0.123, 3)
-
-    # Verify analytics results
-    assert len(retrieved_data["analytics_results"]) == 50
-    assert retrieved_data["analytics_results"]["result_set_10"]["row_count"] == 10000
-    assert len(retrieved_data["analytics_results"]["result_set_25"]["columns"]) == 20
-
-    # Verify large text field
-    assert len(retrieved_data["large_text_field"]) == 100000
-    assert retrieved_data["metadata"]["total_records"] == 10000
-
-
-@xfail_if_driver_missing
-def test_session_cleanup_operations(session_store: SQLSpecSessionStore) -> None:
-    """Test session cleanup and maintenance operations with ADBC."""
-
-    # Create sessions with different expiration times
-    sessions_data = [
-        (f"adbc-short-{i}", {"data": f"short_{i}", "adbc_config": {"driver": "postgresql", "batch_size": 1000}}, 1)
-        for i in range(3)  # Will expire quickly
-    ] + [
-        (
-            f"adbc-long-{i}",
-            {
-                "data": f"long_{i}",
-                "adbc_config": {"driver": "duckdb", "batch_size": 5000},
-                "arrow_metadata": {"format": "columnar", "compression": "snappy"},
-            },
-            3600,
-        )
-        for i in range(3)  # Won't expire
-    ]
-
-    # Set all sessions
-    for session_id, data, expires_in in sessions_data:
-        run_(session_store.set)(session_id, data, expires_in=expires_in)
-
-    # Verify all sessions exist
-    for session_id, expected_data, _ in sessions_data:
-        result = run_(session_store.get)(session_id)
-        assert result == expected_data
-
-    # Wait for short sessions to expire
-    time.sleep(2)
-
-    # Clean up expired sessions
-    run_(session_store.delete_expired)()
-
-    # Verify short sessions are gone and long sessions remain
-    for session_id, expected_data, expires_in in sessions_data:
-        result = run_(session_store.get)(session_id, None)
-        if expires_in == 1:  # Short expiration
-            assert result is None
-        else:  # Long expiration
-            assert result == expected_data
-
-
-@xfail_if_driver_missing
-def test_adbc_specific_features(session_store: SQLSpecSessionStore, adbc_session: AdbcConfig) -> None:
-    """Test ADBC-specific features and optimizations."""
-    session_id = f"adbc-features-{uuid4()}"
-
-    # Test data that showcases ADBC features
-    adbc_data = {
-        "user_id": 54321,
-        "arrow_native_data": {
-            "column_types": {
-                "integers": list(range(1000)),
-                "strings": [f"value_{i}" for i in range(1000)],
-                "timestamps": [f"2024-{(i % 12) + 1:02d}-01T00:00:00Z" for i in range(1000)],
-                "decimals": [round(i * math.pi, 5) for i in range(1000)],
-                "booleans": [i % 2 == 0 for i in range(1000)],
-            },
-            "batch_metadata": {"batch_size": 1000, "compression": "lz4", "schema_fingerprint": "abc123def456"},
-        },
-        "multi_db_support": {
-            "primary_db": "postgresql",
-            "cache_db": "duckdb",
-            "analytics_db": "bigquery",
-            "cross_db_queries": [
-                "SELECT * FROM pg_table JOIN duckdb_cache ON id = cache_id",
-                "INSERT INTO bigquery_analytics SELECT aggregated_data FROM local_cache",
-            ],
-        },
-        "performance_optimizations": {
-            "zero_copy_reads": True,
-            "columnar_storage": True,
-            "vectorized_operations": True,
-            "parallel_execution": True,
-        },
-    }
-
-    # Store ADBC-specific data
-    run_(session_store.set)(session_id, adbc_data, expires_in=3600)
-
-    # Retrieve and verify all features
-    retrieved_data = run_(session_store.get)(session_id)
-    assert retrieved_data == adbc_data
-
-    # Verify Arrow native data integrity
-    arrow_data = retrieved_data["arrow_native_data"]["column_types"]
-    assert len(arrow_data["integers"]) == 1000
-    assert arrow_data["integers"][999] == 999
-    assert len(arrow_data["strings"]) == 1000
-    assert arrow_data["strings"][0] == "value_0"
-    assert len(arrow_data["decimals"]) == 1000
-    assert arrow_data["decimals"][100] == round(100 * math.pi, 5)
-
-    # Verify multi-database support metadata
-    multi_db = retrieved_data["multi_db_support"]
-    assert multi_db["primary_db"] == "postgresql"
-    assert len(multi_db["cross_db_queries"]) == 2
-
-    # Verify performance optimization flags
-    perf_opts = retrieved_data["performance_optimizations"]
-    assert all(perf_opts.values())  # All should be True
-
-
-@xfail_if_driver_missing
-def test_error_handling_and_recovery(session_backend: SQLSpecSessionBackend) -> None:
-    """Test error handling and recovery scenarios with ADBC."""
-
-    @get("/adbc-error-test")
-    async def adbc_error_test_endpoint(request: Any) -> dict:
-        try:
-            # Test normal session operations
-            request.session["adbc_config"] = {"driver": "postgresql", "connection_timeout": 30, "batch_size": 1000}
-            request.session["test_data"] = {
-                "large_array": list(range(5000)),
-                "complex_nested": {"level1": {"level2": {"level3": "deep_value"}}},
-            }
-            return {
-                "status": "success",
-                "adbc_config": request.session.get("adbc_config"),
-                "data_size": len(request.session.get("test_data", {}).get("large_array", [])),
-            }
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-
-    session_config = ServerSideSessionConfig(backend=session_backend, key="adbc-error-test-session", max_age=3600)
-
-    app = Litestar(route_handlers=[adbc_error_test_endpoint], middleware=[session_config.middleware])
+    app = Litestar(route_handlers=[set_data, get_data], middleware=[session_config.middleware], stores=stores)
 
     with TestClient(app=app) as client:
-        response = client.get("/adbc-error-test")
-        assert response.status_code == HTTP_200_OK
+        # Set data
+        response = client.get("/set-expiring-data")
+        assert response.json() == {"status": "data set with short expiration"}
+
+        # Data should be available immediately
+        response = client.get("/get-expiring-data")
         data = response.json()
-        assert data["status"] == "success"
-        assert data["adbc_config"]["driver"] == "postgresql"
-        assert data["adbc_config"]["batch_size"] == 1000
-        assert data["data_size"] == 5000
+        assert data["test_data"] == "adbc_expiring_data"
+        assert data["database"] == "ADBC"
+        assert data["arrow_native"] is True
+
+        # Wait for expiration
+        time.sleep(2)
+
+        # Data should be expired
+        response = client.get("/get-expiring-data")
+        assert response.json() == {
+            "test_data": None,
+            "timestamp": None,
+            "database": None,
+            "arrow_native": None,
+            "columnar_storage": None,
+        }
 
 
 @xfail_if_driver_missing
-def test_multiple_concurrent_adbc_apps(adbc_session: AdbcConfig) -> None:
-    """Test multiple Litestar applications with separate ADBC session backends."""
+def test_large_data_handling_adbc(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
+    """Test handling of large data structures with ADBC Arrow format optimization."""
 
-    # Create separate backends for different apps with ADBC-specific configurations
-    backend1 = SQLSpecSessionBackend(config=adbc_session, table_name="adbc_app1_sessions")
+    @post("/save-large-adbc-dataset")
+    def save_large_data(request: Any) -> dict:
+        # Create a large data structure to test ADBC's Arrow format capacity
+        large_dataset = {
+            "database_info": {
+                "engine": "ADBC",
+                "version": "1.x",
+                "features": ["Arrow-native", "Columnar", "Multi-database", "Zero-copy", "High-performance"],
+                "arrow_format": True,
+                "backends": ["PostgreSQL", "SQLite", "DuckDB", "BigQuery", "Snowflake"],
+            },
+            "test_data": {
+                "records": [
+                    {
+                        "id": i,
+                        "name": f"ADBC Record {i}",
+                        "description": f"This is an Arrow-optimized record {i}. " + "ADBC " * 50,
+                        "metadata": {
+                            "created_at": f"2024-01-{(i % 28) + 1:02d}T12:00:00Z",
+                            "tags": [f"adbc_tag_{j}" for j in range(20)],
+                            "arrow_properties": {
+                                f"prop_{k}": {
+                                    "value": f"adbc_value_{k}",
+                                    "type": "arrow_string" if k % 2 == 0 else "arrow_number",
+                                    "columnar": k % 3 == 0,
+                                }
+                                for k in range(25)
+                            },
+                        },
+                        "columnar_data": {
+                            "text": f"Large columnar content for record {i}. " + "Arrow " * 100,
+                            "data": list(range(i * 10, (i + 1) * 10)),
+                        },
+                    }
+                    for i in range(150)  # Test ADBC's columnar storage capacity
+                ],
+                "analytics": {
+                    "summary": {"total_records": 150, "database": "ADBC", "format": "Arrow", "compressed": True},
+                    "metrics": [
+                        {
+                            "date": f"2024-{month:02d}-{day:02d}",
+                            "adbc_operations": {
+                                "arrow_reads": day * month * 10,
+                                "columnar_writes": day * month * 50,
+                                "batch_operations": day * month * 5,
+                                "zero_copy_transfers": day * month * 2,
+                            },
+                        }
+                        for month in range(1, 13)
+                        for day in range(1, 29)
+                    ],
+                },
+            },
+            "adbc_configuration": {
+                "driver_settings": {f"setting_{i}": {"value": f"adbc_setting_{i}", "active": True} for i in range(75)},
+                "connection_info": {
+                    "arrow_batch_size": 1000,
+                    "timeout": 30,
+                    "compression": "snappy",
+                    "columnar_format": "arrow",
+                },
+            },
+        }
 
-    backend2 = SQLSpecSessionBackend(config=adbc_session, table_name="adbc_app2_sessions")
+        request.session["large_dataset"] = large_dataset
+        request.session["dataset_size"] = len(str(large_dataset))
+        request.session["adbc_metadata"] = {
+            "engine": "ADBC",
+            "storage_type": "JSONB",
+            "compressed": True,
+            "arrow_optimized": True,
+        }
 
-    # Ensure tables exist
-    with adbc_session.provide_session() as driver:
-        run_(backend1.store._ensure_table_exists)(driver)
-        run_(backend2.store._ensure_table_exists)(driver)
-
-    @get("/adbc-app1-data")
-    async def app1_endpoint(request: Any) -> dict:
-        request.session["app"] = "adbc_app1"
-        request.session["adbc_config"] = {"driver": "postgresql", "arrow_batch_size": 1000, "connection_pool_size": 10}
-        request.session["data"] = {"app1_specific": True, "columnar_data": list(range(100))}
         return {
-            "app": "adbc_app1",
-            "adbc_config": request.session["adbc_config"],
-            "data_length": len(request.session["data"]["columnar_data"]),
+            "status": "large dataset saved to ADBC",
+            "records_count": len(large_dataset["test_data"]["records"]),
+            "metrics_count": len(large_dataset["test_data"]["analytics"]["metrics"]),
+            "settings_count": len(large_dataset["adbc_configuration"]["driver_settings"]),
         }
 
-    @get("/adbc-app2-data")
-    async def app2_endpoint(request: Any) -> dict:
-        request.session["app"] = "adbc_app2"
-        request.session["adbc_config"] = {"driver": "duckdb", "arrow_batch_size": 5000, "in_memory": True}
-        request.session["data"] = {
-            "app2_specific": True,
-            "analytics_results": [{"query_id": i, "result_size": i * 100} for i in range(50)],
-        }
+    @get("/load-large-adbc-dataset")
+    def load_large_data(request: Any) -> dict:
+        dataset = request.session.get("large_dataset", {})
         return {
-            "app": "adbc_app2",
-            "adbc_config": request.session["adbc_config"],
-            "analytics_count": len(request.session["data"]["analytics_results"]),
+            "has_data": bool(dataset),
+            "records_count": len(dataset.get("test_data", {}).get("records", [])),
+            "metrics_count": len(dataset.get("test_data", {}).get("analytics", {}).get("metrics", [])),
+            "first_record": (
+                dataset.get("test_data", {}).get("records", [{}])[0]
+                if dataset.get("test_data", {}).get("records")
+                else None
+            ),
+            "database_info": dataset.get("database_info"),
+            "dataset_size": request.session.get("dataset_size", 0),
+            "adbc_metadata": request.session.get("adbc_metadata"),
         }
 
-    # Create separate apps
-    app1 = Litestar(
-        route_handlers=[app1_endpoint],
-        middleware=[ServerSideSessionConfig(backend=backend1, key="adbc_app1").middleware],
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
+
+    app = Litestar(
+        route_handlers=[save_large_data, load_large_data], middleware=[session_config.middleware], stores=stores
     )
 
-    app2 = Litestar(
-        route_handlers=[app2_endpoint],
-        middleware=[ServerSideSessionConfig(backend=backend2, key="adbc_app2").middleware],
+    with TestClient(app=app) as client:
+        # Save large dataset
+        response = client.post("/save-large-adbc-dataset")
+        assert response.status_code == HTTP_201_CREATED
+        data = response.json()
+        assert data["status"] == "large dataset saved to ADBC"
+        assert data["records_count"] == 150
+        assert data["metrics_count"] > 300  # 12 months * ~28 days
+        assert data["settings_count"] == 75
+
+        # Load and verify large dataset
+        response = client.get("/load-large-adbc-dataset")
+        data = response.json()
+        assert data["has_data"] is True
+        assert data["records_count"] == 150
+        assert data["first_record"]["name"] == "ADBC Record 0"
+        assert data["database_info"]["arrow_format"] is True
+        assert data["dataset_size"] > 50000  # Should be a substantial size
+        assert data["adbc_metadata"]["arrow_optimized"] is True
+
+
+@xfail_if_driver_missing
+def test_session_cleanup_and_maintenance(adbc_migration_config: AdbcConfig) -> None:
+    """Test session cleanup and maintenance operations with ADBC."""
+    # Apply migrations first
+    commands = SyncMigrationCommands(adbc_migration_config)
+    commands.init(adbc_migration_config.migration_config["script_location"], package=False)
+    commands.upgrade()
+
+    store = SQLSpecSessionStore(
+        config=adbc_migration_config,
+        table_name="litestar_sessions",  # Use the migrated table
     )
 
-    # Test both apps sequentially (ADBC is sync)
-    with TestClient(app=app1) as client1:
-        with TestClient(app=app2) as client2:
-            # Make requests to both apps
-            response1 = client1.get("/adbc-app1-data")
-            response2 = client2.get("/adbc-app2-data")
+    # Create sessions with different lifetimes using the public async API
+    # The store handles sync/async conversion internally
 
-            # Verify responses
-            assert response1.status_code == HTTP_200_OK
-            data1 = response1.json()
-            assert data1["app"] == "adbc_app1"
-            assert data1["adbc_config"]["driver"] == "postgresql"
-            assert data1["adbc_config"]["arrow_batch_size"] == 1000
-            assert data1["data_length"] == 100
+    async def setup_sessions() -> tuple[list[str], list[str]]:
+        temp_sessions = []
+        for i in range(8):
+            session_id = f"adbc_temp_session_{i}"
+            temp_sessions.append(session_id)
+            await store.set(
+                session_id,
+                {
+                    "data": i,
+                    "type": "temporary",
+                    "adbc_engine": "arrow",
+                    "created_for": "cleanup_test",
+                    "columnar_format": True,
+                },
+                expires_in=1,
+            )
 
-            assert response2.status_code == HTTP_200_OK
-            data2 = response2.json()
-            assert data2["app"] == "adbc_app2"
-            assert data2["adbc_config"]["driver"] == "duckdb"
-            assert data2["adbc_config"]["arrow_batch_size"] == 5000
-            assert data2["analytics_count"] == 50
+        # Create permanent sessions
+        perm_sessions = []
+        for i in range(4):
+            session_id = f"adbc_perm_session_{i}"
+            perm_sessions.append(session_id)
+            await store.set(
+                session_id,
+                {
+                    "data": f"permanent_{i}",
+                    "type": "permanent",
+                    "adbc_engine": "arrow",
+                    "created_for": "cleanup_test",
+                    "durable": True,
+                },
+                expires_in=3600,
+            )
+        return temp_sessions, perm_sessions
 
-            # Verify session data is isolated between apps
-            response1_second = client1.get("/adbc-app1-data")
-            response2_second = client2.get("/adbc-app2-data")
+    async def verify_sessions() -> None:
+        temp_sessions, perm_sessions = await setup_sessions()
 
-            assert response1_second.json()["adbc_config"]["driver"] == "postgresql"
-            assert response2_second.json()["adbc_config"]["driver"] == "duckdb"
+        # Verify all sessions exist initially
+        for session_id in temp_sessions + perm_sessions:
+            result = await store.get(session_id)
+            assert result is not None
+            assert result["adbc_engine"] == "arrow"
+
+        # Wait for temporary sessions to expire
+        await asyncio.sleep(2)
+
+        # Clean up expired sessions
+        await store.delete_expired()
+
+        # Verify temporary sessions are gone
+        for session_id in temp_sessions:
+            result = await store.get(session_id)
+            assert result is None
+
+        # Verify permanent sessions still exist
+        for session_id in perm_sessions:
+            result = await store.get(session_id)
+            assert result is not None
+            assert result["type"] == "permanent"
+
+    # Run the async test
+    asyncio.run(verify_sessions())
+
+
+@xfail_if_driver_missing
+def test_migration_with_default_table_name(adbc_migration_config: AdbcConfig) -> None:
+    """Test that migration with string format creates default table name for ADBC."""
+    # Apply migrations
+    commands = SyncMigrationCommands(adbc_migration_config)
+    commands.init(adbc_migration_config.migration_config["script_location"], package=False)
+    commands.upgrade()
+
+    # Create store using the migrated table
+    store = SQLSpecSessionStore(
+        config=adbc_migration_config,
+        table_name="litestar_sessions",  # Default table name
+    )
+
+    # Test that the store works with the migrated table
+
+    async def test_store() -> None:
+        session_id = "test_session_default"
+        test_data = {"user_id": 1, "username": "test_user", "adbc_features": {"arrow_native": True}}
+
+        await store.set(session_id, test_data, expires_in=3600)
+        retrieved = await store.get(session_id)
+
+        assert retrieved == test_data
+
+    asyncio.run(test_store())
+
+
+@xfail_if_driver_missing
+def test_migration_with_custom_table_name(adbc_migration_config_with_dict: AdbcConfig) -> None:
+    """Test that migration with dict format creates custom table name for ADBC."""
+    # Apply migrations
+    commands = SyncMigrationCommands(adbc_migration_config_with_dict)
+    commands.init(adbc_migration_config_with_dict.migration_config["script_location"], package=False)
+    commands.upgrade()
+
+    # Create store using the custom migrated table
+    store = SQLSpecSessionStore(
+        config=adbc_migration_config_with_dict,
+        table_name="custom_adbc_sessions",  # Custom table name from config
+    )
+
+    # Test that the store works with the custom table
+
+    async def test_custom_table() -> None:
+        session_id = "test_session_custom"
+        test_data = {"user_id": 2, "username": "custom_user", "adbc_features": {"arrow_native": True}}
+
+        await store.set(session_id, test_data, expires_in=3600)
+        retrieved = await store.get(session_id)
+
+        assert retrieved == test_data
+
+    asyncio.run(test_custom_table())
+
+    # Verify default table doesn't exist
+    with adbc_migration_config_with_dict.provide_session() as driver:
+        result = driver.execute("""
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_name = 'litestar_sessions'
+            AND table_schema = 'public'
+        """)
+        assert len(result.data) == 0
+
+
+@xfail_if_driver_missing
+def test_migration_with_mixed_extensions(adbc_migration_config_mixed: AdbcConfig) -> None:
+    """Test migration with mixed extension formats for ADBC."""
+    # Apply migrations
+    commands = SyncMigrationCommands(adbc_migration_config_mixed)
+    commands.init(adbc_migration_config_mixed.migration_config["script_location"], package=False)
+    commands.upgrade()
+
+    # The litestar extension should use default table name
+    store = SQLSpecSessionStore(
+        config=adbc_migration_config_mixed,
+        table_name="litestar_sessions",  # Default since string format was used
+    )
+
+    # Test that the store works
+
+    async def test_mixed_extensions() -> None:
+        session_id = "test_session_mixed"
+        test_data = {"user_id": 3, "username": "mixed_user", "adbc_features": {"arrow_native": True}}
+
+        await store.set(session_id, test_data, expires_in=3600)
+        retrieved = await store.get(session_id)
+
+        assert retrieved == test_data
+
+    asyncio.run(test_mixed_extensions())

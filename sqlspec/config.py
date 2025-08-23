@@ -59,9 +59,9 @@ class LifecycleConfig(TypedDict, total=False):
     on_pool_destroy: NotRequired[list[Callable[[Any], None]]]
     on_session_start: NotRequired[list[Callable[[Any], None]]]
     on_session_end: NotRequired[list[Callable[[Any], None]]]
-    on_query_start: NotRequired[list[Callable[[str, dict], None]]]
-    on_query_complete: NotRequired[list[Callable[[str, dict, Any], None]]]
-    on_error: NotRequired[list[Callable[[Exception, str, dict], None]]]
+    on_query_start: NotRequired[list[Callable[[str, "dict[str, Any]"], None]]]
+    on_query_complete: NotRequired[list[Callable[[str, "dict[str, Any]", Any], None]]]
+    on_error: NotRequired[list[Callable[[Exception, str, "dict[str, Any]"], None]]]
 
 
 class MigrationConfig(TypedDict, total=False):

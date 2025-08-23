@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.migrations.commands import MigrationCommands
+from sqlspec.migrations.commands import SyncMigrationCommands
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -20,7 +20,7 @@ def test_sqlite_migration_full_workflow() -> None:
             pool_config={"database": ":memory:"},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = SyncMigrationCommands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -79,7 +79,7 @@ def test_sqlite_multiple_migrations_workflow() -> None:
             pool_config={"database": ":memory:"},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = SyncMigrationCommands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -171,7 +171,7 @@ def test_sqlite_migration_current_command() -> None:
             pool_config={"database": ":memory:"},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = SyncMigrationCommands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -206,7 +206,7 @@ def test_sqlite_migration_error_handling() -> None:
             pool_config={"database": ":memory:"},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = SyncMigrationCommands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -238,7 +238,7 @@ def test_sqlite_migration_with_transactions() -> None:
             pool_config={"database": ":memory:"},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = SyncMigrationCommands(config)
 
         commands.init(str(migration_dir), package=True)
 

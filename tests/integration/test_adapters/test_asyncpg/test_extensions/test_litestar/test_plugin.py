@@ -1,90 +1,314 @@
-"""Comprehensive Litestar integration tests for AsyncPG adapter."""
+"""Comprehensive Litestar integration tests for AsyncPG adapter.
+
+This test suite validates the full integration between SQLSpec's AsyncPG adapter
+and Litestar's session middleware, including PostgreSQL-specific features like JSONB.
+"""
 
 import asyncio
+from datetime import timedelta
 from typing import Any
 from uuid import uuid4
 
 import pytest
-from litestar import Litestar, get, post
-from litestar.middleware.session.server_side import ServerSideSessionConfig
-from litestar.status_codes import HTTP_200_OK
+from litestar import Litestar, get, post, put
+from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED, HTTP_404_NOT_FOUND
+from litestar.stores.registry import StoreRegistry
 from litestar.testing import AsyncTestClient
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.migrations.commands import AsyncMigrationCommands
 
 pytestmark = [pytest.mark.asyncpg, pytest.mark.postgres, pytest.mark.integration]
 
 
 @pytest.fixture
-async def asyncpg_config() -> AsyncpgConfig:
-    """Create AsyncPG configuration for testing."""
-    return AsyncpgConfig(
-        pool_config={"dsn": "postgresql://postgres:postgres@localhost:5432/postgres", "min_size": 2, "max_size": 10}
-    )
+async def migrated_config(asyncpg_migration_config: AsyncpgConfig) -> AsyncpgConfig:
+    """Apply migrations once and return the config."""
+    commands = AsyncMigrationCommands(asyncpg_migration_config)
+    await commands.init(asyncpg_migration_config.migration_config["script_location"], package=False)
+    await commands.upgrade()
+    return asyncpg_migration_config
 
 
 @pytest.fixture
-async def session_store(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionStore:
-    """Create a session store instance."""
-    store = SQLSpecSessionStore(
-        config=asyncpg_config,
-        table_name="test_litestar_sessions",
-        session_id_column="session_id",
-        data_column="session_data",
-        expires_at_column="expires_at",
-        created_at_column="created_at",
+async def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> Litestar:
+    """Create a Litestar app with session middleware for testing."""
+
+    @get("/session/set/{key:str}")
+    async def set_session_value(request: Any, key: str) -> dict:
+        """Set a session value."""
+        value = request.query_params.get("value", "default")
+        request.session[key] = value
+        return {"status": "set", "key": key, "value": value}
+
+    @get("/session/get/{key:str}")
+    async def get_session_value(request: Any, key: str) -> dict:
+        """Get a session value."""
+        value = request.session.get(key)
+        return {"key": key, "value": value}
+
+    @post("/session/bulk")
+    async def set_bulk_session(request: Any) -> dict:
+        """Set multiple session values."""
+        data = await request.json()
+        for key, value in data.items():
+            request.session[key] = value
+        return {"status": "bulk set", "count": len(data)}
+
+    @get("/session/all")
+    async def get_all_session(request: Any) -> dict:
+        """Get all session data."""
+        return dict(request.session)
+
+    @post("/session/clear")
+    async def clear_session(request: Any) -> dict:
+        """Clear all session data."""
+        request.session.clear()
+        return {"status": "cleared"}
+
+    @post("/session/key/{key:str}/delete")
+    async def delete_session_key(request: Any, key: str) -> dict:
+        """Delete a specific session key."""
+        if key in request.session:
+            del request.session[key]
+            return {"status": "deleted", "key": key}
+        return {"status": "not found", "key": key}
+
+    @get("/counter")
+    async def counter(request: Any) -> dict:
+        """Increment a counter in session."""
+        count = request.session.get("count", 0)
+        count += 1
+        request.session["count"] = count
+        return {"count": count}
+
+    @put("/user/profile")
+    async def set_user_profile(request: Any) -> dict:
+        """Set user profile data."""
+        profile = await request.json()
+        request.session["profile"] = profile
+        return {"status": "profile set", "profile": profile}
+
+    @get("/user/profile")
+    async def get_user_profile(request: Any) -> dict:
+        """Get user profile data."""
+        profile = request.session.get("profile")
+        if not profile:
+            return {"error": "No profile found"}, HTTP_404_NOT_FOUND
+        return {"profile": profile}
+
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
+
+    return Litestar(
+        route_handlers=[
+            set_session_value,
+            get_session_value,
+            set_bulk_session,
+            get_all_session,
+            clear_session,
+            delete_session_key,
+            counter,
+            set_user_profile,
+            get_user_profile,
+        ],
+        middleware=[session_config.middleware],
+        stores=stores,
     )
-    # Ensure table exists
-    async with asyncpg_config.provide_session() as driver:
-        await store._ensure_table_exists(driver)
-    return store
 
 
-@pytest.fixture
-async def session_backend(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionBackend:
-    """Create a session backend instance."""
-    backend = SQLSpecSessionBackend(config=asyncpg_config, table_name="test_litestar_backend", session_lifetime=3600)
-    # Ensure table exists
-    async with asyncpg_config.provide_session() as driver:
-        await backend.store._ensure_table_exists(driver)
-    return backend
+async def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
+    """Test that SessionStore can be created with AsyncPG configuration."""
+    assert session_store is not None
+    assert session_store._table_name == "litestar_sessions"
+    assert session_store._session_id_column == "session_id"
+    assert session_store._data_column == "data"
+    assert session_store._expires_at_column == "expires_at"
+    assert session_store._created_at_column == "created_at"
 
 
-async def test_session_store_basic_operations(session_store: SQLSpecSessionStore) -> None:
-    """Test basic session store operations with AsyncPG."""
-    session_id = f"test-session-{uuid4()}"
-    session_data = {
-        "user_id": 42,
-        "username": "asyncpg_user",
-        "preferences": {"theme": "dark", "language": "en"},
-        "roles": ["user", "admin"],
-    }
+async def test_session_store_postgres_table_structure(
+    session_store: SQLSpecSessionStore, asyncpg_migration_config: AsyncpgConfig
+) -> None:
+    """Test that session table is created with proper PostgreSQL structure."""
+    async with asyncpg_migration_config.provide_session() as driver:
+        # Verify table exists
+        result = await driver.execute(
+            """
+            SELECT tablename FROM pg_tables
+            WHERE tablename = $1
+        """,
+            "litestar_sessions",
+        )
+        assert len(result.data) == 1
+        assert result.data[0]["tablename"] == "litestar_sessions"
 
-    # Set session data
-    await session_store.set(session_id, session_data, expires_in=3600)
+        # Verify column structure
+        result = await driver.execute(
+            """
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_name = $1
+            ORDER BY ordinal_position
+        """,
+            "litestar_sessions",
+        )
 
-    # Get session data
-    retrieved_data = await session_store.get(session_id)
-    assert retrieved_data == session_data
+        columns = {row["column_name"]: row for row in result.data}
+        assert "session_id" in columns
+        assert "data" in columns
+        assert "expires_at" in columns
+        assert "created_at" in columns
 
-    # Update session data
-    updated_data = {**session_data, "last_login": "2024-01-01T12:00:00Z"}
-    await session_store.set(session_id, updated_data, expires_in=3600)
+        # Check data types specific to PostgreSQL
+        assert columns["data"]["data_type"] == "jsonb"  # PostgreSQL JSONB type
+        assert columns["expires_at"]["data_type"] == "timestamp with time zone"
+        assert columns["created_at"]["data_type"] == "timestamp with time zone"
 
-    # Verify update
-    retrieved_data = await session_store.get(session_id)
-    assert retrieved_data == updated_data
+        # Verify indexes exist
+        result = await driver.execute(
+            """
+            SELECT indexname FROM pg_indexes
+            WHERE tablename = $1
+        """,
+            "litestar_sessions",
+        )
+        index_names = [row["indexname"] for row in result.data]
+        assert any("expires_at" in name for name in index_names)
 
-    # Delete session
-    await session_store.delete(session_id)
 
-    # Verify deletion
-    result = await session_store.get(session_id, None)
-    assert result is None
+async def test_basic_session_operations(litestar_app: Litestar) -> None:
+    """Test basic session get/set/delete operations."""
+    async with AsyncTestClient(app=litestar_app) as client:
+        # Set a simple value
+        response = await client.get("/session/set/username?value=testuser")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"status": "set", "key": "username", "value": "testuser"}
+
+        # Get the value back
+        response = await client.get("/session/get/username")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"key": "username", "value": "testuser"}
+
+        # Set another value
+        response = await client.get("/session/set/user_id?value=12345")
+        assert response.status_code == HTTP_200_OK
+
+        # Get all session data
+        response = await client.get("/session/all")
+        assert response.status_code == HTTP_200_OK
+        data = response.json()
+        assert data["username"] == "testuser"
+        assert data["user_id"] == "12345"
+
+        # Delete a specific key
+        response = await client.post("/session/key/username/delete")
+        assert response.status_code == HTTP_201_CREATED
+        assert response.json() == {"status": "deleted", "key": "username"}
+
+        # Verify it's gone
+        response = await client.get("/session/get/username")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"key": "username", "value": None}
+
+        # user_id should still exist
+        response = await client.get("/session/get/user_id")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"key": "user_id", "value": "12345"}
 
 
-async def test_session_store_jsonb_support(session_store: SQLSpecSessionStore, asyncpg_config: AsyncpgConfig) -> None:
+async def test_bulk_session_operations(litestar_app: Litestar) -> None:
+    """Test bulk session operations."""
+    async with AsyncTestClient(app=litestar_app) as client:
+        # Set multiple values at once
+        bulk_data = {
+            "user_id": 42,
+            "username": "alice",
+            "email": "alice@example.com",
+            "preferences": {"theme": "dark", "notifications": True, "language": "en"},
+            "roles": ["user", "admin"],
+            "last_login": "2024-01-15T10:30:00Z",
+        }
+
+        response = await client.post("/session/bulk", json=bulk_data)
+        assert response.status_code == HTTP_201_CREATED
+        assert response.json() == {"status": "bulk set", "count": 6}
+
+        # Verify all data was set
+        response = await client.get("/session/all")
+        assert response.status_code == HTTP_200_OK
+        data = response.json()
+
+        for key, expected_value in bulk_data.items():
+            assert data[key] == expected_value
+
+
+async def test_session_persistence_across_requests(litestar_app: Litestar) -> None:
+    """Test that sessions persist across multiple requests."""
+    async with AsyncTestClient(app=litestar_app) as client:
+        # Test counter functionality across multiple requests
+        expected_counts = [1, 2, 3, 4, 5]
+
+        for expected_count in expected_counts:
+            response = await client.get("/counter")
+            assert response.status_code == HTTP_200_OK
+            assert response.json() == {"count": expected_count}
+
+        # Verify count persists after setting other data
+        response = await client.get("/session/set/other_data?value=some_value")
+        assert response.status_code == HTTP_200_OK
+
+        response = await client.get("/counter")
+        assert response.status_code == HTTP_200_OK
+        assert response.json() == {"count": 6}
+
+
+async def test_session_expiration(migrated_config: AsyncpgConfig) -> None:
+    """Test session expiration handling."""
+    # Create store with very short lifetime
+    session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+
+    session_config = SQLSpecSessionConfig(
+        table_name="litestar_sessions",
+        store="sessions",
+        max_age=1,  # 1 second
+    )
+
+    @get("/set-temp")
+    async def set_temp_data(request: Any) -> dict:
+        request.session["temp_data"] = "will_expire"
+        return {"status": "set"}
+
+    @get("/get-temp")
+    async def get_temp_data(request: Any) -> dict:
+        return {"temp_data": request.session.get("temp_data")}
+
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
+
+    app = Litestar(route_handlers=[set_temp_data, get_temp_data], middleware=[session_config.middleware], stores=stores)
+
+    async with AsyncTestClient(app=app) as client:
+        # Set temporary data
+        response = await client.get("/set-temp")
+        assert response.json() == {"status": "set"}
+
+        # Data should be available immediately
+        response = await client.get("/get-temp")
+        assert response.json() == {"temp_data": "will_expire"}
+
+        # Wait for expiration
+        await asyncio.sleep(2)
+
+        # Data should be expired (new session created)
+        response = await client.get("/get-temp")
+        assert response.json() == {"temp_data": None}
+
+
+async def test_jsonb_support(session_store: SQLSpecSessionStore, asyncpg_migration_config: AsyncpgConfig) -> None:
     """Test PostgreSQL JSONB support for complex data types."""
     session_id = f"jsonb-test-{uuid4()}"
 
@@ -117,152 +341,11 @@ async def test_session_store_jsonb_support(session_store: SQLSpecSessionStore, a
     assert retrieved_data == complex_data
 
     # Verify data is stored as JSONB in database
-    async with asyncpg_config.provide_session() as driver:
-        result = await driver.execute(
-            f"SELECT session_data FROM {session_store._table_name} WHERE session_id = $1", session_id
-        )
+    async with asyncpg_migration_config.provide_session() as driver:
+        result = await driver.execute(f"SELECT data FROM {session_store._table_name} WHERE session_id = $1", session_id)
         assert len(result.data) == 1
-        stored_json = result.data[0]["session_data"]
+        stored_json = result.data[0]["data"]
         assert isinstance(stored_json, dict)  # Should be parsed as dict, not string
-
-
-async def test_session_backend_litestar_integration(session_backend: SQLSpecSessionBackend) -> None:
-    """Test SQLSpecSessionBackend integration with Litestar application."""
-
-    @get("/set-user")
-    async def set_user_session(request: Any) -> dict:
-        request.session["user_id"] = 54321
-        request.session["username"] = "asyncpg_user"
-        request.session["roles"] = ["user", "moderator"]
-        request.session["metadata"] = {"login_time": "2024-01-01T12:00:00Z"}
-        return {"status": "user session set"}
-
-    @get("/get-user")
-    async def get_user_session(request: Any) -> dict:
-        return {
-            "user_id": request.session.get("user_id"),
-            "username": request.session.get("username"),
-            "roles": request.session.get("roles"),
-            "metadata": request.session.get("metadata"),
-        }
-
-    @post("/update-preferences")
-    async def update_preferences(request: Any) -> dict:
-        preferences = request.session.get("preferences", {})
-        preferences.update({"theme": "dark", "notifications": True})
-        request.session["preferences"] = preferences
-        return {"status": "preferences updated"}
-
-    @post("/clear-session")
-    async def clear_session(request: Any) -> dict:
-        request.session.clear()
-        return {"status": "session cleared"}
-
-    session_config = ServerSideSessionConfig(backend=session_backend, key="asyncpg-test-session", max_age=3600)
-
-    app = Litestar(
-        route_handlers=[set_user_session, get_user_session, update_preferences, clear_session],
-        middleware=[session_config.middleware],
-    )
-
-    async with AsyncTestClient(app=app) as client:
-        # Set user session
-        response = await client.get("/set-user")
-        assert response.status_code == HTTP_200_OK
-        assert response.json() == {"status": "user session set"}
-
-        # Get user session
-        response = await client.get("/get-user")
-        assert response.status_code == HTTP_200_OK
-        data = response.json()
-        assert data["user_id"] == 54321
-        assert data["username"] == "asyncpg_user"
-        assert data["roles"] == ["user", "moderator"]
-        assert data["metadata"] == {"login_time": "2024-01-01T12:00:00Z"}
-
-        # Update preferences
-        response = await client.post("/update-preferences")
-        assert response.status_code == HTTP_200_OK
-        assert response.json() == {"status": "preferences updated"}
-
-        # Verify preferences were added
-        response = await client.get("/get-user")
-        data = response.json()
-        assert "preferences" in data
-        assert data["preferences"] == {"theme": "dark", "notifications": True}
-
-        # Clear session
-        response = await client.post("/clear-session")
-        assert response.status_code == HTTP_200_OK
-
-        # Verify session is cleared
-        response = await client.get("/get-user")
-        data = response.json()
-        assert all(value is None for value in data.values())
-
-
-async def test_session_persistence_across_requests(session_backend: SQLSpecSessionBackend) -> None:
-    """Test session persistence across multiple requests."""
-
-    @get("/counter")
-    async def counter_endpoint(request: Any) -> dict:
-        count = request.session.get("count", 0)
-        visits = request.session.get("visits", [])
-
-        count += 1
-        visits.append(f"visit_{count}")
-
-        request.session["count"] = count
-        request.session["visits"] = visits
-        request.session["last_visit"] = f"2024-01-01T12:{count:02d}:00Z"
-
-        return {"count": count, "visits": visits, "last_visit": request.session["last_visit"]}
-
-    session_config = ServerSideSessionConfig(backend=session_backend, key="persistence-test", max_age=3600)
-
-    app = Litestar(route_handlers=[counter_endpoint], middleware=[session_config.middleware])
-
-    async with AsyncTestClient(app=app) as client:
-        # First request
-        response = await client.get("/counter")
-        data = response.json()
-        assert data["count"] == 1
-        assert data["visits"] == ["visit_1"]
-        assert data["last_visit"] == "2024-01-01T12:01:00Z"
-
-        # Second request
-        response = await client.get("/counter")
-        data = response.json()
-        assert data["count"] == 2
-        assert data["visits"] == ["visit_1", "visit_2"]
-        assert data["last_visit"] == "2024-01-01T12:02:00Z"
-
-        # Third request
-        response = await client.get("/counter")
-        data = response.json()
-        assert data["count"] == 3
-        assert data["visits"] == ["visit_1", "visit_2", "visit_3"]
-        assert data["last_visit"] == "2024-01-01T12:03:00Z"
-
-
-async def test_session_expiration(session_store: SQLSpecSessionStore) -> None:
-    """Test session expiration functionality."""
-    session_id = f"expiration-test-{uuid4()}"
-    session_data = {"user_id": 999, "test": "expiration"}
-
-    # Set session with very short expiration
-    await session_store.set(session_id, session_data, expires_in=1)
-
-    # Should exist immediately
-    result = await session_store.get(session_id)
-    assert result == session_data
-
-    # Wait for expiration
-    await asyncio.sleep(2)
-
-    # Should be expired now
-    result = await session_store.get(session_id, None)
-    assert result is None
 
 
 async def test_concurrent_session_operations(session_store: SQLSpecSessionStore) -> None:
@@ -324,7 +407,6 @@ async def test_large_session_data(session_store: SQLSpecSessionStore) -> None:
 
 async def test_session_cleanup_operations(session_store: SQLSpecSessionStore) -> None:
     """Test session cleanup and maintenance operations."""
-    base_time = "2024-01-01T12:00:00Z"
 
     # Create sessions with different expiration times
     sessions_data = [
@@ -359,12 +441,14 @@ async def test_session_cleanup_operations(session_store: SQLSpecSessionStore) ->
             assert result == expected_data
 
 
-async def test_transaction_handling(session_store: SQLSpecSessionStore, asyncpg_config: AsyncpgConfig) -> None:
+async def test_transaction_handling(
+    session_store: SQLSpecSessionStore, asyncpg_migration_config: AsyncpgConfig
+) -> None:
     """Test transaction handling in session operations."""
     session_id = f"transaction-test-{uuid4()}"
 
     # Test that session operations work within transactions
-    async with asyncpg_config.provide_session() as driver:
+    async with asyncpg_migration_config.provide_session() as driver:
         async with driver.begin_transaction():
             # Set session data within transaction
             await session_store.set(session_id, {"test": "transaction"}, expires_in=3600)
@@ -381,80 +465,283 @@ async def test_transaction_handling(session_store: SQLSpecSessionStore, asyncpg_
         assert result == {"test": "updated"}
 
 
-async def test_session_backend_error_handling(session_backend: SQLSpecSessionBackend) -> None:
-    """Test error handling in session backend operations."""
+async def test_concurrent_sessions(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
+    """Test handling of concurrent sessions with different clients."""
 
-    @get("/error-test")
-    async def error_test_endpoint(request: Any) -> dict:
-        # Try to access session normally
-        try:
-            request.session["valid_key"] = "valid_value"
-            return {"status": "success", "value": request.session.get("valid_key")}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+    @get("/user/login/{user_id:int}")
+    async def login_user(request: Any, user_id: int) -> dict:
+        request.session["user_id"] = user_id
+        request.session["login_time"] = "2024-01-15T10:30:00Z"
+        return {"status": "logged in", "user_id": user_id}
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="error-test-session", max_age=3600)
+    @get("/user/whoami")
+    async def whoami(request: Any) -> dict:
+        user_id = request.session.get("user_id")
+        login_time = request.session.get("login_time")
+        return {"user_id": user_id, "login_time": login_time}
 
-    app = Litestar(route_handlers=[error_test_endpoint], middleware=[session_config.middleware])
+    @post("/user/update-profile")
+    async def update_profile(request: Any) -> dict:
+        profile_data = await request.json()
+        request.session["profile"] = profile_data
+        return {"status": "profile updated"}
 
-    async with AsyncTestClient(app=app) as client:
-        response = await client.get("/error-test")
+    @get("/session/all")
+    async def get_all_session(request: Any) -> dict:
+        """Get all session data."""
+        return dict(request.session)
+
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
+
+    app = Litestar(
+        route_handlers=[login_user, whoami, update_profile, get_all_session],
+        middleware=[session_config.middleware],
+        stores=stores,
+    )
+
+    # Use separate clients to simulate different browsers/users
+    async with (
+        AsyncTestClient(app=app) as client1,
+        AsyncTestClient(app=app) as client2,
+        AsyncTestClient(app=app) as client3,
+    ):
+        # Each client logs in as different user
+        response1 = await client1.get("/user/login/100")
+        assert response1.json()["user_id"] == 100
+
+        response2 = await client2.get("/user/login/200")
+        assert response2.json()["user_id"] == 200
+
+        response3 = await client3.get("/user/login/300")
+        assert response3.json()["user_id"] == 300
+
+        # Each client should maintain separate session
+        who1 = await client1.get("/user/whoami")
+        assert who1.json()["user_id"] == 100
+
+        who2 = await client2.get("/user/whoami")
+        assert who2.json()["user_id"] == 200
+
+        who3 = await client3.get("/user/whoami")
+        assert who3.json()["user_id"] == 300
+
+        # Update profiles independently
+        await client1.post("/user/update-profile", json={"name": "User One", "age": 25})
+        await client2.post("/user/update-profile", json={"name": "User Two", "age": 30})
+
+        # Verify isolation - get all session data
+        response1 = await client1.get("/session/all")
+        data1 = response1.json()
+        assert data1["user_id"] == 100
+        assert data1["profile"]["name"] == "User One"
+
+        response2 = await client2.get("/session/all")
+        data2 = response2.json()
+        assert data2["user_id"] == 200
+        assert data2["profile"]["name"] == "User Two"
+
+        # Client3 should not have profile data
+        response3 = await client3.get("/session/all")
+        data3 = response3.json()
+        assert data3["user_id"] == 300
+        assert "profile" not in data3
+
+
+async def test_store_crud_operations(session_store: SQLSpecSessionStore) -> None:
+    """Test direct store CRUD operations."""
+    session_id = "test-session-crud"
+
+    # Test data with various types
+    test_data = {
+        "user_id": 12345,
+        "username": "testuser",
+        "preferences": {"theme": "dark", "language": "en", "notifications": True},
+        "tags": ["admin", "user", "premium"],
+        "metadata": {"last_login": "2024-01-15T10:30:00Z", "login_count": 42, "is_verified": True},
+    }
+
+    # CREATE
+    await session_store.set(session_id, test_data, expires_in=3600)
+
+    # READ
+    retrieved_data = await session_store.get(session_id)
+    assert retrieved_data == test_data
+
+    # UPDATE (overwrite)
+    updated_data = {**test_data, "last_activity": "2024-01-15T11:00:00Z"}
+    await session_store.set(session_id, updated_data, expires_in=3600)
+
+    retrieved_updated = await session_store.get(session_id)
+    assert retrieved_updated == updated_data
+    assert "last_activity" in retrieved_updated
+
+    # EXISTS
+    assert await session_store.exists(session_id) is True
+    assert await session_store.exists("nonexistent") is False
+
+    # EXPIRES_IN
+    expires_in = await session_store.expires_in(session_id)
+    assert 3500 < expires_in <= 3600  # Should be close to 3600
+
+    # DELETE
+    await session_store.delete(session_id)
+
+    # Verify deletion
+    assert await session_store.get(session_id) is None
+    assert await session_store.exists(session_id) is False
+
+
+async def test_special_characters_handling(session_store: SQLSpecSessionStore) -> None:
+    """Test handling of special characters in keys and values."""
+
+    # Test data with various special characters
+    test_cases = [
+        ("unicode_🔑", {"message": "Hello 🌍 World! 你好世界"}),
+        ("special-chars!@#$%", {"data": "Value with special chars: !@#$%^&*()"}),
+        ("json_escape", {"quotes": '"double"', "single": "'single'", "backslash": "\\path\\to\\file"}),
+        ("newlines_tabs", {"multi_line": "Line 1\nLine 2\tTabbed"}),
+        ("empty_values", {"empty_string": "", "empty_list": [], "empty_dict": {}}),
+        ("null_values", {"null_value": None, "false_value": False, "zero_value": 0}),
+    ]
+
+    for session_id, test_data in test_cases:
+        # Store data with special characters
+        await session_store.set(session_id, test_data, expires_in=3600)
+
+        # Retrieve and verify
+        retrieved_data = await session_store.get(session_id)
+        assert retrieved_data == test_data, f"Failed for session_id: {session_id}"
+
+        # Cleanup
+        await session_store.delete(session_id)
+
+
+async def test_session_renewal(session_store: SQLSpecSessionStore) -> None:
+    """Test session renewal functionality."""
+    session_id = "renewal_test"
+    test_data = {"user_id": 123, "activity": "browsing"}
+
+    # Set session with short expiration
+    await session_store.set(session_id, test_data, expires_in=5)
+
+    # Get initial expiration time
+    initial_expires_in = await session_store.expires_in(session_id)
+    assert 4 <= initial_expires_in <= 5
+
+    # Get session data with renewal
+    retrieved_data = await session_store.get(session_id, renew_for=timedelta(hours=1))
+    assert retrieved_data == test_data
+
+    # Check that expiration time was extended
+    new_expires_in = await session_store.expires_in(session_id)
+    assert new_expires_in > 3500  # Should be close to 3600 (1 hour)
+
+    # Cleanup
+    await session_store.delete(session_id)
+
+
+async def test_error_handling_and_edge_cases(session_store: SQLSpecSessionStore) -> None:
+    """Test error handling and edge cases."""
+
+    # Test getting non-existent session
+    result = await session_store.get("non_existent_session")
+    assert result is None
+
+    # Test deleting non-existent session (should not raise error)
+    await session_store.delete("non_existent_session")
+
+    # Test expires_in for non-existent session
+    expires_in = await session_store.expires_in("non_existent_session")
+    assert expires_in == 0
+
+    # Test empty session data
+    await session_store.set("empty_session", {}, expires_in=3600)
+    empty_data = await session_store.get("empty_session")
+    assert empty_data == {}
+
+    # Test very large expiration time
+    await session_store.set("long_expiry", {"data": "test"}, expires_in=365 * 24 * 60 * 60)  # 1 year
+    long_expires_in = await session_store.expires_in("long_expiry")
+    assert long_expires_in > 365 * 24 * 60 * 60 - 10  # Should be close to 1 year
+
+    # Cleanup
+    await session_store.delete("empty_session")
+    await session_store.delete("long_expiry")
+
+
+async def test_complex_user_workflow(litestar_app: Litestar) -> None:
+    """Test a complex user workflow combining multiple operations."""
+    async with AsyncTestClient(app=litestar_app) as client:
+        # User registration workflow
+        user_profile = {
+            "user_id": 12345,
+            "username": "complex_user",
+            "email": "complex@example.com",
+            "profile": {
+                "first_name": "Complex",
+                "last_name": "User",
+                "age": 25,
+                "preferences": {
+                    "theme": "dark",
+                    "language": "en",
+                    "notifications": {"email": True, "push": False, "sms": True},
+                },
+            },
+            "permissions": ["read", "write", "admin"],
+            "last_login": "2024-01-15T10:30:00Z",
+        }
+
+        # Set user profile
+        response = await client.put("/user/profile", json=user_profile)
+        assert response.status_code == HTTP_200_OK  # PUT returns 200 by default
+
+        # Verify profile was set
+        response = await client.get("/user/profile")
         assert response.status_code == HTTP_200_OK
-        data = response.json()
-        assert data["status"] == "success"
-        assert data["value"] == "valid_value"
+        assert response.json()["profile"] == user_profile
 
+        # Update session with additional activity data
+        activity_data = {
+            "page_views": 15,
+            "session_start": "2024-01-15T10:30:00Z",
+            "cart_items": [
+                {"id": 1, "name": "Product A", "price": 29.99},
+                {"id": 2, "name": "Product B", "price": 19.99},
+            ],
+        }
 
-async def test_multiple_concurrent_apps(asyncpg_config: AsyncpgConfig) -> None:
-    """Test multiple Litestar applications with separate session backends."""
+        response = await client.post("/session/bulk", json=activity_data)
+        assert response.status_code == HTTP_201_CREATED
 
-    # Create separate backends for different apps
-    backend1 = SQLSpecSessionBackend(config=asyncpg_config, table_name="app1_sessions", session_lifetime=3600)
+        # Test counter functionality within complex session
+        for i in range(1, 6):
+            response = await client.get("/counter")
+            assert response.json()["count"] == i
 
-    backend2 = SQLSpecSessionBackend(config=asyncpg_config, table_name="app2_sessions", session_lifetime=3600)
+        # Get all session data to verify everything is maintained
+        response = await client.get("/session/all")
+        all_data = response.json()
 
-    # Ensure tables exist
-    async with asyncpg_config.provide_session() as driver:
-        await backend1.store._ensure_table_exists(driver)
-        await backend2.store._ensure_table_exists(driver)
+        # Verify all data components are present
+        assert "profile" in all_data
+        assert all_data["profile"] == user_profile
+        assert all_data["page_views"] == 15
+        assert len(all_data["cart_items"]) == 2
+        assert all_data["count"] == 5
 
-    @get("/app1-data")
-    async def app1_endpoint(request: Any) -> dict:
-        request.session["app"] = "app1"
-        request.session["data"] = "app1_data"
-        return {"app": "app1", "data": request.session["data"]}
+        # Test selective data removal
+        response = await client.post("/session/key/cart_items/delete")
+        assert response.json()["status"] == "deleted"
 
-    @get("/app2-data")
-    async def app2_endpoint(request: Any) -> dict:
-        request.session["app"] = "app2"
-        request.session["data"] = "app2_data"
-        return {"app": "app2", "data": request.session["data"]}
+        # Verify cart_items removed but other data persists
+        response = await client.get("/session/all")
+        updated_data = response.json()
+        assert "cart_items" not in updated_data
+        assert "profile" in updated_data
+        assert updated_data["count"] == 5
 
-    # Create separate apps
-    app1 = Litestar(
-        route_handlers=[app1_endpoint], middleware=[ServerSideSessionConfig(backend=backend1, key="app1").middleware]
-    )
-
-    app2 = Litestar(
-        route_handlers=[app2_endpoint], middleware=[ServerSideSessionConfig(backend=backend2, key="app2").middleware]
-    )
-
-    # Test both apps concurrently
-    async with AsyncTestClient(app=app1) as client1, AsyncTestClient(app=app2) as client2:
-        # Make requests to both apps
-        response1 = await client1.get("/app1-data")
-        response2 = await client2.get("/app2-data")
-
-        # Verify responses
-        assert response1.status_code == HTTP_200_OK
-        assert response1.json() == {"app": "app1", "data": "app1_data"}
-
-        assert response2.status_code == HTTP_200_OK
-        assert response2.json() == {"app": "app2", "data": "app2_data"}
-
-        # Verify session data is isolated between apps
-        response1_second = await client1.get("/app1-data")
-        response2_second = await client2.get("/app2-data")
-
-        assert response1_second.json()["data"] == "app1_data"
-        assert response2_second.json()["data"] == "app2_data"
+        # Final counter increment to ensure functionality still works
+        response = await client.get("/counter")
+        assert response.json()["count"] == 6

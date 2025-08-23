@@ -18,7 +18,7 @@ import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.migrations.commands import AsyncMigrationCommands, MigrationCommands, SyncMigrationCommands
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 pytestmark = pytest.mark.xdist_group("migrations")
 
@@ -36,25 +36,23 @@ def async_config() -> AiosqliteConfig:
 
 
 def test_migration_commands_sync_config_initialization(sync_config: SqliteConfig) -> None:
-    """Test MigrationCommands initializes with sync implementation for sync config."""
-    commands = MigrationCommands(sync_config)
-
-    assert not commands._is_async
-    assert isinstance(commands._impl, SyncMigrationCommands)
+    """Test SyncMigrationCommands initializes correctly with sync config."""
+    commands = SyncMigrationCommands(sync_config)
+    assert commands is not None
+    assert hasattr(commands, "runner")
 
 
 def test_migration_commands_async_config_initialization(async_config: AiosqliteConfig) -> None:
-    """Test MigrationCommands initializes with async implementation for async config."""
-    commands = MigrationCommands(async_config)
-
-    assert commands._is_async
-    assert isinstance(commands._impl, AsyncMigrationCommands)
+    """Test AsyncMigrationCommands initializes correctly with async config."""
+    commands = AsyncMigrationCommands(async_config)
+    assert commands is not None
+    assert hasattr(commands, "runner")
 
 
 def test_migration_commands_sync_init_delegation(sync_config: SqliteConfig) -> None:
     """Test that sync config init is delegated directly to sync implementation."""
     with patch.object(SyncMigrationCommands, "init") as mock_init:
-        commands = MigrationCommands(sync_config)
+        commands = SyncMigrationCommands(sync_config)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             migration_dir = str(Path(temp_dir) / "migrations")
@@ -74,7 +72,7 @@ def test_migration_commands_async_init_delegation(async_config: AiosqliteConfig)
         AsyncMock(return_value=None)
         mock_await.return_value = Mock(return_value=None)
 
-        commands = MigrationCommands(async_config)
+        commands = AsyncMigrationCommands(async_config)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             migration_dir = str(Path(temp_dir) / "migrations")
@@ -90,7 +88,7 @@ def test_migration_commands_async_init_delegation(async_config: AiosqliteConfig)
 def test_migration_commands_sync_current_delegation(sync_config: SqliteConfig) -> None:
     """Test that sync config current is delegated directly to sync implementation."""
     with patch.object(SyncMigrationCommands, "current") as mock_current:
-        commands = MigrationCommands(sync_config)
+        commands = SyncMigrationCommands(sync_config)
 
         commands.current(verbose=True)
 
@@ -106,7 +104,7 @@ def test_migration_commands_async_current_delegation(async_config: AiosqliteConf
         # Set up await_ to return a callable that returns the expected value
         mock_await.return_value = Mock(return_value="test_version")
 
-        commands = MigrationCommands(async_config)
+        commands = AsyncMigrationCommands(async_config)
 
         result = commands.current(verbose=False)
 
@@ -120,7 +118,7 @@ def test_migration_commands_async_current_delegation(async_config: AiosqliteConf
 def test_migration_commands_sync_upgrade_delegation(sync_config: SqliteConfig) -> None:
     """Test that sync config upgrade is delegated directly to sync implementation."""
     with patch.object(SyncMigrationCommands, "upgrade") as mock_upgrade:
-        commands = MigrationCommands(sync_config)
+        commands = SyncMigrationCommands(sync_config)
 
         commands.upgrade(revision="001")
 
@@ -136,7 +134,7 @@ def test_migration_commands_async_upgrade_delegation(async_config: AiosqliteConf
         # Set up await_ to return a callable that returns None
         mock_await.return_value = Mock(return_value=None)
 
-        commands = MigrationCommands(async_config)
+        commands = AsyncMigrationCommands(async_config)
 
         commands.upgrade(revision="002")
 
@@ -149,7 +147,7 @@ def test_migration_commands_async_upgrade_delegation(async_config: AiosqliteConf
 def test_migration_commands_sync_downgrade_delegation(sync_config: SqliteConfig) -> None:
     """Test that sync config downgrade is delegated directly to sync implementation."""
     with patch.object(SyncMigrationCommands, "downgrade") as mock_downgrade:
-        commands = MigrationCommands(sync_config)
+        commands = SyncMigrationCommands(sync_config)
 
         commands.downgrade(revision="base")
 
@@ -165,7 +163,7 @@ def test_migration_commands_async_downgrade_delegation(async_config: AiosqliteCo
         # Set up await_ to return a callable that returns None
         mock_await.return_value = Mock(return_value=None)
 
-        commands = MigrationCommands(async_config)
+        commands = AsyncMigrationCommands(async_config)
 
         commands.downgrade(revision="001")
 
@@ -178,7 +176,7 @@ def test_migration_commands_async_downgrade_delegation(async_config: AiosqliteCo
 def test_migration_commands_sync_stamp_delegation(sync_config: SqliteConfig) -> None:
     """Test that sync config stamp is delegated directly to sync implementation."""
     with patch.object(SyncMigrationCommands, "stamp") as mock_stamp:
-        commands = MigrationCommands(sync_config)
+        commands = SyncMigrationCommands(sync_config)
 
         commands.stamp("001")
 
@@ -194,7 +192,7 @@ def test_migration_commands_async_stamp_delegation(async_config: AiosqliteConfig
         # Set up await_ to return a callable that returns None
         mock_await.return_value = Mock(return_value=None)
 
-        commands = MigrationCommands(async_config)
+        commands = AsyncMigrationCommands(async_config)
 
         commands.stamp("002")
 
@@ -207,7 +205,7 @@ def test_migration_commands_async_stamp_delegation(async_config: AiosqliteConfig
 def test_migration_commands_sync_revision_delegation(sync_config: SqliteConfig) -> None:
     """Test that sync config revision is delegated directly to sync implementation."""
     with patch.object(SyncMigrationCommands, "revision") as mock_revision:
-        commands = MigrationCommands(sync_config)
+        commands = SyncMigrationCommands(sync_config)
 
         commands.revision("Test revision", "sql")
 
@@ -223,7 +221,7 @@ def test_migration_commands_async_revision_delegation(async_config: AiosqliteCon
         # Set up await_ to return a callable that returns None
         mock_await.return_value = Mock(return_value=None)
 
-        commands = MigrationCommands(async_config)
+        commands = AsyncMigrationCommands(async_config)
 
         commands.revision("Test async revision", "python")
 
@@ -286,7 +284,7 @@ def test_migration_commands_error_propagation(async_config: AiosqliteConfig) -> 
         # Set up await_ to raise the same error
         mock_await.return_value = Mock(side_effect=ValueError("Test error"))
 
-        commands = MigrationCommands(async_config)
+        commands = AsyncMigrationCommands(async_config)
 
         with pytest.raises(ValueError, match="Test error"):
             commands.upgrade()
@@ -295,7 +293,7 @@ def test_migration_commands_error_propagation(async_config: AiosqliteConfig) -> 
 def test_migration_commands_parameter_forwarding(sync_config: SqliteConfig) -> None:
     """Test that all parameters are properly forwarded to underlying implementations."""
     with patch.object(SyncMigrationCommands, "upgrade") as mock_upgrade:
-        commands = MigrationCommands(sync_config)
+        commands = SyncMigrationCommands(sync_config)
 
         # Test with various parameter combinations
         commands.upgrade()
@@ -306,12 +304,11 @@ def test_migration_commands_parameter_forwarding(sync_config: SqliteConfig) -> N
 
 
 def test_migration_commands_config_type_detection(sync_config: SqliteConfig, async_config: AiosqliteConfig) -> None:
-    """Test that MigrationCommands correctly detects async vs sync configs."""
-    sync_commands = MigrationCommands(sync_config)
-    async_commands = MigrationCommands(async_config)
+    """Test that MigrationCommands work with their respective config types."""
+    sync_commands = SyncMigrationCommands(sync_config)
+    async_commands = AsyncMigrationCommands(async_config)
 
-    assert not sync_commands._is_async
-    assert async_commands._is_async
-
-    assert isinstance(sync_commands._impl, SyncMigrationCommands)
-    assert isinstance(async_commands._impl, AsyncMigrationCommands)
+    assert sync_commands is not None
+    assert async_commands is not None
+    assert hasattr(sync_commands, "runner")
+    assert hasattr(async_commands, "runner")

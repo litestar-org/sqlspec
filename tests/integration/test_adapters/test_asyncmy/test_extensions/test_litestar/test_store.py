@@ -7,7 +7,7 @@ import pytest
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 from sqlspec.extensions.litestar import SQLSpecSessionStore
 
-pytestmark = [pytest.mark.asyncmy, pytest.mark.mysql, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncmy, pytest.mark.mysql, pytest.mark.integration, pytest.mark.xdist_group("mysql")]
 
 
 @pytest.fixture
@@ -48,9 +48,9 @@ async def test_mysql_store_table_creation(store: SQLSpecSessionStore, asyncmy_co
     async with asyncmy_config.provide_session() as driver:
         # Verify table exists
         result = await driver.execute("""
-            SELECT TABLE_NAME 
-            FROM information_schema.TABLES 
-            WHERE TABLE_SCHEMA = 'test' 
+            SELECT TABLE_NAME
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = 'test'
             AND TABLE_NAME = 'test_store_mysql'
         """)
         assert len(result.data) == 1
@@ -58,9 +58,9 @@ async def test_mysql_store_table_creation(store: SQLSpecSessionStore, asyncmy_co
 
         # Verify table structure
         result = await driver.execute("""
-            SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_SET_NAME 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = 'test' 
+            SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_SET_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = 'test'
             AND TABLE_NAME = 'test_store_mysql'
             ORDER BY ORDINAL_POSITION
         """)
@@ -224,10 +224,7 @@ async def test_mysql_store_get_all(store: SQLSpecSessionStore) -> None:
         await store.set(key, value, expires_in=expires_in)
 
     # Get all entries
-    all_entries = {}
-    async for key, value in store.get_all():
-        if key.startswith("mysql-all-"):
-            all_entries[key] = value
+    all_entries = {key: value async for key, value in store.get_all() if key.startswith("mysql-all-")}
 
     # Should have all four initially
     assert len(all_entries) >= 3
@@ -299,11 +296,11 @@ async def test_mysql_store_utf8mb4_characters(store: SQLSpecSessionStore) -> Non
         "null_values": [None, "not_null", None],
         "escape_sequences": "\\n\\t\\r\\b\\f\\'\\\"\\\\",
         "sql_safe": "'; DROP TABLE test; --",  # Should be safely handled
-        "utf8mb4_only": "𝐇𝐞𝐥𝐥𝐨 𝕎𝕠𝕣𝕝𝕕 🏴󠁧󠁢󠁳󠁣󠁴󠁿",  # 4-byte UTF-8 characters
+        "utf8mb4_only": "Hello World 🏴󠁧󠁢󠁳󠁣󠁴󠁿",  # 4-byte UTF-8 characters
     }
 
     await store.set("mysql-utf8mb4-value", special_value, expires_in=3600)
     retrieved = await store.get("mysql-utf8mb4-value")
     assert retrieved == special_value
     assert retrieved["null_values"][0] is None
-    assert retrieved["utf8mb4_only"] == "𝐇𝐞𝐥𝐥𝐨 𝕎𝕠𝕣𝕝𝕕 🏴󠁧󠁢󠁳󠁣󠁴󠁿"
+    assert retrieved["utf8mb4_only"] == "Hello World 🏴󠁧󠁢󠁳󠁣󠁴󠁿"

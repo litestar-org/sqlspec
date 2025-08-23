@@ -1,26 +1,40 @@
 """Example showing how to use SQLSpec session backend with Litestar."""
 
+from typing import Any
+
 from litestar import Litestar, get, post
 from litestar.config.session import SessionConfig
+from litestar.connection import Request
 from litestar.datastructures import State
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.extensions.litestar import SQLSpec, SQLSpecSessionBackend
+from sqlspec.extensions.litestar import SQLSpec, SQLSpecSessionBackend, SQLSpecSessionConfig
 
 # Configure SQLSpec with SQLite database
+# Include Litestar extension migrations to automatically create session tables
 sqlite_config = SqliteConfig(
     pool_config={"database": "sessions.db"},
-    migration_config={"script_location": "migrations", "version_table_name": "sqlspec_migrations"},
+    migration_config={
+        "script_location": "migrations",
+        "version_table_name": "sqlspec_migrations",
+        "include_extensions": ["litestar"],  # Include Litestar session table migrations
+    },
 )
 
 # Create SQLSpec plugin
 sqlspec_plugin = SQLSpec(sqlite_config)
 
 # Create session backend using SQLSpec
+# Note: The session table will be created automatically when you run migrations
+# Example: sqlspec migrations upgrade --head
 session_backend = SQLSpecSessionBackend(
-    config=sqlite_config,
-    table_name="user_sessions",
-    session_lifetime=3600,  # 1 hour
+    config=SQLSpecSessionConfig(
+        table_name="litestar_sessions",
+        session_id_column="session_id",
+        data_column="data",
+        expires_at_column="expires_at",
+        created_at_column="created_at",
+    )
 )
 
 # Configure session middleware
@@ -61,7 +75,7 @@ async def login_form() -> str:
 
 
 @post("/login")
-async def login(data: dict[str, str], request) -> dict[str, str]:
+async def login(data: dict[str, str], request: "Request[Any, Any, Any]") -> dict[str, str]:
     """Handle login and create session."""
     username = data.get("username")
     password = data.get("password")
@@ -78,7 +92,7 @@ async def login(data: dict[str, str], request) -> dict[str, str]:
 
 
 @get("/profile")
-async def profile(request) -> dict[str, str]:
+async def profile(request: "Request[Any, Any, Any]") -> dict[str, str]:
     """User profile route - requires session."""
     session_data = request.session
 
@@ -94,14 +108,14 @@ async def profile(request) -> dict[str, str]:
 
 
 @post("/logout")
-async def logout(request) -> dict[str, str]:
+async def logout(request: "Request[Any, Any, Any]") -> dict[str, str]:
     """Logout and clear session."""
     request.clear_session()
     return {"message": "Logged out successfully"}
 
 
 @get("/admin/sessions")
-async def admin_sessions(request, state: State) -> dict[str, any]:
+async def admin_sessions(request: "Request[Any, Any, Any]", state: State) -> dict[str, any]:
     """Admin route to view all active sessions."""
     session_data = request.session
 
@@ -119,7 +133,7 @@ async def admin_sessions(request, state: State) -> dict[str, any]:
 
 
 @post("/admin/cleanup")
-async def cleanup_sessions(request, state: State) -> dict[str, str]:
+async def cleanup_sessions(request: "Request[Any, Any, Any]", state: State) -> dict[str, str]:
     """Admin route to clean up expired sessions."""
     session_data = request.session
 
