@@ -9,66 +9,67 @@ from typing import Any
 
 import pytest
 from litestar import Litestar, get, post
-from litestar.middleware.session.server_side import ServerSideSessionConfig
-from litestar.status_codes import HTTP_200_OK
+from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
+from litestar.stores.registry import StoreRegistry
 from litestar.testing import AsyncTestClient
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
+from sqlspec.migrations.commands import AsyncMigrationCommands
 
 pytestmark = [pytest.mark.aiosqlite, pytest.mark.sqlite, pytest.mark.integration]
 
 
 @pytest.fixture
-async def session_store(aiosqlite_config: AiosqliteConfig) -> SQLSpecSessionStore:
-    """Create a session store instance using the proper aiosqlite_config fixture."""
-    store = SQLSpecSessionStore(
-        config=aiosqlite_config,
-        table_name="litestar_test_sessions",
+async def migrated_config(aiosqlite_migration_config: AiosqliteConfig) -> AiosqliteConfig:
+    """Apply migrations once and return the config."""
+    commands = AsyncMigrationCommands(aiosqlite_migration_config)
+    await commands.init(aiosqlite_migration_config.migration_config["script_location"], package=False)
+    await commands.upgrade()
+    return aiosqlite_migration_config
+
+
+@pytest.fixture
+async def session_store(migrated_config: AiosqliteConfig) -> SQLSpecSessionStore:
+    """Create a session store instance using the migrated database."""
+    return SQLSpecSessionStore(
+        config=migrated_config,
+        table_name="litestar_sessions",  # Use the default table created by migration
         session_id_column="session_id",
         data_column="data",
         expires_at_column="expires_at",
         created_at_column="created_at",
     )
-    # Ensure table exists
-    async with aiosqlite_config.provide_session() as driver:
-        await store._ensure_table_exists(driver)
-    return store
 
 
 @pytest.fixture
-async def session_backend(aiosqlite_config: AiosqliteConfig) -> SQLSpecSessionBackend:
-    """Create a session backend instance using the proper aiosqlite_config fixture."""
-    backend = SQLSpecSessionBackend(
-        config=aiosqlite_config, table_name="litestar_test_sessions_backend", session_lifetime=3600
+async def session_config(migrated_config: AiosqliteConfig) -> SQLSpecSessionConfig:
+    """Create a session configuration instance."""
+    # Create the session configuration
+    return SQLSpecSessionConfig(
+        table_name="litestar_sessions",
+        store="sessions",  # This will be the key in the stores registry
     )
-    # Ensure table exists
-    async with aiosqlite_config.provide_session() as driver:
-        await backend.store._ensure_table_exists(driver)
-    return backend
 
 
 @pytest.fixture
-async def session_store_file(aiosqlite_config_file: AiosqliteConfig) -> SQLSpecSessionStore:
+async def session_store_file(migrated_config: AiosqliteConfig) -> SQLSpecSessionStore:
     """Create a session store instance using file-based SQLite for concurrent testing."""
-    store = SQLSpecSessionStore(
-        config=aiosqlite_config_file,
-        table_name="litestar_file_sessions",
+    return SQLSpecSessionStore(
+        config=migrated_config,
+        table_name="litestar_sessions",  # Use the default table created by migration
         session_id_column="session_id",
         data_column="data",
         expires_at_column="expires_at",
         created_at_column="created_at",
     )
-    # Ensure table exists
-    async with aiosqlite_config_file.provide_session() as driver:
-        await store._ensure_table_exists(driver)
-    return store
 
 
 async def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
     """Test that SessionStore can be created with Aiosqlite configuration."""
     assert session_store is not None
-    assert session_store._table_name == "litestar_test_sessions"
+    assert session_store._table_name == "litestar_sessions"
     assert session_store._session_id_column == "session_id"
     assert session_store._data_column == "data"
     assert session_store._expires_at_column == "expires_at"
@@ -76,24 +77,24 @@ async def test_session_store_creation(session_store: SQLSpecSessionStore) -> Non
 
 
 async def test_session_store_sqlite_table_structure(
-    session_store: SQLSpecSessionStore, aiosqlite_config: AiosqliteConfig
+    session_store: SQLSpecSessionStore, aiosqlite_migration_config: AiosqliteConfig
 ) -> None:
     """Test that session table is created with proper SQLite structure."""
-    async with aiosqlite_config.provide_session() as driver:
+    async with aiosqlite_migration_config.provide_session() as driver:
         # Verify table exists with proper name
         result = await driver.execute("""
-            SELECT name, type, sql 
-            FROM sqlite_master 
-            WHERE type='table' 
-            AND name='litestar_test_sessions'
+            SELECT name, type, sql
+            FROM sqlite_master
+            WHERE type='table'
+            AND name='litestar_sessions'
         """)
         assert len(result.data) == 1
         table_info = result.data[0]
-        assert table_info["name"] == "litestar_test_sessions"
+        assert table_info["name"] == "litestar_sessions"
         assert table_info["type"] == "table"
 
         # Verify column structure
-        result = await driver.execute("PRAGMA table_info(litestar_test_sessions)")
+        result = await driver.execute("PRAGMA table_info(litestar_sessions)")
         columns = {row["name"]: row for row in result.data}
 
         assert "session_id" in columns
@@ -106,15 +107,17 @@ async def test_session_store_sqlite_table_structure(
 
         # Verify index exists for expires_at
         result = await driver.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='index' 
-            AND tbl_name='litestar_test_sessions'
+            SELECT name FROM sqlite_master
+            WHERE type='index'
+            AND tbl_name='litestar_sessions'
         """)
         index_names = [row["name"] for row in result.data]
         assert any("expires_at" in name for name in index_names)
 
 
-async def test_basic_session_operations(session_backend: SQLSpecSessionBackend) -> None:
+async def test_basic_session_operations(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+) -> None:
     """Test basic session operations through Litestar application."""
 
     @get("/set-session")
@@ -141,9 +144,13 @@ async def test_basic_session_operations(session_backend: SQLSpecSessionBackend) 
         request.session.clear()
         return {"status": "session cleared"}
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="sqlite-basic-session", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
-    app = Litestar(route_handlers=[set_session, get_session, clear_session], middleware=[session_config.middleware])
+    app = Litestar(
+        route_handlers=[set_session, get_session, clear_session], middleware=[session_config.middleware], stores=stores
+    )
 
     async with AsyncTestClient(app=app) as client:
         # Set session data
@@ -153,6 +160,8 @@ async def test_basic_session_operations(session_backend: SQLSpecSessionBackend) 
 
         # Get session data
         response = await client.get("/get-session")
+        if response.status_code != HTTP_200_OK:
+            pass
         assert response.status_code == HTTP_200_OK
         data = response.json()
         assert data["user_id"] == 12345
@@ -163,7 +172,7 @@ async def test_basic_session_operations(session_backend: SQLSpecSessionBackend) 
 
         # Clear session
         response = await client.post("/clear-session")
-        assert response.status_code == HTTP_200_OK
+        assert response.status_code == HTTP_201_CREATED
         assert response.json() == {"status": "session cleared"}
 
         # Verify session is cleared
@@ -178,7 +187,9 @@ async def test_basic_session_operations(session_backend: SQLSpecSessionBackend) 
         }
 
 
-async def test_session_persistence_across_requests(session_backend: SQLSpecSessionBackend) -> None:
+async def test_session_persistence_across_requests(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+) -> None:
     """Test that sessions persist across multiple requests with SQLite."""
 
     @get("/document/create/{doc_id:int}")
@@ -226,10 +237,14 @@ async def test_session_persistence_across_requests(session_backend: SQLSpecSessi
 
         return {"status": "all documents saved", "count": saved_docs["saved_count"]}
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="sqlite-persistence-session", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
     app = Litestar(
-        route_handlers=[create_document, get_documents, save_all_documents], middleware=[session_config.middleware]
+        route_handlers=[create_document, get_documents, save_all_documents],
+        middleware=[session_config.middleware],
+        stores=stores,
     )
 
     async with AsyncTestClient(app=app) as client:
@@ -254,7 +269,7 @@ async def test_session_persistence_across_requests(session_backend: SQLSpecSessi
 
         # Save all documents
         response = await client.post("/documents/save-all")
-        assert response.status_code == HTTP_200_OK
+        assert response.status_code == HTTP_201_CREATED
         save_data = response.json()
         assert save_data["status"] == "all documents saved"
         assert save_data["count"] == 3
@@ -266,13 +281,23 @@ async def test_session_persistence_across_requests(session_backend: SQLSpecSessi
         assert len(data["documents"]) == 0
 
 
-async def test_session_expiration(aiosqlite_config: AiosqliteConfig) -> None:
+async def test_session_expiration(aiosqlite_migration_config: AiosqliteConfig) -> None:
     """Test session expiration handling with SQLite."""
-    # Create backend with very short lifetime
-    backend = SQLSpecSessionBackend(
-        config=aiosqlite_config,
-        table_name="litestar_test_expiring_sessions",
-        session_lifetime=1,  # 1 second
+    # Apply migrations first
+    commands = AsyncMigrationCommands(aiosqlite_migration_config)
+    await commands.init(aiosqlite_migration_config.migration_config["script_location"], package=False)
+    await commands.upgrade()
+
+    # Create store and config with very short lifetime
+    session_store = SQLSpecSessionStore(
+        config=aiosqlite_migration_config,
+        table_name="litestar_sessions",  # Use the migrated table
+    )
+
+    session_config = SQLSpecSessionConfig(
+        table_name="litestar_sessions",
+        store="sessions",
+        max_age=1,  # 1 second
     )
 
     @get("/set-expiring-data")
@@ -294,9 +319,11 @@ async def test_session_expiration(aiosqlite_config: AiosqliteConfig) -> None:
             "atomic_writes": request.session.get("atomic_writes"),
         }
 
-    session_config = ServerSideSessionConfig(backend=backend, key="sqlite-expiring-session", max_age=1)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
-    app = Litestar(route_handlers=[set_data, get_data], middleware=[session_config.middleware])
+    app = Litestar(route_handlers=[set_data, get_data], middleware=[session_config.middleware], stores=stores)
 
     async with AsyncTestClient(app=app) as client:
         # Set data
@@ -379,9 +406,7 @@ async def test_concurrent_sessions_with_file_backend(session_store_file: SQLSpec
                 successful_operations += 1
             else:
                 # Print failed operation for debugging
-                print(f"Failed operation: {result['session_id']}")
-                print(f"Set: {result['set_data']}")
-                print(f"Retrieved: {result['retrieved_data']}")
+                pass
 
     assert total_operations == num_workers * iterations_per_worker
     assert successful_operations == total_operations  # All should succeed
@@ -395,7 +420,7 @@ async def test_concurrent_sessions_with_file_backend(session_store_file: SQLSpec
         assert result["file_based"] is True
 
 
-async def test_large_data_handling(session_backend: SQLSpecSessionBackend) -> None:
+async def test_large_data_handling(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
     """Test handling of large data structures with SQLite backend."""
 
     @post("/save-large-sqlite-dataset")
@@ -492,14 +517,18 @@ async def test_large_data_handling(session_backend: SQLSpecSessionBackend) -> No
             "sqlite_metadata": request.session.get("sqlite_metadata"),
         }
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="sqlite-large-data-session", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
-    app = Litestar(route_handlers=[save_large_data, load_large_data], middleware=[session_config.middleware])
+    app = Litestar(
+        route_handlers=[save_large_data, load_large_data], middleware=[session_config.middleware], stores=stores
+    )
 
     async with AsyncTestClient(app=app) as client:
         # Save large dataset
         response = await client.post("/save-large-sqlite-dataset")
-        assert response.status_code == HTTP_200_OK
+        assert response.status_code == HTTP_201_CREATED
         data = response.json()
         assert data["status"] == "large dataset saved to SQLite"
         assert data["records_count"] == 150
@@ -517,7 +546,9 @@ async def test_large_data_handling(session_backend: SQLSpecSessionBackend) -> No
         assert data["sqlite_metadata"]["atomic_writes"] is True
 
 
-async def test_sqlite_concurrent_webapp_simulation(session_backend: SQLSpecSessionBackend) -> None:
+async def test_sqlite_concurrent_webapp_simulation(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+) -> None:
     """Test concurrent web application behavior with SQLite session handling."""
 
     @get("/user/{user_id:int}/login")
@@ -572,7 +603,9 @@ async def test_sqlite_concurrent_webapp_simulation(session_backend: SQLSpecSessi
 
         return {"status": "logged out", "user_id": user_id}
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="sqlite-webapp-session", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
     app = Litestar(
         route_handlers=[user_login, get_profile, log_activity, user_logout], middleware=[session_config.middleware]
@@ -607,14 +640,15 @@ async def test_sqlite_concurrent_webapp_simulation(session_backend: SQLSpecSessi
         assert profile_responses[2].json()["user_id"] == 1003
 
         # Log activities concurrently
-        activity_tasks = []
-        for client in [client1, client2, client3]:
-            for _ in range(5):  # 5 activities per user
-                activity_tasks.append(client.post("/user/activity"))
+        activity_tasks = [
+            client.post("/user/activity")
+            for client in [client1, client2, client3]
+            for _ in range(5)  # 5 activities per user
+        ]
 
         activity_responses = await asyncio.gather(*activity_tasks)
         for response in activity_responses:
-            assert response.status_code == HTTP_200_OK
+            assert response.status_code == HTTP_201_CREATED
             assert "activity logged" in response.json()["status"]
 
         # Verify final activity counts
@@ -628,12 +662,16 @@ async def test_sqlite_concurrent_webapp_simulation(session_backend: SQLSpecSessi
             assert profile_data["session_type"] == "file_based"
 
 
-async def test_session_cleanup_and_maintenance(aiosqlite_config: AiosqliteConfig) -> None:
+async def test_session_cleanup_and_maintenance(aiosqlite_migration_config: AiosqliteConfig) -> None:
     """Test session cleanup and maintenance operations with SQLite."""
-    backend = SQLSpecSessionBackend(
-        config=aiosqlite_config,
-        table_name="litestar_test_cleanup_sessions",
-        session_lifetime=1,  # Short lifetime for testing
+    # Apply migrations first
+    commands = AsyncMigrationCommands(aiosqlite_migration_config)
+    await commands.init(aiosqlite_migration_config.migration_config["script_location"], package=False)
+    await commands.upgrade()
+
+    store = SQLSpecSessionStore(
+        config=aiosqlite_migration_config,
+        table_name="litestar_sessions",  # Use the migrated table
     )
 
     # Create sessions with different lifetimes
@@ -641,7 +679,7 @@ async def test_session_cleanup_and_maintenance(aiosqlite_config: AiosqliteConfig
     for i in range(8):
         session_id = f"sqlite_temp_session_{i}"
         temp_sessions.append(session_id)
-        await backend.store.set(
+        await store.set(
             session_id,
             {
                 "data": i,
@@ -658,7 +696,7 @@ async def test_session_cleanup_and_maintenance(aiosqlite_config: AiosqliteConfig
     for i in range(4):
         session_id = f"sqlite_perm_session_{i}"
         perm_sessions.append(session_id)
-        await backend.store.set(
+        await store.set(
             session_id,
             {
                 "data": f"permanent_{i}",
@@ -672,7 +710,7 @@ async def test_session_cleanup_and_maintenance(aiosqlite_config: AiosqliteConfig
 
     # Verify all sessions exist initially
     for session_id in temp_sessions + perm_sessions:
-        result = await backend.store.get(session_id)
+        result = await store.get(session_id)
         assert result is not None
         assert result["sqlite_engine"] == "file"
 
@@ -680,21 +718,97 @@ async def test_session_cleanup_and_maintenance(aiosqlite_config: AiosqliteConfig
     await asyncio.sleep(2)
 
     # Clean up expired sessions
-    await backend.delete_expired_sessions()
+    await store.delete_expired()
 
     # Verify temporary sessions are gone
     for session_id in temp_sessions:
-        result = await backend.store.get(session_id)
+        result = await store.get(session_id)
         assert result is None
 
     # Verify permanent sessions still exist
     for session_id in perm_sessions:
-        result = await backend.store.get(session_id)
+        result = await store.get(session_id)
         assert result is not None
         assert result["type"] == "permanent"
 
 
-async def test_sqlite_atomic_transactions_pattern(session_backend: SQLSpecSessionBackend) -> None:
+async def test_migration_with_default_table_name(aiosqlite_migration_config: AiosqliteConfig) -> None:
+    """Test that migration with string format creates default table name."""
+    # Apply migrations
+    commands = AsyncMigrationCommands(aiosqlite_migration_config)
+    await commands.init(aiosqlite_migration_config.migration_config["script_location"], package=False)
+    await commands.upgrade()
+
+    # Create store using the migrated table
+    store = SQLSpecSessionStore(
+        config=aiosqlite_migration_config,
+        table_name="litestar_sessions",  # Default table name
+    )
+
+    # Test that the store works with the migrated table
+    session_id = "test_session_default"
+    test_data = {"user_id": 1, "username": "test_user"}
+
+    await store.set(session_id, test_data, expires_in=3600)
+    retrieved = await store.get(session_id)
+
+    assert retrieved == test_data
+
+
+async def test_migration_with_custom_table_name(aiosqlite_migration_config_with_dict: AiosqliteConfig) -> None:
+    """Test that migration with dict format creates custom table name."""
+    # Apply migrations
+    commands = AsyncMigrationCommands(aiosqlite_migration_config_with_dict)
+    await commands.init(aiosqlite_migration_config_with_dict.migration_config["script_location"], package=False)
+    await commands.upgrade()
+
+    # Create store using the custom migrated table
+    store = SQLSpecSessionStore(
+        config=aiosqlite_migration_config_with_dict,
+        table_name="custom_sessions",  # Custom table name from config
+    )
+
+    # Test that the store works with the custom table
+    session_id = "test_session_custom"
+    test_data = {"user_id": 2, "username": "custom_user"}
+
+    await store.set(session_id, test_data, expires_in=3600)
+    retrieved = await store.get(session_id)
+
+    assert retrieved == test_data
+
+    # Verify default table doesn't exist
+    async with aiosqlite_migration_config_with_dict.provide_session() as driver:
+        result = await driver.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='litestar_sessions'")
+        assert len(result.data) == 0
+
+
+async def test_migration_with_mixed_extensions(aiosqlite_migration_config_mixed: AiosqliteConfig) -> None:
+    """Test migration with mixed extension formats."""
+    # Apply migrations
+    commands = AsyncMigrationCommands(aiosqlite_migration_config_mixed)
+    await commands.init(aiosqlite_migration_config_mixed.migration_config["script_location"], package=False)
+    await commands.upgrade()
+
+    # The litestar extension should use default table name
+    store = SQLSpecSessionStore(
+        config=aiosqlite_migration_config_mixed,
+        table_name="litestar_sessions",  # Default since string format was used
+    )
+
+    # Test that the store works
+    session_id = "test_session_mixed"
+    test_data = {"user_id": 3, "username": "mixed_user"}
+
+    await store.set(session_id, test_data, expires_in=3600)
+    retrieved = await store.get(session_id)
+
+    assert retrieved == test_data
+
+
+async def test_sqlite_atomic_transactions_pattern(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+) -> None:
     """Test atomic transaction patterns typical for SQLite applications."""
 
     @post("/transaction/start")
@@ -780,11 +894,14 @@ async def test_sqlite_atomic_transactions_pattern(session_backend: SQLSpecSessio
             "current": request.session.get("transaction"),
         }
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="sqlite-transaction-session", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
     app = Litestar(
         route_handlers=[start_transaction, add_operation, commit_transaction, rollback_transaction, get_history],
         middleware=[session_config.middleware],
+        stores=stores,
     )
 
     async with AsyncTestClient(app=app) as client:

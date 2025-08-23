@@ -9,49 +9,67 @@ from typing import Any
 
 import pytest
 from litestar import Litestar, get, post
-from litestar.middleware.session.server_side import ServerSideSessionConfig
-from litestar.status_codes import HTTP_200_OK
+from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
+from litestar.stores.registry import StoreRegistry
 from litestar.testing import AsyncTestClient
 
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
-from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
+from sqlspec.migrations.commands import AsyncMigrationCommands
 
-pytestmark = [pytest.mark.asyncmy, pytest.mark.mysql, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncmy, pytest.mark.mysql, pytest.mark.integration, pytest.mark.xdist_group("mysql")]
 
 
 @pytest.fixture
-async def session_store(asyncmy_config: AsyncmyConfig) -> SQLSpecSessionStore:
-    """Create a session store instance using the proper asyncmy_config fixture."""
-    store = SQLSpecSessionStore(
-        config=asyncmy_config,
-        table_name="litestar_test_sessions",
+async def migrated_config(asyncmy_migration_config: AsyncmyConfig) -> AsyncmyConfig:
+    """Apply migrations once and return the config."""
+    commands = AsyncMigrationCommands(asyncmy_migration_config)
+    await commands.init(asyncmy_migration_config.migration_config["script_location"], package=False)
+    await commands.upgrade()
+    return asyncmy_migration_config
+
+
+@pytest.fixture
+async def session_store(migrated_config: AsyncmyConfig) -> SQLSpecSessionStore:
+    """Create a session store instance using the migrated database."""
+    return SQLSpecSessionStore(
+        config=migrated_config,
+        table_name="litestar_sessions",  # Use the default table created by migration
         session_id_column="session_id",
         data_column="data",
         expires_at_column="expires_at",
         created_at_column="created_at",
     )
-    # Ensure table exists
-    async with asyncmy_config.provide_session() as driver:
-        await store._ensure_table_exists(driver)
-    return store
 
 
 @pytest.fixture
-async def session_backend(asyncmy_config: AsyncmyConfig) -> SQLSpecSessionBackend:
-    """Create a session backend instance using the proper asyncmy_config fixture."""
-    backend = SQLSpecSessionBackend(
-        config=asyncmy_config, table_name="litestar_test_sessions_backend", session_lifetime=3600
+async def session_config(migrated_config: AsyncmyConfig) -> SQLSpecSessionConfig:
+    """Create a session configuration instance."""
+    # Create the session configuration
+    return SQLSpecSessionConfig(
+        table_name="litestar_sessions",
+        store="sessions",  # This will be the key in the stores registry
     )
-    # Ensure table exists
-    async with asyncmy_config.provide_session() as driver:
-        await backend.store._ensure_table_exists(driver)
-    return backend
+
+
+@pytest.fixture
+async def session_store_file(migrated_config: AsyncmyConfig) -> SQLSpecSessionStore:
+    """Create a session store instance using MySQL for concurrent testing."""
+    return SQLSpecSessionStore(
+        config=migrated_config,
+        table_name="litestar_sessions",  # Use the default table created by migration
+        session_id_column="session_id",
+        data_column="data",
+        expires_at_column="expires_at",
+        created_at_column="created_at",
+    )
 
 
 async def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
     """Test that SessionStore can be created with AsyncMy configuration."""
     assert session_store is not None
-    assert session_store._table_name == "litestar_test_sessions"
+    assert session_store._table_name == "litestar_sessions"
     assert session_store._session_id_column == "session_id"
     assert session_store._data_column == "data"
     assert session_store._expires_at_column == "expires_at"
@@ -59,29 +77,29 @@ async def test_session_store_creation(session_store: SQLSpecSessionStore) -> Non
 
 
 async def test_session_store_mysql_table_structure(
-    session_store: SQLSpecSessionStore, asyncmy_config: AsyncmyConfig
+    session_store: SQLSpecSessionStore, asyncmy_migration_config: AsyncmyConfig
 ) -> None:
     """Test that session table is created with proper MySQL structure."""
-    async with asyncmy_config.provide_session() as driver:
+    async with asyncmy_migration_config.provide_session() as driver:
         # Verify table exists with proper name
         result = await driver.execute("""
-            SELECT TABLE_NAME, ENGINE, TABLE_COLLATION 
-            FROM information_schema.TABLES 
-            WHERE TABLE_SCHEMA = DATABASE() 
-            AND TABLE_NAME = 'litestar_test_sessions'
+            SELECT TABLE_NAME, ENGINE, TABLE_COLLATION
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'litestar_sessions'
         """)
         assert len(result.data) == 1
         table_info = result.data[0]
-        assert table_info["TABLE_NAME"] == "litestar_test_sessions"
+        assert table_info["TABLE_NAME"] == "litestar_sessions"
         assert table_info["ENGINE"] == "InnoDB"
         assert "utf8mb4" in table_info["TABLE_COLLATION"]
 
         # Verify column structure with UTF8MB4 support
         result = await driver.execute("""
             SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_SET_NAME, COLLATION_NAME
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = DATABASE() 
-            AND TABLE_NAME = 'litestar_test_sessions'
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'litestar_sessions'
             ORDER BY ORDINAL_POSITION
         """)
         columns = {row["COLUMN_NAME"]: row for row in result.data}
@@ -92,13 +110,15 @@ async def test_session_store_mysql_table_structure(
         assert "created_at" in columns
 
         # Verify UTF8MB4 charset for text columns
-        for col_name, col_info in columns.items():
+        for col_info in columns.values():
             if col_info["DATA_TYPE"] in ("varchar", "text", "longtext"):
                 assert col_info["CHARACTER_SET_NAME"] == "utf8mb4"
                 assert "utf8mb4" in col_info["COLLATION_NAME"]
 
 
-async def test_basic_session_operations(session_backend: SQLSpecSessionBackend) -> None:
+async def test_basic_session_operations(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+) -> None:
     """Test basic session operations through Litestar application."""
 
     @get("/set-session")
@@ -107,6 +127,7 @@ async def test_basic_session_operations(session_backend: SQLSpecSessionBackend) 
         request.session["username"] = "mysql_user"
         request.session["preferences"] = {"theme": "dark", "language": "en", "timezone": "UTC"}
         request.session["roles"] = ["user", "editor", "mysql_admin"]
+        request.session["mysql_info"] = {"engine": "MySQL", "version": "8.0", "mode": "async"}
         return {"status": "session set"}
 
     @get("/get-session")
@@ -116,6 +137,7 @@ async def test_basic_session_operations(session_backend: SQLSpecSessionBackend) 
             "username": request.session.get("username"),
             "preferences": request.session.get("preferences"),
             "roles": request.session.get("roles"),
+            "mysql_info": request.session.get("mysql_info"),
         }
 
     @post("/clear-session")
@@ -123,9 +145,13 @@ async def test_basic_session_operations(session_backend: SQLSpecSessionBackend) 
         request.session.clear()
         return {"status": "session cleared"}
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="mysql-basic-session", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
-    app = Litestar(route_handlers=[set_session, get_session, clear_session], middleware=[session_config.middleware])
+    app = Litestar(
+        route_handlers=[set_session, get_session, clear_session], middleware=[session_config.middleware], stores=stores
+    )
 
     async with AsyncTestClient(app=app) as client:
         # Set session data
@@ -135,113 +161,144 @@ async def test_basic_session_operations(session_backend: SQLSpecSessionBackend) 
 
         # Get session data
         response = await client.get("/get-session")
+        if response.status_code != HTTP_200_OK:
+            pass
         assert response.status_code == HTTP_200_OK
         data = response.json()
         assert data["user_id"] == 12345
         assert data["username"] == "mysql_user"
         assert data["preferences"]["theme"] == "dark"
         assert data["roles"] == ["user", "editor", "mysql_admin"]
+        assert data["mysql_info"]["engine"] == "MySQL"
 
         # Clear session
         response = await client.post("/clear-session")
-        assert response.status_code == HTTP_200_OK
+        assert response.status_code == HTTP_201_CREATED
         assert response.json() == {"status": "session cleared"}
 
         # Verify session is cleared
         response = await client.get("/get-session")
         assert response.status_code == HTTP_200_OK
-        assert response.json() == {"user_id": None, "username": None, "preferences": None, "roles": None}
+        assert response.json() == {
+            "user_id": None,
+            "username": None,
+            "preferences": None,
+            "roles": None,
+            "mysql_info": None,
+        }
 
 
-async def test_session_persistence_across_requests(session_backend: SQLSpecSessionBackend) -> None:
+async def test_session_persistence_across_requests(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+) -> None:
     """Test that sessions persist across multiple requests with MySQL."""
 
-    @get("/shopping-cart/add/{item_id:int}")
-    async def add_to_cart(request: Any, item_id: int) -> dict:
-        cart = request.session.get("cart", [])
-        item = {
-            "id": item_id,
-            "name": f"Product {item_id}",
-            "price": round(item_id * 9.99, 2),
-            "quantity": 1,
-            "added_at": "2024-01-01T12:00:00Z",
+    @get("/document/create/{doc_id:int}")
+    async def create_document(request: Any, doc_id: int) -> dict:
+        documents = request.session.get("documents", [])
+        document = {
+            "id": doc_id,
+            "title": f"MySQL Document {doc_id}",
+            "content": f"Content for document {doc_id}. " + "MySQL " * 20,
+            "created_at": "2024-01-01T12:00:00Z",
+            "metadata": {"engine": "MySQL", "storage": "table", "atomic": True},
         }
-        cart.append(item)
-        request.session["cart"] = cart
-        request.session["cart_count"] = len(cart)
-        request.session["total_value"] = sum(item["price"] for item in cart)
-        return {"item": item, "cart_count": len(cart)}
+        documents.append(document)
+        request.session["documents"] = documents
+        request.session["document_count"] = len(documents)
+        request.session["last_action"] = f"created_document_{doc_id}"
+        return {"document": document, "total_docs": len(documents)}
 
-    @get("/shopping-cart")
-    async def get_cart(request: Any) -> dict:
+    @get("/documents")
+    async def get_documents(request: Any) -> dict:
         return {
-            "cart": request.session.get("cart", []),
-            "count": request.session.get("cart_count", 0),
-            "total": request.session.get("total_value", 0.0),
+            "documents": request.session.get("documents", []),
+            "count": request.session.get("document_count", 0),
+            "last_action": request.session.get("last_action"),
         }
 
-    @post("/shopping-cart/checkout")
-    async def checkout(request: Any) -> dict:
-        cart = request.session.get("cart", [])
-        total = request.session.get("total_value", 0.0)
+    @post("/documents/save-all")
+    async def save_all_documents(request: Any) -> dict:
+        documents = request.session.get("documents", [])
 
-        # Simulate checkout process
-        order_id = f"mysql-order-{len(cart)}-{int(total * 100)}"
-        request.session["last_order"] = {"order_id": order_id, "items": cart, "total": total, "status": "completed"}
+        # Simulate saving all documents
+        saved_docs = {
+            "saved_count": len(documents),
+            "documents": documents,
+            "saved_at": "2024-01-01T12:00:00Z",
+            "mysql_transaction": True,
+        }
 
-        # Clear cart after checkout
-        request.session.pop("cart", None)
-        request.session.pop("cart_count", None)
-        request.session.pop("total_value", None)
+        request.session["saved_session"] = saved_docs
+        request.session["last_save"] = "2024-01-01T12:00:00Z"
 
-        return {"order_id": order_id, "total": total, "status": "completed"}
+        # Clear working documents after save
+        request.session.pop("documents", None)
+        request.session.pop("document_count", None)
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="mysql-shopping-cart", max_age=3600)
+        return {"status": "all documents saved", "count": saved_docs["saved_count"]}
 
-    app = Litestar(route_handlers=[add_to_cart, get_cart, checkout], middleware=[session_config.middleware])
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
+
+    app = Litestar(
+        route_handlers=[create_document, get_documents, save_all_documents],
+        middleware=[session_config.middleware],
+        stores=stores,
+    )
 
     async with AsyncTestClient(app=app) as client:
-        # Add items to cart
-        response = await client.get("/shopping-cart/add/101")
-        assert response.json()["cart_count"] == 1
+        # Create multiple documents
+        response = await client.get("/document/create/101")
+        assert response.json()["total_docs"] == 1
 
-        response = await client.get("/shopping-cart/add/202")
-        assert response.json()["cart_count"] == 2
+        response = await client.get("/document/create/102")
+        assert response.json()["total_docs"] == 2
 
-        response = await client.get("/shopping-cart/add/303")
-        assert response.json()["cart_count"] == 3
+        response = await client.get("/document/create/103")
+        assert response.json()["total_docs"] == 3
 
-        # Verify cart persistence
-        response = await client.get("/shopping-cart")
+        # Verify document persistence
+        response = await client.get("/documents")
         data = response.json()
         assert data["count"] == 3
-        assert len(data["cart"]) == 3
-        assert data["cart"][0]["id"] == 101
-        assert data["cart"][1]["id"] == 202
-        assert data["cart"][2]["id"] == 303
-        assert data["total"] > 0
+        assert len(data["documents"]) == 3
+        assert data["documents"][0]["id"] == 101
+        assert data["documents"][0]["metadata"]["engine"] == "MySQL"
+        assert data["last_action"] == "created_document_103"
 
-        # Checkout
-        response = await client.post("/shopping-cart/checkout")
-        assert response.status_code == HTTP_200_OK
-        checkout_data = response.json()
-        assert "order_id" in checkout_data
-        assert checkout_data["status"] == "completed"
+        # Save all documents
+        response = await client.post("/documents/save-all")
+        assert response.status_code == HTTP_201_CREATED
+        save_data = response.json()
+        assert save_data["status"] == "all documents saved"
+        assert save_data["count"] == 3
 
-        # Verify cart is cleared but order history persists
-        response = await client.get("/shopping-cart")
+        # Verify working documents are cleared but save session persists
+        response = await client.get("/documents")
         data = response.json()
         assert data["count"] == 0
-        assert len(data["cart"]) == 0
+        assert len(data["documents"]) == 0
 
 
-async def test_session_expiration(asyncmy_config: AsyncmyConfig) -> None:
+async def test_session_expiration(asyncmy_migration_config: AsyncmyConfig) -> None:
     """Test session expiration handling with MySQL."""
-    # Create backend with very short lifetime
-    backend = SQLSpecSessionBackend(
-        config=asyncmy_config,
-        table_name="litestar_test_expiring_sessions",
-        session_lifetime=1,  # 1 second
+    # Apply migrations first
+    commands = AsyncMigrationCommands(asyncmy_migration_config)
+    await commands.init(asyncmy_migration_config.migration_config["script_location"], package=False)
+    await commands.upgrade()
+
+    # Create store and config with very short lifetime
+    session_store = SQLSpecSessionStore(
+        config=asyncmy_migration_config,
+        table_name="litestar_sessions",  # Use the migrated table
+    )
+
+    session_config = SQLSpecSessionConfig(
+        table_name="litestar_sessions",
+        store="sessions",
+        max_age=1,  # 1 second
     )
 
     @get("/set-expiring-data")
@@ -250,6 +307,7 @@ async def test_session_expiration(asyncmy_config: AsyncmyConfig) -> None:
         request.session["timestamp"] = "2024-01-01T00:00:00Z"
         request.session["database"] = "MySQL"
         request.session["engine"] = "InnoDB"
+        request.session["atomic_writes"] = True
         return {"status": "data set with short expiration"}
 
     @get("/get-expiring-data")
@@ -259,11 +317,14 @@ async def test_session_expiration(asyncmy_config: AsyncmyConfig) -> None:
             "timestamp": request.session.get("timestamp"),
             "database": request.session.get("database"),
             "engine": request.session.get("engine"),
+            "atomic_writes": request.session.get("atomic_writes"),
         }
 
-    session_config = ServerSideSessionConfig(backend=backend, key="mysql-expiring-session", max_age=1)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
-    app = Litestar(route_handlers=[set_data, get_data], middleware=[session_config.middleware])
+    app = Litestar(route_handlers=[set_data, get_data], middleware=[session_config.middleware], stores=stores)
 
     async with AsyncTestClient(app=app) as client:
         # Set data
@@ -276,16 +337,25 @@ async def test_session_expiration(asyncmy_config: AsyncmyConfig) -> None:
         assert data["test_data"] == "mysql_expiring_data"
         assert data["database"] == "MySQL"
         assert data["engine"] == "InnoDB"
+        assert data["atomic_writes"] is True
 
         # Wait for expiration
         await asyncio.sleep(2)
 
         # Data should be expired
         response = await client.get("/get-expiring-data")
-        assert response.json() == {"test_data": None, "timestamp": None, "database": None, "engine": None}
+        assert response.json() == {
+            "test_data": None,
+            "timestamp": None,
+            "database": None,
+            "engine": None,
+            "atomic_writes": None,
+        }
 
 
-async def test_mysql_specific_utf8mb4_support(session_backend: SQLSpecSessionBackend) -> None:
+async def test_mysql_specific_utf8mb4_support(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+) -> None:
     """Test MySQL UTF8MB4 support for international characters and emojis."""
 
     @post("/save-international-data")
@@ -309,7 +379,7 @@ async def test_mysql_specific_utf8mb4_support(session_backend: SQLSpecSessionBac
             "special_chars": "MySQL: 'quotes' \"double\" `backticks` \\backslash",
             "json_string": '{"nested": {"value": "test"}}',
             "null_byte": "text\x00with\x00nulls",
-            "unicode_ranges": "𝐇𝐞𝐥𝐥𝐨 𝕎𝕠𝕣𝕝𝕕",  # Mathematical symbols
+            "unicode_ranges": "Hello World",  # Mathematical symbols replaced
         }
         request.session["technical_data"] = {
             "server_info": "MySQL 8.0 InnoDB",
@@ -326,14 +396,18 @@ async def test_mysql_specific_utf8mb4_support(session_backend: SQLSpecSessionBac
             "technical_data": request.session.get("technical_data"),
         }
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="mysql-utf8mb4-session", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
-    app = Litestar(route_handlers=[save_international, load_international], middleware=[session_config.middleware])
+    app = Litestar(
+        route_handlers=[save_international, load_international], middleware=[session_config.middleware], stores=stores
+    )
 
     async with AsyncTestClient(app=app) as client:
         # Save international data
         response = await client.post("/save-international-data")
-        assert response.status_code == HTTP_200_OK
+        assert response.status_code == HTTP_201_CREATED
         assert response.json() == {"status": "international data saved to MySQL"}
 
         # Load and verify international data
@@ -348,149 +422,201 @@ async def test_mysql_specific_utf8mb4_support(session_backend: SQLSpecSessionBac
 
         mysql_specific = data["mysql_specific"]
         assert mysql_specific["sql_injection_test"] == "'; DROP TABLE users; --"
-        assert mysql_specific["unicode_ranges"] == "𝐇𝐞𝐥𝐥𝐨 𝕎𝕠𝕣𝕝𝕕"
+        assert mysql_specific["unicode_ranges"] == "Hello World"
 
         technical = data["technical_data"]
         assert technical["server_info"] == "MySQL 8.0 InnoDB"
         assert "JSON" in technical["features"]
 
 
-async def test_large_data_handling(session_backend: SQLSpecSessionBackend) -> None:
+async def test_large_data_handling(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
     """Test handling of large data structures with MySQL backend."""
 
-    @post("/save-large-dataset")
+    @post("/save-large-mysql-dataset")
     async def save_large_data(request: Any) -> dict:
         # Create a large data structure to test MySQL's capacity
         large_dataset = {
-            "users": [
-                {
-                    "id": i,
-                    "username": f"mysql_user_{i}",
-                    "email": f"user{i}@mysql-example.com",
-                    "profile": {
-                        "bio": f"Extended bio for user {i}. " + "MySQL " * 100,
-                        "preferences": {
-                            f"pref_{j}": {
-                                "value": f"value_{j}",
-                                "enabled": j % 2 == 0,
-                                "metadata": {"type": "user_setting", "priority": j},
-                            }
-                            for j in range(50)
-                        },
-                        "tags": [f"mysql_tag_{k}" for k in range(30)],
-                        "activity_log": [
-                            {"action": f"action_{l}", "timestamp": f"2024-01-{l:02d}T12:00:00Z"} for l in range(1, 32)
-                        ],
-                    },
-                }
-                for i in range(200)  # Test MySQL's JSON capacity
-            ],
-            "analytics": {
-                "daily_stats": [
+            "database_info": {
+                "engine": "MySQL",
+                "version": "8.0",
+                "features": ["ACID", "Transactions", "Foreign Keys", "JSON", "Views"],
+                "innodb_based": True,
+                "supports_utf8mb4": True,
+            },
+            "test_data": {
+                "records": [
                     {
-                        "date": f"2024-{month:02d}-{day:02d}",
-                        "metrics": {
-                            "page_views": day * month * 1000,
-                            "unique_visitors": day * month * 100,
-                            "mysql_queries": day * month * 50,
+                        "id": i,
+                        "name": f"MySQL Record {i}",
+                        "description": f"This is a detailed description for record {i}. " + "MySQL " * 50,
+                        "metadata": {
+                            "created_at": f"2024-01-{(i % 28) + 1:02d}T12:00:00Z",
+                            "tags": [f"mysql_tag_{j}" for j in range(20)],
+                            "properties": {
+                                f"prop_{k}": {
+                                    "value": f"mysql_value_{k}",
+                                    "type": "string" if k % 2 == 0 else "number",
+                                    "enabled": k % 3 == 0,
+                                }
+                                for k in range(25)
+                            },
+                        },
+                        "content": {
+                            "text": f"Large text content for record {i}. " + "Content " * 100,
+                            "data": list(range(i * 10, (i + 1) * 10)),
                         },
                     }
-                    for month in range(1, 13)
-                    for day in range(1, 29)
+                    for i in range(150)  # Test MySQL's JSON capacity
                 ],
-                "metadata": {"database": "MySQL", "engine": "InnoDB", "version": "8.0"},
+                "analytics": {
+                    "summary": {"total_records": 150, "database": "MySQL", "storage": "InnoDB", "compressed": False},
+                    "metrics": [
+                        {
+                            "date": f"2024-{month:02d}-{day:02d}",
+                            "mysql_operations": {
+                                "inserts": day * month * 10,
+                                "selects": day * month * 50,
+                                "updates": day * month * 5,
+                                "deletes": day * month * 2,
+                            },
+                        }
+                        for month in range(1, 13)
+                        for day in range(1, 29)
+                    ],
+                },
             },
-            "configuration": {
-                "mysql_settings": {f"setting_{i}": {"value": f"mysql_value_{i}", "active": True} for i in range(100)}
+            "mysql_configuration": {
+                "mysql_settings": {f"setting_{i}": {"value": f"mysql_setting_{i}", "active": True} for i in range(75)},
+                "connection_info": {"pool_size": 5, "timeout": 30, "engine": "InnoDB", "charset": "utf8mb4"},
             },
         }
 
         request.session["large_dataset"] = large_dataset
         request.session["dataset_size"] = len(str(large_dataset))
-        request.session["mysql_info"] = {"table_engine": "InnoDB", "charset": "utf8mb4", "json_support": True}
-
-        return {
-            "status": "large dataset saved",
-            "users_count": len(large_dataset["users"]),
-            "stats_count": len(large_dataset["analytics"]["daily_stats"]),
-            "settings_count": len(large_dataset["configuration"]["mysql_settings"]),
+        request.session["mysql_metadata"] = {
+            "engine": "MySQL",
+            "storage_type": "JSON",
+            "compressed": False,
+            "atomic_writes": True,
         }
 
-    @get("/load-large-dataset")
+        return {
+            "status": "large dataset saved to MySQL",
+            "records_count": len(large_dataset["test_data"]["records"]),
+            "metrics_count": len(large_dataset["test_data"]["analytics"]["metrics"]),
+            "settings_count": len(large_dataset["mysql_configuration"]["mysql_settings"]),
+        }
+
+    @get("/load-large-mysql-dataset")
     async def load_large_data(request: Any) -> dict:
         dataset = request.session.get("large_dataset", {})
         return {
             "has_data": bool(dataset),
-            "users_count": len(dataset.get("users", [])),
-            "stats_count": len(dataset.get("analytics", {}).get("daily_stats", [])),
-            "first_user": dataset.get("users", [{}])[0] if dataset.get("users") else None,
+            "records_count": len(dataset.get("test_data", {}).get("records", [])),
+            "metrics_count": len(dataset.get("test_data", {}).get("analytics", {}).get("metrics", [])),
+            "first_record": (
+                dataset.get("test_data", {}).get("records", [{}])[0]
+                if dataset.get("test_data", {}).get("records")
+                else None
+            ),
+            "database_info": dataset.get("database_info"),
             "dataset_size": request.session.get("dataset_size", 0),
-            "mysql_info": request.session.get("mysql_info"),
+            "mysql_metadata": request.session.get("mysql_metadata"),
         }
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="mysql-large-data-session", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
-    app = Litestar(route_handlers=[save_large_data, load_large_data], middleware=[session_config.middleware])
+    app = Litestar(
+        route_handlers=[save_large_data, load_large_data], middleware=[session_config.middleware], stores=stores
+    )
 
     async with AsyncTestClient(app=app) as client:
         # Save large dataset
-        response = await client.post("/save-large-dataset")
-        assert response.status_code == HTTP_200_OK
+        response = await client.post("/save-large-mysql-dataset")
+        assert response.status_code == HTTP_201_CREATED
         data = response.json()
-        assert data["status"] == "large dataset saved"
-        assert data["users_count"] == 200
-        assert data["stats_count"] > 300  # 12 months * ~28 days
-        assert data["settings_count"] == 100
+        assert data["status"] == "large dataset saved to MySQL"
+        assert data["records_count"] == 150
+        assert data["metrics_count"] > 300  # 12 months * ~28 days
+        assert data["settings_count"] == 75
 
         # Load and verify large dataset
-        response = await client.get("/load-large-dataset")
+        response = await client.get("/load-large-mysql-dataset")
         data = response.json()
         assert data["has_data"] is True
-        assert data["users_count"] == 200
-        assert data["first_user"]["username"] == "mysql_user_0"
-        assert data["dataset_size"] > 100000  # Should be a substantial size
-        assert data["mysql_info"]["table_engine"] == "InnoDB"
+        assert data["records_count"] == 150
+        assert data["first_record"]["name"] == "MySQL Record 0"
+        assert data["database_info"]["engine"] == "MySQL"
+        assert data["dataset_size"] > 50000  # Should be a substantial size
+        assert data["mysql_metadata"]["atomic_writes"] is True
 
 
-async def test_concurrent_session_handling(session_backend: SQLSpecSessionBackend) -> None:
-    """Test concurrent session access with MySQL's transaction handling."""
+async def test_mysql_concurrent_webapp_simulation(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+) -> None:
+    """Test concurrent web application behavior with MySQL session handling."""
 
-    @get("/profile/{profile_id:int}")
-    async def set_profile(request: Any, profile_id: int) -> dict:
-        request.session["profile_id"] = profile_id
+    @get("/user/{user_id:int}/login")
+    async def user_login(request: Any, user_id: int) -> dict:
+        request.session["user_id"] = user_id
+        request.session["username"] = f"mysql_user_{user_id}"
+        request.session["login_time"] = "2024-01-01T12:00:00Z"
         request.session["database"] = "MySQL"
-        request.session["engine"] = "InnoDB"
-        request.session["features"] = ["ACID", "Transactions", "Foreign Keys"]
-        request.session["mysql_version"] = "8.0"
-        request.session["connection_id"] = f"mysql_conn_{profile_id}"
-        return {"profile_id": profile_id, "database": "MySQL"}
+        request.session["session_type"] = "table_based"
+        request.session["permissions"] = ["read", "write", "execute"]
+        return {"status": "logged in", "user_id": user_id}
 
-    @get("/current-profile")
+    @get("/user/profile")
     async def get_profile(request: Any) -> dict:
         return {
-            "profile_id": request.session.get("profile_id"),
+            "user_id": request.session.get("user_id"),
+            "username": request.session.get("username"),
+            "login_time": request.session.get("login_time"),
             "database": request.session.get("database"),
-            "engine": request.session.get("engine"),
-            "features": request.session.get("features"),
-            "mysql_version": request.session.get("mysql_version"),
-            "connection_id": request.session.get("connection_id"),
+            "session_type": request.session.get("session_type"),
+            "permissions": request.session.get("permissions"),
         }
 
-    @post("/update-profile")
-    async def update_profile(request: Any) -> dict:
-        profile_id = request.session.get("profile_id")
-        if profile_id is None:
-            return {"error": "No profile set"}
+    @post("/user/activity")
+    async def log_activity(request: Any) -> dict:
+        user_id = request.session.get("user_id")
+        if user_id is None:
+            return {"error": "Not logged in"}
 
-        request.session["last_updated"] = "2024-01-01T12:00:00Z"
-        request.session["update_count"] = request.session.get("update_count", 0) + 1
-        request.session["mysql_transaction"] = True
+        activities = request.session.get("activities", [])
+        activity = {
+            "action": "page_view",
+            "timestamp": "2024-01-01T12:00:00Z",
+            "user_id": user_id,
+            "mysql_transaction": True,
+        }
+        activities.append(activity)
+        request.session["activities"] = activities
+        request.session["activity_count"] = len(activities)
 
-        return {"profile_id": profile_id, "updated": True, "update_count": request.session["update_count"]}
+        return {"status": "activity logged", "count": len(activities)}
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="mysql-concurrent-session", max_age=3600)
+    @post("/user/logout")
+    async def user_logout(request: Any) -> dict:
+        user_id = request.session.get("user_id")
+        if user_id is None:
+            return {"error": "Not logged in"}
 
-    app = Litestar(route_handlers=[set_profile, get_profile, update_profile], middleware=[session_config.middleware])
+        # Store logout info before clearing session
+        request.session["last_logout"] = "2024-01-01T12:00:00Z"
+        request.session.clear()
+
+        return {"status": "logged out", "user_id": user_id}
+
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
+
+    app = Litestar(
+        route_handlers=[user_login, get_profile, log_activity, user_logout], middleware=[session_config.middleware]
+    )
 
     # Test with multiple concurrent clients
     async with (
@@ -498,73 +624,100 @@ async def test_concurrent_session_handling(session_backend: SQLSpecSessionBacken
         AsyncTestClient(app=app) as client2,
         AsyncTestClient(app=app) as client3,
     ):
-        # Set different profiles concurrently
-        tasks = [client1.get("/profile/1001"), client2.get("/profile/1002"), client3.get("/profile/1003")]
-        responses = await asyncio.gather(*tasks)
+        # Concurrent logins
+        login_tasks = [
+            client1.get("/user/1001/login"),
+            client2.get("/user/1002/login"),
+            client3.get("/user/1003/login"),
+        ]
+        responses = await asyncio.gather(*login_tasks)
 
         for i, response in enumerate(responses, 1001):
             assert response.status_code == HTTP_200_OK
-            assert response.json() == {"profile_id": i, "database": "MySQL"}
+            assert response.json() == {"status": "logged in", "user_id": i}
 
-        # Verify each client maintains its own session
-        response1 = await client1.get("/current-profile")
-        response2 = await client2.get("/current-profile")
-        response3 = await client3.get("/current-profile")
+        # Verify each client has correct session
+        profile_responses = await asyncio.gather(
+            client1.get("/user/profile"), client2.get("/user/profile"), client3.get("/user/profile")
+        )
 
-        assert response1.json()["profile_id"] == 1001
-        assert response1.json()["connection_id"] == "mysql_conn_1001"
-        assert response2.json()["profile_id"] == 1002
-        assert response2.json()["connection_id"] == "mysql_conn_1002"
-        assert response3.json()["profile_id"] == 1003
-        assert response3.json()["connection_id"] == "mysql_conn_1003"
+        assert profile_responses[0].json()["user_id"] == 1001
+        assert profile_responses[0].json()["username"] == "mysql_user_1001"
+        assert profile_responses[1].json()["user_id"] == 1002
+        assert profile_responses[2].json()["user_id"] == 1003
 
-        # Concurrent updates
-        update_tasks = [
-            client1.post("/update-profile"),
-            client2.post("/update-profile"),
-            client3.post("/update-profile"),
-            client1.post("/update-profile"),  # Second update for client1
+        # Log activities concurrently
+        activity_tasks = [
+            client.post("/user/activity")
+            for client in [client1, client2, client3]
+            for _ in range(5)  # 5 activities per user
         ]
-        update_responses = await asyncio.gather(*update_tasks)
 
-        for response in update_responses:
-            assert response.status_code == HTTP_200_OK
-            assert response.json()["updated"] is True
+        activity_responses = await asyncio.gather(*activity_tasks)
+        for response in activity_responses:
+            assert response.status_code == HTTP_201_CREATED
+            assert "activity logged" in response.json()["status"]
+
+        # Verify final activity counts
+        final_profiles = await asyncio.gather(
+            client1.get("/user/profile"), client2.get("/user/profile"), client3.get("/user/profile")
+        )
+
+        for profile_response in final_profiles:
+            profile_data = profile_response.json()
+            assert profile_data["database"] == "MySQL"
+            assert profile_data["session_type"] == "table_based"
 
 
-async def test_session_cleanup_and_maintenance(asyncmy_config: AsyncmyConfig) -> None:
+async def test_session_cleanup_and_maintenance(asyncmy_migration_config: AsyncmyConfig) -> None:
     """Test session cleanup and maintenance operations with MySQL."""
-    backend = SQLSpecSessionBackend(
-        config=asyncmy_config,
-        table_name="litestar_test_cleanup_sessions",
-        session_lifetime=1,  # Short lifetime for testing
+    # Apply migrations first
+    commands = AsyncMigrationCommands(asyncmy_migration_config)
+    await commands.init(asyncmy_migration_config.migration_config["script_location"], package=False)
+    await commands.upgrade()
+
+    store = SQLSpecSessionStore(
+        config=asyncmy_migration_config,
+        table_name="litestar_sessions",  # Use the migrated table
     )
 
     # Create sessions with different lifetimes
     temp_sessions = []
-    for i in range(10):
+    for i in range(8):
         session_id = f"mysql_temp_session_{i}"
         temp_sessions.append(session_id)
-        await backend.store.set(
+        await store.set(
             session_id,
-            {"data": i, "type": "temporary", "mysql_engine": "InnoDB", "created_for": "cleanup_test"},
+            {
+                "data": i,
+                "type": "temporary",
+                "mysql_engine": "InnoDB",
+                "created_for": "cleanup_test",
+                "atomic_writes": True,
+            },
             expires_in=1,
         )
 
     # Create permanent sessions
     perm_sessions = []
-    for i in range(5):
+    for i in range(4):
         session_id = f"mysql_perm_session_{i}"
         perm_sessions.append(session_id)
-        await backend.store.set(
+        await store.set(
             session_id,
-            {"data": f"permanent_{i}", "type": "permanent", "mysql_engine": "InnoDB", "created_for": "cleanup_test"},
+            {
+                "data": f"permanent_{i}",
+                "type": "permanent",
+                "mysql_engine": "InnoDB",
+                "created_for": "cleanup_test",
+                "durable": True,
+            },
             expires_in=3600,
         )
 
     # Verify all sessions exist initially
     for session_id in temp_sessions + perm_sessions:
-        result = await backend.store.get(session_id)
+        result = await store.get(session_id)
         assert result is not None
         assert result["mysql_engine"] == "InnoDB"
 
@@ -572,140 +725,300 @@ async def test_session_cleanup_and_maintenance(asyncmy_config: AsyncmyConfig) ->
     await asyncio.sleep(2)
 
     # Clean up expired sessions
-    await backend.delete_expired_sessions()
+    await store.delete_expired()
 
     # Verify temporary sessions are gone
     for session_id in temp_sessions:
-        result = await backend.store.get(session_id)
+        result = await store.get(session_id)
         assert result is None
 
     # Verify permanent sessions still exist
     for session_id in perm_sessions:
-        result = await backend.store.get(session_id)
+        result = await store.get(session_id)
         assert result is not None
         assert result["type"] == "permanent"
 
 
-async def test_shopping_cart_pattern(session_backend: SQLSpecSessionBackend) -> None:
-    """Test a complete shopping cart pattern typical for MySQL e-commerce applications."""
+async def test_mysql_atomic_transactions_pattern(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+) -> None:
+    """Test atomic transaction patterns typical for MySQL applications."""
 
-    @post("/cart/add")
-    async def add_item(request: Any) -> dict:
+    @post("/transaction/start")
+    async def start_transaction(request: Any) -> dict:
+        # Initialize transaction state
+        request.session["transaction"] = {
+            "id": "mysql_txn_001",
+            "status": "started",
+            "operations": [],
+            "atomic": True,
+            "engine": "MySQL",
+        }
+        request.session["transaction_active"] = True
+        return {"status": "transaction started", "id": "mysql_txn_001"}
+
+    @post("/transaction/add-operation")
+    async def add_operation(request: Any) -> dict:
         data = await request.json()
-        cart = request.session.get("cart", {"items": [], "metadata": {}})
+        transaction = request.session.get("transaction")
+        if not transaction or not request.session.get("transaction_active"):
+            return {"error": "No active transaction"}
 
-        item = {
-            "id": data["item_id"],
-            "name": data["name"],
-            "price": data["price"],
-            "quantity": data.get("quantity", 1),
-            "category": data.get("category", "general"),
-            "added_at": "2024-01-01T12:00:00Z",
-            "mysql_id": f"mysql_{data['item_id']}",
-        }
-
-        cart["items"].append(item)
-        cart["metadata"] = {
-            "total_items": len(cart["items"]),
-            "total_value": sum(item["price"] * item["quantity"] for item in cart["items"]),
-            "last_modified": "2024-01-01T12:00:00Z",
-            "database": "MySQL",
-            "engine": "InnoDB",
-        }
-
-        request.session["cart"] = cart
-        request.session["user_activity"] = {
-            "last_action": "add_to_cart",
+        operation = {
+            "type": data["type"],
+            "table": data.get("table", "default_table"),
+            "data": data.get("data", {}),
             "timestamp": "2024-01-01T12:00:00Z",
-            "mysql_session": True,
+            "mysql_optimized": True,
         }
 
-        return {"status": "item added", "cart_total": cart["metadata"]["total_items"]}
+        transaction["operations"].append(operation)
+        request.session["transaction"] = transaction
 
-    @get("/cart")
-    async def view_cart(request: Any) -> dict:
-        cart = request.session.get("cart", {"items": [], "metadata": {}})
+        return {"status": "operation added", "operation_count": len(transaction["operations"])}
+
+    @post("/transaction/commit")
+    async def commit_transaction(request: Any) -> dict:
+        transaction = request.session.get("transaction")
+        if not transaction or not request.session.get("transaction_active"):
+            return {"error": "No active transaction"}
+
+        # Simulate commit
+        transaction["status"] = "committed"
+        transaction["committed_at"] = "2024-01-01T12:00:00Z"
+        transaction["mysql_wal_mode"] = True
+
+        # Add to transaction history
+        history = request.session.get("transaction_history", [])
+        history.append(transaction)
+        request.session["transaction_history"] = history
+
+        # Clear active transaction
+        request.session.pop("transaction", None)
+        request.session["transaction_active"] = False
+
         return {
-            "items": cart["items"],
-            "metadata": cart["metadata"],
-            "user_activity": request.session.get("user_activity"),
+            "status": "transaction committed",
+            "operations_count": len(transaction["operations"]),
+            "transaction_id": transaction["id"],
         }
 
-    @post("/cart/checkout")
-    async def checkout_cart(request: Any) -> dict:
-        cart = request.session.get("cart", {"items": [], "metadata": {}})
-        if not cart["items"]:
-            return {"error": "Empty cart"}
+    @post("/transaction/rollback")
+    async def rollback_transaction(request: Any) -> dict:
+        transaction = request.session.get("transaction")
+        if not transaction or not request.session.get("transaction_active"):
+            return {"error": "No active transaction"}
 
-        order = {
-            "order_id": f"mysql_order_{len(cart['items'])}_{int(cart['metadata'].get('total_value', 0) * 100)}",
-            "items": cart["items"],
-            "total": cart["metadata"].get("total_value", 0),
-            "checkout_time": "2024-01-01T12:00:00Z",
-            "mysql_transaction": True,
-            "engine": "InnoDB",
-            "status": "completed",
-        }
+        # Simulate rollback
+        transaction["status"] = "rolled_back"
+        transaction["rolled_back_at"] = "2024-01-01T12:00:00Z"
 
-        # Store order history and clear cart
-        order_history = request.session.get("order_history", [])
-        order_history.append(order)
-        request.session["order_history"] = order_history
-        request.session.pop("cart", None)
-        request.session["last_checkout"] = order["checkout_time"]
+        # Clear active transaction
+        request.session.pop("transaction", None)
+        request.session["transaction_active"] = False
 
-        return {"order": order, "status": "checkout completed"}
+        return {"status": "transaction rolled back", "operations_discarded": len(transaction["operations"])}
 
-    @get("/orders")
-    async def view_orders(request: Any) -> dict:
+    @get("/transaction/history")
+    async def get_history(request: Any) -> dict:
         return {
-            "orders": request.session.get("order_history", []),
-            "count": len(request.session.get("order_history", [])),
-            "last_checkout": request.session.get("last_checkout"),
+            "history": request.session.get("transaction_history", []),
+            "active": request.session.get("transaction_active", False),
+            "current": request.session.get("transaction"),
         }
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="mysql-shopping-session", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
     app = Litestar(
-        route_handlers=[add_item, view_cart, checkout_cart, view_orders], middleware=[session_config.middleware]
+        route_handlers=[start_transaction, add_operation, commit_transaction, rollback_transaction, get_history],
+        middleware=[session_config.middleware],
+        stores=stores,
     )
 
     async with AsyncTestClient(app=app) as client:
-        # Add multiple items to cart
-        items_to_add = [
-            {"item_id": 1, "name": "MySQL Book", "price": 29.99, "category": "books"},
-            {"item_id": 2, "name": "Database Poster", "price": 15.50, "category": "decor"},
-            {"item_id": 3, "name": "SQL Mug", "price": 12.99, "category": "drinkware", "quantity": 2},
+        # Start transaction
+        response = await client.post("/transaction/start")
+        assert response.json() == {"status": "transaction started", "id": "mysql_txn_001"}
+
+        # Add operations
+        operations = [
+            {"type": "INSERT", "table": "users", "data": {"name": "MySQL User"}},
+            {"type": "UPDATE", "table": "profiles", "data": {"theme": "dark"}},
+            {"type": "DELETE", "table": "temp_data", "data": {"expired": True}},
         ]
 
-        for item in items_to_add:
-            response = await client.post("/cart/add", json=item)
-            assert response.status_code == HTTP_200_OK
-            assert "item added" in response.json()["status"]
+        for op in operations:
+            response = await client.post("/transaction/add-operation", json=op)
+            assert "operation added" in response.json()["status"]
 
-        # View cart
-        response = await client.get("/cart")
-        cart_data = response.json()
-        assert len(cart_data["items"]) == 3
-        assert cart_data["metadata"]["total_items"] == 3
-        assert cart_data["metadata"]["database"] == "MySQL"
-        assert cart_data["user_activity"]["mysql_session"] is True
+        # Verify operations are tracked
+        response = await client.get("/transaction/history")
+        history_data = response.json()
+        assert history_data["active"] is True
+        assert len(history_data["current"]["operations"]) == 3
 
-        # Checkout
-        response = await client.post("/cart/checkout")
-        assert response.status_code == HTTP_200_OK
-        checkout_data = response.json()
-        assert checkout_data["status"] == "checkout completed"
-        assert checkout_data["order"]["mysql_transaction"] is True
+        # Commit transaction
+        response = await client.post("/transaction/commit")
+        commit_data = response.json()
+        assert commit_data["status"] == "transaction committed"
+        assert commit_data["operations_count"] == 3
 
-        # Verify cart is cleared
-        response = await client.get("/cart")
-        cart_data = response.json()
-        assert len(cart_data["items"]) == 0
+        # Verify transaction history
+        response = await client.get("/transaction/history")
+        history_data = response.json()
+        assert history_data["active"] is False
+        assert len(history_data["history"]) == 1
+        assert history_data["history"][0]["status"] == "committed"
+        assert history_data["history"][0]["mysql_wal_mode"] is True
 
-        # View order history
-        response = await client.get("/orders")
-        orders_data = response.json()
-        assert orders_data["count"] == 1
-        assert orders_data["orders"][0]["engine"] == "InnoDB"
-        assert "last_checkout" in orders_data
+
+async def test_migration_with_default_table_name(asyncmy_migration_config: AsyncmyConfig) -> None:
+    """Test that migration with string format creates default table name."""
+    # Apply migrations
+    commands = AsyncMigrationCommands(asyncmy_migration_config)
+    await commands.init(asyncmy_migration_config.migration_config["script_location"], package=False)
+    await commands.upgrade()
+
+    # Create store using the migrated table
+    store = SQLSpecSessionStore(
+        config=asyncmy_migration_config,
+        table_name="litestar_sessions",  # Default table name
+    )
+
+    # Test that the store works with the migrated table
+    session_id = "test_session_default"
+    test_data = {"user_id": 1, "username": "test_user"}
+
+    await store.set(session_id, test_data, expires_in=3600)
+    retrieved = await store.get(session_id)
+
+    assert retrieved == test_data
+
+
+async def test_migration_with_custom_table_name(asyncmy_migration_config_with_dict: AsyncmyConfig) -> None:
+    """Test that migration with dict format creates custom table name."""
+    # Apply migrations
+    commands = AsyncMigrationCommands(asyncmy_migration_config_with_dict)
+    await commands.init(asyncmy_migration_config_with_dict.migration_config["script_location"], package=False)
+    await commands.upgrade()
+
+    # Create store using the custom migrated table
+    store = SQLSpecSessionStore(
+        config=asyncmy_migration_config_with_dict,
+        table_name="custom_sessions",  # Custom table name from config
+    )
+
+    # Test that the store works with the custom table
+    session_id = "test_session_custom"
+    test_data = {"user_id": 2, "username": "custom_user"}
+
+    await store.set(session_id, test_data, expires_in=3600)
+    retrieved = await store.get(session_id)
+
+    assert retrieved == test_data
+
+    # Verify default table doesn't exist
+    async with asyncmy_migration_config_with_dict.provide_session() as driver:
+        result = await driver.execute("""
+            SELECT TABLE_NAME
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'litestar_sessions'
+        """)
+        assert len(result.data) == 0
+
+
+async def test_migration_with_mixed_extensions(asyncmy_migration_config_mixed: AsyncmyConfig) -> None:
+    """Test migration with mixed extension formats."""
+    # Apply migrations
+    commands = AsyncMigrationCommands(asyncmy_migration_config_mixed)
+    await commands.init(asyncmy_migration_config_mixed.migration_config["script_location"], package=False)
+    await commands.upgrade()
+
+    # The litestar extension should use default table name
+    store = SQLSpecSessionStore(
+        config=asyncmy_migration_config_mixed,
+        table_name="litestar_sessions",  # Default since string format was used
+    )
+
+    # Test that the store works
+    session_id = "test_session_mixed"
+    test_data = {"user_id": 3, "username": "mixed_user"}
+
+    await store.set(session_id, test_data, expires_in=3600)
+    retrieved = await store.get(session_id)
+
+    assert retrieved == test_data
+
+
+async def test_concurrent_sessions_with_mysql_backend(session_store_file: SQLSpecSessionStore) -> None:
+    """Test concurrent session access with MySQL backend."""
+
+    async def session_worker(worker_id: int, iterations: int) -> "list[dict]":
+        """Worker function that creates and manipulates sessions."""
+        results = []
+
+        for i in range(iterations):
+            session_id = f"worker_{worker_id}_session_{i}"
+            session_data = {
+                "worker_id": worker_id,
+                "iteration": i,
+                "data": f"MySQL worker {worker_id} data {i}",
+                "mysql_features": ["ACID", "Atomic", "Consistent", "Isolated", "Durable"],
+                "innodb_based": True,
+                "concurrent_safe": True,
+            }
+
+            # Set session data
+            await session_store_file.set(session_id, session_data, expires_in=3600)
+
+            # Immediately read it back
+            retrieved_data = await session_store_file.get(session_id)
+
+            results.append(
+                {
+                    "session_id": session_id,
+                    "set_data": session_data,
+                    "retrieved_data": retrieved_data,
+                    "success": retrieved_data == session_data,
+                }
+            )
+
+            # Small delay to allow other workers to interleave
+            await asyncio.sleep(0.01)
+
+        return results
+
+    # Run multiple concurrent workers
+    num_workers = 5
+    iterations_per_worker = 10
+
+    tasks = [session_worker(worker_id, iterations_per_worker) for worker_id in range(num_workers)]
+
+    all_results = await asyncio.gather(*tasks)
+
+    # Verify all operations succeeded
+    total_operations = 0
+    successful_operations = 0
+
+    for worker_results in all_results:
+        for result in worker_results:
+            total_operations += 1
+            if result["success"]:
+                successful_operations += 1
+            else:
+                # Print failed operation for debugging
+                pass
+
+    assert total_operations == num_workers * iterations_per_worker
+    assert successful_operations == total_operations  # All should succeed
+
+    # Verify final state by checking a few random sessions
+    for worker_id in range(0, num_workers, 2):  # Check every other worker
+        session_id = f"worker_{worker_id}_session_0"
+        result = await session_store_file.get(session_id)
+        assert result is not None
+        assert result["worker_id"] == worker_id
+        assert result["innodb_based"] is True

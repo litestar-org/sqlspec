@@ -400,12 +400,13 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
                 ext_options = {}
             elif isinstance(ext_config, dict):
                 # Dict format: {"name": "litestar", "session_table": "custom_sessions"}
-                ext_name = ext_config.get("name")
-                if not ext_name:
+                ext_name_raw = ext_config.get("name")
+                if not ext_name_raw:
                     logger.warning("Extension configuration missing 'name' field: %s", ext_config)
                     continue
-                # Assert for type narrowing: ext_name is guaranteed to be str here
-                assert isinstance(ext_name, str)
+                # Assert for type narrowing: ext_name_raw is guaranteed to be str here
+                assert isinstance(ext_name_raw, str)
+                ext_name = ext_name_raw
                 ext_options = {k: v for k, v in ext_config.items() if k != "name"}
             else:
                 logger.warning("Invalid extension configuration format: %s", ext_config)

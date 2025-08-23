@@ -47,7 +47,7 @@ class SQLSpecSessionStore(Store):
 
     def __init__(
         self,
-        config: Union["SyncConfigT", "AsyncConfigT", "DatabaseConfigProtocol"],
+        config: Union["SyncConfigT", "AsyncConfigT", "DatabaseConfigProtocol[Any, Any, Any]"],
         *,
         table_name: str = "litestar_sessions",
         session_id_column: str = "session_id",
@@ -109,12 +109,10 @@ class SQLSpecSessionStore(Store):
                     )
                     .values(session_id, data, expires_at_value, current_time_value)
                     .on_conflict(self._session_id_column)
-                    .do_update(
-                        **{
-                            self._data_column: sql.raw("EXCLUDED." + self._data_column),
-                            self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
-                        }
-                    )
+                    .do_update(**{
+                        self._data_column: sql.raw("EXCLUDED." + self._data_column),
+                        self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
+                    })
                 )
             ]
 
@@ -127,12 +125,10 @@ class SQLSpecSessionStore(Store):
                         self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column
                     )
                     .values(session_id, data, expires_at_value, current_time_value)
-                    .on_duplicate_key_update(
-                        **{
-                            self._data_column: sql.raw(f"VALUES({self._data_column})"),
-                            self._expires_at_column: sql.raw(f"VALUES({self._expires_at_column})"),
-                        }
-                    )
+                    .on_duplicate_key_update(**{
+                        self._data_column: sql.raw(f"VALUES({self._data_column})"),
+                        self._expires_at_column: sql.raw(f"VALUES({self._expires_at_column})"),
+                    })
                 )
             ]
 
@@ -146,42 +142,48 @@ class SQLSpecSessionStore(Store):
                     )
                     .values(session_id, data, expires_at_value, current_time_value)
                     .on_conflict(self._session_id_column)
-                    .do_update(
-                        **{
-                            self._data_column: sql.raw("EXCLUDED." + self._data_column),
-                            self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
-                        }
-                    )
+                    .do_update(**{
+                        self._data_column: sql.raw("EXCLUDED." + self._data_column),
+                        self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
+                    })
                 )
             ]
 
         if dialect == "oracle":
-            # Oracle MERGE statement implementation
-            columns = [self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column]
-
-            return [
-                (
-                    sql.merge()
-                    .into(self._table_name, alias="t")
-                    .using(
-                        sql.raw(
-                            f"(SELECT ? as {self._session_id_column}, JSON(?) as {self._data_column}, ? as {self._expires_at_column}, ? as {self._created_at_column} FROM DUAL)",
-                            parameters=[session_id, data, expires_at_value, current_time_value],
-                        ),
-                        alias="s",
-                    )
-                    .on(f"t.{self._session_id_column} = s.{self._session_id_column}")
-                    .when_matched_then_update(
-                        set_values={
-                            self._data_column: sql.raw(f"s.{self._data_column}"),
-                            self._expires_at_column: sql.raw(f"s.{self._expires_at_column}"),
-                        }
-                    )
-                    .when_not_matched_then_insert(
-                        columns=columns, values=[sql.raw(f"s.{column}") for column in columns]
-                    )
+            # Oracle MERGE statement implementation using SQL builder
+            merge_builder = (
+                sql.merge(self._table_name)
+                .using(
+                    {
+                        self._session_id_column: session_id,
+                        self._data_column: data,
+                        self._expires_at_column: expires_at_value,
+                        self._created_at_column: current_time_value,
+                    },
+                    alias="s",
                 )
-            ]
+                .on(f"t.{self._session_id_column} = s.{self._session_id_column}")
+                .when_matched_then_update({
+                    self._data_column: f"s.{self._data_column}",
+                    self._expires_at_column: f"s.{self._expires_at_column}",
+                })
+                .when_not_matched_then_insert(
+                    columns=[
+                        self._session_id_column,
+                        self._data_column,
+                        self._expires_at_column,
+                        self._created_at_column,
+                    ],
+                    values=[
+                        f"s.{self._session_id_column}",
+                        f"s.{self._data_column}",
+                        f"s.{self._expires_at_column}",
+                        f"s.{self._created_at_column}",
+                    ],
+                )
+            )
+
+            return [merge_builder.to_statement()]
 
         # For other databases, use check-update-insert pattern
         check_exists = (
@@ -510,9 +512,7 @@ class SQLSpecSessionStore(Store):
         try:
             await ensure_async_(driver.execute)(delete_sql)
 
-            # Commit the transaction for databases that need it
-            if hasattr(driver, "commit"):
-                await ensure_async_(driver.commit)()
+            await ensure_async_(driver.commit)()
 
         except Exception as e:
             msg = f"Failed to delete all sessions: {e}"

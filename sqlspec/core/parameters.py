@@ -619,7 +619,7 @@ class ParameterConverter:
 
         return converted_sql
 
-    def _convert_sequence_to_dict(self, parameters: Sequence, param_info: "list[ParameterInfo]") -> "dict[str, Any]":
+    def _convert_sequence_to_dict(self, parameters: "Sequence[Any]", param_info: "list[ParameterInfo]") -> "dict[str, Any]":
         """Convert sequence parameters to dictionary for named styles.
 
         Args:
@@ -637,7 +637,7 @@ class ParameterConverter:
         return param_dict
 
     def _extract_param_value_mixed_styles(
-        self, param: ParameterInfo, parameters: Mapping, param_keys: "list[str]"
+        self, param: ParameterInfo, parameters: "Mapping[str, Any]", param_keys: "list[str]"
     ) -> "tuple[Any, bool]":
         """Extract parameter value for mixed style parameters.
 
@@ -670,7 +670,7 @@ class ParameterConverter:
 
         return None, False
 
-    def _extract_param_value_single_style(self, param: ParameterInfo, parameters: Mapping) -> "tuple[Any, bool]":
+    def _extract_param_value_single_style(self, param: ParameterInfo, parameters: "Mapping[str, Any]") -> "tuple[Any, bool]":
         """Extract parameter value for single style parameters.
 
         Args:

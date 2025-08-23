@@ -1,52 +1,75 @@
 """Comprehensive Litestar integration tests for SQLite adapter."""
 
+import tempfile
 import time
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
-from litestar import Litestar, delete, get, post, put
-from litestar.middleware.session.server_side import ServerSideSessionConfig
-from litestar.status_codes import HTTP_200_OK, HTTP_404_NOT_FOUND
+from litestar import Litestar, get, post, put
+from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED, HTTP_404_NOT_FOUND
+from litestar.stores.registry import StoreRegistry
 from litestar.testing import TestClient
 
-from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionStore
+from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.extensions.litestar import SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.sync_tools import run_
 
-pytestmark = [pytest.mark.sqlite, pytest.mark.integration]
+pytestmark = [pytest.mark.sqlite, pytest.mark.integration, pytest.mark.xdist_group("sqlite")]
 
 
 @pytest.fixture
-def session_store(sqlite_config_regular_memory) -> SQLSpecSessionStore:
-    """Create a session store using the regular memory config from conftest.py."""
-    store = SQLSpecSessionStore(
-        config=sqlite_config_regular_memory,
-        table_name="litestar_test_sessions",
-        session_id_column="session_id",
-        data_column="data",
-        expires_at_column="expires_at",
-        created_at_column="created_at",
+def migrated_config() -> SqliteConfig:
+    """Apply migrations to the config."""
+    tmpdir = tempfile.mkdtemp()
+    db_path = Path(tmpdir) / "test.db"
+    migration_dir = Path(tmpdir) / "migrations"
+
+    # Create a separate config for migrations to avoid connection issues
+    migration_config = SqliteConfig(
+        pool_config={"database": str(db_path)},
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": "test_migrations",
+            "include_extensions": ["litestar"],  # Include litestar extension migrations
+        },
     )
-    # Ensure table exists - the store handles sync/async conversion internally
-    with sqlite_config_regular_memory.provide_session() as driver:
-        run_(store._ensure_table_exists)(driver)
-    return store
 
+    commands = SyncMigrationCommands(migration_config)
+    commands.init(str(migration_dir), package=False)
+    commands.upgrade()
 
-@pytest.fixture
-def session_backend(sqlite_config_regular_memory) -> SQLSpecSessionBackend:
-    """Create a session backend using the regular memory config from conftest.py."""
-    backend = SQLSpecSessionBackend(
-        config=sqlite_config_regular_memory, table_name="litestar_backend_sessions", session_lifetime=3600
+    # Close the migration pool to release the database lock
+    if migration_config.pool_instance:
+        migration_config.close_pool()
+
+    # Return a fresh config for the tests
+    return SqliteConfig(
+        pool_config={"database": str(db_path)},
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": "test_migrations",
+            "include_extensions": ["litestar"],
+        },
     )
-    # Ensure table exists - the store handles sync/async conversion internally
-    with sqlite_config_regular_memory.provide_session() as driver:
-        run_(backend.store._ensure_table_exists)(driver)
-    return backend
 
 
 @pytest.fixture
-def litestar_app(session_backend: SQLSpecSessionBackend) -> Litestar:
+def session_store(migrated_config: SqliteConfig) -> SQLSpecSessionStore:
+    """Create a session store using the migrated config."""
+    return SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+
+
+@pytest.fixture
+def session_config() -> SQLSpecSessionConfig:
+    """Create a session config."""
+    return SQLSpecSessionConfig(table_name="litestar_sessions", store="sessions", max_age=3600)
+
+
+@pytest.fixture
+def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> Litestar:
     """Create a Litestar app with session middleware for testing."""
 
     @get("/session/set/{key:str}")
@@ -75,13 +98,13 @@ def litestar_app(session_backend: SQLSpecSessionBackend) -> Litestar:
         """Get all session data."""
         return dict(request.session)
 
-    @delete("/session/clear")
+    @post("/session/clear")
     async def clear_session(request: Any) -> dict:
         """Clear all session data."""
         request.session.clear()
         return {"status": "cleared"}
 
-    @delete("/session/key/{key:str}")
+    @post("/session/key/{key:str}/delete")
     async def delete_session_key(request: Any, key: str) -> dict:
         """Delete a specific session key."""
         if key in request.session:
@@ -112,7 +135,9 @@ def litestar_app(session_backend: SQLSpecSessionBackend) -> Litestar:
             return {"error": "No profile found"}, HTTP_404_NOT_FOUND
         return {"profile": profile}
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="test-session-key", max_age=3600)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
     return Litestar(
         route_handlers=[
@@ -127,6 +152,7 @@ def litestar_app(session_backend: SQLSpecSessionBackend) -> Litestar:
             get_user_profile,
         ],
         middleware=[session_config.middleware],
+        stores=stores,
     )
 
 
@@ -155,8 +181,8 @@ def test_basic_session_operations(litestar_app: Litestar) -> None:
         assert data["user_id"] == "12345"
 
         # Delete a specific key
-        response = client.delete("/session/key/username")
-        assert response.status_code == HTTP_200_OK
+        response = client.post("/session/key/username/delete")
+        assert response.status_code == HTTP_201_CREATED
         assert response.json() == {"status": "deleted", "key": "username"}
 
         # Verify it's gone
@@ -184,7 +210,7 @@ def test_bulk_session_operations(litestar_app: Litestar) -> None:
         }
 
         response = client.post("/session/bulk", json=bulk_data)
-        assert response.status_code == HTTP_200_OK
+        assert response.status_code == HTTP_201_CREATED
         assert response.json() == {"status": "bulk set", "count": 6}
 
         # Verify all data was set
@@ -216,18 +242,16 @@ def test_session_persistence_across_requests(litestar_app: Litestar) -> None:
         assert response.json() == {"count": 6}
 
 
-def test_session_expiration(sqlite_config_regular_memory) -> None:
+def test_session_expiration(migrated_config: SqliteConfig) -> None:
     """Test session expiration handling."""
-    # Create backend with very short lifetime
-    backend = SQLSpecSessionBackend(
-        config=sqlite_config_regular_memory,
-        table_name="expiring_sessions",
-        session_lifetime=1,  # 1 second
+    # Create store with very short lifetime
+    session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+
+    session_config = SQLSpecSessionConfig(
+        table_name="litestar_sessions",
+        store="sessions",
+        max_age=1,  # 1 second
     )
-    
-    # Ensure table exists
-    with sqlite_config_regular_memory.provide_session() as driver:
-        run_(backend.store._ensure_table_exists)(driver)
 
     @get("/set-temp")
     async def set_temp_data(request: Any) -> dict:
@@ -238,9 +262,11 @@ def test_session_expiration(sqlite_config_regular_memory) -> None:
     async def get_temp_data(request: Any) -> dict:
         return {"temp_data": request.session.get("temp_data")}
 
-    session_config = ServerSideSessionConfig(backend=backend, key="expiring-session", max_age=1)
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
 
-    app = Litestar(route_handlers=[set_temp_data, get_temp_data], middleware=[session_config.middleware])
+    app = Litestar(route_handlers=[set_temp_data, get_temp_data], middleware=[session_config.middleware], stores=stores)
 
     with TestClient(app=app) as client:
         # Set temporary data
@@ -259,7 +285,7 @@ def test_session_expiration(sqlite_config_regular_memory) -> None:
         assert response.json() == {"temp_data": None}
 
 
-def test_concurrent_sessions(session_backend: SQLSpecSessionBackend) -> None:
+def test_concurrent_sessions(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
     """Test handling of concurrent sessions with different clients."""
 
     @get("/user/login/{user_id:int}")
@@ -280,16 +306,23 @@ def test_concurrent_sessions(session_backend: SQLSpecSessionBackend) -> None:
         request.session["profile"] = profile_data
         return {"status": "profile updated"}
 
-    session_config = ServerSideSessionConfig(backend=session_backend, key="concurrent-session")
+    @get("/session/all")
+    async def get_all_session(request: Any) -> dict:
+        """Get all session data."""
+        return dict(request.session)
 
-    app = Litestar(route_handlers=[login_user, whoami, update_profile], middleware=[session_config.middleware])
+    # Register the store in the app
+    stores = StoreRegistry()
+    stores.register("sessions", session_store)
+
+    app = Litestar(
+        route_handlers=[login_user, whoami, update_profile, get_all_session],
+        middleware=[session_config.middleware],
+        stores=stores,
+    )
 
     # Use separate clients to simulate different browsers/users
-    with (
-        TestClient(app=app) as client1,
-        TestClient(app=app) as client2,
-        TestClient(app=app) as client3,
-    ):
+    with TestClient(app=app) as client1, TestClient(app=app) as client2, TestClient(app=app) as client3:
         # Each client logs in as different user
         response1 = client1.get("/user/login/100")
         assert response1.json()["user_id"] == 100
@@ -463,11 +496,11 @@ def test_session_cleanup_operations(session_store: SQLSpecSessionStore) -> None:
 
     # Test get_all functionality
     all_sessions = []
-    
+
     async def collect_sessions():
         async for session_id, session_data in session_store.get_all():
             all_sessions.append((session_id, session_data))
-    
+
     run_(collect_sessions)()
 
     # Should have 2 remaining sessions
@@ -561,7 +594,7 @@ def test_complex_user_workflow(litestar_app: Litestar) -> None:
 
         # Set user profile
         response = client.put("/user/profile", json=user_profile)
-        assert response.status_code == HTTP_200_OK
+        assert response.status_code == HTTP_200_OK  # PUT returns 200 by default
 
         # Verify profile was set
         response = client.get("/user/profile")
@@ -579,7 +612,7 @@ def test_complex_user_workflow(litestar_app: Litestar) -> None:
         }
 
         response = client.post("/session/bulk", json=activity_data)
-        assert response.status_code == HTTP_200_OK
+        assert response.status_code == HTTP_201_CREATED
 
         # Test counter functionality within complex session
         for i in range(1, 6):
@@ -598,7 +631,7 @@ def test_complex_user_workflow(litestar_app: Litestar) -> None:
         assert all_data["count"] == 5
 
         # Test selective data removal
-        response = client.delete("/session/key/cart_items")
+        response = client.post("/session/key/cart_items/delete")
         assert response.json()["status"] == "deleted"
 
         # Verify cart_items removed but other data persists

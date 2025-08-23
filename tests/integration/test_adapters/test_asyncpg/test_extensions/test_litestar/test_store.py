@@ -8,7 +8,7 @@ import pytest
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.extensions.litestar import SQLSpecSessionStore
 
-pytestmark = [pytest.mark.asyncpg, pytest.mark.postgres, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncpg, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
 
 @pytest.fixture
@@ -41,9 +41,9 @@ async def test_asyncpg_store_table_creation(store: SQLSpecSessionStore, asyncpg_
     async with asyncpg_config.provide_session() as driver:
         # Verify table exists
         result = await driver.execute("""
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' 
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
             AND table_name = 'test_store_asyncpg'
         """)
         assert len(result.data) == 1
@@ -51,9 +51,9 @@ async def test_asyncpg_store_table_creation(store: SQLSpecSessionStore, asyncpg_
 
         # Verify table structure
         result = await driver.execute("""
-            SELECT column_name, data_type 
-            FROM information_schema.columns 
-            WHERE table_schema = 'public' 
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
             AND table_name = 'test_store_asyncpg'
             ORDER BY ordinal_position
         """)
@@ -65,9 +65,9 @@ async def test_asyncpg_store_table_creation(store: SQLSpecSessionStore, asyncpg_
 
         # Verify index on key column
         result = await driver.execute("""
-            SELECT indexname 
-            FROM pg_indexes 
-            WHERE tablename = 'test_store_asyncpg' 
+            SELECT indexname
+            FROM pg_indexes
+            WHERE tablename = 'test_store_asyncpg'
             AND indexdef LIKE '%UNIQUE%'
         """)
         assert len(result.data) > 0  # Should have unique index on key
@@ -228,10 +228,7 @@ async def test_asyncpg_store_get_all(store: SQLSpecSessionStore) -> None:
         await store.set(key, value, expires_in=expires_in)
 
     # Get all entries
-    all_entries = {}
-    async for key, value in store.get_all():
-        if key.startswith("asyncpg-all-"):
-            all_entries[key] = value
+    all_entries = {key: value async for key, value in store.get_all() if key.startswith("asyncpg-all-")}
 
     # Should have all four initially
     assert len(all_entries) >= 3  # At least the non-expiring ones
