@@ -14,19 +14,22 @@ from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCom
 
 @pytest.fixture
 async def oracle_async_migration_config(
-    oracle_async_config: OracleAsyncConfig,
+    oracle_async_config: OracleAsyncConfig, request: pytest.FixtureRequest
 ) -> AsyncGenerator[OracleAsyncConfig, None]:
     """Create Oracle async configuration with migration support using string format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_oracle_async_{abs(hash(request.node.nodeid)) % 1000000}"
+
         # Create new config with migration settings
         config = OracleAsyncConfig(
             pool_config=oracle_async_config.pool_config,
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": ["litestar"],  # Simple string format
             },
         )
@@ -35,18 +38,23 @@ async def oracle_async_migration_config(
 
 
 @pytest.fixture
-def oracle_sync_migration_config(oracle_sync_config: OracleSyncConfig) -> Generator[OracleSyncConfig, None, None]:
+def oracle_sync_migration_config(
+    oracle_sync_config: OracleSyncConfig, request: pytest.FixtureRequest
+) -> Generator[OracleSyncConfig, None, None]:
     """Create Oracle sync configuration with migration support using string format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_oracle_sync_{abs(hash(request.node.nodeid)) % 1000000}"
 
         # Create new config with migration settings
         config = OracleSyncConfig(
             pool_config=oracle_sync_config.pool_config,
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": ["litestar"],  # Simple string format
             },
         )
@@ -56,18 +64,21 @@ def oracle_sync_migration_config(oracle_sync_config: OracleSyncConfig) -> Genera
 
 @pytest.fixture
 async def oracle_async_migration_config_with_dict(
-    oracle_async_config: OracleAsyncConfig,
+    oracle_async_config: OracleAsyncConfig, request: pytest.FixtureRequest
 ) -> AsyncGenerator[OracleAsyncConfig, None]:
     """Create Oracle async configuration with migration support using dict format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_oracle_async_dict_{abs(hash(request.node.nodeid)) % 1000000}"
+
         config = OracleAsyncConfig(
             pool_config=oracle_async_config.pool_config,
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": [
                     {"name": "litestar", "session_table": "custom_sessions"}
                 ],  # Dict format with custom table name
@@ -79,18 +90,21 @@ async def oracle_async_migration_config_with_dict(
 
 @pytest.fixture
 def oracle_sync_migration_config_with_dict(
-    oracle_sync_config: OracleSyncConfig,
+    oracle_sync_config: OracleSyncConfig, request: pytest.FixtureRequest
 ) -> Generator[OracleSyncConfig, None, None]:
     """Create Oracle sync configuration with migration support using dict format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_oracle_sync_dict_{abs(hash(request.node.nodeid)) % 1000000}"
+
         config = OracleSyncConfig(
             pool_config=oracle_sync_config.pool_config,
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": [
                     {"name": "litestar", "session_table": "custom_sessions"}
                 ],  # Dict format with custom table name

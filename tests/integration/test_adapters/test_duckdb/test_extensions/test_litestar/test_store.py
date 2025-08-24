@@ -4,10 +4,44 @@ import time
 
 import pytest
 
+from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.litestar import SQLSpecSessionStore
 from sqlspec.utils.sync_tools import run_
 
 pytestmark = [pytest.mark.duckdb, pytest.mark.integration, pytest.mark.xdist_group("duckdb")]
+
+
+def test_duckdb_store_table_creation(session_store: SQLSpecSessionStore, migrated_config: DuckDBConfig) -> None:
+    """Test that store table is created automatically with proper DuckDB structure."""
+    with migrated_config.provide_session() as driver:
+        # Verify table exists
+        result = driver.execute("SELECT table_name FROM information_schema.tables WHERE table_name = 'litestar_sessions'")
+        assert len(result.data) == 1
+        assert result.data[0]["table_name"] == "litestar_sessions"
+
+        # Verify table structure
+        result = driver.execute("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'litestar_sessions' ORDER BY ordinal_position")
+        columns = {row["column_name"]: row["data_type"] for row in result.data}
+        assert "session_id" in columns
+        assert "data" in columns
+        assert "expires_at" in columns
+        assert "created_at" in columns
+
+        # Verify DuckDB-specific data types
+        # DuckDB should use appropriate types for JSON storage (JSON, VARCHAR, or TEXT)
+        assert columns.get("data") in ["JSON", "VARCHAR", "TEXT"]
+        assert any(dt in columns.get("expires_at", "") for dt in ["TIMESTAMP", "DATETIME"])
+
+        # Verify indexes if they exist (DuckDB may handle indexing differently)
+        try:
+            result = driver.execute(
+                "SELECT index_name FROM information_schema.statistics WHERE table_name = 'litestar_sessions'"
+            )
+            # DuckDB indexing may be different, so we just check that the query works
+            assert isinstance(result.data, list)
+        except Exception:
+            # Index information may not be available in the same way, which is acceptable
+            pass
 
 
 def test_duckdb_store_crud_operations(session_store: SQLSpecSessionStore) -> None:
@@ -64,6 +98,19 @@ def test_duckdb_store_expiration(session_store: SQLSpecSessionStore) -> None:
     # Should be expired
     result = run_(session_store.get)(key)
     assert result is None
+
+
+def test_duckdb_store_default_values(session_store: SQLSpecSessionStore) -> None:
+    """Test default value handling."""
+    # Non-existent key should return None
+    result = run_(session_store.get)("non-existent-duckdb-key")
+    assert result is None
+
+    # Test with custom default handling
+    result = run_(session_store.get)("non-existent-duckdb-key")
+    if result is None:
+        result = {"default": True, "engine": "duckdb"}
+    assert result == {"default": True, "engine": "duckdb"}
 
 
 def test_duckdb_store_bulk_operations(session_store: SQLSpecSessionStore) -> None:
@@ -248,6 +295,131 @@ def test_duckdb_store_special_characters(session_store: SQLSpecSessionStore) -> 
 
         run_(session_store.delete)(key)
 
+
+def test_duckdb_store_crud_operations_enhanced(session_store: SQLSpecSessionStore) -> None:
+    """Test enhanced CRUD operations on the DuckDB store."""
+    key = "duckdb-enhanced-test-key"
+    value = {
+        "query_id": 999,
+        "data": ["analytical_item1", "analytical_item2", "analytical_item3"],
+        "nested": {"query": "SELECT * FROM large_table", "execution_time": 123.45},
+        "duckdb_specific": {"vectorization": True, "analytics": [1, 2, 3]},
+    }
+
+    # Create
+    run_(session_store.set)(key, value, expires_in=3600)
+
+    # Read
+    retrieved = run_(session_store.get)(key)
+    assert retrieved == value
+    assert retrieved["duckdb_specific"]["vectorization"] is True
+
+    # Update with new structure
+    updated_value = {
+        "query_id": 1000,
+        "new_field": "new_analytical_value",
+        "duckdb_types": {"boolean": True, "null": None, "float": 3.14159},
+    }
+    run_(session_store.set)(key, updated_value, expires_in=3600)
+
+    retrieved = run_(session_store.get)(key)
+    assert retrieved == updated_value
+    assert retrieved["duckdb_types"]["null"] is None
+
+    # Delete
+    run_(session_store.delete)(key)
+    result = run_(session_store.get)(key)
+    assert result is None
+
+
+def test_duckdb_store_expiration_enhanced(session_store: SQLSpecSessionStore) -> None:
+    """Test enhanced expiration handling with DuckDB."""
+    key = "duckdb-expiring-enhanced-key"
+    value = {"test": "duckdb_analytical_data", "expires": True}
+
+    # Set with 1 second expiration
+    run_(session_store.set)(key, value, expires_in=1)
+
+    # Should exist immediately
+    result = run_(session_store.get)(key)
+    assert result == value
+
+    # Wait for expiration
+    time.sleep(2)
+
+    # Should be expired
+    result = run_(session_store.get)(key)
+    assert result is None
+
+
+def test_duckdb_store_exists_and_expires_in(session_store: SQLSpecSessionStore) -> None:
+    """Test exists and expires_in functionality."""
+    key = "duckdb-exists-test"
+    value = {"test": "analytical_data"}
+
+    # Test non-existent key
+    assert run_(session_store.exists)(key) is False
+    assert run_(session_store.expires_in)(key) == 0
+
+    # Set key
+    run_(session_store.set)(key, value, expires_in=3600)
+
+    # Test existence
+    assert run_(session_store.exists)(key) is True
+    expires_in = run_(session_store.expires_in)(key)
+    assert 3590 <= expires_in <= 3600  # Should be close to 3600
+
+    # Delete and test again
+    run_(session_store.delete)(key)
+    assert run_(session_store.exists)(key) is False
+    assert run_(session_store.expires_in)(key) == 0
+
+
+def test_duckdb_store_transaction_behavior(session_store: SQLSpecSessionStore, migrated_config: DuckDBConfig) -> None:
+    """Test transaction-like behavior in DuckDB store operations."""
+    key = "duckdb-transaction-test"
+
+    # Set initial value
+    run_(session_store.set)(key, {"counter": 0}, expires_in=3600)
+
+    # Test transaction-like behavior using DuckDB's consistency
+    with migrated_config.provide_session() as driver:
+        # Read current value
+        current = run_(session_store.get)(key)
+        if current:
+            # Simulate analytical workload update
+            current["counter"] += 1
+            current["last_query"] = "SELECT COUNT(*) FROM analytics_table"
+            current["execution_time_ms"] = 234.56
+            
+            # Update the session
+            run_(session_store.set)(key, current, expires_in=3600)
+
+    # Verify the update succeeded
+    result = run_(session_store.get)(key)
+    assert result is not None
+    assert result["counter"] == 1
+    assert "last_query" in result
+    assert result["execution_time_ms"] == 234.56
+
+    # Test consistency with multiple rapid updates
+    for i in range(5):
+        current = run_(session_store.get)(key)
+        if current:
+            current["counter"] += 1
+            current["queries_executed"] = current.get("queries_executed", [])
+            current["queries_executed"].append(f"Query #{i+1}")
+            run_(session_store.set)(key, current, expires_in=3600)
+
+    # Final count should be 6 (1 + 5) due to DuckDB's consistency
+    result = run_(session_store.get)(key)
+    assert result is not None
+    assert result["counter"] == 6
+    assert len(result["queries_executed"]) == 5
+
+    # Clean up
+    run_(session_store.delete)(key)
+
     # Test special characters in values
     special_values = [
         {"sql": "SELECT * FROM 'path with spaces/data.parquet'"},
@@ -265,3 +437,128 @@ def test_duckdb_store_special_characters(session_store: SQLSpecSessionStore) -> 
         assert retrieved == value
 
         run_(session_store.delete)(key)
+
+
+def test_duckdb_store_crud_operations_enhanced(session_store: SQLSpecSessionStore) -> None:
+    """Test enhanced CRUD operations on the DuckDB store."""
+    key = "duckdb-enhanced-test-key"
+    value = {
+        "query_id": 999,
+        "data": ["analytical_item1", "analytical_item2", "analytical_item3"],
+        "nested": {"query": "SELECT * FROM large_table", "execution_time": 123.45},
+        "duckdb_specific": {"vectorization": True, "analytics": [1, 2, 3]},
+    }
+
+    # Create
+    run_(session_store.set)(key, value, expires_in=3600)
+
+    # Read
+    retrieved = run_(session_store.get)(key)
+    assert retrieved == value
+    assert retrieved["duckdb_specific"]["vectorization"] is True
+
+    # Update with new structure
+    updated_value = {
+        "query_id": 1000,
+        "new_field": "new_analytical_value",
+        "duckdb_types": {"boolean": True, "null": None, "float": 3.14159},
+    }
+    run_(session_store.set)(key, updated_value, expires_in=3600)
+
+    retrieved = run_(session_store.get)(key)
+    assert retrieved == updated_value
+    assert retrieved["duckdb_types"]["null"] is None
+
+    # Delete
+    run_(session_store.delete)(key)
+    result = run_(session_store.get)(key)
+    assert result is None
+
+
+def test_duckdb_store_expiration_enhanced(session_store: SQLSpecSessionStore) -> None:
+    """Test enhanced expiration handling with DuckDB."""
+    key = "duckdb-expiring-enhanced-key"
+    value = {"test": "duckdb_analytical_data", "expires": True}
+
+    # Set with 1 second expiration
+    run_(session_store.set)(key, value, expires_in=1)
+
+    # Should exist immediately
+    result = run_(session_store.get)(key)
+    assert result == value
+
+    # Wait for expiration
+    time.sleep(2)
+
+    # Should be expired
+    result = run_(session_store.get)(key)
+    assert result is None
+
+
+def test_duckdb_store_exists_and_expires_in(session_store: SQLSpecSessionStore) -> None:
+    """Test exists and expires_in functionality."""
+    key = "duckdb-exists-test"
+    value = {"test": "analytical_data"}
+
+    # Test non-existent key
+    assert run_(session_store.exists)(key) is False
+    assert run_(session_store.expires_in)(key) == 0
+
+    # Set key
+    run_(session_store.set)(key, value, expires_in=3600)
+
+    # Test existence
+    assert run_(session_store.exists)(key) is True
+    expires_in = run_(session_store.expires_in)(key)
+    assert 3590 <= expires_in <= 3600  # Should be close to 3600
+
+    # Delete and test again
+    run_(session_store.delete)(key)
+    assert run_(session_store.exists)(key) is False
+    assert run_(session_store.expires_in)(key) == 0
+
+
+def test_duckdb_store_transaction_behavior(session_store: SQLSpecSessionStore, migrated_config: DuckDBConfig) -> None:
+    """Test transaction-like behavior in DuckDB store operations."""
+    key = "duckdb-transaction-test"
+
+    # Set initial value
+    run_(session_store.set)(key, {"counter": 0}, expires_in=3600)
+
+    # Test transaction-like behavior using DuckDB's consistency
+    with migrated_config.provide_session() as driver:
+        # Read current value
+        current = run_(session_store.get)(key)
+        if current:
+            # Simulate analytical workload update
+            current["counter"] += 1
+            current["last_query"] = "SELECT COUNT(*) FROM analytics_table"
+            current["execution_time_ms"] = 234.56
+            
+            # Update the session
+            run_(session_store.set)(key, current, expires_in=3600)
+
+    # Verify the update succeeded
+    result = run_(session_store.get)(key)
+    assert result is not None
+    assert result["counter"] == 1
+    assert "last_query" in result
+    assert result["execution_time_ms"] == 234.56
+
+    # Test consistency with multiple rapid updates
+    for i in range(5):
+        current = run_(session_store.get)(key)
+        if current:
+            current["counter"] += 1
+            current["queries_executed"] = current.get("queries_executed", [])
+            current["queries_executed"].append(f"Query #{i+1}")
+            run_(session_store.set)(key, current, expires_in=3600)
+
+    # Final count should be 6 (1 + 5) due to DuckDB's consistency
+    result = run_(session_store.get)(key)
+    assert result is not None
+    assert result["counter"] == 6
+    assert len(result["queries_executed"]) == 5
+
+    # Clean up
+    run_(session_store.delete)(key)

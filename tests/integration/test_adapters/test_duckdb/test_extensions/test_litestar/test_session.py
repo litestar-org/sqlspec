@@ -11,7 +11,7 @@ from litestar.middleware.session.server_side import ServerSideSessionConfig
 from litestar.status_codes import HTTP_200_OK
 from litestar.testing import AsyncTestClient
 
-from sqlspec.adapters.duckdb.config import DuckdbConfig
+from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
 from sqlspec.extensions.litestar.store import SQLSpecSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
@@ -21,14 +21,14 @@ pytestmark = [pytest.mark.duckdb, pytest.mark.integration, pytest.mark.xdist_gro
 
 
 @pytest.fixture
-def duckdb_config() -> DuckdbConfig:
+def duckdb_config() -> DuckDBConfig:
     """Create DuckDB configuration with migration support."""
     with tempfile.TemporaryDirectory() as temp_dir:
         db_path = Path(temp_dir) / "sessions.db"
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
-        return DuckdbConfig(
+        return DuckDBConfig(
             pool_config={"database": str(db_path)},
             migration_config={
                 "script_location": str(migration_dir),
@@ -39,11 +39,12 @@ def duckdb_config() -> DuckdbConfig:
 
 
 @pytest.fixture
-async def session_store(duckdb_config: DuckdbConfig) -> SQLSpecSessionStore:
+async def session_store(duckdb_config: DuckDBConfig) -> SQLSpecSessionStore:
     """Create a session store with migrations applied."""
+
     # Apply migrations synchronously (DuckDB uses sync commands like SQLite)
     @async_
-    def apply_migrations():
+    def apply_migrations() -> None:
         commands = SyncMigrationCommands(duckdb_config)
         commands.init(duckdb_config.migration_config["script_location"], package=False)
         commands.upgrade()
@@ -57,11 +58,7 @@ async def session_store(duckdb_config: DuckdbConfig) -> SQLSpecSessionStore:
 @pytest.fixture
 def session_backend_config() -> SQLSpecSessionConfig:
     """Create session backend configuration."""
-    return SQLSpecSessionConfig(
-        key="duckdb-session",
-        max_age=3600,
-        table_name="litestar_sessions",
-    )
+    return SQLSpecSessionConfig(key="duckdb-session", max_age=3600, table_name="litestar_sessions")
 
 
 @pytest.fixture
@@ -70,8 +67,9 @@ def session_backend(session_backend_config: SQLSpecSessionConfig) -> SQLSpecSess
     return SQLSpecSessionBackend(config=session_backend_config)
 
 
-async def test_duckdb_migration_creates_correct_table(duckdb_config: DuckdbConfig) -> None:
+async def test_duckdb_migration_creates_correct_table(duckdb_config: DuckDBConfig) -> None:
     """Test that Litestar migration creates the correct table structure for DuckDB."""
+
     # Apply migrations synchronously
     @async_
     def apply_migrations():
@@ -123,11 +121,7 @@ async def test_duckdb_session_basic_operations(
         request.session.clear()
         return {"status": "session cleared"}
 
-    session_config = ServerSideSessionConfig(
-        backend=session_backend,
-        key="duckdb-session",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="duckdb-session", max_age=3600)
 
     app = Litestar(
         route_handlers=[set_session, get_session, clear_session],
@@ -178,11 +172,7 @@ async def test_duckdb_session_persistence(
     async def get_summary(request: Any) -> dict:
         return {"events": request.session.get("events", []), "count": request.session.get("event_count", 0)}
 
-    session_config = ServerSideSessionConfig(
-        backend=session_backend,
-        key="duckdb-analytics",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="duckdb-analytics", max_age=3600)
 
     app = Litestar(
         route_handlers=[track_event, get_summary],
@@ -213,13 +203,7 @@ async def test_duckdb_session_persistence(
 
 async def test_duckdb_session_expiration(session_store: SQLSpecSessionStore) -> None:
     """Test session expiration handling with DuckDB."""
-    # Create backend with very short lifetime
-    config = SQLSpecSessionConfig(
-        key="duckdb-expiration",
-        max_age=1,  # 1 second
-        table_name="litestar_sessions",
-    )
-    backend = SQLSpecSessionBackend(config=config)
+    # No need to create a custom backend - just use the store with short expiration
 
     @get("/set-data")
     async def set_data(request: Any) -> dict:
@@ -232,15 +216,13 @@ async def test_duckdb_session_expiration(session_store: SQLSpecSessionStore) -> 
         return {"test": request.session.get("test"), "db_type": request.session.get("db_type")}
 
     session_config = ServerSideSessionConfig(
-        backend=backend,
+        store="sessions",  # Use the string name for the store
         key="duckdb-expiring",
-        max_age=1,
+        max_age=1,  # 1 second expiration
     )
 
     app = Litestar(
-        route_handlers=[set_data, get_data],
-        middleware=[session_config.middleware],
-        stores={"sessions": session_store},
+        route_handlers=[set_data, get_data], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
     async with AsyncTestClient(app=app) as client:
@@ -280,11 +262,7 @@ async def test_duckdb_concurrent_sessions(
             "engine": request.session.get("engine"),
         }
 
-    session_config = ServerSideSessionConfig(
-        backend=session_backend,
-        key="duckdb-concurrent",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="duckdb-concurrent", max_age=3600)
 
     app = Litestar(
         route_handlers=[execute_query, get_current_query],
@@ -322,9 +300,7 @@ async def test_duckdb_session_cleanup(session_store: SQLSpecSessionStore) -> Non
     for i in range(2):
         session_id = f"duckdb-perm-{i}"
         perm_sessions.append(session_id)
-        await session_store.set(
-            session_id, {"query": f"SELECT * FROM table_{i}", "type": "permanent"}, expires_in=3600
-        )
+        await session_store.set(session_id, {"query": f"SELECT * FROM table_{i}", "type": "permanent"}, expires_in=3600)
 
     # Wait for temporary sessions to expire
     await asyncio.sleep(2)
@@ -374,11 +350,7 @@ async def test_duckdb_session_analytical_data(
             "performance": request.session.get("performance"),
         }
 
-    session_config = ServerSideSessionConfig(
-        backend=session_backend,
-        key="duckdb-analysis",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="duckdb-analysis", max_age=3600)
 
     app = Litestar(
         route_handlers=[save_analysis, load_analysis],

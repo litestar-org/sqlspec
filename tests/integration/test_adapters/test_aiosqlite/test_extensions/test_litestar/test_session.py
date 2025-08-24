@@ -82,6 +82,7 @@ async def test_aiosqlite_session_basic_operations(
         request.session["user_id"] = 12345
         request.session["username"] = "testuser"
         request.session["preferences"] = {"theme": "dark", "lang": "en"}
+        request.session["tags"] = ["user", "sqlite", "async"]
         return {"status": "session set"}
 
     @get("/get-session")
@@ -90,17 +91,24 @@ async def test_aiosqlite_session_basic_operations(
             "user_id": request.session.get("user_id"),
             "username": request.session.get("username"),
             "preferences": request.session.get("preferences"),
+            "tags": request.session.get("tags"),
         }
+
+    @post("/update-session")
+    async def update_session(request: Any) -> dict:
+        request.session["last_access"] = "2024-01-01T12:00:00"
+        request.session["preferences"]["notifications"] = True
+        return {"status": "session updated"}
 
     @post("/clear-session")
     async def clear_session(request: Any) -> dict:
         request.session.clear()
         return {"status": "session cleared"}
 
-    session_config = SQLSpecSessionConfig(backend=session_backend_default, key="aiosqlite-session", max_age=3600)
+    session_config = SQLSpecSessionConfig(store=session_store_default, key="aiosqlite-session", max_age=3600)
 
     app = Litestar(
-        route_handlers=[set_session, get_session, clear_session],
+        route_handlers=[set_session, get_session, update_session, clear_session],
         middleware=[session_config.middleware],
         stores={"sessions": session_store_default},
     )
@@ -118,6 +126,16 @@ async def test_aiosqlite_session_basic_operations(
         assert data["user_id"] == 12345
         assert data["username"] == "testuser"
         assert data["preferences"] == {"theme": "dark", "lang": "en"}
+        assert data["tags"] == ["user", "sqlite", "async"]
+
+        # Update session
+        response = await client.post("/update-session")
+        assert response.status_code == HTTP_201_CREATED
+
+        # Verify update
+        response = await client.get("/get-session")
+        data = response.json()
+        assert data["preferences"]["notifications"] is True
 
         # Clear session
         response = await client.post("/clear-session")
@@ -127,7 +145,7 @@ async def test_aiosqlite_session_basic_operations(
         # Verify session is cleared
         response = await client.get("/get-session")
         assert response.status_code == HTTP_200_OK
-        assert response.json() == {"user_id": None, "username": None, "preferences": None}
+        assert response.json() == {"user_id": None, "username": None, "preferences": None, "tags": None}
 
 
 async def test_aiosqlite_session_persistence(
@@ -142,7 +160,7 @@ async def test_aiosqlite_session_persistence(
         request.session["count"] = count
         return {"count": count}
 
-    session_config = SQLSpecSessionConfig(backend=session_backend_default, key="aiosqlite-persistence", max_age=3600)
+    session_config = SQLSpecSessionConfig(store=session_store_default, key="aiosqlite-persistence", max_age=3600)
 
     app = Litestar(
         route_handlers=[increment_counter],
@@ -159,13 +177,7 @@ async def test_aiosqlite_session_persistence(
 
 async def test_aiosqlite_session_expiration(session_store_default: SQLSpecSessionStore) -> None:
     """Test session expiration handling."""
-    # Create backend with very short lifetime
-    config = SQLSpecSessionConfig(
-        key="aiosqlite-expiration",
-        max_age=1,  # 1 second
-        table_name="litestar_sessions",
-    )
-    backend = SQLSpecSessionBackend(config=config)
+    # Use the store with short expiration
 
     @get("/set-data")
     async def set_data(request: Any) -> dict:
@@ -176,7 +188,7 @@ async def test_aiosqlite_session_expiration(session_store_default: SQLSpecSessio
     async def get_data(request: Any) -> dict:
         return {"test": request.session.get("test")}
 
-    session_config = ServerSideSessionConfig(backend=backend, key="aiosqlite-expiration", max_age=1)
+    session_config = ServerSideSessionConfig(store=session_store_default, key="aiosqlite-expiration", max_age=1)
 
     app = Litestar(
         route_handlers=[set_data, get_data],
@@ -215,7 +227,7 @@ async def test_aiosqlite_concurrent_sessions(
     async def get_user(request: Any) -> dict:
         return {"user_id": request.session.get("user_id")}
 
-    session_config = ServerSideSessionConfig(backend=session_backend_default, key="aiosqlite-concurrent", max_age=3600)
+    session_config = ServerSideSessionConfig(store=session_store_default, key="aiosqlite-concurrent", max_age=3600)
 
     app = Litestar(
         route_handlers=[set_user, get_user],
@@ -267,6 +279,69 @@ async def test_aiosqlite_session_cleanup(session_store_default: SQLSpecSessionSt
     assert result == {"data": "keep"}
 
 
+async def test_aiosqlite_session_complex_data(
+    session_backend_default: SQLSpecSessionBackend, session_store_default: SQLSpecSessionStore
+) -> None:
+    """Test storing complex data structures in AioSQLite sessions."""
+
+    @post("/save-complex")
+    async def save_complex(request: Any) -> dict:
+        # Store various complex data types
+        request.session["nested"] = {
+            "level1": {"level2": {"level3": ["deep", "nested", "list"], "number": 42.5, "boolean": True}}
+        }
+        request.session["mixed_list"] = [1, "two", 3.0, {"four": 4}, [5, 6]]
+        request.session["unicode"] = "AioSQLite: 🗃️ база данных données 数据库"
+        request.session["null_value"] = None
+        request.session["empty_dict"] = {}
+        request.session["empty_list"] = []
+        return {"status": "complex data saved"}
+
+    @get("/load-complex")
+    async def load_complex(request: Any) -> dict:
+        return {
+            "nested": request.session.get("nested"),
+            "mixed_list": request.session.get("mixed_list"),
+            "unicode": request.session.get("unicode"),
+            "null_value": request.session.get("null_value"),
+            "empty_dict": request.session.get("empty_dict"),
+            "empty_list": request.session.get("empty_list"),
+        }
+
+    session_config = SQLSpecSessionConfig(store=session_store_default, key="aiosqlite-complex", max_age=3600)
+
+    app = Litestar(
+        route_handlers=[save_complex, load_complex],
+        middleware=[session_config.middleware],
+        stores={"sessions": session_store_default},
+    )
+
+    async with AsyncTestClient(app=app) as client:
+        # Save complex data
+        response = await client.post("/save-complex")
+        assert response.json() == {"status": "complex data saved"}
+
+        # Load and verify complex data
+        response = await client.get("/load-complex")
+        data = response.json()
+
+        # Verify nested structure
+        assert data["nested"]["level1"]["level2"]["level3"] == ["deep", "nested", "list"]
+        assert data["nested"]["level1"]["level2"]["number"] == 42.5
+        assert data["nested"]["level1"]["level2"]["boolean"] is True
+
+        # Verify mixed list
+        assert data["mixed_list"] == [1, "two", 3.0, {"four": 4}, [5, 6]]
+
+        # Verify unicode
+        assert data["unicode"] == "AioSQLite: 🗃️ база данных données 数据库"
+
+        # Verify null and empty values
+        assert data["null_value"] is None
+        assert data["empty_dict"] == {}
+        assert data["empty_list"] == []
+
+
 async def test_aiosqlite_store_operations(session_store_default: SQLSpecSessionStore) -> None:
     """Test aiosqlite store operations directly."""
     # Test basic store operations
@@ -282,6 +357,14 @@ async def test_aiosqlite_store_operations(session_store_default: SQLSpecSessionS
 
     # Check exists
     assert await session_store_default.exists(session_id) is True
+
+    # Update with renewal
+    updated_data = {**test_data, "last_login": "2024-01-01"}
+    await session_store_default.set(session_id, updated_data, expires_in=7200)
+
+    # Get updated data
+    result = await session_store_default.get(session_id)
+    assert result == updated_data
 
     # Delete data
     await session_store_default.delete(session_id)

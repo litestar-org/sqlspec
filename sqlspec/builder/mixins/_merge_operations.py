@@ -112,7 +112,7 @@ class MergeUsingClauseMixin:
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
                 param_name = self._generate_unique_parameter_name(column_name)
-                param_name = self.add_parameter(val, name=param_name)[1]
+                _, param_name = self.add_parameter(val, name=param_name)
                 parameterized_values.append(exp.Placeholder(this=param_name))
 
             # Create SELECT statement with the values
@@ -227,6 +227,18 @@ class MergeMatchedClauseMixin:
         if not isinstance(value, str):
             return False
 
+        # If the string contains spaces and no SQL-like syntax, treat as literal
+        if " " in value and not any(x in value for x in [".", "(", ")", "*", "="]):
+            return False
+
+        # Only consider strings with dots (table.column), functions, or SQL keywords as column references
+        # Simple identifiers are treated as literals
+        if not any(x in value for x in [".", "(", ")"]):
+            # Check if it's a SQL keyword/function that should be treated as expression
+            sql_keywords = {"NULL", "CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME", "DEFAULT"}
+            if value.upper() not in sql_keywords:
+                return False
+
         try:
             # Try to parse as SQL expression
             parsed = exp.maybe_parse(value)
@@ -237,10 +249,8 @@ class MergeMatchedClauseMixin:
             if isinstance(
                 parsed,
                 (
-                    exp.Column,
-                    exp.Dot,
-                    exp.Identifier,
-                    exp.Anonymous,
+                    exp.Dot,  # table.column
+                    exp.Anonymous,  # function calls
                     exp.Func,
                     exp.Null,
                     exp.CurrentTimestamp,
@@ -249,18 +259,11 @@ class MergeMatchedClauseMixin:
                 ),
             ):
                 return True
-            return not isinstance(parsed, exp.Literal)
+            return False  # Default to treating as literal
 
         except Exception:
-            # If parsing fails, fall back to conservative approach
-            # Only treat simple identifiers as column references
-            return (
-                value.replace("_", "").replace(".", "").isalnum()
-                and (value[0].isalpha() or value[0] == "_")
-                and " " not in value
-                and "'" not in value
-                and '"' not in value
-            )
+            # If parsing fails, treat as literal
+            return False
 
     def _add_when_clause(self, when_clause: exp.When) -> None:
         """Helper to add a WHEN clause to the MERGE statement.
@@ -308,7 +311,11 @@ class MergeMatchedClauseMixin:
             The current builder instance for method chaining.
         """
         # Combine set_values dict and kwargs
-        all_values = dict(set_values or {}, **kwargs)
+        all_values = {}
+        if set_values:
+            all_values.update(set_values)
+        if kwargs:
+            all_values.update(kwargs)
 
         if not all_values:
             msg = "No update values provided. Use set_values dict or kwargs."
@@ -347,7 +354,7 @@ class MergeMatchedClauseMixin:
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
                 param_name = self._generate_unique_parameter_name(column_name)
-                param_name = self.add_parameter(val, name=param_name)[1]
+                _, param_name = self.add_parameter(val, name=param_name)
                 value_expr = exp.Placeholder(this=param_name)
 
             update_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
@@ -440,6 +447,10 @@ class MergeNotMatchedClauseMixin:
         if not isinstance(value, str):
             return False
 
+        # If the string contains spaces and no SQL-like syntax, treat as literal
+        if " " in value and not any(x in value for x in [".", "(", ")", "*", "="]):
+            return False
+
         try:
             # Try to parse as SQL expression
             parsed = exp.maybe_parse(value)
@@ -455,7 +466,7 @@ class MergeNotMatchedClauseMixin:
                 return True
 
             # If it's a literal (string, number, etc.), it's not a column reference
-            return not isinstance(parsed, exp.Literal)
+            return False  # Default to treating as literal
 
         except Exception:
             # If parsing fails, fall back to conservative approach
@@ -513,7 +524,7 @@ class MergeNotMatchedClauseMixin:
                     if "." in column_name:
                         column_name = column_name.split(".")[-1]
                     param_name = self._generate_unique_parameter_name(column_name)
-                    param_name = self.add_parameter(val, name=param_name)[1]
+                    _, param_name = self.add_parameter(val, name=param_name)
                     parameterized_values.append(exp.Placeholder(this=param_name))
 
             insert_args["this"] = exp.Tuple(expressions=[exp.column(c) for c in columns])
@@ -594,14 +605,26 @@ class MergeNotMatchedBySourceClauseMixin:
         if not isinstance(value, str):
             return False
 
+        # If the string contains spaces and no SQL-like syntax, treat as literal
+        if " " in value and not any(x in value for x in [".", "(", ")", "*", "="]):
+            return False
+
+        # Only consider strings with dots (table.column), functions, or SQL keywords as column references
+        # Simple identifiers are treated as literals
+        if not any(x in value for x in [".", "(", ")"]):
+            # Check if it's a SQL keyword/function that should be treated as expression
+            sql_keywords = {"NULL", "CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME", "DEFAULT"}
+            if value.upper() not in sql_keywords:
+                return False
+
         try:
             # Try to parse as SQL expression
             parsed = exp.maybe_parse(value)
             if parsed is None:
                 return False
 
-            # If it parses to a Column, Dot (table.column), Identifier, or other SQL constructs
-            if isinstance(parsed, (exp.Column, exp.Dot, exp.Identifier, exp.Anonymous, exp.Func)):
+            # If it parses to a Dot (table.column) or function, it's a column reference
+            if isinstance(parsed, (exp.Dot, exp.Anonymous, exp.Func)):
                 return True
 
             # Check for SQL literals that should be treated as expressions
@@ -609,14 +632,11 @@ class MergeNotMatchedBySourceClauseMixin:
                 return True
 
             # If it's a literal (string, number, etc.), it's not a column reference
-            return not isinstance(parsed, exp.Literal)
+            return False  # Default to treating as literal
 
         except Exception:
-            # If parsing fails, fall back to conservative approach
-            # Only treat simple identifiers as column references
-            return (value.replace("_", "").replace(".", "").isalnum() and
-                    (value[0].isalpha() or value[0] == "_") and
-                    " " not in value and "'" not in value and '"' not in value)
+            # If parsing fails, treat as literal
+            return False
 
     def when_not_matched_by_source_then_update(
         self,
@@ -684,7 +704,7 @@ class MergeNotMatchedBySourceClauseMixin:
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
                 param_name = self._generate_unique_parameter_name(column_name)
-                param_name = self.add_parameter(val, name=param_name)[1]
+                _, param_name = self.add_parameter(val, name=param_name)
                 value_expr = exp.Placeholder(this=param_name)
 
             update_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))

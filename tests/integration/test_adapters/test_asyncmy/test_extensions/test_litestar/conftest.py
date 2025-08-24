@@ -14,11 +14,16 @@ from sqlspec.migrations.commands import AsyncMigrationCommands
 
 
 @pytest.fixture
-async def asyncmy_migration_config(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyConfig, None]:
+async def asyncmy_migration_config(
+    mysql_service: MySQLService, request: pytest.FixtureRequest
+) -> AsyncGenerator[AsyncmyConfig, None]:
     """Create asyncmy configuration with migration support using string format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_asyncmy_{abs(hash(request.node.nodeid)) % 1000000}"
 
         config = AsyncmyConfig(
             pool_config={
@@ -33,7 +38,7 @@ async def asyncmy_migration_config(mysql_service: MySQLService) -> AsyncGenerato
             },
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": ["litestar"],  # Simple string format
             },
         )
@@ -42,11 +47,16 @@ async def asyncmy_migration_config(mysql_service: MySQLService) -> AsyncGenerato
 
 
 @pytest.fixture
-async def asyncmy_migration_config_with_dict(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyConfig, None]:
+async def asyncmy_migration_config_with_dict(
+    mysql_service: MySQLService, request: pytest.FixtureRequest
+) -> AsyncGenerator[AsyncmyConfig, None]:
     """Create asyncmy configuration with migration support using dict format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_asyncmy_dict_{abs(hash(request.node.nodeid)) % 1000000}"
 
         config = AsyncmyConfig(
             pool_config={
@@ -61,7 +71,7 @@ async def asyncmy_migration_config_with_dict(mysql_service: MySQLService) -> Asy
             },
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": [
                     {"name": "litestar", "session_table": "custom_sessions"}
                 ],  # Dict format with custom table name
@@ -72,11 +82,16 @@ async def asyncmy_migration_config_with_dict(mysql_service: MySQLService) -> Asy
 
 
 @pytest.fixture
-async def asyncmy_migration_config_mixed(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyConfig, None]:
+async def asyncmy_migration_config_mixed(
+    mysql_service: MySQLService, request: pytest.FixtureRequest
+) -> AsyncGenerator[AsyncmyConfig, None]:
     """Create asyncmy configuration with mixed extension formats."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_asyncmy_mixed_{abs(hash(request.node.nodeid)) % 1000000}"
 
         config = AsyncmyConfig(
             pool_config={
@@ -91,7 +106,7 @@ async def asyncmy_migration_config_mixed(mysql_service: MySQLService) -> AsyncGe
             },
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": [
                     "litestar",  # String format - will use default table name
                     {"name": "other_ext", "option": "value"},  # Dict format for hypothetical extension

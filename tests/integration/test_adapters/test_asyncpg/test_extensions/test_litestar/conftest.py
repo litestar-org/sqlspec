@@ -3,7 +3,7 @@
 import tempfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from secrets import token_bytes
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -11,23 +11,35 @@ from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionConfig, SQLSpecSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
+if TYPE_CHECKING:
+    from pytest_databases.docker.postgres import PostgresService
+
 
 @pytest.fixture
-async def asyncpg_migration_config() -> AsyncGenerator[AsyncpgConfig, None]:
+async def asyncpg_migration_config(
+    postgres_service: "PostgresService", request: pytest.FixtureRequest
+) -> AsyncGenerator[AsyncpgConfig, None]:
     """Create asyncpg configuration with migration support using string format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_asyncpg_{abs(hash(request.node.nodeid)) % 1000000}"
+
         config = AsyncpgConfig(
             pool_config={
-                "dsn": "postgresql://postgres:postgres@localhost:5432/postgres",
+                "host": postgres_service.host,
+                "port": postgres_service.port,
+                "user": postgres_service.user,
+                "password": postgres_service.password,
+                "database": postgres_service.database,
                 "min_size": 2,
                 "max_size": 10,
             },
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": ["litestar"],  # Simple string format
             },
         )
@@ -36,21 +48,30 @@ async def asyncpg_migration_config() -> AsyncGenerator[AsyncpgConfig, None]:
 
 
 @pytest.fixture
-async def asyncpg_migration_config_with_dict() -> AsyncGenerator[AsyncpgConfig, None]:
+async def asyncpg_migration_config_with_dict(
+    postgres_service: "PostgresService", request: pytest.FixtureRequest
+) -> AsyncGenerator[AsyncpgConfig, None]:
     """Create asyncpg configuration with migration support using dict format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_asyncpg_dict_{abs(hash(request.node.nodeid)) % 1000000}"
+
         config = AsyncpgConfig(
             pool_config={
-                "dsn": "postgresql://postgres:postgres@localhost:5432/postgres",
+                "host": postgres_service.host,
+                "port": postgres_service.port,
+                "user": postgres_service.user,
+                "password": postgres_service.password,
+                "database": postgres_service.database,
                 "min_size": 2,
                 "max_size": 10,
             },
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": [
                     {"name": "litestar", "session_table": "custom_sessions"}
                 ],  # Dict format with custom table name
@@ -61,21 +82,30 @@ async def asyncpg_migration_config_with_dict() -> AsyncGenerator[AsyncpgConfig, 
 
 
 @pytest.fixture
-async def asyncpg_migration_config_mixed() -> AsyncGenerator[AsyncpgConfig, None]:
+async def asyncpg_migration_config_mixed(
+    postgres_service: "PostgresService", request: pytest.FixtureRequest
+) -> AsyncGenerator[AsyncpgConfig, None]:
     """Create asyncpg configuration with mixed extension formats."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_asyncpg_mixed_{abs(hash(request.node.nodeid)) % 1000000}"
+
         config = AsyncpgConfig(
             pool_config={
-                "dsn": "postgresql://postgres:postgres@localhost:5432/postgres",
+                "host": postgres_service.host,
+                "port": postgres_service.port,
+                "user": postgres_service.user,
+                "password": postgres_service.password,
+                "database": postgres_service.database,
                 "min_size": 2,
                 "max_size": 10,
             },
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": [
                     "litestar",  # String format - will use default table name
                     {"name": "other_ext", "option": "value"},  # Dict format for hypothetical extension
@@ -154,4 +184,4 @@ async def session_store(asyncpg_migration_config: AsyncpgConfig) -> SQLSpecSessi
 @pytest.fixture
 async def session_config() -> SQLSpecSessionConfig:
     """Create a session config."""
-    return SQLSpecSessionConfig(key="session", secret=token_bytes(16), store="sessions", max_age=3600)
+    return SQLSpecSessionConfig(key="session", store="sessions", max_age=3600)

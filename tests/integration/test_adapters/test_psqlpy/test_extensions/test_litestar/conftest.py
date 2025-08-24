@@ -3,7 +3,6 @@
 import tempfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from secrets import token_bytes
 from typing import TYPE_CHECKING
 
 import pytest
@@ -17,7 +16,9 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-async def psqlpy_migration_config(postgres_service: "PostgresService") -> AsyncGenerator[PsqlpyConfig, None]:
+async def psqlpy_migration_config(
+    postgres_service: "PostgresService", request: pytest.FixtureRequest
+) -> AsyncGenerator[PsqlpyConfig, None]:
     """Create psqlpy configuration with migration support using string format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
@@ -25,11 +26,14 @@ async def psqlpy_migration_config(postgres_service: "PostgresService") -> AsyncG
 
         dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
 
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_psqlpy_{abs(hash(request.node.nodeid)) % 1000000}"
+
         config = PsqlpyConfig(
             pool_config={"dsn": dsn, "max_db_pool_size": 5},
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": ["litestar"],  # Simple string format
             },
         )
@@ -38,7 +42,9 @@ async def psqlpy_migration_config(postgres_service: "PostgresService") -> AsyncG
 
 
 @pytest.fixture
-async def psqlpy_migration_config_with_dict(postgres_service: "PostgresService") -> AsyncGenerator[PsqlpyConfig, None]:
+async def psqlpy_migration_config_with_dict(
+    postgres_service: "PostgresService", request: pytest.FixtureRequest
+) -> AsyncGenerator[PsqlpyConfig, None]:
     """Create psqlpy configuration with migration support using dict format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
@@ -46,11 +52,14 @@ async def psqlpy_migration_config_with_dict(postgres_service: "PostgresService")
 
         dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
 
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_psqlpy_dict_{abs(hash(request.node.nodeid)) % 1000000}"
+
         config = PsqlpyConfig(
             pool_config={"dsn": dsn, "max_db_pool_size": 5},
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": [
                     {"name": "litestar", "session_table": "custom_sessions"}
                 ],  # Dict format with custom table name
@@ -61,7 +70,9 @@ async def psqlpy_migration_config_with_dict(postgres_service: "PostgresService")
 
 
 @pytest.fixture
-async def psqlpy_migration_config_mixed(postgres_service: "PostgresService") -> AsyncGenerator[PsqlpyConfig, None]:
+async def psqlpy_migration_config_mixed(
+    postgres_service: "PostgresService", request: pytest.FixtureRequest
+) -> AsyncGenerator[PsqlpyConfig, None]:
     """Create psqlpy configuration with mixed extension formats."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
@@ -69,11 +80,14 @@ async def psqlpy_migration_config_mixed(postgres_service: "PostgresService") -> 
 
         dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
 
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_psqlpy_mixed_{abs(hash(request.node.nodeid)) % 1000000}"
+
         config = PsqlpyConfig(
             pool_config={"dsn": dsn, "max_db_pool_size": 5},
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": [
                     "litestar",  # String format - will use default table name
                     {"name": "other_ext", "option": "value"},  # Dict format for hypothetical extension
@@ -156,4 +170,4 @@ async def session_store(migrated_config: PsqlpyConfig) -> SQLSpecSessionStore:
 @pytest.fixture
 async def session_config() -> SQLSpecSessionConfig:
     """Create a session config."""
-    return SQLSpecSessionConfig(key="session", secret=token_bytes(16), store="sessions", max_age=3600)
+    return SQLSpecSessionConfig(key="session", store="sessions", max_age=3600)

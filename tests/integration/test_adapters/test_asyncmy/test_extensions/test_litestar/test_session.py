@@ -32,7 +32,7 @@ async def asyncmy_config(mysql_service) -> AsyncmyConfig:
                 "port": mysql_service.port,
                 "user": mysql_service.user,
                 "password": mysql_service.password,
-                "database": mysql_service.database,
+                "database": mysql_service.db,
                 "minsize": 2,
                 "maxsize": 10,
             },
@@ -94,7 +94,8 @@ async def test_mysql_migration_creates_correct_table(asyncmy_config: AsyncmyConf
 
         # MySQL should use JSON for data column (not JSONB or TEXT)
         assert columns.get("data") == "json"
-        assert "timestamp" in columns.get("expires_at", "").lower()
+        # MySQL uses DATETIME for timestamp columns
+        assert columns.get("expires_at", "").lower() in {"datetime", "timestamp"}
 
         # Verify all expected columns exist
         result = await driver.execute("""
@@ -138,7 +139,7 @@ async def test_mysql_session_basic_operations(
         return {"status": "session cleared"}
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="mysql-session",
         max_age=3600,
     )
@@ -193,7 +194,7 @@ async def test_mysql_session_persistence(
         return {"cart": request.session.get("cart", []), "count": request.session.get("cart_count", 0)}
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="mysql-cart",
         max_age=3600,
     )
@@ -225,13 +226,7 @@ async def test_mysql_session_persistence(
 
 async def test_mysql_session_expiration(session_store: SQLSpecSessionStore) -> None:
     """Test session expiration handling with MySQL."""
-    # Create backend with very short lifetime
-    config = SQLSpecSessionConfig(
-        key="mysql-expiration",
-        max_age=1,  # 1 second
-        table_name="litestar_sessions",
-    )
-    backend = SQLSpecSessionBackend(config=config)
+    # No need to create a custom backend - just use the store with short expiration
 
     @get("/set-data")
     async def set_data(request: Any) -> dict:
@@ -244,9 +239,9 @@ async def test_mysql_session_expiration(session_store: SQLSpecSessionStore) -> N
         return {"test": request.session.get("test"), "timestamp": request.session.get("timestamp")}
 
     session_config = ServerSideSessionConfig(
-        backend=backend,
+        store="sessions",  # Use the string name for the store
         key="mysql-expiring",
-        max_age=1,
+        max_age=1,  # 1 second expiration
     )
 
     app = Litestar(
@@ -293,7 +288,7 @@ async def test_mysql_concurrent_sessions(
         }
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="mysql-concurrent",
         max_age=3600,
     )
@@ -379,7 +374,7 @@ async def test_mysql_session_utf8_data(
         return {"messages": request.session.get("messages"), "special_chars": request.session.get("special_chars")}
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="mysql-utf8",
         max_age=3600,
     )

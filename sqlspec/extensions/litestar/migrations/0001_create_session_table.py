@@ -40,7 +40,7 @@ def up(context: "Optional[MigrationContext]" = None) -> "list[str]":
         timestamp_type = "DATETIME"
         created_at_default = "DEFAULT CURRENT_TIMESTAMP"
     elif dialect == "oracle":
-        data_type = "CLOB"  # Oracle JSON is complex, use CLOB for now
+        data_type = "CLOB"
         timestamp_type = "TIMESTAMP"
         created_at_default = ""  # We'll handle default separately in Oracle
     elif dialect == "sqlite":
@@ -80,6 +80,24 @@ def up(context: "Optional[MigrationContext]" = None) -> "list[str]":
                         RAISE;
                     END IF;
             END;
+            """,
+        ]
+
+    if dialect in {"mysql", "mariadb"}:
+        # MySQL versions < 8.0 don't support CREATE INDEX IF NOT EXISTS
+        # For older MySQL versions, the migration system will ignore duplicate index errors (1061)
+        return [
+            f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+                session_id VARCHAR(255) PRIMARY KEY,
+                data {data_type} NOT NULL,
+                expires_at {timestamp_type} NOT NULL,
+                created_at {timestamp_type} NOT NULL {created_at_default}
+            )
+            """,
+            f"""
+            CREATE INDEX idx_{table_name}_expires_at
+            ON {table_name}(expires_at)
             """,
         ]
 
@@ -138,5 +156,10 @@ def down(context: "Optional[MigrationContext]" = None) -> "list[str]":
             END;
             """,
         ]
+
+    if dialect in {"mysql", "mariadb"}:
+        # MySQL DROP INDEX syntax without IF EXISTS for older versions
+        # The migration system will ignore "index doesn't exist" errors (1091)
+        return [f"DROP INDEX idx_{table_name}_expires_at ON {table_name}", f"DROP TABLE IF EXISTS {table_name}"]
 
     return [f"DROP INDEX IF EXISTS idx_{table_name}_expires_at", f"DROP TABLE IF EXISTS {table_name}"]

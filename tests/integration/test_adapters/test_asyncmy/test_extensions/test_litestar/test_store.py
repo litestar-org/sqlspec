@@ -11,15 +11,15 @@ pytestmark = [pytest.mark.asyncmy, pytest.mark.mysql, pytest.mark.integration, p
 
 
 @pytest.fixture
-async def asyncmy_config() -> AsyncmyConfig:
+async def asyncmy_config(mysql_service) -> AsyncmyConfig:
     """Create AsyncMy configuration for testing."""
     return AsyncmyConfig(
         pool_config={
-            "host": "localhost",
-            "port": 3306,
-            "user": "root",
-            "password": "password",
-            "database": "test",
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
             "minsize": 2,
             "maxsize": 10,
         }
@@ -29,7 +29,17 @@ async def asyncmy_config() -> AsyncmyConfig:
 @pytest.fixture
 async def store(asyncmy_config: AsyncmyConfig) -> SQLSpecSessionStore:
     """Create a session store instance."""
-    store = SQLSpecSessionStore(
+    # Create the table manually since we're not using migrations here
+    async with asyncmy_config.provide_session() as driver:
+        await driver.execute_script("""CREATE TABLE IF NOT EXISTS test_store_mysql (
+            session_key VARCHAR(255) PRIMARY KEY,
+            session_data JSON NOT NULL,
+            expires_at DATETIME NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_test_store_mysql_expires_at (expires_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci""")
+
+    return SQLSpecSessionStore(
         config=asyncmy_config,
         table_name="test_store_mysql",
         session_id_column="session_key",
@@ -37,10 +47,6 @@ async def store(asyncmy_config: AsyncmyConfig) -> SQLSpecSessionStore:
         expires_at_column="expires_at",
         created_at_column="created_at",
     )
-    # Ensure table exists
-    async with asyncmy_config.provide_session() as driver:
-        await store._ensure_table_exists(driver)
-    return store
 
 
 async def test_mysql_store_table_creation(store: SQLSpecSessionStore, asyncmy_config: AsyncmyConfig) -> None:
@@ -50,7 +56,7 @@ async def test_mysql_store_table_creation(store: SQLSpecSessionStore, asyncmy_co
         result = await driver.execute("""
             SELECT TABLE_NAME
             FROM information_schema.TABLES
-            WHERE TABLE_SCHEMA = 'test'
+            WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME = 'test_store_mysql'
         """)
         assert len(result.data) == 1
@@ -60,7 +66,7 @@ async def test_mysql_store_table_creation(store: SQLSpecSessionStore, asyncmy_co
         result = await driver.execute("""
             SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_SET_NAME
             FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = 'test'
+            WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME = 'test_store_mysql'
             ORDER BY ORDINAL_POSITION
         """)

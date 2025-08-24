@@ -12,17 +12,35 @@ pytestmark = [pytest.mark.asyncpg, pytest.mark.postgres, pytest.mark.integration
 
 
 @pytest.fixture
-async def asyncpg_config() -> AsyncpgConfig:
+async def asyncpg_config(postgres_service) -> AsyncpgConfig:
     """Create AsyncPG configuration for testing."""
     return AsyncpgConfig(
-        pool_config={"dsn": "postgresql://postgres:postgres@localhost:5432/postgres", "min_size": 2, "max_size": 10}
+        pool_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "database": postgres_service.database,
+            "min_size": 2,
+            "max_size": 10,
+        }
     )
 
 
 @pytest.fixture
 async def store(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionStore:
     """Create a session store instance."""
-    store = SQLSpecSessionStore(
+    # Create the table manually since we're not using migrations here
+    async with asyncpg_config.provide_session() as driver:
+        await driver.execute_script("""CREATE TABLE IF NOT EXISTS test_store_asyncpg (
+            key TEXT PRIMARY KEY,
+            value JSONB NOT NULL,
+            expires TIMESTAMP WITH TIME ZONE NOT NULL,
+            created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )""")
+        await driver.execute_script("CREATE INDEX IF NOT EXISTS idx_test_store_asyncpg_expires ON test_store_asyncpg(expires)")
+
+    return SQLSpecSessionStore(
         config=asyncpg_config,
         table_name="test_store_asyncpg",
         session_id_column="key",
@@ -30,10 +48,6 @@ async def store(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionStore:
         expires_at_column="expires",
         created_at_column="created",
     )
-    # Ensure table exists
-    async with asyncpg_config.provide_session() as driver:
-        await store._ensure_table_exists(driver)
-    return store
 
 
 async def test_asyncpg_store_table_creation(store: SQLSpecSessionStore, asyncpg_config: AsyncpgConfig) -> None:

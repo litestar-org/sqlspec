@@ -84,9 +84,9 @@ class AsyncmyExceptionHandler:
     async def __aenter__(self) -> None:
         return None
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "Optional[bool]":
         if exc_type is None:
-            return
+            return None
 
         if issubclass(exc_type, asyncmy.errors.IntegrityError):
             e = exc_val
@@ -102,6 +102,15 @@ class AsyncmyExceptionHandler:
             raise SQLSpecError(msg) from e
         if issubclass(exc_type, asyncmy.errors.OperationalError):
             e = exc_val
+            # Handle specific MySQL errors that are expected in migrations
+            if hasattr(e, "args") and len(e.args) >= 1 and isinstance(e.args[0], int):
+                error_code = e.args[0]
+                # Error 1061: Duplicate key name (index already exists)
+                # Error 1091: Can't DROP index that doesn't exist
+                if error_code in {1061, 1091}:
+                    # These are acceptable during migrations - log and continue
+                    logger.warning("AsyncMy MySQL expected migration error (ignoring): %s", e)
+                    return True  # Suppress the exception by returning True
             msg = f"AsyncMy MySQL operational error: {e}"
             raise SQLSpecError(msg) from e
         if issubclass(exc_type, asyncmy.errors.DatabaseError):
