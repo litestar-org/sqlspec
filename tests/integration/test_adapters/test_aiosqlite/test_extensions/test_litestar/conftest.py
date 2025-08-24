@@ -35,9 +35,7 @@ async def aiosqlite_migration_config(request: pytest.FixtureRequest) -> AsyncGen
 
 
 @pytest.fixture
-async def aiosqlite_migration_config_with_dict(
-    request: pytest.FixtureRequest,
-) -> AsyncGenerator[AiosqliteConfig, None]:
+async def aiosqlite_migration_config_with_dict(request: pytest.FixtureRequest) -> AsyncGenerator[AiosqliteConfig, None]:
     """Create aiosqlite configuration with migration support using dict format."""
     with tempfile.TemporaryDirectory() as temp_dir:
         db_path = Path(temp_dir) / "sessions.db"
@@ -62,9 +60,7 @@ async def aiosqlite_migration_config_with_dict(
 
 
 @pytest.fixture
-async def aiosqlite_migration_config_mixed(
-    request: pytest.FixtureRequest,
-) -> AsyncGenerator[AiosqliteConfig, None]:
+async def aiosqlite_migration_config_mixed(request: pytest.FixtureRequest) -> AsyncGenerator[AiosqliteConfig, None]:
     """Create aiosqlite configuration with mixed extension formats."""
     with tempfile.TemporaryDirectory() as temp_dir:
         db_path = Path(temp_dir) / "sessions.db"

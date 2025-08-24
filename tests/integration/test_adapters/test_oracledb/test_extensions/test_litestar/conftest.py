@@ -161,9 +161,7 @@ def oracle_sync_migration_config_mixed(oracle_sync_config: OracleSyncConfig) -> 
 
 
 @pytest.fixture
-async def oracle_async_session_store_default(
-    oracle_async_migration_config: OracleAsyncConfig,
-) -> SQLSpecSessionStore:
+async def oracle_async_session_store_default(oracle_async_migration_config: OracleAsyncConfig) -> SQLSpecSessionStore:
     """Create an async session store with default table name."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(oracle_async_migration_config)
@@ -184,7 +182,9 @@ def oracle_async_session_backend_config_default() -> SQLSpecSessionConfig:
 
 
 @pytest.fixture
-def oracle_async_session_backend_default(oracle_async_session_backend_config_default: SQLSpecSessionConfig) -> SQLSpecSessionBackend:
+def oracle_async_session_backend_default(
+    oracle_async_session_backend_config_default: SQLSpecSessionConfig,
+) -> SQLSpecSessionBackend:
     """Create async session backend with default configuration."""
     return SQLSpecSessionBackend(config=oracle_async_session_backend_config_default)
 
@@ -211,7 +211,9 @@ def oracle_sync_session_backend_config_default() -> SQLSpecSessionConfig:
 
 
 @pytest.fixture
-def oracle_sync_session_backend_default(oracle_sync_session_backend_config_default: SQLSpecSessionConfig) -> SQLSpecSessionBackend:
+def oracle_sync_session_backend_default(
+    oracle_sync_session_backend_config_default: SQLSpecSessionConfig,
+) -> SQLSpecSessionBackend:
     """Create sync session backend with default configuration."""
     return SQLSpecSessionBackend(config=oracle_sync_session_backend_config_default)
 
@@ -240,15 +242,15 @@ def oracle_async_session_backend_config_custom() -> SQLSpecSessionConfig:
 
 
 @pytest.fixture
-def oracle_async_session_backend_custom(oracle_async_session_backend_config_custom: SQLSpecSessionConfig) -> SQLSpecSessionBackend:
+def oracle_async_session_backend_custom(
+    oracle_async_session_backend_config_custom: SQLSpecSessionConfig,
+) -> SQLSpecSessionBackend:
     """Create async session backend with custom configuration."""
     return SQLSpecSessionBackend(config=oracle_async_session_backend_config_custom)
 
 
 @pytest.fixture
-def oracle_sync_session_store_custom(
-    oracle_sync_migration_config_with_dict: OracleSyncConfig,
-) -> SQLSpecSessionStore:
+def oracle_sync_session_store_custom(oracle_sync_migration_config_with_dict: OracleSyncConfig) -> SQLSpecSessionStore:
     """Create a sync session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = SyncMigrationCommands(oracle_sync_migration_config_with_dict)
@@ -269,6 +271,8 @@ def oracle_sync_session_backend_config_custom() -> SQLSpecSessionConfig:
 
 
 @pytest.fixture
-def oracle_sync_session_backend_custom(oracle_sync_session_backend_config_custom: SQLSpecSessionConfig) -> SQLSpecSessionBackend:
+def oracle_sync_session_backend_custom(
+    oracle_sync_session_backend_config_custom: SQLSpecSessionConfig,
+) -> SQLSpecSessionBackend:
     """Create sync session backend with custom configuration."""
     return SQLSpecSessionBackend(config=oracle_sync_session_backend_config_custom)

@@ -176,13 +176,13 @@ def test_session_store_sqlite_table_structure(
         # Verify table structure with SQLite-specific types
         result = driver.execute("PRAGMA table_info(litestar_sessions)")
         columns = {row["name"]: row["type"] for row in result.data}
-        
+
         # SQLite should use TEXT for data column (JSON stored as text)
         assert "session_id" in columns
         assert "data" in columns
         assert "expires_at" in columns
         assert "created_at" in columns
-        
+
         # Check SQLite-specific column types
         assert "TEXT" in columns.get("data", "")
         assert any(dt in columns.get("expires_at", "") for dt in ["DATETIME", "TIMESTAMP"])
@@ -287,12 +287,8 @@ def test_sqlite_json_support(session_store: SQLSpecSessionStore, migrated_config
             "id": 12345,
             "preferences": {
                 "theme": "dark",
-                "notifications": {
-                    "email": True,
-                    "push": False,
-                    "sms": True
-                },
-                "language": "en-US"
+                "notifications": {"email": True, "push": False, "sms": True},
+                "language": "en-US",
             },
             "activity": {
                 "login_count": 42,
@@ -300,43 +296,41 @@ def test_sqlite_json_support(session_store: SQLSpecSessionStore, migrated_config
                 "recent_actions": [
                     {"action": "login", "timestamp": "2024-01-15T10:30:00Z"},
                     {"action": "view_profile", "timestamp": "2024-01-15T10:31:00Z"},
-                    {"action": "update_settings", "timestamp": "2024-01-15T10:32:00Z"}
-                ]
-            }
+                    {"action": "update_settings", "timestamp": "2024-01-15T10:32:00Z"},
+                ],
+            },
         },
         "session_metadata": {
             "created_at": "2024-01-15T10:30:00Z",
             "ip_address": "192.168.1.100",
             "user_agent": "Mozilla/5.0 (Test Browser)",
-            "features": ["json_support", "session_storage", "sqlite_backend"]
-        }
+            "features": ["json_support", "session_storage", "sqlite_backend"],
+        },
     }
 
     # Test storing and retrieving complex JSON data
     session_id = "json-test-session"
     run_(session_store.set)(session_id, complex_json_data, expires_in=3600)
-    
+
     retrieved_data = run_(session_store.get)(session_id)
     assert retrieved_data == complex_json_data
-    
+
     # Verify nested structure access
     assert retrieved_data["user_profile"]["preferences"]["theme"] == "dark"
     assert retrieved_data["user_profile"]["activity"]["login_count"] == 42
     assert len(retrieved_data["session_metadata"]["features"]) == 3
-    
+
     # Test JSON operations directly in SQLite
     with migrated_config.provide_session() as driver:
         # Verify the data is stored as JSON text in SQLite
-        result = driver.execute(
-            "SELECT data FROM litestar_sessions WHERE session_id = ?",
-            (session_id,)
-        )
+        result = driver.execute("SELECT data FROM litestar_sessions WHERE session_id = ?", (session_id,))
         assert len(result.data) == 1
         stored_json = result.data[0]["data"]
         assert isinstance(stored_json, str)  # JSON is stored as text in SQLite
-        
+
         # Parse and verify the JSON
         import json
+
         parsed_json = json.loads(stored_json)
         assert parsed_json == complex_json_data
 
@@ -348,7 +342,7 @@ def test_concurrent_session_operations(session_store: SQLSpecSessionStore) -> No
     """Test concurrent operations on sessions with SQLite."""
     import concurrent.futures
     import threading
-    
+
     def create_session(session_id: str) -> bool:
         """Create a session with unique data."""
         try:
@@ -357,36 +351,36 @@ def test_concurrent_session_operations(session_store: SQLSpecSessionStore) -> No
                 "thread_id": thread_id,
                 "session_id": session_id,
                 "timestamp": time.time(),
-                "data": f"Session data from thread {thread_id}"
+                "data": f"Session data from thread {thread_id}",
             }
             run_(session_store.set)(session_id, session_data, expires_in=3600)
             return True
         except Exception:
             return False
-    
+
     def read_session(session_id: str) -> dict:
         """Read a session."""
         return run_(session_store.get)(session_id)
-    
+
     # Test concurrent session creation
     session_ids = [f"concurrent-session-{i}" for i in range(10)]
-    
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         # Create sessions concurrently
         create_futures = [executor.submit(create_session, sid) for sid in session_ids]
         create_results = [future.result() for future in concurrent.futures.as_completed(create_futures)]
-        
+
         # All creates should succeed (SQLite handles concurrency)
         assert all(create_results)
-        
+
         # Read sessions concurrently
         read_futures = [executor.submit(read_session, sid) for sid in session_ids]
         read_results = [future.result() for future in concurrent.futures.as_completed(read_futures)]
-        
+
         # All reads should return valid data
         assert all(result is not None for result in read_results)
         assert all("thread_id" in result for result in read_results)
-        
+
     # Cleanup
     for session_id in session_ids:
         run_(session_store.delete)(session_id)
@@ -435,48 +429,41 @@ def test_session_expiration(migrated_config: SqliteConfig) -> None:
         assert response.json() == {"temp_data": None}
 
 
-def test_transaction_handling(
-    session_store: SQLSpecSessionStore, migrated_config: SqliteConfig
-) -> None:
+def test_transaction_handling(session_store: SQLSpecSessionStore, migrated_config: SqliteConfig) -> None:
     """Test transaction handling in SQLite store operations."""
     session_id = "transaction-test-session"
-    
+
     # Test successful transaction
     test_data = {"counter": 0, "operations": []}
     run_(session_store.set)(session_id, test_data, expires_in=3600)
-    
+
     # SQLite handles transactions automatically in WAL mode
     with migrated_config.provide_session() as driver:
         # Start a transaction context
         driver.begin()
         try:
             # Read current data
-            result = driver.execute(
-                "SELECT data FROM litestar_sessions WHERE session_id = ?",
-                (session_id,)
-            )
+            result = driver.execute("SELECT data FROM litestar_sessions WHERE session_id = ?", (session_id,))
             if result.data:
                 import json
+
                 current_data = json.loads(result.data[0]["data"])
                 current_data["counter"] += 1
                 current_data["operations"].append("increment")
-                
+
                 # Update in transaction
                 updated_json = json.dumps(current_data)
-                driver.execute(
-                    "UPDATE litestar_sessions SET data = ? WHERE session_id = ?",
-                    (updated_json, session_id)
-                )
+                driver.execute("UPDATE litestar_sessions SET data = ? WHERE session_id = ?", (updated_json, session_id))
                 driver.commit()
         except Exception:
             driver.rollback()
             raise
-    
+
     # Verify the update succeeded
     retrieved_data = run_(session_store.get)(session_id)
     assert retrieved_data["counter"] == 1
     assert "increment" in retrieved_data["operations"]
-    
+
     # Test rollback scenario
     with migrated_config.provide_session() as driver:
         driver.begin()
@@ -484,18 +471,18 @@ def test_transaction_handling(
             # Make a change that we'll rollback
             driver.execute(
                 "UPDATE litestar_sessions SET data = ? WHERE session_id = ?",
-                ('{"counter": 999, "operations": ["rollback_test"]}', session_id)
+                ('{"counter": 999, "operations": ["rollback_test"]}', session_id),
             )
             # Force a rollback
             driver.rollback()
         except Exception:
             driver.rollback()
-    
+
     # Verify the rollback worked - data should be unchanged
     retrieved_data = run_(session_store.get)(session_id)
     assert retrieved_data["counter"] == 1  # Should still be 1, not 999
     assert "rollback_test" not in retrieved_data["operations"]
-    
+
     # Cleanup
     run_(session_store.delete)(session_id)
 

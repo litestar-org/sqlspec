@@ -64,11 +64,7 @@ async def session_store(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionStore:
 @pytest.fixture
 def session_backend_config() -> SQLSpecSessionConfig:
     """Create session backend configuration."""
-    return SQLSpecSessionConfig(
-        key="asyncpg-session",
-        max_age=3600,
-        table_name="litestar_sessions",
-    )
+    return SQLSpecSessionConfig(key="asyncpg-session", max_age=3600, table_name="litestar_sessions")
 
 
 @pytest.fixture
@@ -145,11 +141,7 @@ async def test_asyncpg_session_basic_operations(
         request.session.clear()
         return {"status": "session cleared"}
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="asyncpg-session",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="asyncpg-session", max_age=3600)
 
     app = Litestar(
         route_handlers=[set_session, get_session, update_session, clear_session],
@@ -207,16 +199,10 @@ async def test_asyncpg_session_persistence(
         request.session["history"] = history
         return {"count": count, "history": history}
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="asyncpg-counter",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="asyncpg-counter", max_age=3600)
 
     app = Litestar(
-        route_handlers=[increment_counter],
-        middleware=[session_config.middleware],
-        stores={"sessions": session_store},
+        route_handlers=[increment_counter], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
     async with AsyncTestClient(app=app) as client:
@@ -249,9 +235,7 @@ async def test_asyncpg_session_expiration(session_store: SQLSpecSessionStore) ->
     )
 
     app = Litestar(
-        route_handlers=[set_data, get_data],
-        middleware=[session_config.middleware],
-        stores={"sessions": session_store},
+        route_handlers=[set_data, get_data], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
     async with AsyncTestClient(app=app) as client:
@@ -286,16 +270,10 @@ async def test_asyncpg_concurrent_sessions(
     async def get_user(request: Any) -> dict:
         return {"user_id": request.session.get("user_id"), "db": request.session.get("db")}
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="asyncpg-concurrent",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="asyncpg-concurrent", max_age=3600)
 
     app = Litestar(
-        route_handlers=[set_user, get_user],
-        middleware=[session_config.middleware],
-        stores={"sessions": session_store},
+        route_handlers=[set_user, get_user], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
     # Test with multiple concurrent clients
@@ -388,11 +366,7 @@ async def test_asyncpg_session_complex_data(
             "empty_list": request.session.get("empty_list"),
         }
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="asyncpg-complex",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="asyncpg-complex", max_age=3600)
 
     app = Litestar(
         route_handlers=[save_complex, load_complex],
@@ -430,11 +404,7 @@ async def test_asyncpg_store_operations(session_store: SQLSpecSessionStore) -> N
     """Test AsyncPG store operations directly."""
     # Test basic store operations
     session_id = "test-session-asyncpg"
-    test_data = {
-        "user_id": 789,
-        "preferences": {"theme": "blue", "lang": "es"},
-        "tags": ["admin", "user"],
-    }
+    test_data = {"user_id": 789, "preferences": {"theme": "blue", "lang": "es"}, "tags": ["admin", "user"]}
 
     # Set data
     await session_store.set(session_id, test_data, expires_in=3600)

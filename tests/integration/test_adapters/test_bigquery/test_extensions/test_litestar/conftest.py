@@ -20,9 +20,7 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 def bigquery_migration_config(
-    bigquery_service: "BigQueryService",
-    table_schema_prefix: str,
-    request: pytest.FixtureRequest,
+    bigquery_service: "BigQueryService", table_schema_prefix: str, request: pytest.FixtureRequest
 ) -> Generator[BigQueryConfig, None, None]:
     """Create BigQuery configuration with migration support using string format."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -50,9 +48,7 @@ def bigquery_migration_config(
 
 @pytest.fixture
 def bigquery_migration_config_with_dict(
-    bigquery_service: "BigQueryService",
-    table_schema_prefix: str,
-    request: pytest.FixtureRequest,
+    bigquery_service: "BigQueryService", table_schema_prefix: str, request: pytest.FixtureRequest
 ) -> Generator[BigQueryConfig, None, None]:
     """Create BigQuery configuration with migration support using dict format."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -82,9 +78,7 @@ def bigquery_migration_config_with_dict(
 
 @pytest.fixture
 def bigquery_migration_config_mixed(
-    bigquery_service: "BigQueryService",
-    table_schema_prefix: str,
-    request: pytest.FixtureRequest,
+    bigquery_service: "BigQueryService", table_schema_prefix: str, request: pytest.FixtureRequest
 ) -> Generator[BigQueryConfig, None, None]:
     """Create BigQuery configuration with mixed extension formats."""
     with tempfile.TemporaryDirectory() as temp_dir:

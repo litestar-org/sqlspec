@@ -129,6 +129,7 @@ class AsyncmyExceptionHandler:
                 raise SQLParsingError(msg) from e
             msg = f"Unexpected async database operation error: {e}"
             raise SQLSpecError(msg) from e
+        return None
 
 
 class AsyncmyDriver(AsyncDriverAdapterBase):

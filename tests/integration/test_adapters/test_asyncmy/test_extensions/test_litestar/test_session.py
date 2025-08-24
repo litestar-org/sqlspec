@@ -60,11 +60,7 @@ async def session_store(asyncmy_config: AsyncmyConfig) -> SQLSpecSessionStore:
 @pytest.fixture
 def session_backend_config() -> SQLSpecSessionConfig:
     """Create session backend configuration."""
-    return SQLSpecSessionConfig(
-        key="asyncmy-session",
-        max_age=3600,
-        table_name="litestar_sessions",
-    )
+    return SQLSpecSessionConfig(key="asyncmy-session", max_age=3600, table_name="litestar_sessions")
 
 
 @pytest.fixture
@@ -138,11 +134,7 @@ async def test_mysql_session_basic_operations(
         request.session.clear()
         return {"status": "session cleared"}
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="mysql-session",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="mysql-session", max_age=3600)
 
     app = Litestar(
         route_handlers=[set_session, get_session, clear_session],
@@ -193,11 +185,7 @@ async def test_mysql_session_persistence(
     async def get_cart(request: Any) -> dict:
         return {"cart": request.session.get("cart", []), "count": request.session.get("cart_count", 0)}
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="mysql-cart",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="mysql-cart", max_age=3600)
 
     app = Litestar(
         route_handlers=[add_to_cart, get_cart],
@@ -245,9 +233,7 @@ async def test_mysql_session_expiration(session_store: SQLSpecSessionStore) -> N
     )
 
     app = Litestar(
-        route_handlers=[set_data, get_data],
-        middleware=[session_config.middleware],
-        stores={"sessions": session_store},
+        route_handlers=[set_data, get_data], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
     async with AsyncTestClient(app=app) as client:
@@ -287,11 +273,7 @@ async def test_mysql_concurrent_sessions(
             "version": request.session.get("version"),
         }
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="mysql-concurrent",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="mysql-concurrent", max_age=3600)
 
     app = Litestar(
         route_handlers=[set_profile, get_profile],
@@ -373,11 +355,7 @@ async def test_mysql_session_utf8_data(
     async def load_international(request: Any) -> dict:
         return {"messages": request.session.get("messages"), "special_chars": request.session.get("special_chars")}
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="mysql-utf8",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="mysql-utf8", max_age=3600)
 
     app = Litestar(
         route_handlers=[save_international, load_international],

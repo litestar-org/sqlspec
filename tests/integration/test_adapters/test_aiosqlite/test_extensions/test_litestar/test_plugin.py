@@ -375,12 +375,14 @@ async def test_concurrent_sessions_with_file_backend(session_store_file: SQLSpec
             # Immediately read it back
             retrieved_data = await session_store_file.get(session_id)
 
-            results.append({
-                "session_id": session_id,
-                "set_data": session_data,
-                "retrieved_data": retrieved_data,
-                "success": retrieved_data == session_data,
-            })
+            results.append(
+                {
+                    "session_id": session_id,
+                    "set_data": session_data,
+                    "retrieved_data": retrieved_data,
+                    "success": retrieved_data == session_data,
+                }
+            )
 
             # Small delay to allow other workers to interleave
             await asyncio.sleep(0.01)
