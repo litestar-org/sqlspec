@@ -79,7 +79,7 @@ def test_provide_session_context_manager(sqlspec_extension: SQLSpec, sqlite_conf
         async with sqlspec_extension.provide_session(sqlite_config) as session:
             assert session is not None
             # Test that we can execute a simple query
-            result = await session.execute("SELECT 1 as test")
+            result = session.execute("SELECT 1 as test")
             assert result is not None
 
     import asyncio
