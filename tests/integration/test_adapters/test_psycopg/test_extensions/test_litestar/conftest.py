@@ -14,11 +14,16 @@ from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCom
 
 
 @pytest.fixture
-def psycopg_sync_migration_config(postgres_service: PostgresService) -> "Generator[PsycopgSyncConfig, None, None]":
+def psycopg_sync_migration_config(
+    postgres_service: PostgresService, request: pytest.FixtureRequest
+) -> "Generator[PsycopgSyncConfig, None, None]":
     """Create psycopg sync configuration with migration support."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_psycopg_sync_{abs(hash(request.node.nodeid)) % 1000000}"
 
         config = PsycopgSyncConfig(
             pool_config={
@@ -26,7 +31,7 @@ def psycopg_sync_migration_config(postgres_service: PostgresService) -> "Generat
             },
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": ["litestar"],  # Include litestar extension migrations
             },
         )
@@ -37,11 +42,16 @@ def psycopg_sync_migration_config(postgres_service: PostgresService) -> "Generat
 
 
 @pytest.fixture
-async def psycopg_async_migration_config(postgres_service: PostgresService) -> AsyncGenerator[PsycopgAsyncConfig, None]:
+async def psycopg_async_migration_config(
+    postgres_service: PostgresService, request: pytest.FixtureRequest
+) -> AsyncGenerator[PsycopgAsyncConfig, None]:
     """Create psycopg async configuration with migration support."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_psycopg_async_{abs(hash(request.node.nodeid)) % 1000000}"
 
         config = PsycopgAsyncConfig(
             pool_config={
@@ -49,7 +59,7 @@ async def psycopg_async_migration_config(postgres_service: PostgresService) -> A
             },
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": ["litestar"],  # Include litestar extension migrations
             },
         )

@@ -20,11 +20,14 @@ pytestmark = [pytest.mark.asyncpg, pytest.mark.postgres, pytest.mark.integration
 
 
 @pytest.fixture
-async def asyncpg_config(postgres_service) -> AsyncpgConfig:
+async def asyncpg_config(postgres_service, request: pytest.FixtureRequest) -> AsyncpgConfig:
     """Create AsyncPG configuration with migration support."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create unique version table name using adapter and test node ID
+        table_name = f"sqlspec_migrations_asyncpg_test_{abs(hash(request.node.nodeid)) % 1000000}"
 
         config = AsyncpgConfig(
             pool_config={
@@ -38,7 +41,7 @@ async def asyncpg_config(postgres_service) -> AsyncpgConfig:
             },
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
+                "version_table_name": table_name,
                 "include_extensions": ["litestar"],  # Include Litestar migrations
             },
         )
@@ -143,7 +146,7 @@ async def test_asyncpg_session_basic_operations(
         return {"status": "session cleared"}
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="asyncpg-session",
         max_age=3600,
     )
@@ -205,7 +208,7 @@ async def test_asyncpg_session_persistence(
         return {"count": count, "history": history}
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="asyncpg-counter",
         max_age=3600,
     )
@@ -227,13 +230,7 @@ async def test_asyncpg_session_persistence(
 
 async def test_asyncpg_session_expiration(session_store: SQLSpecSessionStore) -> None:
     """Test session expiration handling with AsyncPG."""
-    # Create backend with very short lifetime
-    config = SQLSpecSessionConfig(
-        key="asyncpg-expiration",
-        max_age=1,  # 1 second
-        table_name="litestar_sessions",
-    )
-    backend = SQLSpecSessionBackend(config=config)
+    # No need to create a custom backend - just use the store with short expiration
 
     @get("/set-data")
     async def set_data(request: Any) -> dict:
@@ -246,9 +243,9 @@ async def test_asyncpg_session_expiration(session_store: SQLSpecSessionStore) ->
         return {"test": request.session.get("test"), "timestamp": request.session.get("timestamp")}
 
     session_config = ServerSideSessionConfig(
-        backend=backend,
+        store="sessions",  # Use the string name for the store
         key="asyncpg-expiring",
-        max_age=1,
+        max_age=1,  # 1 second expiration
     )
 
     app = Litestar(
@@ -290,7 +287,7 @@ async def test_asyncpg_concurrent_sessions(
         return {"user_id": request.session.get("user_id"), "db": request.session.get("db")}
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="asyncpg-concurrent",
         max_age=3600,
     )
@@ -392,7 +389,7 @@ async def test_asyncpg_session_complex_data(
         }
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="asyncpg-complex",
         max_age=3600,
     )

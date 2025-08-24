@@ -15,18 +15,21 @@ from sqlspec.migrations.commands import SyncMigrationCommands
 
 
 @pytest.fixture
-def migrated_config() -> DuckDBConfig:
+def migrated_config(request: pytest.FixtureRequest) -> DuckDBConfig:
     """Apply migrations to the config."""
     tmpdir = tempfile.mkdtemp()
     db_path = Path(tmpdir) / "test.duckdb"
     migration_dir = Path(tmpdir) / "migrations"
+
+    # Create unique version table name using adapter and test node ID
+    table_name = f"sqlspec_migrations_duckdb_{abs(hash(request.node.nodeid)) % 1000000}"
 
     # Create a separate config for migrations to avoid connection issues
     migration_config = DuckDBConfig(
         pool_config={"database": str(db_path)},
         migration_config={
             "script_location": str(migration_dir),
-            "version_table_name": "test_migrations",
+            "version_table_name": table_name,
             "include_extensions": ["litestar"],  # Include litestar extension migrations
         },
     )
@@ -44,7 +47,7 @@ def migrated_config() -> DuckDBConfig:
         pool_config={"database": str(db_path)},
         migration_config={
             "script_location": str(migration_dir),
-            "version_table_name": "test_migrations",
+            "version_table_name": table_name,
             "include_extensions": ["litestar"],
         },
     )

@@ -127,7 +127,7 @@ async def test_bigquery_session_basic_operations(
         return {"status": "session cleared"}
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="bigquery-session",
         max_age=3600,
     )
@@ -202,7 +202,7 @@ async def test_bigquery_session_complex_data_types(
         }
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="bigquery-analytics",
         max_age=3600,
     )
@@ -267,7 +267,7 @@ async def test_bigquery_session_large_json_handling(
         }
 
     session_config = ServerSideSessionConfig(
-        backend=session_backend,
+        store=session_store,
         key="bigquery-large",
         max_age=3600,
     )
@@ -300,13 +300,7 @@ async def test_bigquery_session_large_json_handling(
 
 async def test_bigquery_session_expiration(session_store: SQLSpecSessionStore) -> None:
     """Test session expiration handling with BigQuery."""
-    # Create backend with very short lifetime
-    config = SQLSpecSessionConfig(
-        key="bigquery-expiration",
-        max_age=1,  # 1 second
-        table_name="litestar_sessions",
-    )
-    backend = SQLSpecSessionBackend(config=config)
+    # No need to create a custom backend - just use the store with short expiration
 
     @get("/set-data")
     async def set_data(request: Any) -> dict:
@@ -319,9 +313,9 @@ async def test_bigquery_session_expiration(session_store: SQLSpecSessionStore) -
         return {"test": request.session.get("test"), "cloud": request.session.get("cloud")}
 
     session_config = ServerSideSessionConfig(
-        backend=backend,
+        store="sessions",  # Use the string name for the store
         key="bigquery-expiring",
-        max_age=1,
+        max_age=1,  # 1 second expiration
     )
 
     app = Litestar(
