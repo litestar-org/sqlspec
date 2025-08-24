@@ -26,6 +26,7 @@ class OracleMigrationTrackerMixin:
     __slots__ = ()
 
     version_table: str
+    _table_initialized: bool
 
     def _get_create_table_sql(self) -> CreateTable:
         """Get Oracle-specific SQL builder for creating the tracking table.
@@ -52,16 +53,28 @@ class OracleMigrationTrackerMixin:
 class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["SyncDriverAdapterBase"]):
     """Oracle-specific sync migration tracker."""
 
-    __slots__ = ()
+    __slots__ = ("_table_initialized",)
+
+    def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+        """Initialize the Oracle sync migration tracker.
+
+        Args:
+            version_table_name: Name of the table to track migrations.
+        """
+        super().__init__(version_table_name)
+        self._table_initialized = False
 
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
 
-        Oracle doesn't support IF NOT EXISTS, so we check for table existence first.
+        Uses caching to avoid repeated database queries for table existence.
+        This is critical for performance in ASGI frameworks where this might be called on every request.
 
         Args:
             driver: The database driver to use.
         """
+        if self._table_initialized:
+            return
 
         check_sql = (
             sql.select(sql.count().as_("table_count"))
@@ -73,6 +86,8 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         if result.data[0]["TABLE_COUNT"] == 0:
             driver.execute(self._get_create_table_sql())
             self._safe_commit(driver)
+
+        self._table_initialized = True
 
     def get_current_version(self, driver: "SyncDriverAdapterBase") -> "Optional[str]":
         """Get the latest applied migration version.
@@ -156,16 +171,28 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
 class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["AsyncDriverAdapterBase"]):
     """Oracle-specific async migration tracker."""
 
-    __slots__ = ()
+    __slots__ = ("_table_initialized",)
+
+    def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+        """Initialize the Oracle async migration tracker.
+
+        Args:
+            version_table_name: Name of the table to track migrations.
+        """
+        super().__init__(version_table_name)
+        self._table_initialized = False
 
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
 
-        Oracle doesn't support IF NOT EXISTS, so we check for table existence first.
+        Uses caching to avoid repeated database queries for table existence.
+        This is critical for performance in ASGI frameworks where this might be called on every request.
 
         Args:
             driver: The database driver to use.
         """
+        if self._table_initialized:
+            return
 
         check_sql = (
             sql.select(sql.count().as_("table_count"))
@@ -177,6 +204,8 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         if result.data[0]["TABLE_COUNT"] == 0:
             await driver.execute(self._get_create_table_sql())
             await self._safe_commit_async(driver)
+
+        self._table_initialized = True
 
     async def get_current_version(self, driver: "AsyncDriverAdapterBase") -> "Optional[str]":
         """Get the latest applied migration version.

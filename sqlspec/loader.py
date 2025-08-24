@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
+from sqlspec.core import SQL, StatementConfig
 from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
-from sqlspec.core.statement import SQL
 from sqlspec.exceptions import (
     MissingDependencyError,
     SQLFileNotFoundError,
@@ -566,10 +566,12 @@ class SQLFileLoader:
 
         parsed_statement = self._queries[safe_name]
         sqlglot_dialect = None
+        statement_config = None
         if parsed_statement.dialect:
             sqlglot_dialect = _normalize_dialect_for_sqlglot(parsed_statement.dialect)
+            statement_config = StatementConfig(dialect=sqlglot_dialect)
 
-        return SQL(parsed_statement.sql, dialect=sqlglot_dialect)
+        return SQL(parsed_statement.sql, statement_config=statement_config)
 
     def get_file(self, path: Union[str, Path]) -> "Optional[SQLFile]":
         """Get a loaded SQLFile object by path.
