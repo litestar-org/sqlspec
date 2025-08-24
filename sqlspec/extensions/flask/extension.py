@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
     from flask import Flask
 
+    from sqlspec.loader import SQLFileLoader
+
 
 logger = get_logger("extensions.flask")
 
@@ -27,13 +29,19 @@ class SQLSpec(SQLSpecBase):
 
     __slots__ = ("_app", "_configs", "_portal_started")
 
-    def __init__(self, config: SyncConfigT | AsyncConfigT | DatabaseConfig | list[DatabaseConfig]) -> None:
+    def __init__(
+        self,
+        config: SyncConfigT | AsyncConfigT | DatabaseConfig | list[DatabaseConfig],
+        *,
+        loader: SQLFileLoader | None = None,
+    ) -> None:
         """Initialize SQLSpec for Flask.
 
         Args:
             config: Database configuration(s) for SQLSpec.
+            loader: Optional SQL file loader instance.
         """
-        super().__init__()
+        super().__init__(loader=loader)
         self._app: Flask | None = None
         self._portal_started = False
 
@@ -52,6 +60,19 @@ class SQLSpec(SQLSpecBase):
             List of database configurations.
         """
         return self._configs
+
+    def add_config(self, config: SyncConfigT | AsyncConfigT) -> type[SyncConfigT | AsyncConfigT]:
+        """Add a configuration instance to the registry.
+
+        Args:
+            config: The configuration instance to add.
+
+        Returns:
+            The type of the added configuration for use as a registry key.
+        """
+        config_type = type(config)
+        self._base_configs[config_type] = config
+        return config_type
 
     def init_app(self, app: Flask) -> None:
         """Initialize SQLSpec with Flask application.
@@ -129,7 +150,9 @@ class SQLSpec(SQLSpecBase):
         # Find the database config for this configuration
         db_config = None
         for cfg in self._configs:
-            if config in (cfg.config, cfg.annotation):  # type: ignore[attr-defined]
+            # Check if annotation attribute exists and matches, otherwise check config directly
+            annotation = getattr(cfg, "annotation", None)
+            if config in (cfg.config, annotation) or (annotation is None and config == cfg.config):
                 db_config = cfg
                 break
 
@@ -138,6 +161,12 @@ class SQLSpec(SQLSpecBase):
             raise KeyError(msg)
 
         from flask import g
+
+        # Check if we already have a session in Flask's g object
+        session_key = f"_sqlspec_session_{db_config.connection_key}"
+        session = getattr(g, session_key, None)
+        if session is not None:
+            return session
 
         # Check if we already have a connection in Flask's g object
         connection = getattr(g, db_config.connection_key, None)
@@ -152,9 +181,14 @@ class SQLSpec(SQLSpecBase):
 
         # Create session using provider
         if db_config.session_provider:
-            return db_config.session_provider(connection)
-        # Fallback: create driver directly
-        return db_config.config.driver_type(connection=connection)  # type: ignore[attr-defined]
+            session = db_config.session_provider(connection)
+        else:
+            # Fallback: create driver directly
+            session = db_config.config.driver_type(connection=connection)  # type: ignore[attr-defined]
+
+        # Cache session in Flask's g object
+        setattr(g, session_key, session)
+        return session
 
     def get_async_session(self, config: AsyncConfigT | None = None) -> DriverT:
         """Get an async database session for the given configuration.
@@ -221,7 +255,9 @@ class SQLSpec(SQLSpecBase):
         # Find the database config for this configuration
         db_config = None
         for cfg in self._configs:
-            if config in (cfg.config, cfg.annotation):  # type: ignore[attr-defined]
+            # Check if annotation attribute exists and matches, otherwise check config directly
+            annotation = getattr(cfg, "annotation", None)
+            if config in (cfg.config, annotation) or (annotation is None and config == cfg.config):
                 db_config = cfg
                 break
 
@@ -243,10 +279,40 @@ class SQLSpec(SQLSpecBase):
                 if hasattr(connection, "close") and callable(connection.close):
                     with suppress(Exception):
                         connection.close()
+        # Fallback: create session directly from config
+        elif hasattr(db_config.config, "create_pool"):
+            from sqlspec.utils.sync_tools import ensure_async_
+
+            pool = await ensure_async_(db_config.config.create_pool)()  # type: ignore[attr-defined]
+            connection_cm = db_config.config.provide_connection(pool)  # type: ignore[attr-defined]
+
+            try:
+                if hasattr(connection_cm, "__aenter__"):
+                    async with connection_cm as conn:
+                        yield db_config.config.driver_type(connection=conn)  # type: ignore[attr-defined]
+                elif hasattr(connection_cm, "__enter__"):
+                    # Sync context manager
+                    with connection_cm as conn:
+                        yield db_config.config.driver_type(connection=conn)  # type: ignore[attr-defined]
+                else:
+                    # Not a context manager, try to use as connection directly
+                    conn = await connection_cm if hasattr(connection_cm, "__await__") else connection_cm
+                    try:
+                        yield db_config.config.driver_type(connection=conn)  # type: ignore[attr-defined]
+                    finally:
+                        if hasattr(conn, "close") and callable(conn.close):
+                            with suppress(Exception):
+                                if hasattr(conn.close, "__await__"):
+                                    await conn.close()
+                                else:
+                                    conn.close()
+            finally:
+                if hasattr(db_config.config, "close_pool"):
+                    with suppress(Exception):
+                        await ensure_async_(db_config.config.close_pool)()  # type: ignore[attr-defined]
         else:
-            # Fallback: use base class session management
-            async with super().provide_session(config) as session:
-                yield session
+            msg = f"Configuration {config} does not support async session creation"
+            raise RuntimeError(msg)
 
     def get_annotation(
         self, key: str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]
@@ -263,7 +329,8 @@ class SQLSpec(SQLSpecBase):
             KeyError: If no configuration is found for the given key.
         """
         for cfg in self._configs:
-            if key in (cfg.config, cfg.annotation, cfg.connection_key, cfg.pool_key):
-                return cfg.annotation  # type: ignore[attr-defined]
+            annotation = getattr(cfg, "annotation", None)
+            if key in {cfg.config, annotation, cfg.connection_key, cfg.pool_key}:
+                return annotation or type(cfg.config)  # type: ignore[attr-defined]
         msg = f"No configuration found for {key}"
         raise KeyError(msg)

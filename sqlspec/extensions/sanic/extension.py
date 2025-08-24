@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
     from sanic import Sanic
 
+    from sqlspec.loader import SQLFileLoader
     from sqlspec.typing import ConnectionT, PoolT
 
 logger = get_logger("extensions.sanic")
@@ -27,13 +28,19 @@ class SQLSpec(SQLSpecBase):
 
     __slots__ = ("_app", "_configs")
 
-    def __init__(self, config: SyncConfigT | AsyncConfigT | DatabaseConfig | list[DatabaseConfig]) -> None:
+    def __init__(
+        self,
+        config: SyncConfigT | AsyncConfigT | DatabaseConfig | list[DatabaseConfig],
+        *,
+        loader: SQLFileLoader | None = None,
+    ) -> None:
         """Initialize SQLSpec for Sanic.
 
         Args:
             config: Database configuration(s) for SQLSpec.
+            loader: Optional SQL file loader instance.
         """
-        super().__init__()
+        super().__init__(loader=loader)
         self._app: Sanic | None = None
 
         if isinstance(config, DatabaseConfigProtocol):
@@ -62,9 +69,9 @@ class SQLSpec(SQLSpecBase):
 
         # Initialize each database configuration
         for db_config in self._configs:
-            # Add the configuration to SQLSpec base
-            annotation = self.add_config(db_config.config)
-            db_config.annotation = annotation  # type: ignore[attr-defined]
+            # Generate unique annotation type for this config
+            config_type = type(db_config.config)
+            db_config.annotation = config_type  # type: ignore[attr-defined]
 
             # Initialize with the app
             db_config.init_app(app)
@@ -94,7 +101,7 @@ class SQLSpec(SQLSpecBase):
         # Find the database config for this configuration
         db_config = None
         for cfg in self._configs:
-            if config in (cfg.config, cfg.annotation):  # type: ignore[attr-defined]
+            if config in (cfg.config, getattr(cfg, "annotation", None)):
                 db_config = cfg
                 break
 
@@ -102,23 +109,18 @@ class SQLSpec(SQLSpecBase):
             msg = f"No configuration found for {config}"
             raise KeyError(msg)
 
-        # Check if we already have a connection in request context
+        # Check if we already have a session in request context
+        session = getattr(request.ctx, db_config.session_key, None)
+        if session is not None:
+            return session
+
+        # Check if we have a connection in request context
         connection = getattr(request.ctx, db_config.connection_key, None)
         if connection is None:
             msg = f"No connection available for {config}. Ensure middleware is enabled."
             raise RuntimeError(msg)
 
-        # Create session using provider
-        if db_config.session_provider:
-            # For Sanic, we need to handle this synchronously since session access is typically sync
-            import asyncio
-
-            async def get_session_async() -> DriverT:
-                async with db_config.session_provider(connection) as session:
-                    return session
-
-            return asyncio.create_task(get_session_async())
-        # Fallback: create driver directly
+        # Create driver directly using connection
         return db_config.config.driver_type(connection=connection)  # type: ignore[attr-defined]
 
     def get_engine(self, request: Any, config: SyncConfigT | AsyncConfigT | None = None) -> Any:
@@ -143,7 +145,7 @@ class SQLSpec(SQLSpecBase):
         # Find the database config for this configuration
         db_config = None
         for cfg in self._configs:
-            if config in (cfg.config, cfg.annotation):  # type: ignore[attr-defined]
+            if config in (cfg.config, getattr(cfg, "annotation", None)):
                 db_config = cfg
                 break
 
@@ -151,7 +153,7 @@ class SQLSpec(SQLSpecBase):
             msg = f"No configuration found for {config}"
             raise KeyError(msg)
 
-        return getattr(request.app.ctx, db_config.engine_key, None)
+        return getattr(request.app.ctx, db_config.pool_key, None)
 
     @overload
     def provide_session(self, config: SyncConfigT) -> AsyncGenerator[DriverT, None]: ...
@@ -180,7 +182,7 @@ class SQLSpec(SQLSpecBase):
         # Find the database config for this configuration
         db_config = None
         for cfg in self._configs:
-            if config in (cfg.config, cfg.annotation):  # type: ignore[attr-defined]
+            if config in (cfg.config, getattr(cfg, "annotation", None)):
                 db_config = cfg
                 break
 
@@ -198,8 +200,8 @@ class SQLSpec(SQLSpecBase):
                     # Fallback: create driver directly
                     yield db_config.config.driver_type(connection=connection)  # type: ignore[attr-defined]
         else:
-            # Fallback: use base class session management
-            async with super().provide_session(config) as session:
+            # Fallback: use config's provide_session method
+            with db_config.config.provide_session() as session:
                 yield session
 
     @overload
@@ -229,7 +231,7 @@ class SQLSpec(SQLSpecBase):
         # Find the database config for this configuration
         db_config = None
         for cfg in self._configs:
-            if config in (cfg.config, cfg.annotation):  # type: ignore[attr-defined]
+            if config in (cfg.config, getattr(cfg, "annotation", None)):
                 db_config = cfg
                 break
 
@@ -242,8 +244,8 @@ class SQLSpec(SQLSpecBase):
             async with db_config.connection_provider() as connection:
                 yield connection
         else:
-            # Fallback: use base class connection management
-            async with super().provide_connection(config) as connection:
+            # Fallback: use config's provide_connection method
+            with db_config.config.provide_connection() as connection:
                 yield connection
 
     @overload
@@ -270,7 +272,7 @@ class SQLSpec(SQLSpecBase):
         # Find the database config for this configuration
         db_config = None
         for cfg in self._configs:
-            if config in (cfg.config, cfg.annotation):  # type: ignore[attr-defined]
+            if config in (cfg.config, getattr(cfg, "annotation", None)):
                 db_config = cfg
                 break
 
@@ -301,7 +303,11 @@ class SQLSpec(SQLSpecBase):
             KeyError: If no configuration is found for the given key.
         """
         for cfg in self._configs:
-            if key in (cfg.config, cfg.annotation, cfg.connection_key, cfg.pool_key):
-                return cfg.annotation  # type: ignore[attr-defined]
+            annotation = getattr(cfg, "annotation", None)
+            if key in (cfg.config, annotation, cfg.connection_key, cfg.pool_key):
+                if annotation is None:
+                    msg = "Annotation not set for configuration. Ensure the extension has been initialized."
+                    raise AttributeError(msg)
+                return annotation
         msg = f"No configuration found for {key}"
         raise KeyError(msg)

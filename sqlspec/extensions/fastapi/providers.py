@@ -48,6 +48,7 @@ __all__ = (
     "UuidOrNone",
     "create_filter_dependencies",
     "dep_cache",
+    "provide_filters",
 )
 
 DTorNone = Optional[datetime.datetime]
@@ -113,6 +114,37 @@ class DependencyCache(metaclass=SingletonMeta):
 
 
 dep_cache = DependencyCache()
+
+
+def provide_filters(config: FilterConfig) -> Callable[..., list[FilterTypes]]:
+    """Create a FastAPI dependency for the combined filter function.
+
+    Args:
+        config: FilterConfig instance with desired settings.
+
+    Returns:
+        A FastAPI dependency that returns a list of filters based on query parameters.
+
+    Example:
+        >>> filter_config = FilterConfig(
+        ...     id_filter=int,
+        ...     search="name,email",
+        ...     pagination_type="limit_offset",
+        ...     sort_field="created_at",
+        ... )
+        >>>
+        >>> # Use in route handler
+        >>> @app.get("/users")
+        >>> async def get_users(
+        ...     filters: list[FilterTypes] = Depends(
+        ...         provide_filters(filter_config)
+        ...     ),
+        ... ):
+        ...     # filters will contain parsed query parameters
+        ...     return await user_service.get_filtered(filters)
+    """
+    filter_deps = create_filter_dependencies(config)
+    return filter_deps.get(DEPENDENCY_DEFAULTS.FILTERS_DEPENDENCY_KEY, list)
 
 
 def create_filter_dependencies(

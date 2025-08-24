@@ -1,7 +1,7 @@
 """Configuration classes for SQLSpec Starlette integration."""
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Callable, Literal, Optional, Union, cast
 
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -10,8 +10,10 @@ if TYPE_CHECKING:
 
     from starlette.applications import Starlette
     from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
 
     from sqlspec.config import AsyncConfigT, DriverT, SyncConfigT
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.typing import ConnectionT, PoolT
 
 
@@ -26,8 +28,10 @@ __all__ = (
     "DEFAULT_CONNECTION_KEY",
     "DEFAULT_POOL_KEY",
     "DEFAULT_SESSION_KEY",
+    "AsyncDatabaseConfig",
     "CommitMode",
     "DatabaseConfig",
+    "SyncDatabaseConfig",
 )
 
 
@@ -143,3 +147,154 @@ class DatabaseConfig:
                 await ensure_async_(self.config.close_pool)()
 
         return shutdown
+
+    def get_request_session(self, request: "Request") -> "Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]":
+        """Get a database session from request state.
+
+        Args:
+            request: The Starlette request object.
+
+        Returns:
+            Database session instance.
+
+        Raises:
+            RuntimeError: If session is not found in request state.
+        """
+        session = getattr(request.state, self.session_key, None)
+        if session is None:
+            msg = f"Database session '{self.session_key}' not found in request state. Ensure middleware is enabled."
+            raise RuntimeError(msg)
+        return session
+
+    def get_request_connection(self, request: "Request") -> "ConnectionT":
+        """Get a database connection from request state.
+
+        Args:
+            request: The Starlette request object.
+
+        Returns:
+            Database connection instance.
+
+        Raises:
+            RuntimeError: If connection is not found in request state.
+        """
+        connection = getattr(request.state, self.connection_key, None)
+        if connection is None:
+            msg = (
+                f"Database connection '{self.connection_key}' not found in request state. Ensure middleware is enabled."
+            )
+            raise RuntimeError(msg)
+        return connection
+
+    def get_request_pool(self, request: "Request") -> "PoolT":
+        """Get a database pool from app state.
+
+        Args:
+            request: The Starlette request object.
+
+        Returns:
+            Database pool instance.
+
+        Raises:
+            RuntimeError: If pool is not found in app state.
+        """
+        pool = getattr(request.app.state, self.pool_key, None)
+        if pool is None:
+            msg = f"Database pool '{self.pool_key}' not found in app state. Ensure app is properly initialized."
+            raise RuntimeError(msg)
+        return pool
+
+
+# Add passthrough methods to both specialized classes for convenience
+class SyncDatabaseConfig(DatabaseConfig):
+    """Sync-specific DatabaseConfig with better typing for get_request_session."""
+
+    def get_request_session(self, request: "Request") -> "SyncDriverAdapterBase":
+        """Get a sync database session from request state.
+
+        Args:
+            request: The Starlette request object.
+
+        Returns:
+            Sync database session instance.
+
+        Raises:
+            RuntimeError: If session is not found in request state.
+        """
+        session = super().get_request_session(request)
+        return cast("SyncDriverAdapterBase", session)
+
+    def get_request_connection(self, request: "Request") -> "ConnectionT":
+        """Get a sync database connection from request state.
+
+        Args:
+            request: The Starlette request object.
+
+        Returns:
+            Sync database connection instance.
+
+        Raises:
+            RuntimeError: If connection is not found in request state.
+        """
+        return super().get_request_connection(request)
+
+    def get_request_pool(self, request: "Request") -> "PoolT":
+        """Get a sync database pool from app state.
+
+        Args:
+            request: The Starlette request object.
+
+        Returns:
+            Sync database pool instance.
+
+        Raises:
+            RuntimeError: If pool is not found in app state.
+        """
+        return super().get_request_pool(request)
+
+
+class AsyncDatabaseConfig(DatabaseConfig):
+    """Async-specific DatabaseConfig with better typing for get_request_session."""
+
+    def get_request_session(self, request: "Request") -> "AsyncDriverAdapterBase":
+        """Get an async database session from request state.
+
+        Args:
+            request: The Starlette request object.
+
+        Returns:
+            Async database session instance.
+
+        Raises:
+            RuntimeError: If session is not found in request state.
+        """
+        session = super().get_request_session(request)
+        return cast("AsyncDriverAdapterBase", session)
+
+    def get_request_connection(self, request: "Request") -> "ConnectionT":
+        """Get an async database connection from request state.
+
+        Args:
+            request: The Starlette request object.
+
+        Returns:
+            Async database connection instance.
+
+        Raises:
+            RuntimeError: If connection is not found in request state.
+        """
+        return super().get_request_connection(request)
+
+    def get_request_pool(self, request: "Request") -> "PoolT":
+        """Get an async database pool from app state.
+
+        Args:
+            request: The Starlette request object.
+
+        Returns:
+            Async database pool instance.
+
+        Raises:
+            RuntimeError: If pool is not found in app state.
+        """
+        return super().get_request_pool(request)

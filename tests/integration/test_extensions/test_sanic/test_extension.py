@@ -28,12 +28,14 @@ def sqlspec_extension(database_config: DatabaseConfig) -> SQLSpec:
 def sanic_app(sqlspec_extension: SQLSpec, database_config: DatabaseConfig):
     """Create a Sanic application with SQLSpec configured."""
     try:
+        import uuid
+
         from sanic import Sanic
         from sanic.response import json
     except ImportError:
         pytest.skip("Sanic not available")
 
-    app = Sanic("test_app")
+    app = Sanic(f"test_app_{uuid.uuid4().hex[:8]}")
 
     # Initialize SQLSpec with the app
     sqlspec_extension.init_app(app)
@@ -90,7 +92,7 @@ def test_provide_session_context_manager(sqlspec_extension: SQLSpec, sqlite_conf
         async with sqlspec_extension.provide_session(sqlite_config) as session:
             assert session is not None
             # Test that we can execute a simple query
-            result = await session.execute("SELECT 1 as test")
+            result = session.execute("SELECT 1 as test")
             assert result is not None
 
     import asyncio
@@ -126,9 +128,11 @@ def test_multiple_database_configs():
     sqlspec = SQLSpec(config=[config1, config2])
 
     try:
+        import uuid
+
         from sanic import Sanic
 
-        app = Sanic("test_app")
+        app = Sanic(f"test_app_{uuid.uuid4().hex[:8]}")
         sqlspec.init_app(app)
 
         assert len(sqlspec.config) == 2

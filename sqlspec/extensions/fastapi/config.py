@@ -1,91 +1,57 @@
 """Configuration classes for SQLSpec FastAPI integration."""
 
-import contextlib
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING
 
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.starlette.config import (
+    DEFAULT_COMMIT_MODE,
+    DEFAULT_CONNECTION_KEY,
+    DEFAULT_POOL_KEY,
+    DEFAULT_SESSION_KEY,
+)
+from sqlspec.extensions.starlette.config import AsyncDatabaseConfig as StarletteAsyncConfig
+from sqlspec.extensions.starlette.config import DatabaseConfig as StarletteConfig
+from sqlspec.extensions.starlette.config import SyncDatabaseConfig as StarletteSyncConfig
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable
-
     from fastapi import FastAPI
-
-    from sqlspec.config import AsyncConfigT, DriverT, SyncConfigT
-    from sqlspec.typing import ConnectionT, PoolT
-
-
-CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
-DEFAULT_COMMIT_MODE: CommitMode = "manual"
-DEFAULT_CONNECTION_KEY = "db_connection"
-DEFAULT_POOL_KEY = "db_pool"
-DEFAULT_SESSION_KEY = "db_session"
 
 __all__ = (
     "DEFAULT_COMMIT_MODE",
     "DEFAULT_CONNECTION_KEY",
     "DEFAULT_POOL_KEY",
     "DEFAULT_SESSION_KEY",
+    "AsyncDatabaseConfig",
     "CommitMode",
     "DatabaseConfig",
+    "SyncDatabaseConfig",
 )
 
+# Re-export Starlette types with FastAPI-compatible typing
+from sqlspec.extensions.starlette.config import CommitMode
 
-@dataclass
-class DatabaseConfig:
-    """Configuration for SQLSpec database integration with FastAPI applications."""
 
-    config: "Union[SyncConfigT, AsyncConfigT]" = field()  # type: ignore[valid-type]   # pyright: ignore[reportGeneralTypeIssues]
-    connection_key: str = field(default=DEFAULT_CONNECTION_KEY)
-    pool_key: str = field(default=DEFAULT_POOL_KEY)
-    session_key: str = field(default=DEFAULT_SESSION_KEY)
-    commit_mode: "CommitMode" = field(default=DEFAULT_COMMIT_MODE)
-    extra_commit_statuses: "Optional[set[int]]" = field(default=None)
-    extra_rollback_statuses: "Optional[set[int]]" = field(default=None)
-    enable_middleware: bool = field(default=True)
+class DatabaseConfig(StarletteConfig):
+    """Configuration for SQLSpec database integration with FastAPI applications.
 
-    # Generated providers and dependencies
-    connection_provider: "Optional[Callable[[], AsyncGenerator[ConnectionT, None]]]" = field(
-        init=False, repr=False, hash=False, default=None
-    )
-    pool_provider: "Optional[Callable[[], Awaitable[PoolT]]]" = field(init=False, repr=False, hash=False, default=None)
-    session_provider: "Optional[Callable[[ConnectionT], AsyncGenerator[DriverT, None]]]" = field(
-        init=False, repr=False, hash=False, default=None
-    )
+    FastAPI is built on Starlette, so this configuration inherits all functionality
+    from the Starlette configuration. The only differences are type hints for FastAPI
+    Request objects and middleware imports.
+    """
 
-    def __post_init__(self) -> None:
-        """Initialize providers after object creation."""
-        if not self.config.supports_connection_pooling and self.pool_key == DEFAULT_POOL_KEY:  # type: ignore[union-attr,unused-ignore]
-            self.pool_key = f"_{self.pool_key}_{id(self.config)}"
-
-        # Validate commit mode
-        if self.commit_mode not in {"manual", "autocommit", "autocommit_include_redirect"}:
-            msg = f"Invalid commit mode: {self.commit_mode}"
-            raise ImproperConfigurationError(detail=msg)
-
-        # Validate status code sets
-        if (
-            self.extra_commit_statuses
-            and self.extra_rollback_statuses
-            and self.extra_commit_statuses & self.extra_rollback_statuses
-        ):
-            msg = "Extra rollback statuses and commit statuses must not share any status codes"
-            raise ImproperConfigurationError(msg)
-
-    def init_app(self, app: "FastAPI") -> None:
+    def init_app(self, app: "FastAPI") -> None:  # pyright: ignore
         """Initialize SQLSpec configuration for FastAPI application.
 
         Args:
             app: The FastAPI application instance.
         """
         from sqlspec.extensions.fastapi._middleware import SessionMiddleware
-        from sqlspec.extensions.fastapi._providers import (
+        from sqlspec.extensions.starlette._providers import (
             create_connection_provider,
             create_pool_provider,
             create_session_provider,
         )
 
-        # Create providers
+        # Create providers using Starlette providers (FastAPI is compatible)
         self.pool_provider = create_pool_provider(self.config, self.pool_key)
         self.connection_provider = create_connection_provider(self.config, self.pool_key, self.connection_key)
         self.session_provider = create_session_provider(self.config, self.connection_key)
@@ -100,43 +66,30 @@ class DatabaseConfig:
                 extra_rollback_statuses=self.extra_rollback_statuses,
             )
 
-        # Add event handlers
-        app.add_event_handler("startup", self._startup_handler(app))
-        app.add_event_handler("shutdown", self._shutdown_handler(app))
+        # Add event handlers - delegate to parent logic but cast FastAPI to Starlette
+        super().init_app(app)  # type: ignore[arg-type]
 
-    def _startup_handler(self, app: "FastAPI") -> "Callable[[], Awaitable[None]]":
-        """Create startup handler for database pool initialization.
 
-        Args:
-            app: The FastAPI application instance.
+# Add typed subclasses for better developer experience
+class SyncDatabaseConfig(StarletteSyncConfig):
+    """Sync-specific DatabaseConfig with FastAPI-compatible type hints."""
 
-        Returns:
-            Startup handler function.
-        """
-
-        async def startup() -> None:
-            from sqlspec.utils.sync_tools import ensure_async_
-
-            db_pool = await ensure_async_(self.config.create_pool)()
-            app.state.__dict__[self.pool_key] = db_pool
-
-        return startup
-
-    def _shutdown_handler(self, app: "FastAPI") -> "Callable[[], Awaitable[None]]":
-        """Create shutdown handler for database pool cleanup.
+    def init_app(self, app: "FastAPI") -> None:  # pyright: ignore
+        """Initialize SQLSpec configuration for FastAPI application.
 
         Args:
             app: The FastAPI application instance.
-
-        Returns:
-            Shutdown handler function.
         """
+        DatabaseConfig.init_app(self, app)  # pyright: ignore
 
-        async def shutdown() -> None:
-            from sqlspec.utils.sync_tools import ensure_async_
 
-            app.state.__dict__.pop(self.pool_key, None)
-            with contextlib.suppress(Exception):
-                await ensure_async_(self.config.close_pool)()
+class AsyncDatabaseConfig(StarletteAsyncConfig):
+    """Async-specific DatabaseConfig with FastAPI-compatible type hints."""
 
-        return shutdown
+    def init_app(self, app: "FastAPI") -> None:  # pyright: ignore
+        """Initialize SQLSpec configuration for FastAPI application.
+
+        Args:
+            app: The FastAPI application instance.
+        """
+        DatabaseConfig.init_app(self, app)  # pyright: ignore

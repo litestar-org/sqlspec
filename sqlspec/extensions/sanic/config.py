@@ -26,8 +26,10 @@ __all__ = (
     "DEFAULT_CONNECTION_KEY",
     "DEFAULT_POOL_KEY",
     "DEFAULT_SESSION_KEY",
+    "AsyncDatabaseConfig",
     "CommitMode",
     "DatabaseConfig",
+    "SyncDatabaseConfig",
 )
 
 
@@ -99,12 +101,15 @@ class DatabaseConfig:
 
         # Add middleware if enabled
         if self.enable_middleware:
-            app.middleware("request")(self._before_request_middleware)
-            app.middleware("response")(self._after_response_middleware)
+            from sqlspec.extensions.sanic._middleware import SessionMiddleware
+
+            middleware = SessionMiddleware(self)
+            app.middleware("request")(middleware.before_request)
+            app.middleware("response")(middleware.after_response)
 
         # Add startup and shutdown listeners
-        app.add_listener(self._startup_handler(app), "before_server_start")
-        app.add_listener(self._shutdown_handler(app), "after_server_stop")
+        app.listener("before_server_start")(self._startup_handler(app))
+        app.listener("after_server_stop")(self._shutdown_handler(app))
 
     def _startup_handler(self, app: "Sanic") -> "Callable[[Sanic, Any], Awaitable[None]]":
         """Create startup handler for database pool initialization.
@@ -155,74 +160,11 @@ class DatabaseConfig:
 
         return shutdown
 
-    async def _before_request_middleware(self, request: Any) -> None:
-        """Set up database connection before request processing.
 
-        Args:
-            request: The Sanic request object.
-        """
-        # Sanic handles this automatically through dependency injection
-        # Connection will be created when first accessed
+# Add typed subclasses for better developer experience
+class SyncDatabaseConfig(DatabaseConfig):
+    """Sync-specific DatabaseConfig with better typing for Sanic applications."""
 
-    async def _after_response_middleware(self, request: Any, response: Any) -> None:
-        """Handle transaction commit/rollback after response processing.
 
-        Args:
-            request: The Sanic request object.
-            response: The Sanic response object.
-        """
-        if self.commit_mode == "manual":
-            return
-
-        # Get connection from request context if it exists
-        connection = getattr(request.ctx, self.connection_key, None)
-        if connection is None:
-            return
-
-        try:
-            should_commit = self._should_commit_transaction(response.status)
-
-            if should_commit and hasattr(connection, "commit") and callable(connection.commit):
-                await connection.commit()
-            elif hasattr(connection, "rollback") and callable(connection.rollback):
-                await connection.rollback()
-        except Exception:
-            # Always try to rollback on exception
-            if hasattr(connection, "rollback") and callable(connection.rollback):
-                with contextlib.suppress(Exception):
-                    await connection.rollback()
-        finally:
-            # Clean up connection
-            if hasattr(connection, "close") and callable(connection.close):
-                with contextlib.suppress(Exception):
-                    await connection.close()
-            if hasattr(request.ctx, self.connection_key):
-                delattr(request.ctx, self.connection_key)
-
-    def _should_commit_transaction(self, status_code: int) -> bool:
-        """Determine if transaction should be committed based on status code.
-
-        Args:
-            status_code: HTTP response status code.
-
-        Returns:
-            True if transaction should be committed, False otherwise.
-        """
-        http_ok = 200
-        http_multiple_choices = 300
-        http_bad_request = 400
-
-        should_commit = False
-
-        if self.commit_mode == "autocommit":
-            should_commit = http_ok <= status_code < http_multiple_choices
-        elif self.commit_mode == "autocommit_include_redirect":
-            should_commit = http_ok <= status_code < http_bad_request
-
-        # Apply extra status overrides
-        if self.extra_commit_statuses and status_code in self.extra_commit_statuses:
-            should_commit = True
-        elif self.extra_rollback_statuses and status_code in self.extra_rollback_statuses:
-            should_commit = False
-
-        return should_commit
+class AsyncDatabaseConfig(DatabaseConfig):
+    """Async-specific DatabaseConfig with better typing for Sanic applications."""

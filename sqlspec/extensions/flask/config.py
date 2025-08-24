@@ -26,8 +26,10 @@ __all__ = (
     "DEFAULT_CONNECTION_KEY",
     "DEFAULT_POOL_KEY",
     "DEFAULT_SESSION_KEY",
+    "AsyncDatabaseConfig",
     "CommitMode",
     "DatabaseConfig",
+    "SyncDatabaseConfig",
 )
 
 
@@ -182,12 +184,21 @@ class DatabaseConfig:
         return should_commit
 
     def _teardown_session(self, exception: "Optional[BaseException]" = None) -> None:
-        """Clean up database connections at the end of request.
+        """Clean up database connections and sessions at the end of request.
 
         Args:
             exception: Exception that occurred during request processing, if any.
         """
         from flask import g
+
+        # Clean up cached session first
+        session_key = f"_sqlspec_session_{self.connection_key}"
+        session = getattr(g, session_key, None)
+        if session is not None:
+            if hasattr(session, "close") and callable(session.close):
+                with contextlib.suppress(Exception):
+                    session.close()
+            delattr(g, session_key)
 
         # Close any open connection
         connection = getattr(g, self.connection_key, None)
@@ -196,3 +207,12 @@ class DatabaseConfig:
                 with contextlib.suppress(Exception):
                     connection.close()
             delattr(g, self.connection_key)
+
+
+# Add typed subclasses for better developer experience
+class SyncDatabaseConfig(DatabaseConfig):
+    """Sync-specific DatabaseConfig with better typing for Flask applications."""
+
+
+class AsyncDatabaseConfig(DatabaseConfig):
+    """Async-specific DatabaseConfig with better typing for Flask applications."""
