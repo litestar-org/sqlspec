@@ -54,11 +54,7 @@ async def session_store(bigquery_config: BigQueryConfig) -> SQLSpecSessionStore:
 @pytest.fixture
 def session_backend_config() -> SQLSpecSessionConfig:
     """Create session backend configuration."""
-    return SQLSpecSessionConfig(
-        key="bigquery-session",
-        max_age=3600,
-        table_name="litestar_sessions",
-    )
+    return SQLSpecSessionConfig(key="bigquery-session", max_age=3600, table_name="litestar_sessions")
 
 
 @pytest.fixture
@@ -126,11 +122,7 @@ async def test_bigquery_session_basic_operations(
         request.session.clear()
         return {"status": "session cleared"}
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="bigquery-session",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="bigquery-session", max_age=3600)
 
     app = Litestar(
         route_handlers=[set_session, get_session, clear_session],
@@ -201,11 +193,7 @@ async def test_bigquery_session_complex_data_types(
             "first_query": analytics.get("queries", [{}])[0] if analytics.get("queries") else None,
         }
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="bigquery-analytics",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="bigquery-analytics", max_age=3600)
 
     app = Litestar(
         route_handlers=[save_analytics, load_analytics],
@@ -266,11 +254,7 @@ async def test_bigquery_session_large_json_handling(
             "segments_count": len(large_data.get("analytics", {}).get("segments", {})),
         }
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="bigquery-large",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="bigquery-large", max_age=3600)
 
     app = Litestar(
         route_handlers=[save_large_session, load_large_session],
@@ -319,9 +303,7 @@ async def test_bigquery_session_expiration(session_store: SQLSpecSessionStore) -
     )
 
     app = Litestar(
-        route_handlers=[set_data, get_data],
-        middleware=[session_config.middleware],
-        stores={"sessions": session_store},
+        route_handlers=[set_data, get_data], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
     async with AsyncTestClient(app=app) as client:
@@ -355,9 +337,7 @@ async def test_bigquery_session_cleanup(session_store: SQLSpecSessionStore) -> N
     for i in range(3):
         session_id = f"bigquery-perm-{i}"
         perm_sessions.append(session_id)
-        await session_store.set(
-            session_id, {"query": f"SELECT * FROM table_{i}", "type": "permanent"}, expires_in=3600
-        )
+        await session_store.set(session_id, {"query": f"SELECT * FROM table_{i}", "type": "permanent"}, expires_in=3600)
 
     # Wait for temporary sessions to expire
     await asyncio.sleep(2)

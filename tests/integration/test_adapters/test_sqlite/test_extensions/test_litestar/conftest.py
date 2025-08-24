@@ -1,8 +1,8 @@
 """Shared fixtures for Litestar extension tests with SQLite."""
 
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import pytest
 
@@ -92,7 +92,7 @@ def sqlite_migration_config_mixed(request: pytest.FixtureRequest) -> Generator[S
 @pytest.fixture
 def session_store_default(sqlite_migration_config: SqliteConfig) -> SQLSpecSessionStore:
     """Create a session store with default table name."""
-    
+
     # Apply migrations to create the session table
     @async_
     def apply_migrations():
@@ -125,7 +125,7 @@ def session_backend_default(session_backend_config_default: SQLSpecSessionConfig
 @pytest.fixture
 def session_store_custom(sqlite_migration_config_with_dict: SqliteConfig) -> SQLSpecSessionStore:
     """Create a session store with custom table name."""
-    
+
     # Apply migrations to create the session table with custom name
     @async_
     def apply_migrations():
@@ -158,7 +158,7 @@ def session_backend_custom(session_backend_config_custom: SQLSpecSessionConfig) 
 @pytest.fixture
 def session_store(sqlite_migration_config: SqliteConfig) -> SQLSpecSessionStore:
     """Create a session store using migrated config."""
-    
+
     # Apply migrations to create the session table
     @async_
     def apply_migrations():

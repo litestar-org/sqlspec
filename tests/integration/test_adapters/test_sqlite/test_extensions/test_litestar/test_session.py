@@ -12,7 +12,6 @@ from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
 from litestar.testing import AsyncTestClient
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.extensions.litestar import SQLSpec
 from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
 from sqlspec.extensions.litestar.store import SQLSpecSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
@@ -42,6 +41,7 @@ def sqlite_config() -> SqliteConfig:
 @pytest.fixture
 async def session_store(sqlite_config: SqliteConfig) -> SQLSpecSessionStore:
     """Create a session store with migrations applied."""
+
     # Apply migrations synchronously (SQLite uses sync commands)
     @async_
     def apply_migrations():
@@ -135,11 +135,7 @@ async def test_sqlite_session_basic_operations(
         request.session.clear()
         return {"status": "session cleared"}
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="sqlite-session",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="sqlite-session", max_age=3600)
 
     # Create app with session store registered
     app = Litestar(
@@ -197,16 +193,10 @@ async def test_sqlite_session_persistence(
         request.session["history"] = history
         return {"count": count, "history": history}
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="sqlite-persistence",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="sqlite-persistence", max_age=3600)
 
     app = Litestar(
-        route_handlers=[increment_counter],
-        middleware=[session_config.middleware],
-        stores={"sessions": session_store},
+        route_handlers=[increment_counter], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
     async with AsyncTestClient(app=app) as client:
@@ -227,7 +217,7 @@ async def test_sqlite_session_expiration() -> None:
         migration_dir.mkdir(parents=True, exist_ok=True)
 
         # Create configuration
-        config = SqliteConfig(
+        SqliteConfig(
             pool_config={"database": str(db_path)},
             migration_config={
                 "script_location": str(migration_dir),
@@ -255,7 +245,7 @@ async def test_sqlite_session_expiration() -> None:
                 migration_config.close_pool()
 
         await apply_migrations()
-        
+
         # Give a small delay to ensure the file lock is released
         await asyncio.sleep(0.1)
 
@@ -301,16 +291,10 @@ async def test_sqlite_concurrent_sessions(
     async def get_user(request: Any) -> dict:
         return {"user_id": request.session.get("user_id"), "db": request.session.get("db")}
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="sqlite-concurrent",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="sqlite-concurrent", max_age=3600)
 
     app = Litestar(
-        route_handlers=[set_user, get_user],
-        middleware=[session_config.middleware],
-        stores={"sessions": session_store},
+        route_handlers=[set_user, get_user], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
     # Test with multiple concurrent clients
@@ -437,11 +421,7 @@ async def test_sqlite_session_complex_data(
             "empty_list": request.session.get("empty_list"),
         }
 
-    session_config = ServerSideSessionConfig(
-        store=session_store,
-        key="sqlite-complex",
-        max_age=3600,
-    )
+    session_config = ServerSideSessionConfig(store=session_store, key="sqlite-complex", max_age=3600)
 
     app = Litestar(
         route_handlers=[save_complex, load_complex],
@@ -509,11 +489,7 @@ async def test_sqlite_store_operations() -> None:
 
         # Test basic store operations
         session_id = "test-session-sqlite"
-        test_data = {
-            "user_id": 789,
-            "preferences": {"theme": "blue", "lang": "es"},
-            "tags": ["admin", "user"],
-        }
+        test_data = {"user_id": 789, "preferences": {"theme": "blue", "lang": "es"}, "tags": ["admin", "user"]}
 
         # Set data
         await session_store.set(session_id, test_data, expires_in=3600)

@@ -38,7 +38,9 @@ async def store(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionStore:
             expires TIMESTAMP WITH TIME ZONE NOT NULL,
             created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
         )""")
-        await driver.execute_script("CREATE INDEX IF NOT EXISTS idx_test_store_asyncpg_expires ON test_store_asyncpg(expires)")
+        await driver.execute_script(
+            "CREATE INDEX IF NOT EXISTS idx_test_store_asyncpg_expires ON test_store_asyncpg(expires)"
+        )
 
     return SQLSpecSessionStore(
         config=asyncpg_config,

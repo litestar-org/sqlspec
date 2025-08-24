@@ -169,7 +169,7 @@ def test_sqlite_store_default_values(store: SQLSpecSessionStore) -> None:
 
 async def test_sqlite_store_bulk_operations(store: SQLSpecSessionStore) -> None:
     """Test bulk operations on the SQLite store."""
-    
+
     @async_
     async def run_bulk_test():
         # Create multiple entries efficiently

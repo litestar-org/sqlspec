@@ -109,10 +109,12 @@ class SQLSpecSessionStore(Store):
                     )
                     .values(session_id, data, expires_at_value, current_time_value)
                     .on_conflict(self._session_id_column)
-                    .do_update(**{
-                        self._data_column: sql.raw("EXCLUDED." + self._data_column),
-                        self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
-                    })
+                    .do_update(
+                        **{
+                            self._data_column: sql.raw("EXCLUDED." + self._data_column),
+                            self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
+                        }
+                    )
                 )
             ]
 
@@ -125,10 +127,12 @@ class SQLSpecSessionStore(Store):
                         self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column
                     )
                     .values(session_id, data, expires_at_value, current_time_value)
-                    .on_duplicate_key_update(**{
-                        self._data_column: sql.raw(f"VALUES({self._data_column})"),
-                        self._expires_at_column: sql.raw(f"VALUES({self._expires_at_column})"),
-                    })
+                    .on_duplicate_key_update(
+                        **{
+                            self._data_column: sql.raw(f"VALUES({self._data_column})"),
+                            self._expires_at_column: sql.raw(f"VALUES({self._expires_at_column})"),
+                        }
+                    )
                 )
             ]
 
@@ -142,10 +146,12 @@ class SQLSpecSessionStore(Store):
                     )
                     .values(session_id, data, expires_at_value, current_time_value)
                     .on_conflict(self._session_id_column)
-                    .do_update(**{
-                        self._data_column: sql.raw("EXCLUDED." + self._data_column),
-                        self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
-                    })
+                    .do_update(
+                        **{
+                            self._data_column: sql.raw("EXCLUDED." + self._data_column),
+                            self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
+                        }
+                    )
                 )
             ]
 
@@ -163,10 +169,12 @@ class SQLSpecSessionStore(Store):
                     alias="s",
                 )
                 .on(f"t.{self._session_id_column} = s.{self._session_id_column}")
-                .when_matched_then_update({
-                    self._data_column: f"s.{self._data_column}",
-                    self._expires_at_column: f"s.{self._expires_at_column}",
-                })
+                .when_matched_then_update(
+                    {
+                        self._data_column: f"s.{self._data_column}",
+                        self._expires_at_column: f"s.{self._expires_at_column}",
+                    }
+                )
                 .when_not_matched_then_insert(
                     columns=[
                         self._session_id_column,
