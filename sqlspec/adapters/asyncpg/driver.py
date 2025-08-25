@@ -4,6 +4,7 @@ Provides async PostgreSQL connectivity with parameter processing, resource manag
 PostgreSQL COPY operation support, and transaction management.
 """
 
+import datetime
 import re
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -36,7 +37,7 @@ asyncpg_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={},
+        type_coercion_map={datetime.datetime: lambda x: x, datetime.date: lambda x: x, datetime.time: lambda x: x},
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,

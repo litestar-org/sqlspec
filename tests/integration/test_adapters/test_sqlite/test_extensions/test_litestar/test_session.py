@@ -2,6 +2,7 @@
 
 import asyncio
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,8 @@ from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
 from litestar.testing import AsyncTestClient
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
+
+# Removed unused session backend imports
 from sqlspec.extensions.litestar.store import SQLSpecSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.sync_tools import async_
@@ -21,26 +23,39 @@ pytestmark = [pytest.mark.sqlite, pytest.mark.integration, pytest.mark.xdist_gro
 
 
 @pytest.fixture
-def sqlite_config() -> SqliteConfig:
-    """Create SQLite configuration with migration support."""
+def sqlite_config(request: pytest.FixtureRequest) -> Generator[SqliteConfig, None, None]:
+    """Create SQLite configuration with migration support and test isolation."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        db_path = Path(temp_dir) / "sessions.db"
+        # Create unique names for test isolation (based on advanced-alchemy pattern)
+        worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
+        table_suffix = f"{worker_id}_{abs(hash(request.node.nodeid)) % 100000}"
+        migration_table = f"sqlspec_migrations_sqlite_{table_suffix}"
+        session_table = f"litestar_sessions_sqlite_{table_suffix}"
+
+        db_path = Path(temp_dir) / f"sessions_{table_suffix}.db"
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
-        return SqliteConfig(
+        config = SqliteConfig(
             pool_config={"database": str(db_path)},
             migration_config={
                 "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations",
-                "include_extensions": ["litestar"],  # Include Litestar migrations
+                "version_table_name": migration_table,
+                "include_extensions": [{"name": "litestar", "session_table": session_table}],
             },
         )
+        yield config
+        # Cleanup: close pool
+        try:
+            if config.pool_instance:
+                config.close_pool()
+        except Exception:
+            pass  # Ignore cleanup errors
 
 
 @pytest.fixture
 async def session_store(sqlite_config: SqliteConfig) -> SQLSpecSessionStore:
-    """Create a session store with migrations applied."""
+    """Create a session store with migrations applied using unique table names."""
 
     # Apply migrations synchronously (SQLite uses sync commands)
     @async_
@@ -52,23 +67,14 @@ async def session_store(sqlite_config: SqliteConfig) -> SQLSpecSessionStore:
     # Run migrations
     await apply_migrations()
 
-    return SQLSpecSessionStore(sqlite_config, table_name="litestar_sessions")
-
-
-@pytest.fixture
-def session_backend_config() -> SQLSpecSessionConfig:
-    """Create session backend configuration."""
-    return SQLSpecSessionConfig(
-        key="test-session",
-        max_age=3600,  # 1 hour
-        table_name="litestar_sessions",
+    # Extract the unique session table name from config context
+    session_table_name = sqlite_config.migration_config.get("context", {}).get(
+        "session_table_name", "litestar_sessions"
     )
+    return SQLSpecSessionStore(sqlite_config, table_name=session_table_name)
 
 
-@pytest.fixture
-def session_backend(session_backend_config: SQLSpecSessionConfig) -> SQLSpecSessionBackend:
-    """Create session backend instance."""
-    return SQLSpecSessionBackend(config=session_backend_config)
+# Removed unused session backend fixtures - using store directly
 
 
 async def test_sqlite_migration_creates_correct_table(sqlite_config: SqliteConfig) -> None:
@@ -104,9 +110,7 @@ async def test_sqlite_migration_creates_correct_table(sqlite_config: SqliteConfi
         assert "created_at" in columns
 
 
-async def test_sqlite_session_basic_operations(
-    session_backend: SQLSpecSessionBackend, session_store: SQLSpecSessionStore
-) -> None:
+async def test_sqlite_session_basic_operations(session_store: SQLSpecSessionStore) -> None:
     """Test basic session operations with SQLite backend."""
 
     @get("/set-session")
@@ -135,7 +139,7 @@ async def test_sqlite_session_basic_operations(
         request.session.clear()
         return {"status": "session cleared"}
 
-    session_config = ServerSideSessionConfig(store=session_store, key="sqlite-session", max_age=3600)
+    session_config = ServerSideSessionConfig(store="sessions", key="sqlite-session", max_age=3600)
 
     # Create app with session store registered
     app = Litestar(
@@ -178,9 +182,7 @@ async def test_sqlite_session_basic_operations(
         assert response.json() == {"user_id": None, "username": None, "preferences": None}
 
 
-async def test_sqlite_session_persistence(
-    session_backend: SQLSpecSessionBackend, session_store: SQLSpecSessionStore
-) -> None:
+async def test_sqlite_session_persistence(session_store: SQLSpecSessionStore) -> None:
     """Test that sessions persist across requests."""
 
     @get("/counter")
@@ -193,7 +195,7 @@ async def test_sqlite_session_persistence(
         request.session["history"] = history
         return {"count": count, "history": history}
 
-    session_config = ServerSideSessionConfig(store=session_store, key="sqlite-persistence", max_age=3600)
+    session_config = ServerSideSessionConfig(store="sessions", key="sqlite-persistence", max_age=3600)
 
     app = Litestar(
         route_handlers=[increment_counter], middleware=[session_config.middleware], stores={"sessions": session_store}
@@ -222,7 +224,7 @@ async def test_sqlite_session_expiration() -> None:
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": "sqlspec_migrations",
-                "include_extensions": ["litestar"],
+                "include_extensions": [{"name": "litestar", "session_table": session_table}],
             },
         )
 
@@ -234,7 +236,7 @@ async def test_sqlite_session_expiration() -> None:
                 migration_config={
                     "script_location": str(migration_dir),
                     "version_table_name": "sqlspec_migrations",
-                    "include_extensions": ["litestar"],
+                    "include_extensions": [{"name": "litestar", "session_table": session_table}],
                 },
             )
             commands = SyncMigrationCommands(migration_config)
@@ -276,9 +278,7 @@ async def test_sqlite_session_expiration() -> None:
             store_config.close_pool()
 
 
-async def test_sqlite_concurrent_sessions(
-    session_backend: SQLSpecSessionBackend, session_store: SQLSpecSessionStore
-) -> None:
+async def test_sqlite_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
     """Test handling of concurrent sessions."""
 
     @get("/user/{user_id:int}")
@@ -291,7 +291,7 @@ async def test_sqlite_concurrent_sessions(
     async def get_user(request: Any) -> dict:
         return {"user_id": request.session.get("user_id"), "db": request.session.get("db")}
 
-    session_config = ServerSideSessionConfig(store=session_store, key="sqlite-concurrent", max_age=3600)
+    session_config = ServerSideSessionConfig(store="sessions", key="sqlite-concurrent", max_age=3600)
 
     app = Litestar(
         route_handlers=[set_user, get_user], middleware=[session_config.middleware], stores={"sessions": session_store}
@@ -340,7 +340,7 @@ async def test_sqlite_session_cleanup() -> None:
                 migration_config={
                     "script_location": str(migration_dir),
                     "version_table_name": "sqlspec_migrations",
-                    "include_extensions": ["litestar"],
+                    "include_extensions": [{"name": "litestar", "session_table": session_table}],
                 },
             )
             commands = SyncMigrationCommands(migration_config)
@@ -392,9 +392,7 @@ async def test_sqlite_session_cleanup() -> None:
             store_config.close_pool()
 
 
-async def test_sqlite_session_complex_data(
-    session_backend: SQLSpecSessionBackend, session_store: SQLSpecSessionStore
-) -> None:
+async def test_sqlite_session_complex_data(session_store: SQLSpecSessionStore) -> None:
     """Test storing complex data structures in SQLite sessions."""
 
     @post("/save-complex")
@@ -421,7 +419,7 @@ async def test_sqlite_session_complex_data(
             "empty_list": request.session.get("empty_list"),
         }
 
-    session_config = ServerSideSessionConfig(store=session_store, key="sqlite-complex", max_age=3600)
+    session_config = ServerSideSessionConfig(store="sessions", key="sqlite-complex", max_age=3600)
 
     app = Litestar(
         route_handlers=[save_complex, load_complex],
@@ -471,7 +469,7 @@ async def test_sqlite_store_operations() -> None:
                 migration_config={
                     "script_location": str(migration_dir),
                     "version_table_name": "sqlspec_migrations",
-                    "include_extensions": ["litestar"],
+                    "include_extensions": [{"name": "litestar", "session_table": session_table}],
                 },
             )
             commands = SyncMigrationCommands(migration_config)

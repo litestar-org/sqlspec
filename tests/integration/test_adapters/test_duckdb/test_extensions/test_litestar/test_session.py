@@ -21,8 +21,32 @@ pytestmark = [pytest.mark.duckdb, pytest.mark.integration, pytest.mark.xdist_gro
 
 
 @pytest.fixture
+def duckdb_config_isolated(request: pytest.FixtureRequest) -> DuckDBConfig:
+    """Create DuckDB configuration with migration support and test isolation."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        db_path = Path(temp_dir) / "sessions.duckdb"
+        migration_dir = Path(temp_dir) / "migrations"
+        migration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Get worker ID for table isolation in parallel testing
+        worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
+        table_suffix = f"{worker_id}_{abs(hash(request.node.nodeid)) % 100000}"
+        session_table = f"duckdb_sessions_{table_suffix}"
+        migration_table = f"sqlspec_migrations_duckdb_{table_suffix}"
+
+        return DuckDBConfig(
+            pool_config={"database": str(db_path)},
+            migration_config={
+                "script_location": str(migration_dir),
+                "version_table_name": migration_table,
+                "include_extensions": [{"name": "litestar", "session_table": session_table}],
+            },
+        )
+
+
+@pytest.fixture
 def duckdb_config() -> DuckDBConfig:
-    """Create DuckDB configuration with migration support."""
+    """Create DuckDB configuration with migration support (backward compatibility)."""
     with tempfile.TemporaryDirectory() as temp_dir:
         db_path = Path(temp_dir) / "sessions.db"
         migration_dir = Path(temp_dir) / "migrations"

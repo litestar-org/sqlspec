@@ -141,8 +141,8 @@ async def test_asyncpg_store_expiration(store: SQLSpecSessionStore) -> None:
     await asyncio.sleep(2)
 
     # Should be expired
-    result = await store.get(key, default={"expired": True})
-    assert result == {"expired": True}
+    result = await store.get(key)
+    assert result is None
 
 
 async def test_asyncpg_store_bulk_operations(store: SQLSpecSessionStore) -> None:

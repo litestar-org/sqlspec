@@ -5,6 +5,7 @@ SQL conditions with parameter binding.
 """
 
 from collections.abc import Iterable
+from datetime import date, datetime
 from typing import Any, Optional, cast
 
 from sqlglot import exp
@@ -67,33 +68,53 @@ class Column:
         else:
             self._expression = exp.Column(this=exp.Identifier(this=name))
 
+    def _convert_value(self, value: Any) -> exp.Expression:
+        """Convert a Python value to a SQLGlot expression.
+
+        Special handling for datetime objects to prevent SQLGlot from
+        converting them to TIME_STR_TO_TIME function calls. Datetime
+        objects should be passed as parameters, not converted to SQL functions.
+
+        Args:
+            value: The value to convert
+
+        Returns:
+            A SQLGlot expression representing the value
+        """
+        if isinstance(value, (datetime, date)):
+            # Create a Literal with the datetime value directly
+            # This will be parameterized by the QueryBuilder's _parameterize_expression
+            # Don't use exp.convert() which would create TIME_STR_TO_TIME
+            return exp.Literal(this=value, is_string=False)
+        return exp.convert(value)
+
     def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
         """Equal to (==)."""
         if other is None:
             return ColumnExpression(exp.Is(this=self._expression, expression=exp.Null()))
-        return ColumnExpression(exp.EQ(this=self._expression, expression=exp.convert(other)))
+        return ColumnExpression(exp.EQ(this=self._expression, expression=self._convert_value(other)))
 
     def __ne__(self, other: object) -> ColumnExpression:  # type: ignore[override]
         """Not equal to (!=)."""
         if other is None:
             return ColumnExpression(exp.Not(this=exp.Is(this=self._expression, expression=exp.Null())))
-        return ColumnExpression(exp.NEQ(this=self._expression, expression=exp.convert(other)))
+        return ColumnExpression(exp.NEQ(this=self._expression, expression=self._convert_value(other)))
 
     def __gt__(self, other: Any) -> ColumnExpression:
         """Greater than (>)."""
-        return ColumnExpression(exp.GT(this=self._expression, expression=exp.convert(other)))
+        return ColumnExpression(exp.GT(this=self._expression, expression=self._convert_value(other)))
 
     def __ge__(self, other: Any) -> ColumnExpression:
         """Greater than or equal (>=)."""
-        return ColumnExpression(exp.GTE(this=self._expression, expression=exp.convert(other)))
+        return ColumnExpression(exp.GTE(this=self._expression, expression=self._convert_value(other)))
 
     def __lt__(self, other: Any) -> ColumnExpression:
         """Less than (<)."""
-        return ColumnExpression(exp.LT(this=self._expression, expression=exp.convert(other)))
+        return ColumnExpression(exp.LT(this=self._expression, expression=self._convert_value(other)))
 
     def __le__(self, other: Any) -> ColumnExpression:
         """Less than or equal (<=)."""
-        return ColumnExpression(exp.LTE(this=self._expression, expression=exp.convert(other)))
+        return ColumnExpression(exp.LTE(this=self._expression, expression=self._convert_value(other)))
 
     def __invert__(self) -> ColumnExpression:
         """Apply NOT operator (~)."""
@@ -102,18 +123,20 @@ class Column:
     def like(self, pattern: str, escape: Optional[str] = None) -> ColumnExpression:
         """SQL LIKE pattern matching."""
         if escape:
-            like_expr = exp.Like(this=self._expression, expression=exp.convert(pattern), escape=exp.convert(escape))
+            like_expr = exp.Like(
+                this=self._expression, expression=self._convert_value(pattern), escape=self._convert_value(escape)
+            )
         else:
-            like_expr = exp.Like(this=self._expression, expression=exp.convert(pattern))
+            like_expr = exp.Like(this=self._expression, expression=self._convert_value(pattern))
         return ColumnExpression(like_expr)
 
     def ilike(self, pattern: str) -> ColumnExpression:
         """Case-insensitive LIKE."""
-        return ColumnExpression(exp.ILike(this=self._expression, expression=exp.convert(pattern)))
+        return ColumnExpression(exp.ILike(this=self._expression, expression=self._convert_value(pattern)))
 
     def in_(self, values: Iterable[Any]) -> ColumnExpression:
         """SQL IN clause."""
-        converted_values = [exp.convert(v) for v in values]
+        converted_values = [self._convert_value(v) for v in values]
         return ColumnExpression(exp.In(this=self._expression, expressions=converted_values))
 
     def not_in(self, values: Iterable[Any]) -> ColumnExpression:
@@ -122,7 +145,9 @@ class Column:
 
     def between(self, start: Any, end: Any) -> ColumnExpression:
         """SQL BETWEEN clause."""
-        return ColumnExpression(exp.Between(this=self._expression, low=exp.convert(start), high=exp.convert(end)))
+        return ColumnExpression(
+            exp.Between(this=self._expression, low=self._convert_value(start), high=self._convert_value(end))
+        )
 
     def is_null(self) -> ColumnExpression:
         """SQL IS NULL."""
@@ -142,12 +167,12 @@ class Column:
 
     def any_(self, values: Iterable[Any]) -> ColumnExpression:
         """SQL = ANY(...) clause."""
-        converted_values = [exp.convert(v) for v in values]
+        converted_values = [self._convert_value(v) for v in values]
         return ColumnExpression(exp.EQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
 
     def not_any_(self, values: Iterable[Any]) -> ColumnExpression:
         """SQL <> ANY(...) clause."""
-        converted_values = [exp.convert(v) for v in values]
+        converted_values = [self._convert_value(v) for v in values]
         return ColumnExpression(exp.NEQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
 
     def lower(self) -> "FunctionColumn":
@@ -186,14 +211,14 @@ class Column:
 
     def substring(self, start: int, length: Optional[int] = None) -> "FunctionColumn":
         """SQL SUBSTRING() function."""
-        args = [exp.convert(start)]
+        args = [self._convert_value(start)]
         if length is not None:
-            args.append(exp.convert(length))
+            args.append(self._convert_value(length))
         return FunctionColumn(exp.Substring(this=self._expression, expressions=args))
 
     def coalesce(self, *values: Any) -> "FunctionColumn":
         """SQL COALESCE() function."""
-        expressions = [self._expression] + [exp.convert(v) for v in values]
+        expressions = [self._expression] + [self._convert_value(v) for v in values]
         return FunctionColumn(exp.Coalesce(expressions=expressions))
 
     def cast(self, data_type: str) -> "FunctionColumn":
@@ -272,22 +297,42 @@ class FunctionColumn:
     def __init__(self, expression: exp.Expression) -> None:
         self._expression = expression
 
+    def _convert_value(self, value: Any) -> exp.Expression:
+        """Convert a Python value to a SQLGlot expression.
+
+        Special handling for datetime objects to prevent SQLGlot from
+        converting them to TIME_STR_TO_TIME function calls. Datetime
+        objects should be passed as parameters, not converted to SQL functions.
+
+        Args:
+            value: The value to convert
+
+        Returns:
+            A SQLGlot expression representing the value
+        """
+        if isinstance(value, (datetime, date)):
+            # Create a Literal with the datetime value directly
+            # This will be parameterized by the QueryBuilder's _parameterize_expression
+            # Don't use exp.convert() which would create TIME_STR_TO_TIME
+            return exp.Literal(this=value, is_string=False)
+        return exp.convert(value)
+
     def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
-        return ColumnExpression(exp.EQ(this=self._expression, expression=exp.convert(other)))
+        return ColumnExpression(exp.EQ(this=self._expression, expression=self._convert_value(other)))
 
     def __ne__(self, other: object) -> ColumnExpression:  # type: ignore[override]
-        return ColumnExpression(exp.NEQ(this=self._expression, expression=exp.convert(other)))
+        return ColumnExpression(exp.NEQ(this=self._expression, expression=self._convert_value(other)))
 
     def like(self, pattern: str) -> ColumnExpression:
-        return ColumnExpression(exp.Like(this=self._expression, expression=exp.convert(pattern)))
+        return ColumnExpression(exp.Like(this=self._expression, expression=self._convert_value(pattern)))
 
     def ilike(self, pattern: str) -> ColumnExpression:
         """Case-insensitive LIKE."""
-        return ColumnExpression(exp.ILike(this=self._expression, expression=exp.convert(pattern)))
+        return ColumnExpression(exp.ILike(this=self._expression, expression=self._convert_value(pattern)))
 
     def in_(self, values: Iterable[Any]) -> ColumnExpression:
         """SQL IN clause."""
-        converted_values = [exp.convert(v) for v in values]
+        converted_values = [self._convert_value(v) for v in values]
         return ColumnExpression(exp.In(this=self._expression, expressions=converted_values))
 
     def not_in_(self, values: Iterable[Any]) -> ColumnExpression:
@@ -304,7 +349,9 @@ class FunctionColumn:
 
     def between(self, start: Any, end: Any) -> ColumnExpression:
         """SQL BETWEEN clause."""
-        return ColumnExpression(exp.Between(this=self._expression, low=exp.convert(start), high=exp.convert(end)))
+        return ColumnExpression(
+            exp.Between(this=self._expression, low=self._convert_value(start), high=self._convert_value(end))
+        )
 
     def is_null(self) -> ColumnExpression:
         """SQL IS NULL."""
@@ -316,12 +363,12 @@ class FunctionColumn:
 
     def any_(self, values: Iterable[Any]) -> ColumnExpression:
         """SQL = ANY(...) clause."""
-        converted_values = [exp.convert(v) for v in values]
+        converted_values = [self._convert_value(v) for v in values]
         return ColumnExpression(exp.EQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
 
     def not_any_(self, values: Iterable[Any]) -> ColumnExpression:
         """SQL <> ANY(...) clause."""
-        converted_values = [exp.convert(v) for v in values]
+        converted_values = [self._convert_value(v) for v in values]
         return ColumnExpression(exp.NEQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
 
     def alias(self, alias_name: str) -> exp.Expression:

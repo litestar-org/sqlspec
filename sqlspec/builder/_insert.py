@@ -290,22 +290,69 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         return self.on_conflict(*columns).do_nothing()
 
     def on_duplicate_key_update(self, **kwargs: Any) -> "Insert":
-        """Adds conflict resolution using the ON CONFLICT syntax (cross-database compatible).
+        """Adds MySQL-style ON DUPLICATE KEY UPDATE clause.
 
         Args:
-            **kwargs: Column-value pairs to update on conflict.
+            **kwargs: Column-value pairs to update on duplicate key.
 
         Returns:
             The current builder instance for method chaining.
 
         Note:
-            This method uses PostgreSQL-style ON CONFLICT syntax but SQLGlot will
-            transpile it to the appropriate syntax for each database (MySQL's
-            ON DUPLICATE KEY UPDATE, etc.).
+            This method creates MySQL-specific ON DUPLICATE KEY UPDATE syntax.
+            For PostgreSQL, use on_conflict() instead.
         """
         if not kwargs:
             return self
-        return self.on_conflict().do_update(**kwargs)
+
+        insert_expr = self._get_insert_expression()
+
+        # Create SET expressions for MySQL ON DUPLICATE KEY UPDATE
+        set_expressions = []
+        for col, val in kwargs.items():
+            if hasattr(val, "expression") and hasattr(val, "sql"):
+                # Handle SQL objects (from sql.raw with parameters)
+                expression = getattr(val, "expression", None)
+                if expression is not None and isinstance(expression, exp.Expression):
+                    # Merge parameters from SQL object into builder
+                    if hasattr(val, "parameters"):
+                        sql_parameters = getattr(val, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self.add_parameter(param_value, name=param_name)
+                    value_expr = expression
+                else:
+                    # If expression is None, fall back to parsing the raw SQL
+                    sql_text = getattr(val, "sql", "")
+                    # Merge parameters even when parsing raw SQL
+                    if hasattr(val, "parameters"):
+                        sql_parameters = getattr(val, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self.add_parameter(param_value, name=param_name)
+                    # Check if sql_text is callable (like Expression.sql method)
+                    if callable(sql_text):
+                        sql_text = str(val)
+                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+            elif isinstance(val, exp.Expression):
+                value_expr = val
+            else:
+                # Create parameter for regular values
+                param_name = self._generate_unique_parameter_name(col)
+                _, param_name = self.add_parameter(val, name=param_name)
+                value_expr = exp.Placeholder(this=param_name)
+
+            set_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
+
+        # For MySQL, create ON CONFLICT with duplicate=True flag
+        # This tells SQLGlot to generate ON DUPLICATE KEY UPDATE
+        on_conflict = exp.OnConflict(
+            duplicate=True,  # This flag makes it MySQL-specific
+            action=exp.var("UPDATE"),  # MySQL requires UPDATE action
+            expressions=set_expressions or None,
+        )
+
+        insert_expr.set("conflict", on_conflict)
+
+        return self
 
 
 class ConflictBuilder:

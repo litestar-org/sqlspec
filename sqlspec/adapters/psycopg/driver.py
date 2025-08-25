@@ -14,6 +14,7 @@ PostgreSQL Features:
 - PostgreSQL-specific error handling
 """
 
+import datetime
 import io
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -94,7 +95,12 @@ psycopg_statement_config = StatementConfig(
             ParameterStyle.NAMED_PYFORMAT,
             ParameterStyle.NUMERIC,
         },
-        type_coercion_map={dict: to_json},
+        type_coercion_map={
+            dict: to_json,
+            datetime.datetime: lambda x: x,
+            datetime.date: lambda x: x,
+            datetime.time: lambda x: x,
+        },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,

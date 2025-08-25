@@ -36,6 +36,7 @@ sqlite_statement_config = StatementConfig(
             datetime.datetime: lambda v: v.isoformat(),
             datetime.date: lambda v: v.isoformat(),
             Decimal: str,
+            dict: to_json,
             list: to_json,
         },
         has_native_list_expansion=False,

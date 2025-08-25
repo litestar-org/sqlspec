@@ -458,15 +458,6 @@ class MergeNotMatchedClauseMixin:
                 return False
 
             # If it parses to a Column, Dot (table.column), Identifier, or other SQL constructs
-            if isinstance(parsed, (exp.Column, exp.Dot, exp.Identifier, exp.Anonymous, exp.Func)):
-                return True
-
-            # Check for SQL literals that should be treated as expressions
-            if isinstance(parsed, (exp.Null, exp.CurrentTimestamp, exp.CurrentDate, exp.CurrentTime)):
-                return True
-
-            # If it's a literal (string, number, etc.), it's not a column reference
-            return False  # Default to treating as literal
 
         except Exception:
             # If parsing fails, fall back to conservative approach
@@ -478,6 +469,22 @@ class MergeNotMatchedClauseMixin:
                 and "'" not in value
                 and '"' not in value
             )
+        return bool(
+            isinstance(
+                parsed,
+                (
+                    exp.Column,
+                    exp.Dot,
+                    exp.Identifier,
+                    exp.Anonymous,
+                    exp.Func,
+                    exp.Null,
+                    exp.CurrentTimestamp,
+                    exp.CurrentDate,
+                    exp.CurrentTime,
+                ),
+            )
+        )
 
     def _add_when_clause(self, when_clause: exp.When) -> None:
         """Helper to add a WHEN clause to the MERGE statement - provided by QueryBuilder."""
@@ -605,38 +612,19 @@ class MergeNotMatchedBySourceClauseMixin:
         if not isinstance(value, str):
             return False
 
-        # If the string contains spaces and no SQL-like syntax, treat as literal
-        if " " in value and not any(x in value for x in [".", "(", ")", "*", "="]):
-            return False
-
-        # Only consider strings with dots (table.column), functions, or SQL keywords as column references
-        # Simple identifiers are treated as literals
-        if not any(x in value for x in [".", "(", ")"]):
-            # Check if it's a SQL keyword/function that should be treated as expression
-            sql_keywords = {"NULL", "CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME", "DEFAULT"}
-            if value.upper() not in sql_keywords:
-                return False
-
         try:
-            # Try to parse as SQL expression
             parsed = exp.maybe_parse(value)
             if parsed is None:
                 return False
 
-            # If it parses to a Dot (table.column) or function, it's a column reference
-            if isinstance(parsed, (exp.Dot, exp.Anonymous, exp.Func)):
-                return True
-
-            # Check for SQL literals that should be treated as expressions
-            if isinstance(parsed, (exp.Null, exp.CurrentTimestamp, exp.CurrentDate, exp.CurrentTime)):
-                return True
-
-            # If it's a literal (string, number, etc.), it's not a column reference
-            return False  # Default to treating as literal
-
         except Exception:
-            # If parsing fails, treat as literal
             return False
+        return bool(
+            isinstance(
+                parsed,
+                (exp.Dot, exp.Anonymous, exp.Func, exp.Null, exp.CurrentTimestamp, exp.CurrentDate, exp.CurrentTime),
+            )
+        )
 
     def when_not_matched_by_source_then_update(
         self,

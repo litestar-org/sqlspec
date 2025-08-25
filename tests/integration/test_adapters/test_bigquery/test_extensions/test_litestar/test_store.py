@@ -12,6 +12,7 @@ from google.auth.credentials import AnonymousCredentials
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.extensions.litestar import SQLSpecSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
+from sqlspec.utils.sync_tools import run_
 
 if TYPE_CHECKING:
     from pytest_databases.docker.bigquery import BigQueryService
@@ -105,22 +106,22 @@ def test_bigquery_store_crud_operations(store: SQLSpecSessionStore) -> None:
     }
 
     # Create
-    store.set(key, value, expires_in=3600)
+    run_(store.set)(key, value, expires_in=3600)
 
     # Read
-    retrieved = store.get(key)
+    retrieved = run_(store.get)(key)
     assert retrieved == value
 
     # Update
     updated_value = {"user_id": 456, "new_field": "new_value", "bigquery_ml": {"model": "clustering", "accuracy": 0.85}}
-    store.set(key, updated_value, expires_in=3600)
+    run_(store.set)(key, updated_value, expires_in=3600)
 
-    retrieved = store.get(key)
+    retrieved = run_(store.get)(key)
     assert retrieved == updated_value
 
     # Delete
     store.delete(key)
-    result = store.get(key)
+    result = run_(store.get)(key)
     assert result is None
 
 
@@ -130,17 +131,17 @@ def test_bigquery_store_expiration(store: SQLSpecSessionStore) -> None:
     value = {"data": "will expire", "bigquery_info": {"serverless": True}}
 
     # Set with very short expiration
-    store.set(key, value, expires_in=1)
+    run_(store.set)(key, value, expires_in=1)
 
     # Should be retrievable immediately
-    result = store.get(key)
+    result = run_(store.get)(key)
     assert result == value
 
     # Wait for expiration
     time.sleep(2)
 
     # Should return None after expiration
-    result = store.get(key)
+    result = run_(store.get)(key)
     assert result is None
 
 
@@ -208,10 +209,10 @@ def test_bigquery_store_complex_json_data(store: SQLSpecSessionStore) -> None:
     }
 
     # Store complex JSON data
-    store.set(key, complex_value, expires_in=3600)
+    run_(store.set)(key, complex_value, expires_in=3600)
 
     # Retrieve and verify
-    retrieved = store.get(key)
+    retrieved = run_(store.get)(key)
     assert retrieved == complex_value
 
     # Verify specific nested structures
@@ -242,17 +243,17 @@ def test_bigquery_store_multiple_sessions(store: SQLSpecSessionStore) -> None:
             },
         }
         sessions[key] = value
-        store.set(key, value, expires_in=3600)
+        run_(store.set)(key, value, expires_in=3600)
 
     # Verify all sessions can be retrieved correctly
     for key, expected_value in sessions.items():
-        retrieved = store.get(key)
+        retrieved = run_(store.get)(key)
         assert retrieved == expected_value
 
     # Clean up by deleting all sessions
     for key in sessions:
-        store.delete(key)
-        assert store.get(key) is None
+        run_(store.delete)(key)
+        assert run_(store.get)(key) is None
 
 
 def test_bigquery_store_cleanup_expired_sessions(store: SQLSpecSessionStore) -> None:
@@ -268,32 +269,32 @@ def test_bigquery_store_cleanup_expired_sessions(store: SQLSpecSessionStore) -> 
         short_value = {"data": f"short lived {i}", "expires": "soon"}
         long_value = {"data": f"long lived {i}", "expires": "later"}
 
-        store.set(short_key, short_value, expires_in=1)  # 1 second
-        store.set(long_key, long_value, expires_in=3600)  # 1 hour
+        run_(store.set)(short_key, short_value, expires_in=1)  # 1 second
+        run_(store.set)(long_key, long_value, expires_in=3600)  # 1 hour
 
         short_lived_keys.append(short_key)
         long_lived_keys.append(long_key)
 
     # Verify all sessions exist initially
     for key in short_lived_keys + long_lived_keys:
-        assert store.get(key) is not None
+        assert run_(store.get)(key) is not None
 
     # Wait for short-lived sessions to expire
     time.sleep(2)
 
     # Cleanup expired sessions
-    store.delete_expired()
+    run_(store.delete_expired)()
 
     # Verify short-lived sessions are gone, long-lived remain
     for key in short_lived_keys:
-        assert store.get(key) is None
+        assert run_(store.get)(key) is None
 
     for key in long_lived_keys:
-        assert store.get(key) is not None
+        assert run_(store.get)(key) is not None
 
     # Clean up remaining sessions
     for key in long_lived_keys:
-        store.delete(key)
+        run_(store.delete)(key)
 
 
 def test_bigquery_store_large_session_data(store: SQLSpecSessionStore) -> None:
@@ -355,10 +356,10 @@ def test_bigquery_store_large_session_data(store: SQLSpecSessionStore) -> None:
     }
 
     # Store large data
-    store.set(key, large_value, expires_in=3600)
+    run_(store.set)(key, large_value, expires_in=3600)
 
     # Retrieve and verify
-    retrieved = store.get(key)
+    retrieved = run_(store.get)(key)
     assert retrieved == large_value
 
     # Verify specific parts of the large data
@@ -369,4 +370,4 @@ def test_bigquery_store_large_session_data(store: SQLSpecSessionStore) -> None:
     assert len(retrieved["bigquery_metadata"]["table_schemas"]) == 10
 
     # Clean up
-    store.delete(key)
+    run_(store.delete)(key)

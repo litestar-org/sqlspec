@@ -2,17 +2,15 @@
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litestar.stores.base import Store
 
 from sqlspec import sql
-from sqlspec.core.statement import StatementConfig
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 
 if TYPE_CHECKING:
@@ -72,13 +70,49 @@ class SQLSpecSessionStore(Store):
         self._expires_at_column = expires_at_column
         self._created_at_column = created_at_column
 
-    def _get_set_sql(self, dialect: str, session_id: str, data: str, expires_at: datetime) -> list[Any]:
+    def _get_dialect_from_config(self) -> str:
+        """Get database dialect from configuration without entering async context.
+
+        Returns:
+            Database dialect string
+        """
+        # Try to get dialect from config module name
+        config_module = self._config.__class__.__module__.lower()
+
+        if (
+            "postgres" in config_module
+            or "asyncpg" in config_module
+            or "psycopg" in config_module
+            or "psqlpy" in config_module
+        ):
+            return "postgres"
+        if "mysql" in config_module or "asyncmy" in config_module:
+            return "mysql"
+        if "sqlite" in config_module or "aiosqlite" in config_module:
+            return "sqlite"
+        if "oracle" in config_module:
+            return "oracle"
+        if "duckdb" in config_module:
+            return "duckdb"
+        if "bigquery" in config_module:
+            return "bigquery"
+        # Try to get from statement config if available
+        if hasattr(self._config, "_create_statement_config"):
+            try:
+                stmt_config = self._config._create_statement_config()
+                if stmt_config and stmt_config.dialect:
+                    return str(stmt_config.dialect)
+            except Exception:
+                pass
+        return "generic"
+
+    def _get_set_sql(self, dialect: str, session_id: str, data: Any, expires_at: datetime) -> list[Any]:
         """Generate SQL for setting session data (check, then update or insert).
 
         Args:
             dialect: Database dialect
             session_id: Session identifier
-            data: JSON-encoded session data
+            data: Session data (adapter will handle JSON serialization via type_coercion_map)
             expires_at: Session expiration time
 
         Returns:
@@ -100,7 +134,6 @@ class SQLSpecSessionStore(Store):
 
         # For databases that support native upsert, use those features
         if dialect in {"postgres", "postgresql"}:
-            # PostgreSQL UPSERT using ON CONFLICT
             return [
                 (
                     sql.insert(self._table_name)
@@ -246,45 +279,17 @@ class SQLSpecSessionStore(Store):
         """
         current_time = datetime.now(timezone.utc)
 
-        # For SQLite, use ISO format string for datetime comparison
-        dialect = driver.statement_config.dialect or "generic"
-        if dialect == "sqlite":
-            # SQLite stores datetimes as TEXT, use ISO format for comparison
-            current_time_str = current_time.isoformat()
-            select_sql = (
-                sql.select(self._data_column)
-                .from_(self._table_name)
-                .where(
-                    (sql.column(self._session_id_column) == key)
-                    & (sql.column(self._expires_at_column) > current_time_str)
-                )
-            )
-        elif dialect == "oracle":
-            # Oracle needs timezone-naive datetime for comparison
-            current_time_naive = current_time.replace(tzinfo=None)
-            select_sql = (
-                sql.select(self._data_column)
-                .from_(self._table_name)
-                .where(
-                    (sql.column(self._session_id_column) == key)
-                    & (sql.column(self._expires_at_column) > current_time_naive)
-                )
-            )
-        else:
-            select_sql = (
-                sql.select(self._data_column)
-                .from_(self._table_name)
-                .where(
-                    (sql.column(self._session_id_column) == key) & (sql.column(self._expires_at_column) > current_time)
-                )
-            )
+        select_sql = (
+            sql.select(self._data_column)
+            .from_(self._table_name)
+            .where((sql.column(self._session_id_column) == key) & (sql.column(self._expires_at_column) > current_time))
+        )
 
         try:
             result = await ensure_async_(driver.execute)(select_sql)
 
             if result.data:
-                data_json = result.data[0][self._data_column]
-                data = from_json(data_json)
+                data = result.data[0][self._data_column]
 
                 # If renew_for is specified, update the expiration time
                 if renew_for is not None:
@@ -335,28 +340,33 @@ class SQLSpecSessionStore(Store):
             expires_in = int(expires_in.total_seconds())
 
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-        data_json = to_json(value)
+
+        # Get dialect before entering async context to avoid event loop issues
+        dialect = self._get_dialect_from_config()
 
         async with with_ensure_async_(self._config.provide_session()) as driver:
-            await self._set_session_data(driver, key, data_json, expires_at)
+            await self._set_session_data(driver, key, value, expires_at, dialect)
 
     async def _set_session_data(
         self,
         driver: Union[SyncDriverAdapterBase, AsyncDriverAdapterBase],
         key: str,
-        data_json: str,
+        data: Any,
         expires_at: datetime,
+        dialect: Optional[str] = None,
     ) -> None:
         """Internal method to set session data.
 
         Args:
             driver: Database driver
             key: Session identifier
-            data_json: JSON-encoded session data
+            data: Session data
             expires_at: Expiration time
+            dialect: Optional dialect override (to avoid accessing driver in event loop)
         """
-        dialect = str(getattr(driver, "statement_config", StatementConfig()).dialect or "generic")
-        sql_statements = self._get_set_sql(dialect, key, data_json, expires_at)
+        if dialect is None:
+            dialect = str(driver.statement_config.dialect or "generic")
+        sql_statements = self._get_set_sql(dialect, key, data, expires_at)
 
         try:
             # For databases with native upsert, there's only one statement
@@ -426,21 +436,21 @@ class SQLSpecSessionStore(Store):
         """
         current_time = datetime.now(timezone.utc)
 
-        select_sql = (
-            sql.select(sql.count().as_("count"))
-            .from_(self._table_name)
-            .where((sql.column(self._session_id_column) == key) & (sql.column(self._expires_at_column) > current_time))
-        )
+        async with with_ensure_async_(self._config.provide_session()) as driver:
+            select_sql = (
+                sql.select(sql.count().as_("count"))
+                .from_(self._table_name)
+                .where(
+                    (sql.column(self._session_id_column) == key) & (sql.column(self._expires_at_column) > current_time)
+                )
+            )
 
-        try:
-            async with with_ensure_async_(self._config.provide_session()) as driver:
+            try:
                 result = await ensure_async_(driver.execute)(select_sql)
-
-            return bool(result.data[0]["count"] > 0)
-
-        except Exception:
-            logger.exception("Failed to check if session %s exists", key)
-            return False
+                return bool(result.data[0]["count"] > 0)
+            except Exception:
+                logger.exception("Failed to check if session %s exists", key)
+                return False
 
     async def expires_in(self, key: str) -> int:
         """Get the number of seconds until the session expires.
@@ -464,34 +474,9 @@ class SQLSpecSessionStore(Store):
                 result = await ensure_async_(driver.execute)(select_sql)
 
             if result.data:
-                expires_at_str = result.data[0][self._expires_at_column]
-                # Parse the datetime string based on the format
-                if isinstance(expires_at_str, str):
-                    # Try parsing as ISO format first (for SQLite)
-                    try:
-                        from datetime import datetime as dt
-
-                        expires_at = dt.fromisoformat(expires_at_str)
-                        if expires_at.tzinfo is None:
-                            expires_at = expires_at.replace(tzinfo=timezone.utc)
-                    except (ValueError, AttributeError):
-                        # Try different datetime formats
-                        for fmt in ["%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S"]:
-                            try:
-                                expires_at = datetime.strptime(expires_at_str, fmt)  # noqa: DTZ007
-                                if expires_at.tzinfo is None:
-                                    expires_at = expires_at.replace(tzinfo=timezone.utc)
-                                break
-                            except ValueError:
-                                continue
-                        else:
-                            return 0
-                elif isinstance(expires_at_str, datetime):
-                    expires_at = expires_at_str
-                    if expires_at.tzinfo is None:
-                        expires_at = expires_at.replace(tzinfo=timezone.utc)
-                else:
-                    return 0
+                expires_at = result.data[0][self._expires_at_column]
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
 
                 delta = expires_at - current_time
                 return max(0, int(delta.total_seconds()))
@@ -543,19 +528,12 @@ class SQLSpecSessionStore(Store):
             driver: Database driver
             current_time: Current timestamp
         """
-        # For SQLite, use ISO format string for datetime comparison
-        dialect = str(getattr(driver, "statement_config", StatementConfig()).dialect or "generic")
-        current_time_value = current_time.isoformat() if dialect == "sqlite" else current_time
-        delete_sql = (
-            sql.delete().from_(self._table_name).where(sql.column(self._expires_at_column) <= current_time_value)
-        )
+        delete_sql = sql.delete().from_(self._table_name).where(sql.column(self._expires_at_column) <= current_time)
 
         try:
             await ensure_async_(driver.execute)(delete_sql)
 
-            # Commit the transaction for databases that need it
-            if hasattr(driver, "commit"):
-                await ensure_async_(driver.commit)()
+            await ensure_async_(driver.commit)()
 
             logger.debug("Deleted expired sessions")
 
@@ -589,13 +567,10 @@ class SQLSpecSessionStore(Store):
         Yields:
             Tuples of (session_id, session_data)
         """
-        # For SQLite, use ISO format string for datetime comparison
-        dialect = str(getattr(driver, "statement_config", StatementConfig()).dialect or "generic")
-        current_time_value = current_time.isoformat() if dialect == "sqlite" else current_time
         select_sql = (
             sql.select(sql.column(self._session_id_column), sql.column(self._data_column))
             .from_(self._table_name)
-            .where(sql.column(self._expires_at_column) > current_time_value)
+            .where(sql.column(self._expires_at_column) > current_time)
         )
 
         try:
@@ -603,13 +578,8 @@ class SQLSpecSessionStore(Store):
 
             for row in result.data:
                 session_id = row[self._session_id_column]
-                data_json = row[self._data_column]
-                try:
-                    session_data = from_json(data_json)
-                    yield session_id, session_data
-                except Exception as e:
-                    logger.warning("Failed to decode session data for %s: %s", session_id, e)
-                    continue
+                session_data = row[self._data_column]
+                yield session_id, session_data
 
         except Exception:
             logger.exception("Failed to get all sessions")
