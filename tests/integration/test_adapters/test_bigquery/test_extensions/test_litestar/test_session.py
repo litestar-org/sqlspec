@@ -1,36 +1,40 @@
 """Integration tests for BigQuery session backend with store integration."""
 
-import asyncio
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
+from google.api_core.client_options import ClientOptions
+from google.auth.credentials import AnonymousCredentials
 from litestar import Litestar, get, post
 from litestar.middleware.session.server_side import ServerSideSessionConfig
 from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
-from litestar.testing import AsyncTestClient
+from litestar.testing import TestClient
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
 from sqlspec.extensions.litestar.store import SQLSpecSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
+from sqlspec.utils.sync_tools import run_
 
 pytestmark = [pytest.mark.bigquery, pytest.mark.integration]
 
 
 @pytest.fixture
-def bigquery_config(bigquery_service) -> BigQueryConfig:
+def bigquery_config(bigquery_service, table_schema_prefix: str) -> BigQueryConfig:
     """Create BigQuery configuration with migration support."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
         return BigQueryConfig(
-            pool_config={
+            connection_config={
                 "project": bigquery_service.project,
-                "dataset": bigquery_service.dataset,
-                "credentials": bigquery_service.credentials,
+                "dataset_id": table_schema_prefix,
+                "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
+                "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
             },
             migration_config={
                 "script_location": str(migration_dir),
@@ -41,7 +45,7 @@ def bigquery_config(bigquery_service) -> BigQueryConfig:
 
 
 @pytest.fixture
-async def session_store(bigquery_config: BigQueryConfig) -> SQLSpecSessionStore:
+def session_store(bigquery_config: BigQueryConfig) -> SQLSpecSessionStore:
     """Create a session store with migrations applied."""
     # Apply migrations synchronously (BigQuery uses sync commands)
     commands = SyncMigrationCommands(bigquery_config)
@@ -95,7 +99,7 @@ def test_bigquery_migration_creates_correct_table(bigquery_config: BigQueryConfi
         assert columns["created_at"]["data_type"] == "TIMESTAMP"
 
 
-async def test_bigquery_session_basic_operations(
+def test_bigquery_session_basic_operations(
     session_backend: SQLSpecSessionBackend, session_store: SQLSpecSessionStore
 ) -> None:
     """Test basic session operations with BigQuery backend."""
@@ -130,14 +134,14 @@ async def test_bigquery_session_basic_operations(
         stores={"sessions": session_store},
     )
 
-    async with AsyncTestClient(app=app) as client:
+    with TestClient(app=app) as client:
         # Set session data
-        response = await client.get("/set-session")
+        response = client.get("/set-session")
         assert response.status_code == HTTP_200_OK
         assert response.json() == {"status": "session set"}
 
         # Get session data
-        response = await client.get("/get-session")
+        response = client.get("/get-session")
         assert response.status_code == HTTP_200_OK
         data = response.json()
         assert data["user_id"] == 12345
@@ -146,17 +150,17 @@ async def test_bigquery_session_basic_operations(
         assert data["bigquery_features"]["analytics"] is True
 
         # Clear session
-        response = await client.post("/clear-session")
+        response = client.post("/clear-session")
         assert response.status_code == HTTP_201_CREATED
         assert response.json() == {"status": "session cleared"}
 
         # Verify session is cleared
-        response = await client.get("/get-session")
+        response = client.get("/get-session")
         assert response.status_code == HTTP_200_OK
         assert response.json() == {"user_id": None, "username": None, "preferences": None, "bigquery_features": None}
 
 
-async def test_bigquery_session_complex_data_types(
+def test_bigquery_session_complex_data_types(
     session_backend: SQLSpecSessionBackend, session_store: SQLSpecSessionStore
 ) -> None:
     """Test BigQuery-specific complex data types in sessions."""
@@ -201,14 +205,14 @@ async def test_bigquery_session_complex_data_types(
         stores={"sessions": session_store},
     )
 
-    async with AsyncTestClient(app=app) as client:
+    with TestClient(app=app) as client:
         # Save analytics session
-        response = await client.post("/save-analytics-session")
+        response = client.post("/save-analytics-session")
         assert response.status_code == HTTP_201_CREATED
         assert response.json() == {"status": "analytics session saved"}
 
         # Load and verify analytics session
-        response = await client.get("/load-analytics-session")
+        response = client.get("/load-analytics-session")
         assert response.status_code == HTTP_200_OK
         data = response.json()
         assert data["has_analytics"] is True
@@ -218,7 +222,7 @@ async def test_bigquery_session_complex_data_types(
         assert data["first_query"]["bytes_processed"] == 1024
 
 
-async def test_bigquery_session_large_json_handling(
+def test_bigquery_session_large_json_handling(
     session_backend: SQLSpecSessionBackend, session_store: SQLSpecSessionStore
 ) -> None:
     """Test BigQuery's ability to handle large JSON session data."""
@@ -262,16 +266,16 @@ async def test_bigquery_session_large_json_handling(
         stores={"sessions": session_store},
     )
 
-    async with AsyncTestClient(app=app) as client:
+    with TestClient(app=app) as client:
         # Save large session
-        response = await client.post("/save-large-session")
+        response = client.post("/save-large-session")
         assert response.status_code == HTTP_201_CREATED
         data = response.json()
         assert data["status"] == "large session saved"
         assert data["size"] > 10000  # Should be substantial
 
         # Load and verify large session
-        response = await client.get("/load-large-session")
+        response = client.get("/load-large-session")
         assert response.status_code == HTTP_200_OK
         data = response.json()
         assert data["has_data"] is True
@@ -282,7 +286,7 @@ async def test_bigquery_session_large_json_handling(
         assert data["segments_count"] == 20
 
 
-async def test_bigquery_session_expiration(session_store: SQLSpecSessionStore) -> None:
+def test_bigquery_session_expiration(session_store: SQLSpecSessionStore) -> None:
     """Test session expiration handling with BigQuery."""
     # No need to create a custom backend - just use the store with short expiration
 
@@ -306,53 +310,53 @@ async def test_bigquery_session_expiration(session_store: SQLSpecSessionStore) -
         route_handlers=[set_data, get_data], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
-    async with AsyncTestClient(app=app) as client:
+    with TestClient(app=app) as client:
         # Set data
-        response = await client.get("/set-data")
+        response = client.get("/set-data")
         assert response.json() == {"status": "set"}
 
         # Data should be available immediately
-        response = await client.get("/get-data")
+        response = client.get("/get-data")
         assert response.json() == {"test": "bigquery_data", "cloud": "gcp"}
 
         # Wait for expiration
-        await asyncio.sleep(2)
+        time.sleep(2)
 
         # Data should be expired
-        response = await client.get("/get-data")
+        response = client.get("/get-data")
         assert response.json() == {"test": None, "cloud": None}
 
 
-async def test_bigquery_session_cleanup(session_store: SQLSpecSessionStore) -> None:
+def test_bigquery_session_cleanup(session_store: SQLSpecSessionStore) -> None:
     """Test expired session cleanup with BigQuery."""
     # Create multiple sessions with short expiration
     temp_sessions = []
     for i in range(5):
         session_id = f"bigquery-temp-{i}"
         temp_sessions.append(session_id)
-        await session_store.set(session_id, {"query": f"SELECT {i} FROM dataset", "type": "temporary"}, expires_in=1)
+        run_(session_store.set)(session_id, {"query": f"SELECT {i} FROM dataset", "type": "temporary"}, expires_in=1)
 
     # Create permanent sessions
     perm_sessions = []
     for i in range(3):
         session_id = f"bigquery-perm-{i}"
         perm_sessions.append(session_id)
-        await session_store.set(session_id, {"query": f"SELECT * FROM table_{i}", "type": "permanent"}, expires_in=3600)
+        run_(session_store.set)(session_id, {"query": f"SELECT * FROM table_{i}", "type": "permanent"}, expires_in=3600)
 
     # Wait for temporary sessions to expire
-    await asyncio.sleep(2)
+    time.sleep(2)
 
     # Clean up expired sessions
-    await session_store.delete_expired()
+    run_(session_store.delete_expired)()
 
     # Check that expired sessions are gone
     for session_id in temp_sessions:
-        result = await session_store.get(session_id)
+        result = run_(session_store.get)(session_id)
         assert result is None
 
     # Permanent sessions should still exist
     for session_id in perm_sessions:
-        result = await session_store.get(session_id)
+        result = run_(session_store.get)(session_id)
         assert result is not None
         assert result["type"] == "permanent"
 
@@ -373,27 +377,27 @@ async def test_bigquery_store_operations(session_store: SQLSpecSessionStore) -> 
     }
 
     # Set data
-    await session_store.set(session_id, test_data, expires_in=3600)
+    run_(session_store.set)(session_id, test_data, expires_in=3600)
 
     # Get data
-    result = await session_store.get(session_id)
+    result = run_(session_store.get)(session_id)
     assert result == test_data
 
     # Check exists
-    assert await session_store.exists(session_id) is True
+    assert run_(session_store.exists)(session_id) is True
 
     # Update with BigQuery-specific data
     updated_data = {**test_data, "last_job": "bquxjob_12345678"}
-    await session_store.set(session_id, updated_data, expires_in=7200)
+    run_(session_store.set)(session_id, updated_data, expires_in=7200)
 
     # Get updated data
-    result = await session_store.get(session_id)
+    result = run_(session_store.get)(session_id)
     assert result == updated_data
 
     # Delete data
-    await session_store.delete(session_id)
+    run_(session_store.delete)(session_id)
 
     # Verify deleted
-    result = await session_store.get(session_id)
+    result = run_(session_store.get)(session_id)
     assert result is None
-    assert await session_store.exists(session_id) is False
+    assert run_(session_store.exists)(session_id) is False

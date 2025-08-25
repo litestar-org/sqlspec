@@ -16,6 +16,7 @@ from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.extensions.litestar import SQLSpecSessionStore
 from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
+from sqlspec.utils.sync_tools import run_
 
 pytestmark = [pytest.mark.bigquery, pytest.mark.integration]
 
@@ -394,8 +395,8 @@ def test_migration_with_default_table_name(bigquery_migration_config: BigQueryCo
     session_id = "test_session_default"
     test_data = {"user_id": 1, "username": "test_user"}
 
-    store.set(session_id, test_data, expires_in=3600)
-    retrieved = store.get(session_id)
+    run_(store.set)(session_id, test_data, expires_in=3600)
+    retrieved = run_(store.get)(session_id)
 
     assert retrieved == test_data
 
@@ -419,8 +420,8 @@ def test_migration_with_custom_table_name(
     session_id = "test_session_custom"
     test_data = {"user_id": 2, "username": "custom_user"}
 
-    store.set(session_id, test_data, expires_in=3600)
-    retrieved = store.get(session_id)
+    run_(store.set)(session_id, test_data, expires_in=3600)
+    retrieved = run_(store.get)(session_id)
 
     assert retrieved == test_data
 
@@ -452,7 +453,7 @@ def test_migration_with_mixed_extensions(bigquery_migration_config_mixed: BigQue
     session_id = "test_session_mixed"
     test_data = {"user_id": 3, "username": "mixed_user"}
 
-    store.set(session_id, test_data, expires_in=3600)
-    retrieved = store.get(session_id)
+    run_(store.set)(session_id, test_data, expires_in=3600)
+    retrieved = run_(store.get)(session_id)
 
     assert retrieved == test_data

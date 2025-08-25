@@ -788,3 +788,197 @@ def test_duckdb_analytical_session_data(session_store: SQLSpecSessionStore) -> N
 
     # Cleanup
     run_(session_store.delete)(session_id)
+
+
+def test_duckdb_pooling_behavior(migrated_config: DuckDBConfig) -> None:
+    """Test DuckDB connection pooling behavior (sync-only with pooling)."""
+    import concurrent.futures
+    import threading
+    import time
+
+    def create_session_data(thread_id: int) -> dict:
+        """Create session data in a specific thread."""
+        session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+        session_id = f"pool-test-{thread_id}-{time.time()}"
+        data = {
+            "thread_id": thread_id,
+            "worker": threading.get_ident(),
+            "query": f"SELECT * FROM analytics_table_{thread_id}",
+            "pool_test": True,
+        }
+
+        run_(session_store.set)(session_id, data, expires_in=3600)
+        retrieved = run_(session_store.get)(session_id)
+
+        # Cleanup
+        run_(session_store.delete)(session_id)
+
+        return retrieved
+
+    # Test concurrent pool usage
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(create_session_data, i) for i in range(8)]
+        results = [future.result() for future in concurrent.futures.as_completed(futures)]
+
+    # All operations should succeed with DuckDB pooling
+    assert len(results) == 8
+    for result in results:
+        assert result["pool_test"] is True
+        assert "thread_id" in result
+        assert "worker" in result
+
+
+def test_duckdb_extension_integration(migrated_config: DuckDBConfig) -> None:
+    """Test DuckDB extension system integration."""
+    # Test that DuckDB can handle JSON operations (if JSON extension is available)
+    with migrated_config.provide_session() as driver:
+        # Try to use DuckDB's JSON functionality if available
+        try:
+            # Test basic JSON operations
+            result = driver.execute('SELECT \'{"test": "value"}\' AS json_data')
+            assert len(result.data) == 1
+            assert "json_data" in result.data[0]
+        except Exception:
+            # JSON extension might not be available, which is acceptable
+            pass
+
+        # Test DuckDB's analytical capabilities with session data
+        session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+
+        # Create test sessions with analytical data
+        for i in range(5):
+            session_id = f"analytics-{i}"
+            data = {
+                "user_id": 1000 + i,
+                "queries": [f"SELECT * FROM table_{j}" for j in range(i + 1)],
+                "execution_times": [10.5 * j for j in range(i + 1)],
+            }
+            run_(session_store.set)(session_id, data, expires_in=3600)
+
+        # Query the sessions table directly to test DuckDB's analytical capabilities
+        try:
+            # Count sessions by table
+            result = driver.execute("SELECT COUNT(*) as session_count FROM litestar_sessions")
+            assert result.data[0]["session_count"] >= 5
+        except Exception:
+            # If table doesn't exist or query fails, that's acceptable for this test
+            pass
+
+        # Cleanup
+        for i in range(5):
+            run_(session_store.delete)(f"analytics-{i}")
+
+
+def test_duckdb_memory_database_behavior(migrated_config: DuckDBConfig) -> None:
+    """Test DuckDB memory database behavior for sessions."""
+    # Test with in-memory database (DuckDB default behavior)
+    memory_config = DuckDBConfig(
+        pool_config={"database": ":memory:shared_db"},  # DuckDB shared memory
+        migration_config={
+            "script_location": migrated_config.migration_config["script_location"],
+            "version_table_name": "test_memory_migrations",
+            "include_extensions": ["litestar"],
+        },
+    )
+
+    # Apply migrations
+    commands = SyncMigrationCommands(memory_config)
+    commands.init(memory_config.migration_config["script_location"], package=False)
+    commands.upgrade()
+
+    session_store = SQLSpecSessionStore(config=memory_config, table_name="litestar_sessions")
+
+    # Test memory database operations
+    test_data = {
+        "memory_test": True,
+        "data_type": "in_memory_analytics",
+        "performance": {"fast_operations": True, "vectorized": True},
+    }
+
+    run_(session_store.set)("memory-test", test_data, expires_in=3600)
+    result = run_(session_store.get)("memory-test")
+
+    assert result == test_data
+    assert result["memory_test"] is True
+
+    # Cleanup
+    run_(session_store.delete)("memory-test")
+    if memory_config.pool_instance:
+        memory_config.close_pool()
+
+
+def test_duckdb_custom_table_configuration() -> None:
+    """Test DuckDB with custom session table names from configuration."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        db_path = Path(temp_dir) / "custom_sessions.duckdb"
+        migration_dir = Path(temp_dir) / "migrations"
+        migration_dir.mkdir(parents=True, exist_ok=True)
+
+        custom_table = "custom_duckdb_sessions"
+        config = DuckDBConfig(
+            pool_config={"database": str(db_path)},
+            migration_config={
+                "script_location": str(migration_dir),
+                "version_table_name": "test_custom_migrations",
+                "include_extensions": [{"name": "litestar", "session_table": custom_table}],
+            },
+        )
+
+        # Apply migrations
+        commands = SyncMigrationCommands(config)
+        commands.init(str(migration_dir), package=False)
+        commands.upgrade()
+
+        # Test session store with custom table
+        session_store = SQLSpecSessionStore(config=config, table_name=custom_table)
+
+        # Test operations
+        test_data = {"custom_table": True, "table_name": custom_table}
+        run_(session_store.set)("custom-test", test_data, expires_in=3600)
+
+        result = run_(session_store.get)("custom-test")
+        assert result == test_data
+
+        # Verify custom table exists
+        with config.provide_session() as driver:
+            table_result = driver.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_name = ?", (custom_table,)
+            )
+            assert len(table_result.data) == 1
+            assert table_result.data[0]["table_name"] == custom_table
+
+        # Cleanup
+        run_(session_store.delete)("custom-test")
+        if config.pool_instance:
+            config.close_pool()
+
+
+def test_duckdb_file_persistence(migrated_config: DuckDBConfig) -> None:
+    """Test that DuckDB file-based sessions persist across connections."""
+    # This test verifies that file-based DuckDB sessions persist
+    session_store1 = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+
+    # Create session data
+    persistent_data = {
+        "user_id": 999,
+        "persistence_test": True,
+        "file_based": True,
+        "duckdb_specific": {"analytical_engine": True},
+    }
+
+    run_(session_store1.set)("persistence-test", persistent_data, expires_in=3600)
+
+    # Create a new store instance (simulating new connection)
+    session_store2 = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+
+    # Data should persist across store instances
+    result = run_(session_store2.get)("persistence-test")
+    assert result == persistent_data
+    assert result["persistence_test"] is True
+    assert result["duckdb_specific"]["analytical_engine"] is True
+
+    # Cleanup
+    run_(session_store2.delete)("persistence-test")

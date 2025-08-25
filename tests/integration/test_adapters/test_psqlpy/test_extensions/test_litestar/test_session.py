@@ -1,8 +1,7 @@
-"""Integration tests for AsyncPG session backend with store integration."""
+"""Integration tests for PsqlPy session backend with store integration."""
 
 import asyncio
 import tempfile
-from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
 
@@ -11,40 +10,31 @@ from litestar import Litestar, get, post
 from litestar.middleware.session.server_side import ServerSideSessionConfig
 from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
 from litestar.testing import AsyncTestClient
-from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.extensions.litestar.store import SQLSpecSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
-pytestmark = [pytest.mark.asyncpg, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
+pytestmark = [pytest.mark.psqlpy, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
 
 @pytest.fixture
-async def asyncpg_config(
-    postgres_service: PostgresService, request: pytest.FixtureRequest
-) -> AsyncGenerator[AsyncpgConfig, None]:
-    """Create AsyncPG configuration with migration support and test isolation."""
+async def psqlpy_config(postgres_service, request: pytest.FixtureRequest) -> PsqlpyConfig:
+    """Create PsqlPy configuration with migration support and test isolation."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
+        dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+
         # Create unique names for test isolation (based on advanced-alchemy pattern)
         worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
         table_suffix = f"{worker_id}_{abs(hash(request.node.nodeid)) % 100000}"
-        migration_table = f"sqlspec_migrations_asyncpg_{table_suffix}"
-        session_table = f"litestar_sessions_asyncpg_{table_suffix}"
+        migration_table = f"sqlspec_migrations_psqlpy_{table_suffix}"
+        session_table = f"litestar_sessions_psqlpy_{table_suffix}"
 
-        config = AsyncpgConfig(
-            pool_config={
-                "host": postgres_service.host,
-                "port": postgres_service.port,
-                "user": postgres_service.user,
-                "password": postgres_service.password,
-                "database": postgres_service.database,
-                "min_size": 2,
-                "max_size": 10,
-            },
+        config = PsqlpyConfig(
+            pool_config={"dsn": dsn, "max_db_pool_size": 5},
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": migration_table,
@@ -63,38 +53,48 @@ async def asyncpg_config(
 
 
 @pytest.fixture
-async def session_store(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionStore:
+async def session_store(psqlpy_config: PsqlpyConfig) -> SQLSpecSessionStore:
     """Create a session store with migrations applied using unique table names."""
     # Apply migrations to create the session table
-    commands = AsyncMigrationCommands(asyncpg_config)
-    await commands.init(asyncpg_config.migration_config["script_location"], package=False)
+    commands = AsyncMigrationCommands(psqlpy_config)
+    await commands.init(psqlpy_config.migration_config["script_location"], package=False)
     await commands.upgrade()
 
-    # Extract the unique session table name from config context
-    session_table_name = asyncpg_config.migration_config.get("context", {}).get(
-        "session_table_name", "litestar_sessions"
-    )
-    return SQLSpecSessionStore(asyncpg_config, table_name=session_table_name)
+    # Extract the unique session table name from the migration config extensions
+    session_table_name = "litestar_sessions"  # default
+    for ext in psqlpy_config.migration_config.get("include_extensions", []):
+        if isinstance(ext, dict) and ext.get("name") == "litestar":
+            session_table_name = ext.get("session_table", "litestar_sessions")
+            break
+
+    return SQLSpecSessionStore(psqlpy_config, table_name=session_table_name)
 
 
-# Removed unused fixtures - using direct configuration in tests for clarity
-
-
-async def test_asyncpg_migration_creates_correct_table(asyncpg_config: AsyncpgConfig) -> None:
+async def test_psqlpy_migration_creates_correct_table(psqlpy_config: PsqlpyConfig) -> None:
     """Test that Litestar migration creates the correct table structure for PostgreSQL."""
     # Apply migrations
-    commands = AsyncMigrationCommands(asyncpg_config)
-    await commands.init(asyncpg_config.migration_config["script_location"], package=False)
+    commands = AsyncMigrationCommands(psqlpy_config)
+    await commands.init(psqlpy_config.migration_config["script_location"], package=False)
     await commands.upgrade()
 
+    # Get the session table name from the migration config
+    extensions = psqlpy_config.migration_config.get("include_extensions", [])
+    session_table = "litestar_sessions"  # default
+    for ext in extensions:
+        if isinstance(ext, dict) and ext.get("name") == "litestar":
+            session_table = ext.get("session_table", "litestar_sessions")
+
     # Verify table was created with correct PostgreSQL-specific types
-    async with asyncpg_config.provide_session() as driver:
-        result = await driver.execute("""
+    async with psqlpy_config.provide_session() as driver:
+        result = await driver.execute(
+            """
             SELECT column_name, data_type
             FROM information_schema.columns
-            WHERE table_name = 'litestar_sessions'
+            WHERE table_name = %s
             AND column_name IN ('data', 'expires_at')
-        """)
+        """,
+            [session_table],
+        )
 
         columns = {row["column_name"]: row["data_type"] for row in result.data}
 
@@ -103,11 +103,14 @@ async def test_asyncpg_migration_creates_correct_table(asyncpg_config: AsyncpgCo
         assert "timestamp" in columns.get("expires_at", "").lower()
 
         # Verify all expected columns exist
-        result = await driver.execute("""
+        result = await driver.execute(
+            """
             SELECT column_name
             FROM information_schema.columns
-            WHERE table_name = 'litestar_sessions'
-        """)
+            WHERE table_name = %s
+        """,
+            [session_table],
+        )
         columns = {row["column_name"] for row in result.data}
         assert "session_id" in columns
         assert "data" in columns
@@ -115,13 +118,13 @@ async def test_asyncpg_migration_creates_correct_table(asyncpg_config: AsyncpgCo
         assert "created_at" in columns
 
 
-async def test_asyncpg_session_basic_operations(session_store: SQLSpecSessionStore) -> None:
-    """Test basic session operations with AsyncPG backend."""
+async def test_psqlpy_session_basic_operations_simple(session_store_default: SQLSpecSessionStore) -> None:
+    """Test basic session operations with PsqlPy backend."""
 
     @get("/set-session")
     async def set_session(request: Any) -> dict:
         request.session["user_id"] = 54321
-        request.session["username"] = "pguser"
+        request.session["username"] = "psqlpyuser"
         request.session["preferences"] = {"theme": "light", "lang": "fr"}
         request.session["tags"] = ["admin", "moderator", "user"]
         return {"status": "session set"}
@@ -146,7 +149,7 @@ async def test_asyncpg_session_basic_operations(session_store: SQLSpecSessionSto
         request.session.clear()
         return {"status": "session cleared"}
 
-    session_config = ServerSideSessionConfig(store="sessions", key="asyncpg-session", max_age=3600)
+    session_config = ServerSideSessionConfig(store="sessions", key="psqlpy-session", max_age=3600)
 
     app = Litestar(
         route_handlers=[set_session, get_session, update_session, clear_session],
@@ -155,6 +158,11 @@ async def test_asyncpg_session_basic_operations(session_store: SQLSpecSessionSto
     )
 
     async with AsyncTestClient(app=app) as client:
+        # First test direct store operations work
+        test_data = {"user_id": 54321, "username": "psqlpyuser", "test": "direct"}
+        await session_store.set("test-key", test_data, expires_in=3600)
+        await session_store.get("test-key")
+
         # Set session data
         response = await client.get("/set-session")
         assert response.status_code == HTTP_200_OK
@@ -162,10 +170,12 @@ async def test_asyncpg_session_basic_operations(session_store: SQLSpecSessionSto
 
         # Get session data
         response = await client.get("/get-session")
+        if response.status_code != HTTP_200_OK:
+            pass
         assert response.status_code == HTTP_200_OK
         data = response.json()
         assert data["user_id"] == 54321
-        assert data["username"] == "pguser"
+        assert data["username"] == "psqlpyuser"
         assert data["preferences"] == {"theme": "light", "lang": "fr"}
         assert data["tags"] == ["admin", "moderator", "user"]
 
@@ -189,8 +199,8 @@ async def test_asyncpg_session_basic_operations(session_store: SQLSpecSessionSto
         assert response.json() == {"user_id": None, "username": None, "preferences": None, "tags": None}
 
 
-async def test_asyncpg_session_persistence(session_store: SQLSpecSessionStore) -> None:
-    """Test that sessions persist across requests with AsyncPG."""
+async def test_psqlpy_session_persistence(session_store: SQLSpecSessionStore) -> None:
+    """Test that sessions persist across requests with PsqlPy."""
 
     @get("/counter")
     async def increment_counter(request: Any) -> dict:
@@ -202,7 +212,7 @@ async def test_asyncpg_session_persistence(session_store: SQLSpecSessionStore) -
         request.session["history"] = history
         return {"count": count, "history": history}
 
-    session_config = ServerSideSessionConfig(store="sessions", key="asyncpg-counter", max_age=3600)
+    session_config = ServerSideSessionConfig(store="sessions", key="psqlpy-counter", max_age=3600)
 
     app = Litestar(
         route_handlers=[increment_counter], middleware=[session_config.middleware], stores={"sessions": session_store}
@@ -217,13 +227,12 @@ async def test_asyncpg_session_persistence(session_store: SQLSpecSessionStore) -
             assert data["history"] == list(range(1, expected + 1))
 
 
-async def test_asyncpg_session_expiration(session_store: SQLSpecSessionStore) -> None:
-    """Test session expiration handling with AsyncPG."""
-    # No need to create a custom backend - just use the store with short expiration
+async def test_psqlpy_session_expiration(session_store: SQLSpecSessionStore) -> None:
+    """Test session expiration handling with PsqlPy."""
 
     @get("/set-data")
     async def set_data(request: Any) -> dict:
-        request.session["test"] = "postgres_data"
+        request.session["test"] = "psqlpy_data"
         request.session["timestamp"] = "2024-01-01"
         return {"status": "set"}
 
@@ -233,7 +242,7 @@ async def test_asyncpg_session_expiration(session_store: SQLSpecSessionStore) ->
 
     session_config = ServerSideSessionConfig(
         store="sessions",  # Use the string name for the store
-        key="asyncpg-expiring",
+        key="psqlpy-expiring",
         max_age=1,  # 1 second expiration
     )
 
@@ -248,7 +257,7 @@ async def test_asyncpg_session_expiration(session_store: SQLSpecSessionStore) ->
 
         # Data should be available immediately
         response = await client.get("/get-data")
-        assert response.json() == {"test": "postgres_data", "timestamp": "2024-01-01"}
+        assert response.json() == {"test": "psqlpy_data", "timestamp": "2024-01-01"}
 
         # Wait for expiration
         await asyncio.sleep(2)
@@ -258,20 +267,25 @@ async def test_asyncpg_session_expiration(session_store: SQLSpecSessionStore) ->
         assert response.json() == {"test": None, "timestamp": None}
 
 
-async def test_asyncpg_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
-    """Test handling of concurrent sessions with AsyncPG."""
+async def test_psqlpy_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
+    """Test handling of concurrent sessions with PsqlPy."""
 
     @get("/user/{user_id:int}")
     async def set_user(request: Any, user_id: int) -> dict:
         request.session["user_id"] = user_id
         request.session["db"] = "postgres"
+        request.session["adapter"] = "psqlpy"
         return {"user_id": user_id}
 
     @get("/whoami")
     async def get_user(request: Any) -> dict:
-        return {"user_id": request.session.get("user_id"), "db": request.session.get("db")}
+        return {
+            "user_id": request.session.get("user_id"),
+            "db": request.session.get("db"),
+            "adapter": request.session.get("adapter"),
+        }
 
-    session_config = ServerSideSessionConfig(store="sessions", key="asyncpg-concurrent", max_age=3600)
+    session_config = ServerSideSessionConfig(store="sessions", key="psqlpy-concurrent", max_age=3600)
 
     app = Litestar(
         route_handlers=[set_user, get_user], middleware=[session_config.middleware], stores={"sessions": session_store}
@@ -295,28 +309,28 @@ async def test_asyncpg_concurrent_sessions(session_store: SQLSpecSessionStore) -
 
         # Each client should maintain its own session
         response1 = await client1.get("/whoami")
-        assert response1.json() == {"user_id": 101, "db": "postgres"}
+        assert response1.json() == {"user_id": 101, "db": "postgres", "adapter": "psqlpy"}
 
         response2 = await client2.get("/whoami")
-        assert response2.json() == {"user_id": 202, "db": "postgres"}
+        assert response2.json() == {"user_id": 202, "db": "postgres", "adapter": "psqlpy"}
 
         response3 = await client3.get("/whoami")
-        assert response3.json() == {"user_id": 303, "db": "postgres"}
+        assert response3.json() == {"user_id": 303, "db": "postgres", "adapter": "psqlpy"}
 
 
-async def test_asyncpg_session_cleanup(session_store: SQLSpecSessionStore) -> None:
-    """Test expired session cleanup with AsyncPG."""
+async def test_psqlpy_session_cleanup(session_store: SQLSpecSessionStore) -> None:
+    """Test expired session cleanup with PsqlPy."""
     # Create multiple sessions with short expiration
     session_ids = []
     for i in range(10):
-        session_id = f"asyncpg-cleanup-{i}"
+        session_id = f"psqlpy-cleanup-{i}"
         session_ids.append(session_id)
         await session_store.set(session_id, {"data": i, "type": "temporary"}, expires_in=1)
 
     # Create long-lived sessions
     persistent_ids = []
     for i in range(3):
-        session_id = f"asyncpg-persistent-{i}"
+        session_id = f"psqlpy-persistent-{i}"
         persistent_ids.append(session_id)
         await session_store.set(session_id, {"data": f"keep-{i}", "type": "persistent"}, expires_in=3600)
 
@@ -338,8 +352,8 @@ async def test_asyncpg_session_cleanup(session_store: SQLSpecSessionStore) -> No
         assert result["type"] == "persistent"
 
 
-async def test_asyncpg_session_complex_data(session_store: SQLSpecSessionStore) -> None:
-    """Test storing complex data structures in AsyncPG sessions."""
+async def test_psqlpy_session_complex_data(session_store: SQLSpecSessionStore) -> None:
+    """Test storing complex data structures in PsqlPy sessions."""
 
     @post("/save-complex")
     async def save_complex(request: Any) -> dict:
@@ -352,6 +366,7 @@ async def test_asyncpg_session_complex_data(session_store: SQLSpecSessionStore) 
         request.session["null_value"] = None
         request.session["empty_dict"] = {}
         request.session["empty_list"] = []
+        request.session["adapter"] = "psqlpy"
         return {"status": "complex data saved"}
 
     @get("/load-complex")
@@ -363,9 +378,10 @@ async def test_asyncpg_session_complex_data(session_store: SQLSpecSessionStore) 
             "null_value": request.session.get("null_value"),
             "empty_dict": request.session.get("empty_dict"),
             "empty_list": request.session.get("empty_list"),
+            "adapter": request.session.get("adapter"),
         }
 
-    session_config = ServerSideSessionConfig(store="sessions", key="asyncpg-complex", max_age=3600)
+    session_config = ServerSideSessionConfig(store="sessions", key="psqlpy-complex", max_age=3600)
 
     app = Litestar(
         route_handlers=[save_complex, load_complex],
@@ -397,13 +413,19 @@ async def test_asyncpg_session_complex_data(session_store: SQLSpecSessionStore) 
         assert data["null_value"] is None
         assert data["empty_dict"] == {}
         assert data["empty_list"] == []
+        assert data["adapter"] == "psqlpy"
 
 
-async def test_asyncpg_store_operations(session_store: SQLSpecSessionStore) -> None:
-    """Test AsyncPG store operations directly."""
+async def test_psqlpy_store_operations(session_store: SQLSpecSessionStore) -> None:
+    """Test PsqlPy store operations directly."""
     # Test basic store operations
-    session_id = "test-session-asyncpg"
-    test_data = {"user_id": 789, "preferences": {"theme": "blue", "lang": "es"}, "tags": ["admin", "user"]}
+    session_id = "test-session-psqlpy"
+    test_data = {
+        "user_id": 789,
+        "preferences": {"theme": "blue", "lang": "es"},
+        "tags": ["admin", "user"],
+        "adapter": "psqlpy",
+    }
 
     # Set data
     await session_store.set(session_id, test_data, expires_in=3600)

@@ -1,3 +1,3 @@
 import pytest
 
-pytestmark = [pytest.mark.mysql, pytest.mark.asyncmy]
+pytestmark = [pytest.mark.bigquery, pytest.mark.integration]
