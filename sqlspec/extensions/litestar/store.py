@@ -103,7 +103,7 @@ class SQLSpecSessionStore(Store):
                 if stmt_config and stmt_config.dialect:
                     return str(stmt_config.dialect)
             except Exception:
-                pass
+                logger.debug("Failed to determine dialect from statement config", exc_info=True)
         return "generic"
 
     def _get_set_sql(self, dialect: str, session_id: str, data: Any, expires_at: datetime) -> list[Any]:

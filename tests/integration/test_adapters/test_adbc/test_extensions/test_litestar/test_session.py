@@ -19,18 +19,11 @@ from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.sync_tools import run_
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
-pytestmark = [
-    pytest.mark.adbc,
-    pytest.mark.postgres,
-    pytest.mark.integration,
-    pytest.mark.xdist_group("postgres"),
-]
+pytestmark = [pytest.mark.adbc, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
 
 @pytest.fixture
-def adbc_config(
-    postgres_service: PostgresService, request: pytest.FixtureRequest
-) -> Generator[AdbcConfig, None, None]:
+def adbc_config(postgres_service: PostgresService, request: pytest.FixtureRequest) -> Generator[AdbcConfig, None, None]:
     """Create ADBC configuration with migration support and test isolation."""
     with tempfile.TemporaryDirectory() as temp_dir:
         # Create unique names for test isolation (based on advanced-alchemy pattern)
@@ -97,25 +90,31 @@ def test_adbc_migration_creates_correct_table(adbc_config: AdbcConfig) -> None:
 
     # Verify table was created with correct PostgreSQL-specific types
     with adbc_config.provide_session() as driver:
-        result = driver.execute("""
+        result = driver.execute(
+            """
             SELECT table_name, table_type
             FROM information_schema.tables
             WHERE table_name = %s
             AND table_schema = 'public'
-        """, (session_table_name,))
+        """,
+            (session_table_name,),
+        )
         assert len(result.data) == 1
         table_info = result.data[0]
         assert table_info["table_name"] == session_table_name
         assert table_info["table_type"] == "BASE TABLE"
 
         # Verify column structure - ADBC with PostgreSQL uses JSONB
-        result = driver.execute("""
+        result = driver.execute(
+            """
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
             WHERE table_name = %s
             AND table_schema = 'public'
             ORDER BY ordinal_position
-        """, (session_table_name,))
+        """,
+            (session_table_name,),
+        )
         columns = {row["column_name"]: row for row in result.data}
 
         assert "session_id" in columns
@@ -226,19 +225,12 @@ def test_adbc_session_persistence(session_store: SQLSpecSessionStore) -> None:
         request.session["arrow_operations"] = arrow_operations
         request.session["adbc_engine"] = "Arrow-native"
 
-        return {
-            "count": count,
-            "history": history,
-            "arrow_operations": arrow_operations,
-            "engine": "ADBC",
-        }
+        return {"count": count, "history": history, "arrow_operations": arrow_operations, "engine": "ADBC"}
 
     session_config = ServerSideSessionConfig(store="sessions", key="adbc-persistence", max_age=3600)
 
     app = Litestar(
-        route_handlers=[increment_counter],
-        middleware=[session_config.middleware],
-        stores={"sessions": session_store}
+        route_handlers=[increment_counter], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
     with TestClient(app=app) as client:
@@ -267,10 +259,7 @@ def test_adbc_session_expiration() -> None:
 
         # Create configuration
         config = AdbcConfig(
-            connection_config={
-                "uri": postgres_url,
-                "driver_name": "postgresql",
-            },
+            connection_config={"uri": postgres_url, "driver_name": "postgresql"},
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": "sqlspec_migrations_exp",
@@ -288,12 +277,7 @@ def test_adbc_session_expiration() -> None:
 
         # Test expiration
         session_id = "adbc-expiration-test-session"
-        test_data = {
-            "test": "adbc_data",
-            "timestamp": "2024-01-01",
-            "engine": "ADBC",
-            "arrow_native": True
-        }
+        test_data = {"test": "adbc_data", "timestamp": "2024-01-01", "engine": "ADBC", "arrow_native": True}
 
         # Set data with 1 second expiration
         run_(session_store.set)(session_id, test_data, expires_in=1)
@@ -332,17 +316,11 @@ def test_adbc_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
     session_config = ServerSideSessionConfig(store="sessions", key="adbc-concurrent", max_age=3600)
 
     app = Litestar(
-        route_handlers=[set_user, get_user],
-        middleware=[session_config.middleware],
-        stores={"sessions": session_store}
+        route_handlers=[set_user, get_user], middleware=[session_config.middleware], stores={"sessions": session_store}
     )
 
     # Test with multiple concurrent clients
-    with (
-        TestClient(app=app) as client1,
-        TestClient(app=app) as client2,
-        TestClient(app=app) as client3,
-    ):
+    with TestClient(app=app) as client1, TestClient(app=app) as client2, TestClient(app=app) as client3:
         # Set different users in different clients
         response1 = client1.get("/user/101")
         assert response1.json() == {"user_id": 101, "engine": "ADBC"}
@@ -386,10 +364,7 @@ def test_adbc_session_cleanup() -> None:
 
         # Apply migrations and create store
         config = AdbcConfig(
-            connection_config={
-                "uri": postgres_url,
-                "driver_name": "postgresql",
-            },
+            connection_config={"uri": postgres_url, "driver_name": "postgresql"},
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": "sqlspec_migrations_cleanup",
@@ -409,9 +384,7 @@ def test_adbc_session_cleanup() -> None:
             session_id = f"adbc-cleanup-{i}"
             session_ids.append(session_id)
             run_(session_store.set)(
-                session_id,
-                {"data": i, "type": "temporary", "engine": "ADBC", "arrow_native": True},
-                expires_in=1
+                session_id, {"data": i, "type": "temporary", "engine": "ADBC", "arrow_native": True}, expires_in=1
             )
 
         # Create long-lived sessions
@@ -422,7 +395,7 @@ def test_adbc_session_cleanup() -> None:
             run_(session_store.set)(
                 session_id,
                 {"data": f"keep-{i}", "type": "persistent", "engine": "ADBC", "columnar": True},
-                expires_in=3600
+                expires_in=3600,
             )
 
         # Wait for short sessions to expire
@@ -544,10 +517,7 @@ def test_adbc_store_operations() -> None:
 
         # Apply migrations and create store
         config = AdbcConfig(
-            connection_config={
-                "uri": postgres_url,
-                "driver_name": "postgresql",
-            },
+            connection_config={"uri": postgres_url, "driver_name": "postgresql"},
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": "sqlspec_migrations_ops",
@@ -567,12 +537,7 @@ def test_adbc_store_operations() -> None:
             "user_id": 789,
             "preferences": {"theme": "blue", "lang": "es", "arrow_native": True},
             "tags": ["admin", "user", "adbc"],
-            "arrow_metadata": {
-                "engine": "ADBC",
-                "format": "Arrow",
-                "columnar": True,
-                "zero_copy": True,
-            },
+            "arrow_metadata": {"engine": "ADBC", "format": "Arrow", "columnar": True, "zero_copy": True},
         }
 
         # Set data
@@ -586,11 +551,7 @@ def test_adbc_store_operations() -> None:
         assert run_(session_store.exists)(session_id) is True
 
         # Update with renewal and ADBC-specific data
-        updated_data = {
-            **test_data,
-            "last_login": "2024-01-01",
-            "arrow_operations": ["read", "write", "batch_process"],
-        }
+        updated_data = {**test_data, "last_login": "2024-01-01", "arrow_operations": ["read", "write", "batch_process"]}
         run_(session_store.set)(session_id, updated_data, expires_in=7200)
 
         # Get updated data

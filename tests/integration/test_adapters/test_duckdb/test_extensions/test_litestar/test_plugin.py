@@ -12,6 +12,7 @@ from litestar.testing import TestClient
 
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.litestar import SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.sync_tools import run_
 
 pytestmark = [pytest.mark.duckdb, pytest.mark.integration, pytest.mark.xdist_group("duckdb")]

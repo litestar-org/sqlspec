@@ -663,9 +663,7 @@ async def test_psycopg_sync_session_cleanup(sync_session_store: SQLSpecSessionSt
         )
 
     # Wait for short sessions to expire
-    import time
-
-    time.sleep(2)
+    await asyncio.sleep(2)
 
     # Clean up expired sessions
     run_(sync_session_store.delete_expired)()

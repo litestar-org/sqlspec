@@ -217,6 +217,7 @@ async def test_sqlite_session_expiration() -> None:
         db_path = Path(temp_dir) / "expiration_test.db"
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
+        session_table = "litestar_sessions"
 
         # Create configuration
         SqliteConfig(
@@ -331,6 +332,7 @@ async def test_sqlite_session_cleanup() -> None:
         db_path = Path(temp_dir) / "cleanup_test.db"
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
+        session_table = "litestar_sessions"
 
         # Apply migrations and create store
         @async_
@@ -460,6 +462,7 @@ async def test_sqlite_store_operations() -> None:
         db_path = Path(temp_dir) / "store_ops_test.db"
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
+        session_table = "litestar_sessions"
 
         # Apply migrations and create store
         @async_
