@@ -96,14 +96,12 @@ class SQLSpecSessionStore(Store):
             return "duckdb"
         if "bigquery" in config_module:
             return "bigquery"
-        # Try to get from statement config if available
-        if hasattr(self._config, "_create_statement_config"):
-            try:
-                stmt_config = self._config._create_statement_config()
-                if stmt_config and stmt_config.dialect:
-                    return str(stmt_config.dialect)
-            except Exception:
-                logger.debug("Failed to determine dialect from statement config", exc_info=True)
+        try:
+            stmt_config = self._config.statement_config
+            if stmt_config and stmt_config.dialect:
+                return str(stmt_config.dialect)
+        except Exception:
+            logger.debug("Failed to determine dialect from statement config", exc_info=True)
         return "generic"
 
     def _get_set_sql(self, dialect: str, session_id: str, data: Any, expires_at: datetime) -> list[Any]:
@@ -277,12 +275,13 @@ class SQLSpecSessionStore(Store):
         Returns:
             Session data or None
         """
-        current_time = datetime.now(timezone.utc)
-
         select_sql = (
             sql.select(self._data_column)
             .from_(self._table_name)
-            .where((sql.column(self._session_id_column) == key) & (sql.column(self._expires_at_column) > current_time))
+            .where(
+                (sql.column(self._session_id_column) == key)
+                & (sql.column(self._expires_at_column) > datetime.now(timezone.utc))
+            )
         )
 
         try:
