@@ -19,7 +19,9 @@ pytestmark = [pytest.mark.oracledb, pytest.mark.oracle, pytest.mark.integration,
 
 
 @pytest.fixture
-async def oracle_async_config(oracle_async_config: OracleAsyncConfig, request: pytest.FixtureRequest) -> OracleAsyncConfig:
+async def oracle_async_config(
+    oracle_async_config: OracleAsyncConfig, request: pytest.FixtureRequest
+) -> OracleAsyncConfig:
     """Create Oracle async configuration with migration support and test isolation."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
@@ -138,8 +140,7 @@ async def test_oracle_async_migration_creates_correct_table(oracle_async_config:
     # Verify table was created with correct Oracle-specific types
     async with oracle_async_config.provide_session() as driver:
         result = await driver.execute(
-            "SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :1",
-            (session_table_name.upper(),)
+            "SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :1", (session_table_name.upper(),)
         )
 
         columns = {row["COLUMN_NAME"]: row["DATA_TYPE"] for row in result.data}
@@ -173,8 +174,7 @@ def test_oracle_sync_migration_creates_correct_table(oracle_sync_config: OracleS
     # Verify table was created with correct Oracle-specific types
     with oracle_sync_config.provide_session() as driver:
         result = driver.execute(
-            "SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :1",
-            (session_table_name.upper(),)
+            "SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :1", (session_table_name.upper(),)
         )
 
         columns = {row["COLUMN_NAME"]: row["DATA_TYPE"] for row in result.data}
@@ -343,7 +343,7 @@ async def test_oracle_async_session_persistence(oracle_async_session_store: SQLS
     app = Litestar(
         route_handlers=[increment_counter],
         middleware=[session_config.middleware],
-        stores={"sessions": oracle_async_session_store}
+        stores={"sessions": oracle_async_session_store},
     )
 
     async with AsyncTestClient(app=app) as client:
@@ -376,7 +376,7 @@ def test_oracle_sync_session_persistence(oracle_sync_session_store: SQLSpecSessi
         app = Litestar(
             route_handlers=[oracle_stats],
             middleware=[session_config.middleware],
-            stores={"sessions": oracle_sync_session_store}
+            stores={"sessions": oracle_sync_session_store},
         )
 
         async with AsyncTestClient(app=app) as client:
@@ -425,7 +425,7 @@ async def test_oracle_async_session_expiration(oracle_async_session_store: SQLSp
     app = Litestar(
         route_handlers=[set_data, get_data],
         middleware=[session_config.middleware],
-        stores={"sessions": oracle_async_session_store}
+        stores={"sessions": oracle_async_session_store},
     )
 
     async with AsyncTestClient(app=app) as client:
@@ -462,7 +462,7 @@ def test_oracle_sync_session_expiration(oracle_sync_session_store: SQLSpecSessio
                 "sga_size": "2GB",
                 "pga_size": "1GB",
                 "service_name": "ORCL_SERVICE",
-                "tablespace": "USERS"
+                "tablespace": "USERS",
             }
             return {"status": "oracle config set"}
 
@@ -479,7 +479,7 @@ def test_oracle_sync_session_expiration(oracle_sync_session_store: SQLSpecSessio
         app = Litestar(
             route_handlers=[set_oracle_config, get_oracle_config],
             middleware=[session_config.middleware],
-            stores={"sessions": oracle_sync_session_store}
+            stores={"sessions": oracle_sync_session_store},
         )
 
         async with AsyncTestClient(app=app) as client:
@@ -528,7 +528,7 @@ async def test_oracle_async_concurrent_sessions(oracle_async_session_store: SQLS
     app = Litestar(
         route_handlers=[set_user, get_user],
         middleware=[session_config.middleware],
-        stores={"sessions": oracle_async_session_store}
+        stores={"sessions": oracle_async_session_store},
     )
 
     # Test with multiple concurrent clients
@@ -595,14 +595,11 @@ def test_oracle_sync_concurrent_sessions(oracle_sync_session_store: SQLSpecSessi
         app = Litestar(
             route_handlers=[set_workspace, get_workspace],
             middleware=[session_config.middleware],
-            stores={"sessions": oracle_sync_session_store}
+            stores={"sessions": oracle_sync_session_store},
         )
 
         # Test with multiple concurrent clients
-        async with (
-            AsyncTestClient(app=app) as client1,
-            AsyncTestClient(app=app) as client2,
-        ):
+        async with AsyncTestClient(app=app) as client1, AsyncTestClient(app=app) as client2:
             # Set different workspaces
             await client1.get("/oracle-workspace/100")
             await client2.get("/oracle-workspace/200")
@@ -684,10 +681,7 @@ def test_oracle_sync_session_cleanup(oracle_sync_session_store: SQLSpecSessionSt
             oracle_data = {
                 "data": i,
                 "type": "temporary",
-                "oracle_config": {
-                    "sga_size": f"{i}GB",
-                    "service": f"TEMP_SERVICE_{i}",
-                },
+                "oracle_config": {"sga_size": f"{i}GB", "service": f"TEMP_SERVICE_{i}"},
             }
             await oracle_sync_session_store.set(session_id, oracle_data, expires_in=1)
 
@@ -699,10 +693,7 @@ def test_oracle_sync_session_cleanup(oracle_sync_session_store: SQLSpecSessionSt
             oracle_data = {
                 "data": f"keep-{i}",
                 "type": "persistent",
-                "oracle_config": {
-                    "sga_size": f"{i + 10}GB",
-                    "service": f"PERSISTENT_SERVICE_{i}",
-                },
+                "oracle_config": {"sga_size": f"{i + 10}GB", "service": f"PERSISTENT_SERVICE_{i}"},
             }
             await oracle_sync_session_store.set(session_id, oracle_data, expires_in=3600)
 
@@ -737,11 +728,7 @@ async def test_oracle_async_session_complex_data(oracle_async_session_store: SQL
             "database": {
                 "instances": ["ORCL1", "ORCL2", "ORCL3"],
                 "services": {"primary": "ORCL_PRIMARY", "standby": "ORCL_STANDBY"},
-                "tablespaces": {
-                    "data": ["USERS", "TEMP", "UNDO"],
-                    "index": ["INDEX_TBS"],
-                    "lob": ["LOB_TBS"],
-                },
+                "tablespaces": {"data": ["USERS", "TEMP", "UNDO"], "index": ["INDEX_TBS"], "lob": ["LOB_TBS"]},
             },
             "features": {
                 "advanced_security": True,
@@ -750,11 +737,7 @@ async def test_oracle_async_session_complex_data(oracle_async_session_store: SQL
                 "flashback": {"database": True, "table": True, "query": True},
             },
             "performance": {
-                "sga_components": {
-                    "shared_pool": "512MB",
-                    "buffer_cache": "1GB",
-                    "redo_log_buffer": "64MB",
-                },
+                "sga_components": {"shared_pool": "512MB", "buffer_cache": "1GB", "redo_log_buffer": "64MB"},
                 "pga_target": "1GB",
             },
         }
@@ -820,11 +803,7 @@ async def test_oracle_async_store_operations(oracle_async_session_store: SQLSpec
     session_id = "test-session-oracle-async"
     oracle_test_data = {
         "user_id": 789,
-        "oracle_preferences": {
-            "default_tablespace": "USERS",
-            "temp_tablespace": "TEMP",
-            "profile": "DEFAULT",
-        },
+        "oracle_preferences": {"default_tablespace": "USERS", "temp_tablespace": "TEMP", "profile": "DEFAULT"},
         "oracle_roles": ["DBA", "RESOURCE", "CONNECT"],
         "plsql_features": {"packages": True, "functions": True, "procedures": True, "triggers": True},
     }
@@ -869,11 +848,7 @@ def test_oracle_sync_store_operations(oracle_sync_session_store: SQLSpecSessionS
         session_id = "test-session-oracle-sync"
         oracle_sync_test_data = {
             "user_id": 987,
-            "oracle_workspace": {
-                "schema": "HR",
-                "default_tablespace": "HR_DATA",
-                "quota": "100M",
-            },
+            "oracle_workspace": {"schema": "HR", "default_tablespace": "HR_DATA", "quota": "100M"},
             "oracle_objects": ["TABLE", "VIEW", "INDEX", "SEQUENCE", "TRIGGER", "PACKAGE"],
             "database_links": [{"name": "REMOTE_DB", "connect_string": "remote.example.com:1521/REMOTE"}],
         }

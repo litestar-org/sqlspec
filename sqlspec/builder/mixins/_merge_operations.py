@@ -246,21 +246,10 @@ class MergeMatchedClauseMixin:
                 return False
 
             # Check for SQL literals that should be treated as expressions
-            if isinstance(
+            return isinstance(
                 parsed,
-                (
-                    exp.Dot,  # table.column
-                    exp.Anonymous,  # function calls
-                    exp.Func,
-                    exp.Null,
-                    exp.CurrentTimestamp,
-                    exp.CurrentDate,
-                    exp.CurrentTime,
-                ),
-            ):
-                return True
-            return False  # Default to treating as literal
-
+                (exp.Dot, exp.Anonymous, exp.Func, exp.Null, exp.CurrentTimestamp, exp.CurrentDate, exp.CurrentTime),
+            )
         except Exception:
             # If parsing fails, treat as literal
             return False

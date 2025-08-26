@@ -15,12 +15,7 @@ from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.sync_tools import async_, run_
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
-pytestmark = [
-    pytest.mark.adbc,
-    pytest.mark.postgres,
-    pytest.mark.integration,
-    pytest.mark.xdist_group("postgres"),
-]
+pytestmark = [pytest.mark.adbc, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
 
 @pytest.fixture
@@ -68,10 +63,7 @@ def down():
                 "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
                 "driver_name": "postgresql",
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "test_migrations_adbc"
-            },
+            migration_config={"script_location": str(migration_dir), "version_table_name": "test_migrations_adbc"},
         )
 
         # Run migrations to create the table
@@ -134,11 +126,7 @@ def test_adbc_store_crud_operations(store: SQLSpecSessionStore) -> None:
         "user_id": 123,
         "data": ["item1", "item2"],
         "nested": {"key": "value"},
-        "arrow_features": {
-            "columnar": True,
-            "zero_copy": True,
-            "cross_language": True,
-        },
+        "arrow_features": {"columnar": True, "zero_copy": True, "cross_language": True},
     }
 
     # Create
@@ -153,11 +141,7 @@ def test_adbc_store_crud_operations(store: SQLSpecSessionStore) -> None:
     updated_value = {
         "user_id": 456,
         "new_field": "new_value",
-        "adbc_metadata": {
-            "engine": "ADBC",
-            "format": "Arrow",
-            "optimized": True,
-        },
+        "adbc_metadata": {"engine": "ADBC", "format": "Arrow", "optimized": True},
     }
     run_(store.set)(key, updated_value, expires_in=3600)
 
@@ -177,11 +161,7 @@ def test_adbc_store_expiration(store: SQLSpecSessionStore, adbc_config: AdbcConf
     import time
 
     key = "adbc-expiring-key"
-    value = {
-        "test": "adbc_data",
-        "arrow_native": True,
-        "columnar_format": True,
-    }
+    value = {"test": "adbc_data", "arrow_native": True, "columnar_format": True}
 
     # Set with 1 second expiration
     run_(store.set)(key, value, expires_in=1)
@@ -193,9 +173,7 @@ def test_adbc_store_expiration(store: SQLSpecSessionStore, adbc_config: AdbcConf
 
     # Check what's actually in the database
     with adbc_config.provide_session() as driver:
-        check_result = driver.execute(
-            f"SELECT * FROM {store._table_name} WHERE session_id = %s", (key,)
-        )
+        check_result = driver.execute(f"SELECT * FROM {store._table_name} WHERE session_id = %s", (key,))
         if check_result.data:
             # Verify JSONB data structure
             session_data = check_result.data[0]
@@ -321,11 +299,7 @@ def test_adbc_store_large_data(store: SQLSpecSessionStore) -> None:
             "driver": "postgresql",
             "arrow_native": True,
             "performance_mode": "high_throughput",
-            "batch_processing": {
-                "enabled": True,
-                "batch_size": 1000,
-                "compression": "snappy",
-            },
+            "batch_processing": {"enabled": True, "batch_size": 1000, "compression": "snappy"},
         },
     }
 
@@ -353,11 +327,7 @@ async def test_adbc_store_concurrent_access(store: SQLSpecSessionStore) -> None:
             {
                 "value": value,
                 "operation": f"adbc_update_{value}",
-                "arrow_metadata": {
-                    "batch_id": value,
-                    "columnar": True,
-                    "timestamp": f"2024-01-01T12:{value:02d}:00Z",
-                },
+                "arrow_metadata": {"batch_id": value, "columnar": True, "timestamp": f"2024-01-01T12:{value:02d}:00Z"},
             },
             expires_in=3600,
         )
@@ -514,11 +484,7 @@ def test_adbc_store_crud_operations_enhanced(store: SQLSpecSessionStore) -> None
         "adbc_specific": {
             "arrow_format": True,
             "columnar_data": [1, 2, 3],
-            "metadata": {
-                "driver": "postgresql",
-                "compression": "snappy",
-                "batch_size": 1000,
-            },
+            "metadata": {"driver": "postgresql", "compression": "snappy", "batch_size": 1000},
         },
     }
 
@@ -564,11 +530,7 @@ def test_adbc_store_expiration_enhanced(store: SQLSpecSessionStore) -> None:
     value = {
         "test": "adbc_data",
         "expires": True,
-        "arrow_metadata": {
-            "format": "Arrow",
-            "columnar": True,
-            "zero_copy": True,
-        },
+        "arrow_metadata": {"format": "Arrow", "columnar": True, "zero_copy": True},
     }
 
     # Set with 1 second expiration
@@ -591,11 +553,7 @@ def test_adbc_store_expiration_enhanced(store: SQLSpecSessionStore) -> None:
 def test_adbc_store_exists_and_expires_in(store: SQLSpecSessionStore) -> None:
     """Test exists and expires_in functionality with ADBC."""
     key = "adbc-exists-test"
-    value = {
-        "test": "data",
-        "adbc_engine": "Arrow",
-        "columnar_format": True,
-    }
+    value = {"test": "data", "adbc_engine": "Arrow", "columnar_format": True}
 
     # Test non-existent key
     assert run_(store.exists)(key) is False
@@ -632,10 +590,7 @@ async def test_adbc_store_arrow_optimization() -> None:
         @async_
         def setup_database():
             config = AdbcConfig(
-                connection_config={
-                    "uri": postgres_url,
-                    "driver_name": "postgresql",
-                },
+                connection_config={"uri": postgres_url, "driver_name": "postgresql"},
                 migration_config={
                     "script_location": str(migration_dir),
                     "version_table_name": "sqlspec_migrations_arrow",
@@ -666,8 +621,8 @@ async def test_adbc_store_arrow_optimization() -> None:
             },
             "performance_metrics": {
                 "throughput": 10000,  # rows per second
-                "latency": 0.1,       # milliseconds
-                "cpu_usage": 15.5,    # percentage
+                "latency": 0.1,  # milliseconds
+                "cpu_usage": 15.5,  # percentage
             },
         }
         await store.set(key, arrow_data, expires_in=3600)

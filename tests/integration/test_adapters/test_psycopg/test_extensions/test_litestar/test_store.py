@@ -179,14 +179,14 @@ async def async_store(psycopg_async_config: PsycopgAsyncConfig) -> SQLSpecSessio
     )
 
 
-def test_psycopg_sync_store_table_creation(sync_store: SQLSpecSessionStore, psycopg_sync_config: PsycopgSyncConfig) -> None:
+def test_psycopg_sync_store_table_creation(
+    sync_store: SQLSpecSessionStore, psycopg_sync_config: PsycopgSyncConfig
+) -> None:
     """Test that store table is created automatically with sync driver."""
     with psycopg_sync_config.provide_session() as driver:
         # Verify table exists
         table_name = getattr(psycopg_sync_config, "_session_table_name", "litestar_session")
-        result = driver.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_name = %s", (table_name,)
-        )
+        result = driver.execute("SELECT table_name FROM information_schema.tables WHERE table_name = %s", (table_name,))
         assert len(result.data) == 1
         assert result.data[0]["table_name"] == table_name
 
@@ -479,9 +479,7 @@ def test_psycopg_sync_store_large_data(sync_store: SQLSpecSessionStore) -> None:
             for i in range(100)  # Test PostgreSQL capacity
         ],
         "analytics": {
-            "metrics": {
-                f"metric_{i}": {"value": i * 1.5, "timestamp": f"2024-01-{i:02d}"} for i in range(1, 32)
-            },
+            "metrics": {f"metric_{i}": {"value": i * 1.5, "timestamp": f"2024-01-{i:02d}"} for i in range(1, 32)},
             "events": [{"type": f"event_{i}", "data": "x" * 300, "postgres": True} for i in range(50)],
             "postgres_info": {"jsonb_support": True, "gin_indexes": True, "btree_indexes": True},
         },
@@ -524,9 +522,7 @@ async def test_psycopg_async_store_large_data(async_store: SQLSpecSessionStore) 
             for i in range(120)  # Test PostgreSQL async capacity
         ],
         "analytics": {
-            "metrics": {
-                f"async_metric_{i}": {"value": i * 2.5, "timestamp": f"2024-01-{i:02d}"} for i in range(1, 32)
-            },
+            "metrics": {f"async_metric_{i}": {"value": i * 2.5, "timestamp": f"2024-01-{i:02d}"} for i in range(1, 32)},
             "events": [{"type": f"async_event_{i}", "data": "y" * 350, "postgres": True} for i in range(60)],
             "postgres_info": {"jsonb_support": True, "gin_indexes": True, "concurrent": True},
         },
@@ -557,9 +553,7 @@ async def test_psycopg_sync_store_concurrent_access(sync_store: SQLSpecSessionSt
     async def update_value(key: str, value: int) -> None:
         """Update a value in the store."""
         await sync_store.set(
-            key,
-            {"value": value, "operation": f"update_{value}", "postgres": "sync", "jsonb": True},
-            expires_in=3600,
+            key, {"value": value, "operation": f"update_{value}", "postgres": "sync", "jsonb": True}, expires_in=3600
         )
 
     @async_
@@ -919,8 +913,7 @@ async def test_psycopg_sync_store_postgresql_features(
 
             # Test JSONB contains operator
             result = driver.execute(
-                f"SELECT session_id FROM {table_name} WHERE data @> %s",
-                ('{"metadata": {"jsonb": true}}',),
+                f"SELECT session_id FROM {table_name} WHERE data @> %s", ('{"metadata": {"jsonb": true}}',)
             )
             assert len(result.data) == 1
             assert result.data[0]["session_id"] == key
@@ -965,16 +958,14 @@ async def test_psycopg_async_store_postgresql_features(
 
         # Test JSONB contains operator
         result = await driver.execute(
-            f"SELECT session_id FROM {table_name} WHERE data @> %s",
-            ('{"metadata": {"jsonb": true}}',),
+            f"SELECT session_id FROM {table_name} WHERE data @> %s", ('{"metadata": {"jsonb": true}}',)
         )
         assert len(result.data) == 1
         assert result.data[0]["session_id"] == key
 
         # Test async-specific JSONB query
         result = await driver.execute(
-            f"SELECT session_id FROM {table_name} WHERE data @> %s",
-            ('{"metadata": {"pool": true}}',),
+            f"SELECT session_id FROM {table_name} WHERE data @> %s", ('{"metadata": {"pool": true}}',)
         )
         assert len(result.data) == 1
         assert result.data[0]["session_id"] == key

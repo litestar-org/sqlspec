@@ -24,7 +24,9 @@ def oracle_sync_config(oracle_sync_config: OracleSyncConfig) -> OracleSyncConfig
 
 
 @pytest.fixture
-async def oracle_async_store(oracle_async_config: OracleAsyncConfig, request: pytest.FixtureRequest) -> SQLSpecSessionStore:
+async def oracle_async_store(
+    oracle_async_config: OracleAsyncConfig, request: pytest.FixtureRequest
+) -> SQLSpecSessionStore:
     """Create an async Oracle session store instance."""
     # Create unique table name for test isolation
     worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
@@ -151,23 +153,23 @@ def oracle_sync_store(oracle_sync_config: OracleSyncConfig, request: pytest.Fixt
         pass  # Ignore cleanup errors
 
 
-async def test_oracle_async_store_table_creation(oracle_async_store: SQLSpecSessionStore, oracle_async_config: OracleAsyncConfig) -> None:
+async def test_oracle_async_store_table_creation(
+    oracle_async_store: SQLSpecSessionStore, oracle_async_config: OracleAsyncConfig
+) -> None:
     """Test that store table is created automatically with proper Oracle structure."""
     async with oracle_async_config.provide_session() as driver:
         # Get the table name from the store
         table_name = oracle_async_store._table_name.upper()
 
         # Verify table exists
-        result = await driver.execute(
-            "SELECT table_name FROM user_tables WHERE table_name = :1", (table_name,)
-        )
+        result = await driver.execute("SELECT table_name FROM user_tables WHERE table_name = :1", (table_name,))
         assert len(result.data) == 1
         assert result.data[0]["TABLE_NAME"] == table_name
 
         # Verify table structure with Oracle-specific types
         result = await driver.execute(
             "SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :1 ORDER BY column_id",
-            (table_name,)
+            (table_name,),
         )
         columns = {row["COLUMN_NAME"]: row["DATA_TYPE"] for row in result.data}
         assert "SESSION_KEY" in columns
@@ -183,35 +185,34 @@ async def test_oracle_async_store_table_creation(oracle_async_store: SQLSpecSess
         # Verify primary key constraint
         result = await driver.execute(
             "SELECT constraint_name, constraint_type FROM user_constraints WHERE table_name = :1 AND constraint_type = 'P'",
-            (table_name,)
+            (table_name,),
         )
         assert len(result.data) == 1  # Should have primary key
 
         # Verify index on expires_at column
         result = await driver.execute(
-            "SELECT index_name FROM user_indexes WHERE table_name = :1 AND index_name LIKE '%EXPIRES%'",
-            (table_name,)
+            "SELECT index_name FROM user_indexes WHERE table_name = :1 AND index_name LIKE '%EXPIRES%'", (table_name,)
         )
         assert len(result.data) >= 1  # Should have index on expires_at
 
 
-def test_oracle_sync_store_table_creation(oracle_sync_store: SQLSpecSessionStore, oracle_sync_config: OracleSyncConfig) -> None:
+def test_oracle_sync_store_table_creation(
+    oracle_sync_store: SQLSpecSessionStore, oracle_sync_config: OracleSyncConfig
+) -> None:
     """Test that store table is created automatically with proper Oracle structure (sync)."""
     with oracle_sync_config.provide_session() as driver:
         # Get the table name from the store
         table_name = oracle_sync_store._table_name.upper()
 
         # Verify table exists
-        result = driver.execute(
-            "SELECT table_name FROM user_tables WHERE table_name = :1", (table_name,)
-        )
+        result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = :1", (table_name,))
         assert len(result.data) == 1
         assert result.data[0]["TABLE_NAME"] == table_name
 
         # Verify table structure
         result = driver.execute(
             "SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :1 ORDER BY column_id",
-            (table_name,)
+            (table_name,),
         )
         columns = {row["COLUMN_NAME"]: row["DATA_TYPE"] for row in result.data}
         assert "SESSION_KEY" in columns
@@ -235,10 +236,7 @@ async def test_oracle_async_store_crud_operations(oracle_async_store: SQLSpecSes
             "tablespace": "USERS",
             "features": ["plsql", "json", "vector"],
         },
-        "nested_oracle": {
-            "sga_config": {"shared_pool": "512MB", "buffer_cache": "1GB"},
-            "pga_target": "1GB",
-        },
+        "nested_oracle": {"sga_config": {"shared_pool": "512MB", "buffer_cache": "1GB"}, "pga_target": "1GB"},
         "oracle_arrays": [1, 2, 3, [4, 5, [6, 7]]],
         "plsql_packages": ["DBMS_STATS", "DBMS_SCHEDULER", "DBMS_VECTOR"],
     }
@@ -397,11 +395,7 @@ async def test_oracle_async_store_bulk_operations(oracle_async_store: SQLSpecSes
                 "batch": i // 10,
                 "instance": f"ORCL_{i % 3}",  # Simulate RAC instances
             },
-            "oracle_features": {
-                "plsql_enabled": i % 2 == 0,
-                "json_enabled": True,
-                "vector_enabled": i % 5 == 0,
-            },
+            "oracle_features": {"plsql_enabled": i % 2 == 0, "json_enabled": True, "vector_enabled": i % 5 == 0},
         }
         entries[key] = oracle_bulk_value
         tasks.append(oracle_async_store.set(key, oracle_bulk_value, expires_in=3600))
@@ -443,11 +437,7 @@ def test_oracle_sync_store_bulk_operations(oracle_sync_store: SQLSpecSessionStor
                     "schema": f"SCHEMA_{i}",
                     "tablespace": f"TBS_{i % 5}",
                 },
-                "database_objects": {
-                    "tables": i * 2,
-                    "indexes": i * 3,
-                    "sequences": i,
-                },
+                "database_objects": {"tables": i * 2, "indexes": i * 3, "sequences": i},
             }
             entries[key] = oracle_sync_bulk_value
 
@@ -506,7 +496,9 @@ async def test_oracle_async_store_large_data(oracle_async_store: SQLSpecSessionS
             },
         },
         "oracle_analytics": {
-            "statistics": {f"stat_{i}": {"value": i * 1.5, "timestamp": f"2024-01-{i:02d}"} for i in range(1, 366)},  # Full year
+            "statistics": {
+                f"stat_{i}": {"value": i * 1.5, "timestamp": f"2024-01-{i:02d}"} for i in range(1, 366)
+            },  # Full year
             "events": [{"event_id": i, "description": "Oracle event " + "x" * 300} for i in range(500)],
         },
     }
@@ -562,7 +554,7 @@ def test_oracle_sync_store_large_data(oracle_sync_store: SQLSpecSessionStore) ->
                         "statistics": {"logical_reads": i * 1000, "physical_reads": i * 100},
                     }
                     for i in range(200)
-                ],
+                ]
             },
         }
 
@@ -655,10 +647,11 @@ async def test_oracle_async_store_get_all(oracle_async_store: SQLSpecSessionStor
         await oracle_async_store.set(key, oracle_value, expires_in=expires_in)
 
     # Get all entries
-    all_entries = {}
-    async for key, value in oracle_async_store.get_all():
-        if key.startswith("oracle-async-all-"):
-            all_entries[key] = value
+    all_entries = {
+        key: value 
+        async for key, value in oracle_async_store.get_all() 
+        if key.startswith("oracle-async-all-")
+    }
 
     # Should have all four initially
     assert len(all_entries) >= 3  # At least the non-expiring ones
@@ -671,10 +664,11 @@ async def test_oracle_async_store_get_all(oracle_async_store: SQLSpecSessionStor
     await asyncio.sleep(2)
 
     # Get all again
-    all_entries = {}
-    async for key, value in oracle_async_store.get_all():
-        if key.startswith("oracle-async-all-"):
-            all_entries[key] = value
+    all_entries = {
+        key: value 
+        async for key, value in oracle_async_store.get_all() 
+        if key.startswith("oracle-async-all-")
+    }
 
     # Should only have non-expired entries
     expected_persistent = ["oracle-async-all-1", "oracle-async-all-2", "oracle-async-all-4"]
@@ -701,10 +695,11 @@ def test_oracle_sync_store_get_all(oracle_sync_store: SQLSpecSessionStore) -> No
             await oracle_sync_store.set(key, oracle_sync_value, expires_in=expires_in)
 
         # Get all entries
-        all_entries = {}
-        async for key, value in oracle_sync_store.get_all():
-            if key.startswith("oracle-sync-all-"):
-                all_entries[key] = value
+        all_entries = {
+            key: value 
+            async for key, value in oracle_sync_store.get_all() 
+            if key.startswith("oracle-sync-all-")
+        }
 
         # Should have all initially
         assert len(all_entries) >= 2  # At least the non-expiring ones
@@ -713,10 +708,11 @@ def test_oracle_sync_store_get_all(oracle_sync_store: SQLSpecSessionStore) -> No
         await asyncio.sleep(2)
 
         # Get all again
-        all_entries = {}
-        async for key, value in oracle_sync_store.get_all():
-            if key.startswith("oracle-sync-all-"):
-                all_entries[key] = value
+        all_entries = {
+            key: value 
+            async for key, value in oracle_sync_store.get_all() 
+            if key.startswith("oracle-sync-all-")
+        }
 
         # Verify persistent entries remain
         for key, value in all_entries.items():
@@ -881,7 +877,9 @@ def test_oracle_sync_store_special_characters(oracle_sync_store: SQLSpecSessionS
     asyncio.run(run_sync_test())
 
 
-async def test_oracle_async_store_transaction_isolation(oracle_async_store: SQLSpecSessionStore, oracle_async_config: OracleAsyncConfig) -> None:
+async def test_oracle_async_store_transaction_isolation(
+    oracle_async_store: SQLSpecSessionStore, oracle_async_config: OracleAsyncConfig
+) -> None:
     """Test transaction isolation in Oracle async store operations."""
     key = "oracle-async-transaction-test"
 
@@ -912,17 +910,16 @@ async def test_oracle_async_store_transaction_isolation(oracle_async_store: SQLS
     assert result["oracle_session"]["sid"] == 123
 
 
-def test_oracle_sync_store_transaction_isolation(oracle_sync_store: SQLSpecSessionStore, oracle_sync_config: OracleSyncConfig) -> None:
+def test_oracle_sync_store_transaction_isolation(
+    oracle_sync_store: SQLSpecSessionStore, oracle_sync_config: OracleSyncConfig
+) -> None:
     """Test transaction isolation in Oracle sync store operations."""
 
     async def run_sync_test() -> None:
         key = "oracle-sync-transaction-test"
 
         # Set initial Oracle sync value
-        initial_sync_data = {
-            "counter": 0,
-            "oracle_workspace": {"name": "TEST_WS", "schema": "TEST_SCHEMA"},
-        }
+        initial_sync_data = {"counter": 0, "oracle_workspace": {"name": "TEST_WS", "schema": "TEST_SCHEMA"}}
         await oracle_sync_store.set(key, initial_sync_data, expires_in=3600)
 
         async def increment_sync_counter() -> None:
