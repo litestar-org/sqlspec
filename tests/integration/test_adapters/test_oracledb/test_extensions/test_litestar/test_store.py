@@ -648,9 +648,7 @@ async def test_oracle_async_store_get_all(oracle_async_store: SQLSpecSessionStor
 
     # Get all entries
     all_entries = {
-        key: value 
-        async for key, value in oracle_async_store.get_all() 
-        if key.startswith("oracle-async-all-")
+        key: value async for key, value in oracle_async_store.get_all() if key.startswith("oracle-async-all-")
     }
 
     # Should have all four initially
@@ -665,9 +663,7 @@ async def test_oracle_async_store_get_all(oracle_async_store: SQLSpecSessionStor
 
     # Get all again
     all_entries = {
-        key: value 
-        async for key, value in oracle_async_store.get_all() 
-        if key.startswith("oracle-async-all-")
+        key: value async for key, value in oracle_async_store.get_all() if key.startswith("oracle-async-all-")
     }
 
     # Should only have non-expired entries
@@ -696,9 +692,7 @@ def test_oracle_sync_store_get_all(oracle_sync_store: SQLSpecSessionStore) -> No
 
         # Get all entries
         all_entries = {
-            key: value 
-            async for key, value in oracle_sync_store.get_all() 
-            if key.startswith("oracle-sync-all-")
+            key: value async for key, value in oracle_sync_store.get_all() if key.startswith("oracle-sync-all-")
         }
 
         # Should have all initially
@@ -709,9 +703,7 @@ def test_oracle_sync_store_get_all(oracle_sync_store: SQLSpecSessionStore) -> No
 
         # Get all again
         all_entries = {
-            key: value 
-            async for key, value in oracle_sync_store.get_all() 
-            if key.startswith("oracle-sync-all-")
+            key: value async for key, value in oracle_sync_store.get_all() if key.startswith("oracle-sync-all-")
         }
 
         # Verify persistent entries remain
