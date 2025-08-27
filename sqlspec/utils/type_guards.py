@@ -6,6 +6,7 @@ understand type narrowing, replacing defensive hasattr() and duck typing pattern
 
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlspec.typing import (
@@ -59,6 +60,7 @@ __all__ = (
     "extract_dataclass_items",
     "get_initial_expression",
     "get_literal_parent",
+    "get_msgspec_rename_config",
     "get_node_expressions",
     "get_node_this",
     "get_param_style_and_name",
@@ -427,6 +429,78 @@ def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Str
     except AttributeError:
         return True
     return False
+
+
+@lru_cache(maxsize=500)
+def _detect_rename_pattern(field_name: str, encode_name: str) -> "Optional[str]":
+    """Detect the rename pattern by comparing field name transformations.
+
+    Args:
+        field_name: Original field name (e.g., "user_id")
+        encode_name: Encoded field name (e.g., "userId")
+
+    Returns:
+        The detected rename pattern ("camel", "kebab", "pascal") or None
+    """
+    from sqlspec.utils.text import camelize, kebabize, pascalize
+
+    # Test camelCase conversion
+    if encode_name == camelize(field_name) and encode_name != field_name:
+        return "camel"
+
+    if encode_name == kebabize(field_name) and encode_name != field_name:
+        return "kebab"
+
+    if encode_name == pascalize(field_name) and encode_name != field_name:
+        return "pascal"
+    return None
+
+
+def get_msgspec_rename_config(schema_type: type) -> "Optional[str]":
+    """Extract msgspec rename configuration from a struct type.
+
+    Analyzes field name transformations to detect the rename pattern used by msgspec.
+    Since msgspec doesn't store the original rename parameter directly, we infer it
+    by comparing field names with their encode_name values.
+
+    Args:
+        schema_type: The msgspec struct type to inspect.
+
+    Returns:
+        The rename configuration value ("camel", "kebab", "pascal", etc.) if detected,
+        None if no rename configuration exists or if not a msgspec struct.
+
+    Examples:
+        >>> class User(msgspec.Struct, rename="camel"):
+        ...     user_id: int
+        >>> get_msgspec_rename_config(User)
+        "camel"
+
+        >>> class Product(msgspec.Struct):
+        ...     product_id: int
+        >>> get_msgspec_rename_config(Product)
+        None
+    """
+    if not MSGSPEC_INSTALLED:
+        return None
+
+    if not is_msgspec_struct(schema_type):
+        return None
+
+    from msgspec import structs
+
+    fields = structs.fields(schema_type)  # type: ignore[arg-type]
+    if not fields:
+        return None
+
+    # Check if any field name differs from its encode_name
+    for field in fields:
+        if field.name != field.encode_name:
+            # Detect the rename pattern by comparing transformations
+            return _detect_rename_pattern(field.name, field.encode_name)
+
+    # If all field names match their encode_name, no rename is applied
+    return None
 
 
 def is_attrs_instance(obj: Any) -> "TypeGuard[AttrsInstanceStub]":

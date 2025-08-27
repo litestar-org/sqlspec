@@ -161,10 +161,11 @@ include = [
   "sqlspec/loader.py",    # Loader module
 
   # === UTILITY MODULES ===
-  "sqlspec/utils/text.py",        # Text utilities
-  "sqlspec/utils/sync_tools.py",  # Synchronous utility functions
-  "sqlspec/utils/type_guards.py", # Type guard utilities
-  "sqlspec/utils/fixtures.py",    # File fixture loading
+  "sqlspec/utils/text.py",                # Text utilities
+  "sqlspec/utils/sync_tools.py",          # Synchronous utility functions
+  "sqlspec/utils/type_guards.py",         # Type guard utilities
+  "sqlspec/utils/fixtures.py",            # File fixture loading
+  "sqlspec/utils/data_transformation.py", # Data transformation utilities
 ]
 mypy-args = [
   "--ignore-missing-imports",

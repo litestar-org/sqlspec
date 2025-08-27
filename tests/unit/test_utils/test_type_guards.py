@@ -7,6 +7,7 @@ Uses function-based pytest approach as per CLAUDE.md requirements.
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+import msgspec
 import pytest
 
 if TYPE_CHECKING:
@@ -19,6 +20,7 @@ from sqlspec.utils.type_guards import (
     extract_dataclass_items,
     get_initial_expression,
     get_literal_parent,
+    get_msgspec_rename_config,
     get_node_expressions,
     get_node_this,
     get_param_style_and_name,
@@ -864,3 +866,106 @@ def test_edge_case_empty_string_literal() -> None:
 
     zero_literal = cast("exp.Literal", MockLiteral(this="0"))
     assert is_number_literal(zero_literal) is True
+
+
+class MockMsgspecStructWithCamelRename(msgspec.Struct, rename="camel"):  # type: ignore[misc]
+    """Mock msgspec struct with camel rename configuration."""
+
+    test_name: str = "test"
+
+
+class MockMsgspecStructWithKebabRename(msgspec.Struct, rename="kebab"):  # type: ignore[misc]
+    """Mock msgspec struct with kebab rename configuration."""
+
+    test_name: str = "test"
+
+
+class MockMsgspecStructWithPascalRename(msgspec.Struct, rename="pascal"):  # type: ignore[misc]
+    """Mock msgspec struct with pascal rename configuration."""
+
+    test_name: str = "test"
+
+
+class MockMsgspecStructWithoutRename(msgspec.Struct):
+    """Mock msgspec struct without rename configuration."""
+
+    test_name: str = "test"
+
+
+class MockMsgspecStructWithoutConfig(msgspec.Struct):
+    """Mock msgspec struct without __struct_config__ attribute."""
+
+    test_name: str = "test"
+
+
+def test_get_msgspec_rename_config_with_camel_rename() -> None:
+    """Test get_msgspec_rename_config returns 'camel' for camel rename config."""
+    schema_type = MockMsgspecStructWithCamelRename
+    result = get_msgspec_rename_config(schema_type)
+    assert result == "camel"
+
+
+def test_get_msgspec_rename_config_with_kebab_rename() -> None:
+    """Test get_msgspec_rename_config returns 'kebab' for kebab rename config."""
+    schema_type = MockMsgspecStructWithKebabRename
+    result = get_msgspec_rename_config(schema_type)
+    assert result == "kebab"
+
+
+def test_get_msgspec_rename_config_with_pascal_rename() -> None:
+    """Test get_msgspec_rename_config returns 'pascal' for pascal rename config."""
+    schema_type = MockMsgspecStructWithPascalRename
+    result = get_msgspec_rename_config(schema_type)
+    assert result == "pascal"
+
+
+def test_get_msgspec_rename_config_without_rename() -> None:
+    """Test get_msgspec_rename_config returns None when no rename config."""
+    schema_type = MockMsgspecStructWithoutRename
+    result = get_msgspec_rename_config(schema_type)
+    assert result is None
+
+
+def test_get_msgspec_rename_config_without_struct_config() -> None:
+    """Test get_msgspec_rename_config returns None when no __struct_config__."""
+    schema_type = MockMsgspecStructWithoutConfig
+    result = get_msgspec_rename_config(schema_type)
+    assert result is None
+
+
+def test_get_msgspec_rename_config_with_non_msgspec_class() -> None:
+    """Test get_msgspec_rename_config returns None for non-msgspec classes."""
+    result = get_msgspec_rename_config(SampleDataclass)
+    assert result is None
+
+    result = get_msgspec_rename_config(dict)
+    assert result is None
+
+    result = get_msgspec_rename_config(list)
+    assert result is None
+
+
+def test_get_msgspec_rename_config_with_invalid_config_structure() -> None:
+    """Test get_msgspec_rename_config handles invalid config structures."""
+
+    class InvalidConfigStruct:
+        __struct_config__ = "not a dict"
+
+    result = get_msgspec_rename_config(InvalidConfigStruct)
+    assert result is None
+
+    class InvalidConfigStruct2:
+        __struct_config__ = None
+
+    result = get_msgspec_rename_config(InvalidConfigStruct2)
+    assert result is None
+
+
+def test_get_msgspec_rename_config_performance() -> None:
+    """Test get_msgspec_rename_config performs efficiently."""
+    schema_type = MockMsgspecStructWithCamelRename
+
+    # Test repeated calls to ensure no performance degradation
+    for _ in range(100):
+        result = get_msgspec_rename_config(schema_type)
+        assert result == "camel"

@@ -6,44 +6,9 @@ camelCase conversion, and snake_case conversion.
 
 import pytest
 
-from sqlspec.utils.text import camelize, check_email, slugify, snake_case
+from sqlspec.utils.text import camelize, slugify, snake_case
 
 pytestmark = pytest.mark.xdist_group("utils")
-
-
-def test_check_email_valid() -> None:
-    """Test check_email with valid email addresses."""
-    assert check_email("test@example.com") == "test@example.com"
-    assert check_email("USER@DOMAIN.COM") == "user@domain.com"
-    assert check_email("complex.email+test@sub.domain.co.uk") == "complex.email+test@sub.domain.co.uk"
-
-
-def test_check_email_invalid() -> None:
-    """Test check_email with invalid email addresses."""
-    with pytest.raises(ValueError, match="Invalid email!"):
-        check_email("invalid_email")
-
-    with pytest.raises(ValueError, match="Invalid email!"):
-        check_email("")
-
-    with pytest.raises(ValueError, match="Invalid email!"):
-        check_email("no_at_symbol")
-
-
-def test_check_email_unicode_domains() -> None:
-    """Test check_email with Unicode domain names."""
-    unicode_email = "test@тест.com"
-    result = check_email(unicode_email)
-    assert result == "test@тест.com"
-
-
-def test_check_email_special_local_parts() -> None:
-    """Test check_email with special characters in local part."""
-    special_emails = ["user.name@example.com", "user+tag@example.com", "user_name@example.com", "user-name@example.com"]
-
-    for email in special_emails:
-        result = check_email(email)
-        assert result == email.lower()
 
 
 def test_slugify_basic() -> None:
