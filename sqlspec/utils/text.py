@@ -19,25 +19,7 @@ _SNAKE_CASE_HYPHEN_SPACE = re.compile(r"[.\s@-]+", re.UNICODE)
 _SNAKE_CASE_REMOVE_NON_WORD = re.compile(r"[^\w]+", re.UNICODE)
 _SNAKE_CASE_MULTIPLE_UNDERSCORES = re.compile(r"__+", re.UNICODE)
 
-__all__ = ("camelize", "check_email", "slugify", "snake_case")
-
-
-def check_email(email: str) -> str:
-    """Validate an email address.
-
-    Args:
-        email: The email to validate.
-
-    Raises:
-        ValueError: If the email is invalid.
-
-    Returns:
-        The validated email.
-    """
-    if "@" not in email:
-        msg = "Invalid email!"
-        raise ValueError(msg)
-    return email.lower()
+__all__ = ("camelize", "kebabize", "pascalize", "slugify", "snake_case")
 
 
 def slugify(value: str, allow_unicode: bool = False, separator: Optional[str] = None) -> str:
@@ -78,6 +60,32 @@ def camelize(string: str) -> str:
         The converted string.
     """
     return "".join(word if index == 0 else word.capitalize() for index, word in enumerate(string.split("_")))
+
+
+@lru_cache(maxsize=100)
+def kebabize(string: str) -> str:
+    """Convert a string to kebab-case.
+
+    Args:
+        string: The string to convert.
+
+    Returns:
+        The kebab-case version of the string.
+    """
+    return "-".join(word.lower() for word in string.split("_") if word)
+
+
+@lru_cache(maxsize=100)
+def pascalize(string: str) -> str:
+    """Convert a string to PascalCase.
+
+    Args:
+        string: The string to convert.
+
+    Returns:
+        The PascalCase version of the string.
+    """
+    return "".join(word.capitalize() for word in string.split("_") if word)
 
 
 @lru_cache(maxsize=100)
