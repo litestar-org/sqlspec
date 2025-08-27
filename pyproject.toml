@@ -51,6 +51,7 @@ psycopg = ["psycopg[binary,pool]"]
 pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
+sanic = ["sanic", "sanic[ext]>=24.6.0"]
 spanner = ["google-cloud-spanner"]
 uuid = ["uuid-utils"]
 
@@ -90,6 +91,10 @@ extras = [
   "adbc_driver_postgresql",
   "adbc_driver_flightsql",
   "adbc_driver_bigquery",
+  "sanic-testing",
+  "dishka ; python_version >= \"3.10\"",
+  "pydantic-extra-types",
+  "fsspec[s3]",
 ]
 lint = [
   "mypy>=1.13.0",
@@ -466,6 +471,7 @@ split-on-trailing-comma = false
 "docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127"]
 "docs/examples/**" = ["T201"]
 "sqlspec/builder/mixins/**/*.*" = ["SLF001"]
+"sqlspec/extensions/fastapi/providers.py" = ["B008"]
 "tests/**/*.*" = [
   "A",
   "ARG",
