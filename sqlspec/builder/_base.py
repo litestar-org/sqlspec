@@ -416,7 +416,7 @@ class QueryBuilder(ABC):
 
         if isinstance(safe_query.parameters, dict):
             kwargs = safe_query.parameters
-            parameters: Optional[tuple] = None
+            parameters: Optional[tuple[Any, ...]] = None
         else:
             kwargs = None
             parameters = (

@@ -142,7 +142,7 @@ class WhereClauseMixin:
         msg = f"NOT BETWEEN operator requires a tuple of two values, got {type(value).__name__}"
         raise SQLBuilderError(msg)
 
-    def _process_tuple_condition(self, condition: tuple) -> exp.Expression:
+    def _process_tuple_condition(self, condition: "tuple[Any, ...]") -> exp.Expression:
         """Process tuple-based WHERE conditions."""
         builder = cast("SQLBuilderProtocol", self)
         column_name_raw = str(condition[0])

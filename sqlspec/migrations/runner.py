@@ -106,7 +106,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
-                loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
+                loader = get_migration_loader(file_path, self.migrations_path, self.project_root, self.context)
 
                 try:
                     up_sql = await_(loader.get_up_sql, raise_sync_error=False)(file_path)
@@ -154,7 +154,45 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
         Returns:
             Migration metadata dictionary.
         """
-        loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
+        # Check if this is an extension migration and update context accordingly
+        context_to_use = self.context
+        if context_to_use and file_path.name.startswith("ext_"):
+            # Try to extract extension name from the version
+            version = self._extract_version(file_path.name)
+            if version and version.startswith("ext_"):
+                # Parse extension name from version like "ext_litestar_0001"
+                min_extension_version_parts = 3
+                parts = version.split("_", 2)
+                if len(parts) >= min_extension_version_parts:
+                    ext_name = parts[1]
+                    if ext_name in self.extension_configs:
+                        # Create a new context with the extension config
+                        from sqlspec.migrations.context import MigrationContext
+
+                        context_to_use = MigrationContext(
+                            dialect=self.context.dialect if self.context else None,
+                            config=self.context.config if self.context else None,
+                            driver=self.context.driver if self.context else None,
+                            metadata=self.context.metadata.copy() if self.context and self.context.metadata else {},
+                            extension_config=self.extension_configs[ext_name],
+                        )
+
+        # For extension migrations, check by path
+        for ext_name, ext_path in self.extension_migrations.items():
+            if file_path.parent == ext_path:
+                if ext_name in self.extension_configs and self.context:
+                    from sqlspec.migrations.context import MigrationContext
+
+                    context_to_use = MigrationContext(
+                        dialect=self.context.dialect,
+                        config=self.context.config,
+                        driver=self.context.driver,
+                        metadata=self.context.metadata.copy() if self.context.metadata else {},
+                        extension_config=self.extension_configs[ext_name],
+                    )
+                break
+
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)
         loader.validate_migration_file(file_path)
         content = file_path.read_text(encoding="utf-8")
         checksum = self._calculate_checksum(content)
@@ -281,7 +319,7 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
-                loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
+                loader = get_migration_loader(file_path, self.migrations_path, self.project_root, self.context)
 
                 try:
                     up_sql = await loader.get_up_sql(file_path)
