@@ -1,3 +1,4 @@
+# ruff: noqa: C901
 """Result handling and schema conversion mixins for database drivers."""
 
 import datetime
@@ -22,7 +23,16 @@ from sqlspec.typing import (
     convert,
     get_type_adapter,
 )
-from sqlspec.utils.type_guards import is_attrs_schema, is_dataclass, is_msgspec_struct, is_pydantic_model
+from sqlspec.utils.data_transformation import transform_dict_keys
+from sqlspec.utils.text import camelize, kebabize, pascalize
+from sqlspec.utils.type_guards import (
+    get_msgspec_rename_config,
+    is_attrs_schema,
+    is_dataclass,
+    is_dict,
+    is_msgspec_struct,
+    is_pydantic_model,
+)
 
 __all__ = ("_DEFAULT_TYPE_DECODERS", "_default_msgspec_deserializer")
 
@@ -143,21 +153,46 @@ class ToSchemaMixin:
             if isinstance(data, list):
                 result: list[Any] = []
                 for item in data:
-                    if hasattr(item, "keys"):
+                    if is_dict(item):
                         result.append(schema_type(**dict(item)))  # type: ignore[operator]
                     else:
                         result.append(item)
                 return result
-            if hasattr(data, "keys"):
+            if is_dict(data):
                 return schema_type(**dict(data))  # type: ignore[operator]
             if isinstance(data, dict):
                 return schema_type(**data)  # type: ignore[operator]
             return data
         if is_msgspec_struct(schema_type):
+            rename_config = get_msgspec_rename_config(schema_type)  # type: ignore[arg-type]
             deserializer = partial(_default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS)
-            if not isinstance(data, Sequence):
-                return convert(obj=data, type=schema_type, from_attributes=True, dec_hook=deserializer)
-            return convert(obj=data, type=list[schema_type], from_attributes=True, dec_hook=deserializer)  # type: ignore[valid-type]
+
+            # Transform field names if rename configuration exists
+            transformed_data = data
+            if (rename_config and is_dict(data)) or (isinstance(data, Sequence) and data and is_dict(data[0])):
+                try:
+                    converter = None
+                    if rename_config == "camel":
+                        converter = camelize
+                    elif rename_config == "kebab":
+                        converter = kebabize
+                    elif rename_config == "pascal":
+                        converter = pascalize
+
+                    if converter is not None:
+                        if isinstance(data, Sequence):
+                            transformed_data = [
+                                transform_dict_keys(item, converter) if is_dict(item) else item for item in data
+                            ]
+                        else:
+                            transformed_data = transform_dict_keys(data, converter) if is_dict(data) else data
+                except Exception as e:
+                    logger.debug("Field name transformation failed for msgspec schema: %s", e)
+                    transformed_data = data
+
+            if not isinstance(transformed_data, Sequence):
+                return convert(obj=transformed_data, type=schema_type, from_attributes=True, dec_hook=deserializer)
+            return convert(obj=transformed_data, type=list[schema_type], from_attributes=True, dec_hook=deserializer)  # type: ignore[valid-type]
         if is_pydantic_model(schema_type):
             if not isinstance(data, Sequence):
                 adapter = get_type_adapter(schema_type)
