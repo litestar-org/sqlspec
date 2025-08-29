@@ -320,6 +320,9 @@ async def test_get_next_with_default() -> None:
     """Test get_next with default value when iterator is exhausted."""
 
     class EmptyAsyncIterator:
+        def __aiter__(self) -> "EmptyAsyncIterator":
+            return self
+
         async def __anext__(self) -> int:
             raise StopAsyncIteration
 
@@ -334,17 +337,17 @@ async def test_get_next_no_default_behavior() -> None:
     """Test get_next behavior when iterator is exhausted without default."""
 
     class EmptyAsyncIterator:
+        def __aiter__(self) -> "EmptyAsyncIterator":
+            return self
+
         async def __anext__(self) -> int:
             raise StopAsyncIteration
 
     iterator = EmptyAsyncIterator()
 
-    try:
-        result = await get_next(iterator)
-
-        assert isinstance(result, type(NoValue))
-    except StopAsyncIteration:
-        pass
+    # Should raise StopAsyncIteration when no default is provided
+    with pytest.raises(StopAsyncIteration):
+        await get_next(iterator)
 
 
 def test_no_value_class() -> None:
