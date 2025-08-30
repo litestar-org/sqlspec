@@ -108,10 +108,14 @@ class ObStoreBackend:
 
                 self.store = MemoryStore()
             elif uri.startswith("file://"):
+                from pathlib import Path as PathlibPath
+
                 from obstore.store import LocalStore
 
                 parsed = urlparse(uri)
                 path = parsed.path or "/"
+                # Create directory if it doesn't exist (ObStore LocalStore requires it)
+                PathlibPath(path).mkdir(parents=True, exist_ok=True)
                 self.store = LocalStore(path)
             else:
                 from obstore.store import from_url

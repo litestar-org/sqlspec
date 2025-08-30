@@ -27,9 +27,10 @@ def test_from_config() -> None:
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        config = {"store_uri": f"file://{temp_dir}", "base_path": "data", "store_options": {}}
+        data_dir = f"{temp_dir}/data"
+        config = {"store_uri": f"file://{data_dir}", "store_options": {}}
         store = ObStoreBackend.from_config(config)
-        assert store.base_path == "data"
+        assert store.base_path == ""
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")

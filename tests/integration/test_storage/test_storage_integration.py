@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from minio import Minio
 from pytest_databases.docker.minio import MinioService
 
 from sqlspec.protocols import ObjectStoreProtocol
@@ -48,10 +49,12 @@ def fsspec_s3_backend(minio_service: "MinioService", minio_default_bucket_name: 
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     return FSSpecBackend(
-        uri="s3://",
-        endpoint_url=f"http://{minio_service.host}:{minio_service.port}",
+        uri=f"s3://{minio_default_bucket_name}",
+        endpoint_url=f"http://{minio_service.endpoint}",
         key=minio_service.access_key,
         secret=minio_service.secret_key,
+        use_ssl=False,
+        client_kwargs={"verify": False, "use_ssl": False},
     )
 
 
@@ -63,9 +66,11 @@ def obstore_s3_backend(minio_service: "MinioService", minio_default_bucket_name:
     s3_uri = f"s3://{minio_default_bucket_name}"
     return ObStoreBackend(
         s3_uri,
-        endpoint_url=f"http://{minio_service.host}:{minio_service.port}",
+        aws_endpoint=f"http://{minio_service.endpoint}",
         aws_access_key_id=minio_service.access_key,
         aws_secret_access_key=minio_service.secret_key,
+        aws_virtual_hosted_style_request=False,
+        client_options={"allow_http": True},
     )
 
 
@@ -165,8 +170,13 @@ async def test_local_store_async_operations(local_test_setup: Path) -> None:
 
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
-def test_fsspec_s3_basic_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
+def test_fsspec_s3_basic_operations(
+    fsspec_s3_backend: "ObjectStoreProtocol", minio_client: "Minio", minio_default_bucket_name: str
+) -> None:
     """Test FSSpec S3 backend basic operations."""
+    # Ensure bucket exists (following Advanced Alchemy pattern)
+    assert minio_client.bucket_exists(minio_default_bucket_name), f"Bucket {minio_default_bucket_name} does not exist"
+
     # Test write and read text
     test_path = "integration_test/test.txt"
     fsspec_s3_backend.write_text(test_path, TEST_TEXT_CONTENT)
@@ -254,8 +264,13 @@ def test_fsspec_s3_copy_move_operations(fsspec_s3_backend: "ObjectStoreProtocol"
 
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
-def test_obstore_s3_basic_operations(obstore_s3_backend: "ObjectStoreProtocol") -> None:
+def test_obstore_s3_basic_operations(
+    obstore_s3_backend: "ObjectStoreProtocol", minio_client: "Minio", minio_default_bucket_name: str
+) -> None:
     """Test ObStore S3 backend basic operations."""
+    # Ensure bucket exists (following Advanced Alchemy pattern)
+    assert minio_client.bucket_exists(minio_default_bucket_name), f"Bucket {minio_default_bucket_name} does not exist"
+
     test_path = "integration_test/obstore_test.txt"
 
     # Test write and read
@@ -356,9 +371,12 @@ def test_registry_s3_fsspec_resolution(minio_service: "MinioService", minio_defa
 
     backend = storage_registry.get(
         s3_uri,
-        endpoint_url=f"http://{minio_service.host}:{minio_service.port}",
-        aws_access_key_id=minio_service.access_key,
-        aws_secret_access_key=minio_service.secret_key,
+        backend="fsspec",
+        endpoint_url=f"http://{minio_service.endpoint}",
+        key=minio_service.access_key,
+        secret=minio_service.secret_key,
+        use_ssl=False,
+        client_kwargs={"verify": False, "use_ssl": False},
     )
 
     # Should get FSSpec backend for S3
@@ -383,7 +401,7 @@ def test_registry_alias_registration(
 
     try:
         # Register local alias
-        storage_registry.register_alias("test-local", uri=f"file://{tmp_path}", base_path="test_data")
+        storage_registry.register_alias("test-local", uri=f"file://{tmp_path / 'test_data'}")
 
         # Test local alias
         backend = storage_registry.get("test-local")
@@ -401,9 +419,12 @@ def test_registry_alias_registration(
             storage_registry.register_alias(
                 "test-s3",
                 uri=f"s3://{minio_default_bucket_name}",
-                endpoint_url=f"http://{minio_service.host}:{minio_service.port}",
-                aws_access_key_id=minio_service.access_key,
-                aws_secret_access_key=minio_service.secret_key,
+                backend="fsspec",
+                endpoint_url=f"http://{minio_service.endpoint}",
+                key=minio_service.access_key,
+                secret=minio_service.secret_key,
+                use_ssl=False,
+                client_kwargs={"verify": False, "use_ssl": False},
             )
 
             s3_backend = storage_registry.get("test-s3")
@@ -462,9 +483,11 @@ def obstore_s3_backend_optional(minio_service: "MinioService", minio_default_buc
     s3_uri = f"s3://{minio_default_bucket_name}"
     return ObStoreBackend(
         s3_uri,
-        endpoint_url=f"http://{minio_service.host}:{minio_service.port}",
+        aws_endpoint=f"http://{minio_service.endpoint}",
         aws_access_key_id=minio_service.access_key,
         aws_secret_access_key=minio_service.secret_key,
+        aws_virtual_hosted_style_request=False,
+        client_options={"allow_http": True},
     )
 
 

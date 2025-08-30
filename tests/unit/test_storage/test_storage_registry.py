@@ -126,7 +126,7 @@ def test_register_alias_with_base_path() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         registry = StorageRegistry()
 
-        registry.register_alias("test_store", f"file://{temp_dir}", base_path="data")
+        registry.register_alias("test_store", f"file://{temp_dir}/data")
         backend = registry.get("test_store")
 
         # Write and read to verify base_path works

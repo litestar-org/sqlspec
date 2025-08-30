@@ -109,6 +109,15 @@ class FSSpecBackend:
             clean_base = self.base_path.rstrip("/")
             clean_path = path_str.lstrip("/")
             return f"{clean_base}/{clean_path}"
+        if self.protocol == "s3" and "://" in self._fs_uri:
+            # For S3, we need to include the bucket from the URI
+            # Extract bucket and path from URI like s3://bucket/path
+            uri_parts = self._fs_uri.split("://", 1)[1]  # Remove s3://
+            if "/" in uri_parts:
+                # URI has bucket and base path
+                return f"{uri_parts.rstrip('/')}/{path_str.lstrip('/')}"
+            # URI has only bucket
+            return f"{uri_parts}/{path_str.lstrip('/')}"
         return path_str
 
     @property
@@ -123,9 +132,12 @@ class FSSpecBackend:
     def write_bytes(self, path: Union[str, Path], data: bytes, **kwargs: Any) -> None:
         """Write bytes to an object."""
         resolved_path = self._resolve_path(path)
-        parent_dir = str(Path(resolved_path).parent)
-        if parent_dir and not self.fs.exists(parent_dir):
-            self.fs.makedirs(parent_dir, exist_ok=True)
+
+        # Only create directories for local file systems, not for cloud storage
+        if self.protocol == "file":
+            parent_dir = str(Path(resolved_path).parent)
+            if parent_dir and not self.fs.exists(parent_dir):
+                self.fs.makedirs(parent_dir, exist_ok=True)
 
         with self.fs.open(resolved_path, mode="wb", **kwargs) as f:
             f.write(data)  # pyright: ignore

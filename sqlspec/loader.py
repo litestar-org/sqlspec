@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from urllib.parse import unquote, urlparse
 
 from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
 from sqlspec.core.statement import SQL
@@ -50,13 +51,25 @@ MIN_QUERY_PARTS: Final = 3
 def _normalize_query_name(name: str) -> str:
     """Normalize query name to be a valid Python identifier.
 
+    Convert hyphens to underscores, preserve dots for namespacing,
+    and remove invalid characters.
+
     Args:
         name: Raw query name from SQL file.
 
     Returns:
         Normalized query name suitable as Python identifier.
     """
-    return slugify(name, separator="_")
+    # Handle namespace parts separately to preserve dots
+    parts = name.split(".")
+    normalized_parts = []
+
+    for part in parts:
+        # Use slugify with underscore separator and remove any remaining invalid chars
+        normalized_part = slugify(part, separator="_")
+        normalized_parts.append(normalized_part)
+
+    return ".".join(normalized_parts)
 
 
 def _normalize_dialect(dialect: str) -> str:
@@ -239,6 +252,15 @@ class SQLFileLoader:
 
         try:
             backend = self.storage_registry.get(path)
+            # For file:// URIs, extract just the filename for the backend call
+            if path_str.startswith("file://"):
+                parsed = urlparse(path_str)
+                file_path = unquote(parsed.path)
+                # Handle Windows paths (file:///C:/path)
+                if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
+                    file_path = file_path[1:]  # Remove leading slash for Windows
+                filename = Path(file_path).name
+                return backend.read_text(filename, encoding=self.encoding)
             return backend.read_text(path_str, encoding=self.encoding)
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e

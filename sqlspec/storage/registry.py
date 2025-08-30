@@ -77,6 +77,16 @@ class StorageRegistry:
         self._instances: dict[Union[str, tuple[str, tuple[tuple[str, Any], ...]]], ObjectStoreProtocol] = {}
         self._cache: dict[str, tuple[str, type[ObjectStoreProtocol]]] = {}
 
+    def _make_hashable(self, obj: Any) -> Any:
+        """Convert nested dict/list structures to hashable tuples."""
+        if isinstance(obj, dict):
+            return tuple(sorted((k, self._make_hashable(v)) for k, v in obj.items()))
+        if isinstance(obj, list):
+            return tuple(self._make_hashable(item) for item in obj)
+        if isinstance(obj, set):
+            return tuple(sorted(self._make_hashable(item) for item in obj))
+        return obj
+
     def register_alias(
         self, alias: str, uri: str, *, backend: Optional[str] = None, base_path: str = "", **kwargs: Any
     ) -> None:
@@ -123,7 +133,7 @@ class StorageRegistry:
         if isinstance(uri_or_alias, Path):
             uri_or_alias = f"file://{uri_or_alias.resolve()}"
 
-        cache_key = (uri_or_alias, tuple(sorted(kwargs.items()))) if kwargs else uri_or_alias
+        cache_key = (uri_or_alias, self._make_hashable(kwargs)) if kwargs else uri_or_alias
         if cache_key in self._instances:
             return self._instances[cache_key]
         scheme = self._get_scheme(uri_or_alias)
