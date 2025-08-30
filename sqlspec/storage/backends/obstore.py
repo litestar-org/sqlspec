@@ -30,21 +30,35 @@ logger = logging.getLogger(__name__)
 class _AsyncArrowIterator:
     """Helper class to work around mypyc's lack of async generator support."""
 
-    def __init__(self, store: Any, pattern: str, **kwargs: Any) -> None:
-        self.store = store
+    def __init__(self, backend: ObStoreBackend, pattern: str, **kwargs: Any) -> None:
+        self.backend = backend
         self.pattern = pattern
         self.kwargs = kwargs
-        self._iterator: Any | None = None
+        self._files_iterator: Iterator[str] | None = None
+        self._current_file_iterator: Iterator[ArrowRecordBatch] | None = None
 
     def __aiter__(self) -> _AsyncArrowIterator:
         return self
 
     async def __anext__(self) -> ArrowRecordBatch:
-        if self._iterator is None:
-            self._iterator = self.store.stream_arrow_async(self.pattern, **self.kwargs)
-        if self._iterator is not None:
-            return cast("ArrowRecordBatch", await self._iterator.__anext__())
-        raise StopAsyncIteration
+        if self._files_iterator is None:
+            files = self.backend.glob(self.pattern, **self.kwargs)
+            self._files_iterator = iter(files)
+
+        while True:
+            if self._current_file_iterator is not None:
+                try:
+                    return next(self._current_file_iterator)
+                except StopIteration:
+                    self._current_file_iterator = None
+
+            try:
+                next_file = next(self._files_iterator)
+                # Stream from this file
+                file_batches = self.backend.stream_arrow(next_file)
+                self._current_file_iterator = iter(file_batches)
+            except StopIteration:
+                raise StopAsyncIteration
 
 
 DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_timeout": "60s"}
@@ -161,7 +175,10 @@ class ObStoreBackend:
         """List objects using obstore."""
         resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
         items = self.store.list_with_delimiter(resolved_prefix) if not recursive else self.store.list(resolved_prefix)
-        return sorted(str(getattr(item, "path", getattr(item, "key", str(item)))) for item in items)
+        paths = []
+        for batch in items:
+            paths.extend(item["path"] for item in batch)
+        return sorted(paths)
 
     def exists(self, path: str | Path, **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Check if object exists using obstore."""
@@ -218,16 +235,14 @@ class ObStoreBackend:
         result: dict[str, Any] = {}
         try:
             metadata = self.store.head(resolved_path)
-            result.update(
-                {
-                    "path": resolved_path,
-                    "exists": True,
-                    "size": getattr(metadata, "size", None),
-                    "last_modified": getattr(metadata, "last_modified", None),
-                    "e_tag": getattr(metadata, "e_tag", None),
-                    "version": getattr(metadata, "version", None),
-                }
-            )
+            result.update({
+                "path": resolved_path,
+                "exists": True,
+                "size": getattr(metadata, "size", None),
+                "last_modified": getattr(metadata, "last_modified", None),
+                "e_tag": getattr(metadata, "e_tag", None),
+                "version": getattr(metadata, "version", None),
+            })
             if hasattr(metadata, "metadata") and metadata.metadata:
                 result["custom_metadata"] = metadata.metadata
 
@@ -308,8 +323,18 @@ class ObStoreBackend:
         Yields:
             Iterator of Arrow record batches from matching objects.
         """
-        resolved_pattern = self._resolve_path(pattern)
-        yield from self.store.stream_arrow(resolved_pattern, **kwargs)  # pyright: ignore[reportAttributeAccessIssue]
+        self._ensure_pyarrow()
+        from io import BytesIO
+
+        import pyarrow.parquet as pq
+
+        for obj_path in self.glob(pattern, **kwargs):
+            result = self.store.get(self._resolve_path(obj_path))
+            bytes_obj = result.bytes()
+            data = bytes_obj.to_bytes()
+            buffer = BytesIO(data)
+            parquet_file = pq.ParquetFile(buffer)
+            yield from parquet_file.iter_batches()
 
     def sign(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL for the object."""
@@ -334,7 +359,9 @@ class ObStoreBackend:
         """List objects in storage asynchronously."""
         resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
 
-        objects = [str(item.path) async for item in self.store.list_async(resolved_prefix)]  # pyright: ignore[reportAttributeAccessIssue]
+        objects = []
+        async for batch in self.store.list_async(resolved_prefix):  # pyright: ignore[reportAttributeAccessIssue]
+            objects.extend(item["path"] for item in batch)
 
         if not recursive and resolved_prefix:
             base_depth = resolved_prefix.count("/")
@@ -384,18 +411,16 @@ class ObStoreBackend:
         result: dict[str, Any] = {}
         try:
             metadata = await self.store.head_async(resolved_path)
-            result.update(
-                {
-                    "path": resolved_path,
-                    "exists": True,
-                    "size": metadata.size,
-                    "last_modified": metadata.last_modified,
-                    "e_tag": metadata.e_tag,
-                    "version": metadata.version,
-                }
-            )
-            if hasattr(metadata, "metadata") and metadata.metadata:
-                result["custom_metadata"] = metadata.metadata
+            result.update({
+                "path": resolved_path,
+                "exists": True,
+                "size": metadata.get("size"),
+                "last_modified": metadata.get("last_modified"),
+                "e_tag": metadata.get("e_tag"),
+                "version": metadata.get("version"),
+            })
+            if metadata.get("metadata"):
+                result["custom_metadata"] = metadata["metadata"]
 
         except Exception:
             return {"path": resolved_path, "exists": False}
@@ -433,7 +458,7 @@ class ObStoreBackend:
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
         resolved_pattern = self._resolve_path(pattern)
-        return _AsyncArrowIterator(self.store, resolved_pattern, **kwargs)
+        return _AsyncArrowIterator(self, resolved_pattern, **kwargs)
 
     async def sign_async(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL asynchronously."""

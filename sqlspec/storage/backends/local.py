@@ -56,8 +56,12 @@ class LocalStore:
         if "base_path" in kwargs:
             self.base_path = Path(kwargs["base_path"]).resolve()
 
-        # Create base directory if it doesn't exist
-        self.base_path.mkdir(parents=True, exist_ok=True)
+        # Create base directory if it doesn't exist and it's actually a directory
+        if not self.base_path.exists():
+            self.base_path.mkdir(parents=True, exist_ok=True)
+        elif self.base_path.is_file():
+            # If base_path points to a file, use its parent as the base directory
+            self.base_path = self.base_path.parent
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         self.protocol = "file"
@@ -98,13 +102,16 @@ class LocalStore:
 
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects in directory."""
-        search_path = self._resolve_path(prefix) if prefix else self.base_path
-
-        if not search_path.exists():
-            return []
-
-        if search_path.is_file():
-            return [str(search_path.relative_to(self.base_path))]
+        # If prefix looks like a directory path, treat as directory
+        if prefix and (prefix.endswith("/") or "/" in prefix):
+            search_path = self._resolve_path(prefix)
+            if not search_path.exists():
+                return []
+            if search_path.is_file():
+                return [str(search_path.relative_to(self.base_path))]
+        else:
+            # Treat as filename prefix filter
+            search_path = self.base_path
 
         pattern = "**/*" if recursive else "*"
         files = []
@@ -112,10 +119,15 @@ class LocalStore:
             if path.is_file():
                 try:
                     relative = path.relative_to(self.base_path)
-                    files.append(str(relative))
+                    relative_str = str(relative)
+                    # Apply prefix filter if provided
+                    if not prefix or relative_str.startswith(prefix):
+                        files.append(relative_str)
                 except ValueError:
                     # Path is outside base_path, use absolute
-                    files.append(str(path))
+                    path_str = str(path)
+                    if not prefix or path_str.startswith(prefix):
+                        files.append(path_str)
 
         return sorted(files)
 

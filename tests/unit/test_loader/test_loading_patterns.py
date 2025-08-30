@@ -623,186 +623,201 @@ SELECT 'Unicode filename support' as message;
         assert "unicode_filename_query" in queries
 
 
-class TestFixturePerformanceTests:
-    """Performance tests using real fixture files."""
+@pytest.fixture
+def fixtures_path() -> Path:
+    """Get path to test fixtures directory."""
+    return Path(__file__).parent.parent.parent / "fixtures"
 
-    @pytest.fixture
-    def fixtures_path(self) -> Path:
-        """Get path to test fixtures directory."""
-        return Path(__file__).parent.parent.parent / "fixtures"
 
-    def test_large_fixture_loading_performance(self, fixtures_path: Path) -> None:
-        """Test performance loading large fixture files."""
-        import time
+def test_large_fixture_loading_performance(fixtures_path: Path) -> None:
+    """Test performance loading large fixture files."""
+    import time
 
-        large_fixtures = [
-            "postgres/collection-database_details.sql",
-            "postgres/collection-table_details.sql",
-            "postgres/collection-schema_details.sql",
-            "mysql/collection-database_details.sql",
-            "mysql/collection-table_details.sql",
-        ]
+    from sqlspec.loader import SQLFileLoader
 
-        performance_results = {}
+    large_fixtures = [
+        "postgres/collection-database_details.sql",
+        "postgres/collection-table_details.sql",
+        "postgres/collection-schema_details.sql",
+        "mysql/collection-database_details.sql",
+        "mysql/collection-table_details.sql",
+    ]
 
-        for fixture_path in large_fixtures:
-            fixture_file = fixtures_path / fixture_path
-            if not fixture_file.exists():
-                continue
+    performance_results = {}
 
-            loader = SQLFileLoader()
-
-            start_time = time.time()
-            loader.load_sql(fixture_file)
-            load_time = time.time() - start_time
-
-            queries = loader.list_queries()
-            performance_results[fixture_path] = {
-                "load_time": load_time,
-                "query_count": len(queries),
-                "file_size": fixture_file.stat().st_size,
-            }
-
-            assert load_time < 2.0, f"Loading {fixture_path} took too long: {load_time:.3f}s"
-            assert len(queries) > 0, f"No queries loaded from {fixture_path}"
-
-            if queries:
-                test_query = queries[0]
-                sql_start = time.time()
-                sql_obj = loader.get_sql(test_query)
-                sql_time = time.time() - sql_start
-
-                assert sql_time < 0.1, f"SQL object creation too slow: {sql_time:.3f}s"
-                assert isinstance(sql_obj, SQL)
-
-    def test_multiple_fixture_batch_loading(self, fixtures_path: Path) -> None:
-        """Test performance when loading multiple fixture files at once."""
-        import time
-
-        fixture_files = [
-            fixtures_path / "init.sql",
-            fixtures_path / "postgres" / "collection-extensions.sql",
-            fixtures_path / "mysql" / "collection-engines.sql",
-            fixtures_path / "postgres" / "collection-privileges.sql",
-        ]
-
-        existing_files = [f for f in fixture_files if f.exists()]
-        if len(existing_files) < 2:
-            pytest.skip("Need at least 2 fixture files for batch loading test")
-
-        loader = SQLFileLoader()
-
-        start_time = time.time()
-        loader.load_sql(*existing_files)
-        total_load_time = time.time() - start_time
-
-        all_queries = loader.list_queries()
-        assert len(all_queries) > 0
-
-        assert total_load_time < 3.0, f"Batch loading took too long: {total_load_time:.3f}s"
-
-        loaded_files = loader.list_files()
-        for fixture_file in existing_files:
-            assert str(fixture_file) in loaded_files
-
-    def test_fixture_directory_scanning_performance(self, fixtures_path: Path) -> None:
-        """Test performance when scanning fixture directories."""
-        import time
-
-        test_dirs = [fixtures_path / "postgres", fixtures_path / "mysql"]
-
-        for test_dir in test_dirs:
-            if not test_dir.exists():
-                continue
-
-            loader = SQLFileLoader()
-
-            start_time = time.time()
-            loader.load_sql(test_dir)
-            scan_time = time.time() - start_time
-
-            queries = loader.list_queries()
-            files = loader.list_files()
-
-            assert scan_time < 5.0, f"Directory scanning took too long: {scan_time:.3f}s"
-            assert len(queries) > 0, f"No queries found in {test_dir}"
-            assert len(files) > 0, f"No files loaded from {test_dir}"
-
-            if test_dir.name in ["postgres", "mysql"]:
-                assert len(queries) > 0, f"No queries found in {test_dir}"
-
-    def test_fixture_cache_performance(self, fixtures_path: Path) -> None:
-        """Test performance benefits of caching with fixture files."""
-        import time
-
-        fixture_file = fixtures_path / "postgres" / "collection-database_details.sql"
+    for fixture_path in large_fixtures:
+        fixture_file = fixtures_path / fixture_path
         if not fixture_file.exists():
-            pytest.skip("Large fixture file not available")
-
-        loader1 = SQLFileLoader()
-        start_time = time.time()
-        loader1.load_sql(fixture_file)
-        first_load_time = time.time() - start_time
-
-        start_time = time.time()
-        loader1.load_sql(fixture_file)
-        cached_load_time = time.time() - start_time
-
-        assert cached_load_time <= first_load_time, "Cached load should not be slower than first load"
-
-        queries1 = loader1.list_queries()
-        assert len(queries1) > 0
-
-    def test_concurrent_fixture_access_simulation(self, fixtures_path: Path) -> None:
-        """Test simulated concurrent access to fixture files."""
-        import time
-
-        fixture_file = fixtures_path / "init.sql"
-
-        loaders = []
-        load_times = []
-
-        for i in range(5):
-            loader = SQLFileLoader()
-
-            start_time = time.time()
-            loader.load_sql(fixture_file)
-            load_time = time.time() - start_time
-
-            loaders.append(loader)
-            load_times.append(load_time)
-
-            queries = loader.list_queries()
-            assert len(queries) > 0
-
-            assert load_time < 1.0, f"Load {i + 1} took too long: {load_time:.3f}s"
-
-        base_queries = set(loaders[0].list_queries())
-        for loader in loaders[1:]:
-            assert set(loader.list_queries()) == base_queries
-
-    def test_memory_usage_with_large_fixtures(self, fixtures_path: Path) -> None:
-        """Test memory usage patterns with large fixture files."""
-        large_fixtures = ["postgres/collection-database_details.sql", "postgres/collection-table_details.sql"]
+            continue
 
         loader = SQLFileLoader()
-        initial_query_count = len(loader.list_queries())
 
-        for fixture_path in large_fixtures:
-            fixture_file = fixtures_path / fixture_path
-            if not fixture_file.exists():
-                continue
+        start_time = time.time()
+        loader.load_sql(fixture_file)
+        load_time = time.time() - start_time
 
-            loader.load_sql(fixture_file)
+        queries = loader.list_queries()
+        performance_results[fixture_path] = {
+            "load_time": load_time,
+            "query_count": len(queries),
+            "file_size": fixture_file.stat().st_size,
+        }
 
-            queries = loader.list_queries()
+        assert load_time < 2.0, f"Loading {fixture_path} took too long: {load_time:.3f}s"
+        assert len(queries) > 0, f"No queries loaded from {fixture_path}"
 
-            assert len(queries) > initial_query_count
+        if queries:
+            test_query = queries[0]
+            sql_start = time.time()
+            sql_obj = loader.get_sql(test_query)
+            sql_time = time.time() - sql_start
 
-            for query_name in queries[:5]:
-                sql_obj = loader.get_sql(query_name)
-                assert isinstance(sql_obj, SQL)
+            assert sql_time < 0.1, f"SQL object creation too slow: {sql_time:.3f}s"
+            assert isinstance(sql_obj, SQL)
 
-                assert len(str(sql_obj)) < 50000
 
-            initial_query_count = len(queries)
+def test_multiple_fixture_batch_loading(fixtures_path: Path) -> None:
+    """Test performance when loading multiple fixture files at once."""
+    import time
+
+    from sqlspec.loader import SQLFileLoader
+
+    fixture_files = [
+        fixtures_path / "init.sql",
+        fixtures_path / "postgres" / "collection-extensions.sql",
+        fixtures_path / "mysql" / "collection-engines.sql",
+        fixtures_path / "postgres" / "collection-privileges.sql",
+    ]
+
+    existing_files = [f for f in fixture_files if f.exists()]
+    if len(existing_files) < 2:
+        pytest.skip("Need at least 2 fixture files for batch loading test")
+
+    loader = SQLFileLoader()
+
+    start_time = time.time()
+    loader.load_sql(*existing_files)
+    total_load_time = time.time() - start_time
+
+    all_queries = loader.list_queries()
+    assert len(all_queries) > 0
+
+    assert total_load_time < 3.0, f"Batch loading took too long: {total_load_time:.3f}s"
+
+    loaded_files = loader.list_files()
+    for fixture_file in existing_files:
+        assert str(fixture_file) in loaded_files
+
+
+def test_fixture_directory_scanning_performance(fixtures_path: Path) -> None:
+    """Test performance when scanning fixture directories."""
+    import time
+
+    from sqlspec.loader import SQLFileLoader
+
+    test_dirs = [fixtures_path / "postgres", fixtures_path / "mysql"]
+
+    for test_dir in test_dirs:
+        if not test_dir.exists():
+            continue
+
+        loader = SQLFileLoader()
+
+        start_time = time.time()
+        loader.load_sql(test_dir)
+        scan_time = time.time() - start_time
+
+        queries = loader.list_queries()
+        files = loader.list_files()
+
+        assert scan_time < 5.0, f"Directory scanning took too long: {scan_time:.3f}s"
+        assert len(queries) > 0, f"No queries found in {test_dir}"
+        assert len(files) > 0, f"No files loaded from {test_dir}"
+
+        if test_dir.name in ["postgres", "mysql"]:
+            assert len(queries) > 0, f"No queries found in {test_dir}"
+
+
+def test_fixture_cache_performance(fixtures_path: Path) -> None:
+    """Test performance benefits of caching with fixture files."""
+    import time
+
+    from sqlspec.loader import SQLFileLoader
+
+    fixture_file = fixtures_path / "postgres" / "collection-database_details.sql"
+    if not fixture_file.exists():
+        pytest.skip("Large fixture file not available")
+
+    loader1 = SQLFileLoader()
+    start_time = time.time()
+    loader1.load_sql(fixture_file)
+    first_load_time = time.time() - start_time
+
+    start_time = time.time()
+    loader1.load_sql(fixture_file)
+    cached_load_time = time.time() - start_time
+
+    assert cached_load_time <= first_load_time, "Cached load should not be slower than first load"
+
+    queries1 = loader1.list_queries()
+    assert len(queries1) > 0
+
+
+def test_concurrent_fixture_access_simulation(fixtures_path: Path) -> None:
+    """Test simulated concurrent access to fixture files."""
+    import time
+
+    from sqlspec.loader import SQLFileLoader
+
+    fixture_file = fixtures_path / "init.sql"
+
+    loaders = []
+    load_times = []
+
+    for i in range(5):
+        loader = SQLFileLoader()
+
+        start_time = time.time()
+        loader.load_sql(fixture_file)
+        load_time = time.time() - start_time
+
+        loaders.append(loader)
+        load_times.append(load_time)
+
+        queries = loader.list_queries()
+        assert len(queries) > 0
+
+        assert load_time < 1.0, f"Load {i + 1} took too long: {load_time:.3f}s"
+
+    base_queries = set(loaders[0].list_queries())
+    for loader in loaders[1:]:
+        assert set(loader.list_queries()) == base_queries
+
+
+def test_memory_usage_with_large_fixtures(fixtures_path: Path) -> None:
+    """Test memory usage patterns with large fixture files."""
+    from sqlspec.loader import SQLFileLoader
+
+    large_fixtures = ["postgres/collection-database_details.sql", "postgres/collection-table_details.sql"]
+
+    loader = SQLFileLoader()
+    initial_query_count = len(loader.list_queries())
+
+    for fixture_path in large_fixtures:
+        fixture_file = fixtures_path / fixture_path
+        if not fixture_file.exists():
+            continue
+
+        loader.load_sql(fixture_file)
+
+        queries = loader.list_queries()
+
+        assert len(queries) > initial_query_count
+
+        for query_name in queries[:5]:
+            sql_obj = loader.get_sql(query_name)
+            assert isinstance(sql_obj, SQL)
+
+            assert len(str(sql_obj)) < 50000
+
+        initial_query_count = len(queries)

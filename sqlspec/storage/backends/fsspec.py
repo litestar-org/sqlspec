@@ -230,8 +230,6 @@ class FSSpecBackend:
     def sign(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL for the file."""
         resolved_path = self._resolve_path(path)
-        if hasattr(self.fs, "sign") and callable(self.fs.sign):
-            return self.fs.sign(resolved_path, expires_in=expires_in, for_upload=for_upload)  # type: ignore[no-any-return]
         return f"{self._fs_uri}{resolved_path}"
 
     def _stream_file_batches(self, obj_path: Union[str, Path]) -> "Iterator[ArrowRecordBatch]":
