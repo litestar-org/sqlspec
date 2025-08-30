@@ -10,18 +10,15 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from urllib.parse import unquote, urlparse
 
 from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
 from sqlspec.core.statement import SQL
-from sqlspec.exceptions import (
-    MissingDependencyError,
-    SQLFileNotFoundError,
-    SQLFileParseError,
-    StorageOperationFailedError,
-)
+from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, StorageOperationFailedError
 from sqlspec.storage.registry import storage_registry as default_storage_registry
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
     from sqlspec.storage.registry import StorageRegistry
@@ -54,13 +51,25 @@ MIN_QUERY_PARTS: Final = 3
 def _normalize_query_name(name: str) -> str:
     """Normalize query name to be a valid Python identifier.
 
+    Convert hyphens to underscores, preserve dots for namespacing,
+    and remove invalid characters.
+
     Args:
         name: Raw query name from SQL file.
 
     Returns:
         Normalized query name suitable as Python identifier.
     """
-    return TRIM_SPECIAL_CHARS.sub("", name).replace("-", "_")
+    # Handle namespace parts separately to preserve dots
+    parts = name.split(".")
+    normalized_parts = []
+
+    for part in parts:
+        # Use slugify with underscore separator and remove any remaining invalid chars
+        normalized_part = slugify(part, separator="_")
+        normalized_parts.append(normalized_part)
+
+    return ".".join(normalized_parts)
 
 
 def _normalize_dialect(dialect: str) -> str:
@@ -71,19 +80,6 @@ def _normalize_dialect(dialect: str) -> str:
 
     Returns:
         Normalized dialect name.
-    """
-    normalized = dialect.lower().strip()
-    return DIALECT_ALIASES.get(normalized, normalized)
-
-
-def _normalize_dialect_for_sqlglot(dialect: str) -> str:
-    """Normalize dialect name for SQLGlot compatibility.
-
-    Args:
-        dialect: Dialect name from SQL file or parameter.
-
-    Returns:
-        SQLGlot-compatible dialect name.
     """
     normalized = dialect.lower().strip()
     return DIALECT_ALIASES.get(normalized, normalized)
@@ -218,8 +214,7 @@ class SQLFileLoader:
             SQLFileParseError: If file cannot be read.
         """
         try:
-            content = self._read_file_content(path)
-            return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
+            return hashlib.md5(self._read_file_content(path).encode(), usedforsecurity=False).hexdigest()
         except Exception as e:
             raise SQLFileParseError(str(path), str(path), e) from e
 
@@ -253,19 +248,22 @@ class SQLFileLoader:
             SQLFileNotFoundError: If file does not exist.
             SQLFileParseError: If file cannot be read or parsed.
         """
-
         path_str = str(path)
 
         try:
             backend = self.storage_registry.get(path)
+            # For file:// URIs, extract just the filename for the backend call
+            if path_str.startswith("file://"):
+                parsed = urlparse(path_str)
+                file_path = unquote(parsed.path)
+                # Handle Windows paths (file:///C:/path)
+                if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
+                    file_path = file_path[1:]  # Remove leading slash for Windows
+                filename = Path(file_path).name
+                return backend.read_text(filename, encoding=self.encoding)
             return backend.read_text(path_str, encoding=self.encoding)
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e
-        except MissingDependencyError:
-            try:
-                return path.read_text(encoding=self.encoding)  # type: ignore[union-attr]
-            except FileNotFoundError as e:
-                raise SQLFileNotFoundError(path_str) from e
         except StorageOperationFailedError as e:
             if "not found" in str(e).lower() or "no such file" in str(e).lower():
                 raise SQLFileNotFoundError(path_str) from e
@@ -419,8 +417,7 @@ class SQLFileLoader:
         for file_path in sql_files:
             relative_path = file_path.relative_to(dir_path)
             namespace_parts = relative_path.parent.parts
-            namespace = ".".join(namespace_parts) if namespace_parts else None
-            self._load_single_file(file_path, namespace)
+            self._load_single_file(file_path, ".".join(namespace_parts) if namespace_parts else None)
         return len(sql_files)
 
     def _load_single_file(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
@@ -533,44 +530,6 @@ class SQLFileLoader:
         self._queries[normalized_name] = statement
         self._query_to_file[normalized_name] = "<directly added>"
 
-    def get_sql(self, name: str) -> "SQL":
-        """Get a SQL object by statement name.
-
-        Args:
-            name: Name of the statement (from -- name: in SQL file).
-                  Hyphens in names are converted to underscores.
-
-        Returns:
-            SQL object ready for execution.
-
-        Raises:
-            SQLFileNotFoundError: If statement name not found.
-        """
-        correlation_id = CorrelationContext.get()
-
-        safe_name = _normalize_query_name(name)
-
-        if safe_name not in self._queries:
-            available = ", ".join(sorted(self._queries.keys())) if self._queries else "none"
-            logger.error(
-                "Statement not found: %s",
-                name,
-                extra={
-                    "statement_name": name,
-                    "safe_name": safe_name,
-                    "available_statements": len(self._queries),
-                    "correlation_id": correlation_id,
-                },
-            )
-            raise SQLFileNotFoundError(name, path=f"Statement '{name}' not found. Available statements: {available}")
-
-        parsed_statement = self._queries[safe_name]
-        sqlglot_dialect = None
-        if parsed_statement.dialect:
-            sqlglot_dialect = _normalize_dialect_for_sqlglot(parsed_statement.dialect)
-
-        return SQL(parsed_statement.sql, dialect=sqlglot_dialect)
-
     def get_file(self, path: Union[str, Path]) -> "Optional[SQLFile]":
         """Get a loaded SQLFile object by path.
 
@@ -659,3 +618,41 @@ class SQLFileLoader:
         if safe_name not in self._queries:
             raise SQLFileNotFoundError(name)
         return self._queries[safe_name].sql
+
+    def get_sql(self, name: str) -> "SQL":
+        """Get a SQL object by statement name.
+
+        Args:
+            name: Name of the statement (from -- name: in SQL file).
+                  Hyphens in names are converted to underscores.
+
+        Returns:
+            SQL object ready for execution.
+
+        Raises:
+            SQLFileNotFoundError: If statement name not found.
+        """
+        correlation_id = CorrelationContext.get()
+
+        safe_name = _normalize_query_name(name)
+
+        if safe_name not in self._queries:
+            available = ", ".join(sorted(self._queries.keys())) if self._queries else "none"
+            logger.error(
+                "Statement not found: %s",
+                name,
+                extra={
+                    "statement_name": name,
+                    "safe_name": safe_name,
+                    "available_statements": len(self._queries),
+                    "correlation_id": correlation_id,
+                },
+            )
+            raise SQLFileNotFoundError(name, path=f"Statement '{name}' not found. Available statements: {available}")
+
+        parsed_statement = self._queries[safe_name]
+        sqlglot_dialect = None
+        if parsed_statement.dialect:
+            sqlglot_dialect = _normalize_dialect(parsed_statement.dialect)
+
+        return SQL(parsed_statement.sql, dialect=sqlglot_dialect)
