@@ -235,14 +235,16 @@ class ObStoreBackend:
         result: dict[str, Any] = {}
         try:
             metadata = self.store.head(resolved_path)
-            result.update({
-                "path": resolved_path,
-                "exists": True,
-                "size": getattr(metadata, "size", None),
-                "last_modified": getattr(metadata, "last_modified", None),
-                "e_tag": getattr(metadata, "e_tag", None),
-                "version": getattr(metadata, "version", None),
-            })
+            result.update(
+                {
+                    "path": resolved_path,
+                    "exists": True,
+                    "size": getattr(metadata, "size", None),
+                    "last_modified": getattr(metadata, "last_modified", None),
+                    "e_tag": getattr(metadata, "e_tag", None),
+                    "version": getattr(metadata, "version", None),
+                }
+            )
             if hasattr(metadata, "metadata") and metadata.metadata:
                 result["custom_metadata"] = metadata.metadata
 
@@ -411,14 +413,16 @@ class ObStoreBackend:
         result: dict[str, Any] = {}
         try:
             metadata = await self.store.head_async(resolved_path)
-            result.update({
-                "path": resolved_path,
-                "exists": True,
-                "size": metadata.get("size"),
-                "last_modified": metadata.get("last_modified"),
-                "e_tag": metadata.get("e_tag"),
-                "version": metadata.get("version"),
-            })
+            result.update(
+                {
+                    "path": resolved_path,
+                    "exists": True,
+                    "size": metadata.get("size"),
+                    "last_modified": metadata.get("last_modified"),
+                    "e_tag": metadata.get("e_tag"),
+                    "version": metadata.get("version"),
+                }
+            )
             if metadata.get("metadata"):
                 result["custom_metadata"] = metadata["metadata"]
 
