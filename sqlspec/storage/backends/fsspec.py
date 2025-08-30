@@ -1,17 +1,13 @@
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
-from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
-from sqlspec.storage.backends.base import ObjectStoreBase
-from sqlspec.storage.capabilities import StorageCapabilities
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
-
-    from fsspec import AbstractFileSystem
 
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
@@ -56,40 +52,30 @@ class _ArrowStreamer:
         raise StopAsyncIteration
 
 
-class FSSpecBackend(ObjectStoreBase):
+class FSSpecBackend:
     """Storage backend using fsspec.
 
-    Implements the ObjectStoreProtocol using fsspec for various protocols
+    Implements ObjectStoreProtocol using fsspec for various protocols
     including HTTP, HTTPS, FTP, and cloud storage services.
     """
 
-    _default_capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
-        supports_arrow=PYARROW_INSTALLED,
-        supports_streaming=PYARROW_INSTALLED,
-        supports_async=True,
-        supports_compression=True,
-        is_remote=True,
-        is_cloud_native=False,
-    )
+    def __init__(self, uri: str, **kwargs: Any) -> None:
+        self._ensure_fsspec()
 
-    def __init__(self, fs: "Union[str, AbstractFileSystem]", base_path: str = "") -> None:
-        if not FSSPEC_INSTALLED:
-            raise MissingDependencyError(package="fsspec", install_package="fsspec")
-
+        base_path = kwargs.pop("base_path", "")
         self.base_path = base_path.rstrip("/") if base_path else ""
 
-        if isinstance(fs, str):
-            import fsspec
-
-            self.fs = fsspec.filesystem(fs.split("://")[0])
-            self.protocol = fs.split("://")[0]
-            self._fs_uri = fs
+        if "://" in uri:
+            self.protocol = uri.split("://", maxsplit=1)[0]
+            self._fs_uri = uri
         else:
-            self.fs = fs
-            self.protocol = getattr(fs, "protocol", "unknown")
-            self._fs_uri = f"{self.protocol}://"
+            self.protocol = uri
+            self._fs_uri = f"{uri}://"
 
-        self._instance_capabilities = self._detect_capabilities()
+        import fsspec
+
+        self.fs = fsspec.filesystem(self.protocol, **kwargs)
+        self.backend_type = "fsspec"
 
         super().__init__()
 
@@ -99,11 +85,22 @@ class FSSpecBackend(ObjectStoreBase):
         fs_config = config.get("fs_config", {})
         base_path = config.get("base_path", "")
 
-        import fsspec
+        uri = f"{protocol}://"
+        kwargs = dict(fs_config)
+        if base_path:
+            kwargs["base_path"] = base_path
 
-        fs_instance = fsspec.filesystem(protocol, **fs_config)
+        return cls(uri=uri, **kwargs)
 
-        return cls(fs=fs_instance, base_path=base_path)
+    def _ensure_fsspec(self) -> None:
+        """Ensure fsspec is available for operations."""
+        if not FSSPEC_INSTALLED:
+            raise MissingDependencyError(package="fsspec", install_package="fsspec")
+
+    def _ensure_pyarrow(self) -> None:
+        """Ensure PyArrow is available for Arrow operations."""
+        if not PYARROW_INSTALLED:
+            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
 
     def _resolve_path(self, path: Union[str, Path]) -> str:
         """Resolve path relative to base_path."""
@@ -114,68 +111,24 @@ class FSSpecBackend(ObjectStoreBase):
             return f"{clean_base}/{clean_path}"
         return path_str
 
-    def _detect_capabilities(self) -> StorageCapabilities:
-        """Detect capabilities based on filesystem protocol."""
-        protocol = self.protocol.lower()
-
-        if protocol in {"s3", "s3a", "s3n"}:
-            return StorageCapabilities.s3_compatible()
-        if protocol in {"gcs", "gs"}:
-            return StorageCapabilities.gcs()
-        if protocol in {"abfs", "az", "azure"}:
-            return StorageCapabilities.azure_blob()
-        if protocol in {"file", "local"}:
-            return StorageCapabilities.local_filesystem()
-        return StorageCapabilities(
-            supports_arrow=PYARROW_INSTALLED,
-            supports_streaming=PYARROW_INSTALLED,
-            supports_async=True,
-            supports_compression=True,
-            is_remote=True,
-            is_cloud_native=False,
-        )
-
-    @property
-    def capabilities(self) -> StorageCapabilities:
-        """Return capabilities based on detected protocol."""
-        return getattr(self, "_instance_capabilities", self.__class__._default_capabilities)
-
-    @classmethod
-    def has_capability(cls, capability: str) -> bool:
-        """Check if backend has a specific capability."""
-        return getattr(cls._default_capabilities, capability, False)
-
-    @classmethod
-    def get_capabilities(cls) -> StorageCapabilities:
-        """Get all capabilities for this backend."""
-        return cls._default_capabilities
-
-    @property
-    def backend_type(self) -> str:
-        return "fsspec"
-
     @property
     def base_uri(self) -> str:
         return self._fs_uri
 
     def read_bytes(self, path: Union[str, Path], **kwargs: Any) -> bytes:
         """Read bytes from an object."""
-        try:
-            resolved_path = self._resolve_path(path)
-            return self.fs.cat(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore
-        except Exception as exc:
-            msg = f"Failed to read bytes from {path}"
-            raise StorageOperationFailedError(msg) from exc
+        resolved_path = self._resolve_path(path)
+        return self.fs.cat(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore
 
     def write_bytes(self, path: Union[str, Path], data: bytes, **kwargs: Any) -> None:
         """Write bytes to an object."""
-        try:
-            resolved_path = self._resolve_path(path)
-            with self.fs.open(resolved_path, mode="wb", **kwargs) as f:
-                f.write(data)  # pyright: ignore
-        except Exception as exc:
-            msg = f"Failed to write bytes to {path}"
-            raise StorageOperationFailedError(msg) from exc
+        resolved_path = self._resolve_path(path)
+        parent_dir = str(Path(resolved_path).parent)
+        if parent_dir and not self.fs.exists(parent_dir):
+            self.fs.makedirs(parent_dir, exist_ok=True)
+
+        with self.fs.open(resolved_path, mode="wb", **kwargs) as f:
+            f.write(data)  # pyright: ignore
 
     def read_text(self, path: Union[str, Path], encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from an object."""
@@ -193,87 +146,59 @@ class FSSpecBackend(ObjectStoreBase):
 
     def delete(self, path: Union[str, Path], **kwargs: Any) -> None:
         """Delete an object."""
-        try:
-            resolved_path = self._resolve_path(path)
-            self.fs.rm(resolved_path, **kwargs)
-        except Exception as exc:
-            msg = f"Failed to delete {path}"
-            raise StorageOperationFailedError(msg) from exc
+        resolved_path = self._resolve_path(path)
+        self.fs.rm(resolved_path, **kwargs)
 
     def copy(self, source: Union[str, Path], destination: Union[str, Path], **kwargs: Any) -> None:
         """Copy an object."""
-        try:
-            source_path = self._resolve_path(source)
-            dest_path = self._resolve_path(destination)
-            self.fs.copy(source_path, dest_path, **kwargs)
-        except Exception as exc:
-            msg = f"Failed to copy {source} to {destination}"
-            raise StorageOperationFailedError(msg) from exc
+        source_path = self._resolve_path(source)
+        dest_path = self._resolve_path(destination)
+        self.fs.copy(source_path, dest_path, **kwargs)
 
     def move(self, source: Union[str, Path], destination: Union[str, Path], **kwargs: Any) -> None:
         """Move an object."""
-        try:
-            source_path = self._resolve_path(source)
-            dest_path = self._resolve_path(destination)
-            self.fs.mv(source_path, dest_path, **kwargs)
-        except Exception as exc:
-            msg = f"Failed to move {source} to {destination}"
-            raise StorageOperationFailedError(msg) from exc
+        source_path = self._resolve_path(source)
+        dest_path = self._resolve_path(destination)
+        self.fs.mv(source_path, dest_path, **kwargs)
 
     def read_arrow(self, path: Union[str, Path], **kwargs: Any) -> "ArrowTable":
         """Read an Arrow table from storage."""
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
-        try:
-            import pyarrow.parquet as pq
+        import pyarrow.parquet as pq
 
-            resolved_path = self._resolve_path(path)
-            with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
-                return pq.read_table(f)
-        except Exception as exc:
-            msg = f"Failed to read Arrow table from {path}"
-            raise StorageOperationFailedError(msg) from exc
+        resolved_path = self._resolve_path(path)
+        with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
+            return pq.read_table(f)
 
     def write_arrow(self, path: Union[str, Path], table: "ArrowTable", **kwargs: Any) -> None:
         """Write an Arrow table to storage."""
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
-        try:
-            import pyarrow.parquet as pq
+        import pyarrow.parquet as pq
 
-            resolved_path = self._resolve_path(path)
-            with self.fs.open(resolved_path, mode="wb") as f:
-                pq.write_table(table, f, **kwargs)  # pyright: ignore
-        except Exception as exc:
-            msg = f"Failed to write Arrow table to {path}"
-            raise StorageOperationFailedError(msg) from exc
+        resolved_path = self._resolve_path(path)
+        with self.fs.open(resolved_path, mode="wb") as f:
+            pq.write_table(table, f, **kwargs)  # pyright: ignore
 
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects with optional prefix."""
-        try:
-            resolved_prefix = self._resolve_path(prefix)
-            if recursive:
-                return sorted(self.fs.find(resolved_prefix, **kwargs))
-            return sorted(self.fs.ls(resolved_prefix, detail=False, **kwargs))
-        except Exception as exc:
-            msg = f"Failed to list objects with prefix '{prefix}'"
-            raise StorageOperationFailedError(msg) from exc
+        resolved_prefix = self._resolve_path(prefix)
+        if recursive:
+            return sorted(self.fs.find(resolved_prefix, **kwargs))
+        return sorted(self.fs.ls(resolved_prefix, detail=False, **kwargs))
 
     def glob(self, pattern: str, **kwargs: Any) -> list[str]:
         """Find objects matching a glob pattern."""
-        try:
-            resolved_pattern = self._resolve_path(pattern)
-            return sorted(self.fs.glob(resolved_pattern, **kwargs))  # pyright: ignore
-        except Exception as exc:
-            msg = f"Failed to glob with pattern '{pattern}'"
-            raise StorageOperationFailedError(msg) from exc
+        resolved_pattern = self._resolve_path(pattern)
+        return sorted(self.fs.glob(resolved_pattern, **kwargs))  # pyright: ignore
 
-    def is_object(self, path: str) -> bool:
+    def is_object(self, path: Union[str, Path]) -> bool:
         """Check if path points to an object."""
         resolved_path = self._resolve_path(path)
         return self.fs.exists(resolved_path) and not self.fs.isdir(resolved_path)
 
-    def is_path(self, path: str) -> bool:
+    def is_path(self, path: Union[str, Path]) -> bool:
         """Check if path points to a prefix (directory-like)."""
         resolved_path = self._resolve_path(path)
         return self.fs.isdir(resolved_path)  # type: ignore[no-any-return]
@@ -294,9 +219,6 @@ class FSSpecBackend(ObjectStoreBase):
 
         except FileNotFoundError:
             return {"path": self._resolve_path(path), "exists": False}
-        except Exception as exc:
-            msg = f"Failed to get metadata for {path}"
-            raise StorageOperationFailedError(msg) from exc
         return {
             "path": resolved_path,
             "exists": True,
@@ -304,6 +226,13 @@ class FSSpecBackend(ObjectStoreBase):
             "last_modified": info.mtime,
             "type": info.type,
         }
+
+    def sign(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
+        """Generate a signed URL for the file."""
+        resolved_path = self._resolve_path(path)
+        if hasattr(self.fs, "sign") and callable(self.fs.sign):
+            return self.fs.sign(resolved_path, expires_in=expires_in, for_upload=for_upload)  # type: ignore[no-any-return]
+        return f"{self._fs_uri}{resolved_path}"
 
     def _stream_file_batches(self, obj_path: Union[str, Path]) -> "Iterator[ArrowRecordBatch]":
         import pyarrow.parquet as pq
@@ -313,10 +242,8 @@ class FSSpecBackend(ObjectStoreBase):
             yield from parquet_file.iter_batches()
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
-        if not FSSPEC_INSTALLED:
-            raise MissingDependencyError(package="fsspec", install_package="fsspec")
-        if not PYARROW_INSTALLED:
-            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
+        self._ensure_fsspec()
+        self._ensure_pyarrow()
 
         for obj_path in self.glob(pattern, **kwargs):
             yield from self._stream_file_batches(obj_path)
@@ -339,8 +266,7 @@ class FSSpecBackend(ObjectStoreBase):
         Returns:
             AsyncIterator of Arrow record batches
         """
-        if not PYARROW_INSTALLED:
-            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
+        self._ensure_pyarrow()
 
         return _ArrowStreamer(self, pattern, **kwargs)
 
@@ -375,6 +301,10 @@ class FSSpecBackend(ObjectStoreBase):
     async def get_metadata_async(self, path: Union[str, Path], **kwargs: Any) -> dict[str, Any]:
         """Get object metadata from storage asynchronously."""
         return await async_(self.get_metadata)(path, **kwargs)
+
+    async def sign_async(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
+        """Generate a signed URL asynchronously."""
+        return await async_(self.sign)(path, expires_in, for_upload)
 
     async def read_arrow_async(self, path: Union[str, Path], **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from storage asynchronously."""

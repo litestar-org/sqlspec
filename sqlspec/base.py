@@ -64,7 +64,7 @@ class SQLSpec:
                     config.close_pool()
                     cleaned_count += 1
                 except Exception as e:
-                    logger.warning("Failed to clean up sync pool for config %s: %s", config_type.__name__, e)
+                    logger.debug("Failed to clean up sync pool for config %s: %s", config_type.__name__, e)
 
         if cleaned_count > 0:
             logger.debug("Sync pool cleanup completed. Cleaned %d pools.", cleaned_count)
@@ -87,14 +87,14 @@ class SQLSpec:
                     else:
                         sync_configs.append((config_type, config))
                 except Exception as e:
-                    logger.warning("Failed to prepare cleanup for config %s: %s", config_type.__name__, e)
+                    logger.debug("Failed to prepare cleanup for config %s: %s", config_type.__name__, e)
 
         if cleanup_tasks:
             try:
                 await asyncio.gather(*cleanup_tasks, return_exceptions=True)
                 logger.debug("Async pool cleanup completed. Cleaned %d pools.", len(cleanup_tasks))
             except Exception as e:
-                logger.warning("Failed to complete async pool cleanup: %s", e)
+                logger.debug("Failed to complete async pool cleanup: %s", e)
 
         for _config_type, config in sync_configs:
             config.close_pool()
@@ -129,7 +129,7 @@ class SQLSpec:
         """
         config_type = type(config)
         if config_type in self._configs:
-            logger.warning("Configuration for %s already exists. Overwriting.", config_type.__name__)
+            logger.debug("Configuration for %s already exists. Overwriting.", config_type.__name__)
         self._configs[config_type] = config
         return config_type
 

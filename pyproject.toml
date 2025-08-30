@@ -83,6 +83,7 @@ doc = [
 ]
 extras = [
   "adbc_driver_manager",
+  "fsspec[s3]",
   "pgvector",
   "pyarrow",
   "polars",
