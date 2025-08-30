@@ -955,7 +955,7 @@ def test_get_msgspec_rename_config_with_invalid_config_structure() -> None:
     assert result is None
 
     class InvalidConfigStruct2:
-        __struct_config__ = None
+        __struct_config__ = None  # type: ignore[var-annotated]
 
     result = get_msgspec_rename_config(InvalidConfigStruct2)
     assert result is None

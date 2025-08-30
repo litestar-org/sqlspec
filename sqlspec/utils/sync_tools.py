@@ -29,6 +29,13 @@ ParamSpecT = ParamSpec("ParamSpecT")
 T = TypeVar("T")
 
 
+class NoValue:
+    """Sentinel class for missing values."""
+
+
+NO_VALUE = NoValue()
+
+
 class CapacityLimiter:
     """Limits the number of concurrent operations using a semaphore."""
 
@@ -240,11 +247,7 @@ def with_ensure_async_(
     return obj
 
 
-class NoValue:
-    """Sentinel class for missing values."""
-
-
-async def get_next(iterable: Any, default: Any = NoValue, *args: Any) -> Any:  # pragma: no cover
+async def get_next(iterable: Any, default: Any = NO_VALUE, *args: Any) -> Any:  # pragma: no cover
     """Return the next item from an async iterator.
 
     Args:

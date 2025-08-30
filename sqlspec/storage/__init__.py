@@ -8,16 +8,6 @@ Provides a storage system with:
 - Capability-based backend selection
 """
 
-from sqlspec.protocols import ObjectStoreProtocol
-from sqlspec.storage.capabilities import HasStorageCapabilities, StorageCapabilities
-from sqlspec.storage.registry import StorageRegistry
+from sqlspec.storage.registry import StorageRegistry, storage_registry
 
-storage_registry = StorageRegistry()
-
-__all__ = (
-    "HasStorageCapabilities",
-    "ObjectStoreProtocol",
-    "StorageCapabilities",
-    "StorageRegistry",
-    "storage_registry",
-)
+__all__ = ("StorageRegistry", "storage_registry")
