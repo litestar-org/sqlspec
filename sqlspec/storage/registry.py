@@ -14,7 +14,6 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.protocols import ObjectStoreProtocol
-from sqlspec.storage.capabilities import StorageCapabilities
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
 
 __all__ = ("StorageRegistry", "storage_registry")
@@ -22,34 +21,52 @@ __all__ = ("StorageRegistry", "storage_registry")
 logger = logging.getLogger(__name__)
 
 
+def _is_local_uri(uri: str) -> bool:
+    """Check if URI represents a local filesystem path."""
+    if "://" in uri and not uri.startswith("file://"):
+        return False
+    windows_drive_min_length = 3
+    return (
+        Path(uri).exists()
+        or Path(uri).is_absolute()
+        or uri.startswith(("~", ".", "/"))
+        or (len(uri) >= windows_drive_min_length and uri[1:3] == ":\\")
+        or "/" in uri
+    )
+
+
 SCHEME_REGEX: Final = re.compile(r"([a-zA-Z0-9+.-]+)://")
-FILE_PROTOCOL: Final[str] = "file"
-S3_PROTOCOL: Final[str] = "s3"
-GCS_PROTOCOL: Final[str] = "gs"
-AZURE_PROTOCOL: Final[str] = "az"
+
+
 FSSPEC_ONLY_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https", "ftp", "sftp", "ssh"})
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class StorageRegistry:
-    """Storage registry with URI-first access and automatic backend selection.
+    """Global storage registry for named backend configurations.
 
-    Provides URI-first access pattern with automatic backend selection.
-    Named aliases support complex configurations.
+    Allows registering named storage backends that can be accessed from anywhere
+    in your application. Backends are automatically selected based on URI scheme
+    unless explicitly overridden.
 
     Examples:
-        backend = registry.get("s3://my-bucket/file.parquet")
-        backend = registry.get("file:///tmp/data.csv")
-        backend = registry.get("gs://bucket/data.json")
+        # Direct URI access to storage containers
+        backend = registry.get("s3://my-bucket")
+        backend = registry.get("file:///tmp/data")
+        backend = registry.get("gs://my-gcs-bucket")
 
-        registry.register_alias(
-            "production-s3",
-            uri="s3://prod-bucket/data",
-            base_path="sqlspec",
-            aws_access_key_id="...",
-            aws_secret_access_key="..."
-        )
-        backend = registry.get("production-s3")
+        # Named store pattern for environment-specific backends
+        # Development
+        registry.register_alias("my_app_store", "file:///tmp/dev_data")
+
+        # Production
+        registry.register_alias("my_app_store", "s3://prod-bucket/data")
+
+        # Access from anywhere in your app
+        store = registry.get("my_app_store")  # Works in both environments
+
+        # Force specific backend when multiple options available
+        backend = registry.get("s3://bucket", backend="fsspec")  # Force fsspec over obstore
     """
 
     __slots__ = ("_alias_configs", "_aliases", "_cache", "_instances")
@@ -61,43 +78,36 @@ class StorageRegistry:
         self._cache: dict[str, tuple[str, type[ObjectStoreProtocol]]] = {}
 
     def register_alias(
-        self,
-        alias: str,
-        uri: str,
-        *,
-        backend: Optional[type[ObjectStoreProtocol]] = None,
-        base_path: str = "",
-        config: Optional[dict[str, Any]] = None,
-        **kwargs: Any,
+        self, alias: str, uri: str, *, backend: Optional[str] = None, base_path: str = "", **kwargs: Any
     ) -> None:
         """Register a named alias for a storage configuration.
 
         Args:
-            alias: Unique alias name for the configuration
-            uri: Storage URI (e.g., "s3://bucket", "file:///path")
-            backend: Backend class to use (auto-detected from URI if not provided)
+            alias: Unique alias name (e.g., "my_app_store", "user_uploads")
+            uri: Storage URI (e.g., "s3://bucket", "file:///path", "gs://bucket")
+            backend: Force specific backend ("local", "fsspec", "obstore") instead of auto-detection
             base_path: Base path to prepend to all operations
-            config: Additional configuration dict
             **kwargs: Backend-specific configuration options
         """
-        if backend is None:
-            backend = self._determine_backend_class(uri)
+        backend_cls = self._get_backend_class(backend) if backend else self._determine_backend_class(uri)
 
-        config = config or {}
-        config.update(kwargs)
-        backend_config = dict(config)
+        backend_config = dict(kwargs)
         if base_path:
             backend_config["base_path"] = base_path
-        self._alias_configs[alias] = (backend, uri, backend_config)
+        self._alias_configs[alias] = (backend_cls, uri, backend_config)
+
         test_config = dict(backend_config)
         test_config["uri"] = uri
         self._aliases[alias] = test_config
 
-    def get(self, uri_or_alias: Union[str, Path], **kwargs: Any) -> ObjectStoreProtocol:
+    def get(
+        self, uri_or_alias: Union[str, Path], *, backend: Optional[str] = None, **kwargs: Any
+    ) -> ObjectStoreProtocol:
         """Get backend instance using URI-first routing with automatic backend selection.
 
         Args:
-            uri_or_alias: URI to resolve directly OR named alias
+            uri_or_alias: URI to resolve directly OR named alias (e.g., "my_app_store")
+            backend: Force specific backend ("local", "fsspec", "obstore") instead of auto-selection
             **kwargs: Additional backend-specific configuration options
 
         Returns:
@@ -117,20 +127,16 @@ class StorageRegistry:
         if cache_key in self._instances:
             return self._instances[cache_key]
         scheme = self._get_scheme(uri_or_alias)
-        if not scheme and (
-            Path(uri_or_alias).exists()
-            or Path(uri_or_alias).is_absolute()
-            or uri_or_alias.startswith(("~", "."))
-            or ":\\" in uri_or_alias
-            or "/" in uri_or_alias
-        ):
+        if not scheme and _is_local_uri(uri_or_alias):
             scheme = "file"
             uri_or_alias = f"file://{uri_or_alias}"
 
         if scheme:
-            instance = self._resolve_from_uri(uri_or_alias, **kwargs)
+            instance = self._resolve_from_uri(uri_or_alias, backend_override=backend, **kwargs)
         elif uri_or_alias in self._alias_configs:
             backend_cls, stored_uri, config = self._alias_configs[uri_or_alias]
+            if backend:
+                backend_cls = self._get_backend_class(backend)
             instance = backend_cls(stored_uri, **{**config, **kwargs})
         else:
             msg = f"Unknown storage alias or invalid URI: '{uri_or_alias}'"
@@ -138,36 +144,66 @@ class StorageRegistry:
         self._instances[cache_key] = instance
         return instance
 
-    def _resolve_from_uri(self, uri: str, **kwargs: Any) -> ObjectStoreProtocol:
-        """Resolve backend from URI, trying ObStore first, then FSSpec."""
+    def _resolve_from_uri(
+        self, uri: str, *, backend_override: Optional[str] = None, **kwargs: Any
+    ) -> ObjectStoreProtocol:
+        """Resolve backend from URI with optional backend override."""
+        if backend_override:
+            return self._create_backend(backend_override, uri, **kwargs)
         scheme = self._get_scheme(uri)
+
+        # For local files, prefer LocalStore first
+        if scheme in {None, "file"}:
+            return self._create_backend("local", uri, **kwargs)
+
+        # Try ObStore first if available and appropriate
         if scheme not in FSSPEC_ONLY_SCHEMES and OBSTORE_INSTALLED:
             try:
                 return self._create_backend("obstore", uri, **kwargs)
             except (ValueError, ImportError, NotImplementedError):
                 pass
+
+        # Try FSSpec if available
         if FSSPEC_INSTALLED:
             try:
                 return self._create_backend("fsspec", uri, **kwargs)
             except (ValueError, ImportError, NotImplementedError):
                 pass
-        msg = "obstore"
-        raise MissingDependencyError(msg, "fsspec")
+
+        # For cloud schemes without backends, provide helpful error
+        msg = f"No backend available for URI scheme '{scheme}'. Install obstore or fsspec for cloud storage support."
+        raise MissingDependencyError(msg)
 
     def _determine_backend_class(self, uri: str) -> type[ObjectStoreProtocol]:
         """Determine the backend class for a URI based on availability."""
         scheme = self._get_scheme(uri)
+
+        # For local files, always use LocalStore
+        if scheme in {None, "file"}:
+            return self._get_backend_class("local")
+
+        # FSSpec-only schemes require FSSpec
         if scheme in FSSPEC_ONLY_SCHEMES and FSSPEC_INSTALLED:
             return self._get_backend_class("fsspec")
+
+        # Prefer ObStore for cloud storage if available
         if OBSTORE_INSTALLED:
             return self._get_backend_class("obstore")
+
+        # Fall back to FSSpec if available
         if FSSPEC_INSTALLED:
             return self._get_backend_class("fsspec")
-        msg = f"No backend available for URI scheme '{scheme}'. Install obstore or fsspec."
+
+        # For cloud schemes without backends, provide helpful error
+        msg = f"No backend available for URI scheme '{scheme}'. Install obstore or fsspec for cloud storage support."
         raise MissingDependencyError(msg)
 
     def _get_backend_class(self, backend_type: str) -> type[ObjectStoreProtocol]:
         """Get backend class by type name."""
+        if backend_type == "local":
+            from sqlspec.storage.backends.local import LocalStore
+
+            return cast("type[ObjectStoreProtocol]", LocalStore)
         if backend_type == "obstore":
             from sqlspec.storage.backends.obstore import ObStoreBackend
 
@@ -176,7 +212,7 @@ class StorageRegistry:
             from sqlspec.storage.backends.fsspec import FSSpecBackend
 
             return cast("type[ObjectStoreProtocol]", FSSpecBackend)
-        msg = f"Unknown backend type: {backend_type}. Supported types: 'obstore', 'fsspec'"
+        msg = f"Unknown backend type: {backend_type}. Supported types: 'local', 'obstore', 'fsspec'"
         raise ValueError(msg)
 
     def _create_backend(self, backend_type: str, uri: str, **kwargs: Any) -> ObjectStoreProtocol:
@@ -219,21 +255,6 @@ class StorageRegistry:
         """Clear only aliases, keeping cached instances."""
         self._alias_configs.clear()
         self._aliases.clear()
-
-    def get_backend_capabilities(self, uri_or_alias: Union[str, Path]) -> "StorageCapabilities":
-        """Get capabilities for a backend without creating an instance."""
-        if isinstance(uri_or_alias, Path):
-            uri_or_alias = f"file://{uri_or_alias.resolve()}"
-        if "://" in uri_or_alias:
-            backend_cls = self._determine_backend_class(uri_or_alias)
-        elif uri_or_alias in self._alias_configs:
-            backend_cls, _, _ = self._alias_configs[uri_or_alias]
-        else:
-            msg = f"Unknown storage alias or invalid URI: '{uri_or_alias}'"
-            raise ImproperConfigurationError(msg)
-        if hasattr(backend_cls, "capabilities"):
-            return backend_cls.capabilities
-        return StorageCapabilities()
 
 
 storage_registry = StorageRegistry()

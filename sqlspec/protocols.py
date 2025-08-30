@@ -4,7 +4,7 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks.
 """
 
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Protocol, Union, runtime_checkable
+from typing import TYPE_CHECKING, Any, Optional, Protocol, Union, runtime_checkable
 
 from typing_extensions import Self
 
@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
     from sqlglot import exp
 
-    from sqlspec.storage.capabilities import StorageCapabilities
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
@@ -194,9 +193,8 @@ class ObjectStoreItemProtocol(Protocol):
 class ObjectStoreProtocol(Protocol):
     """Protocol for object storage operations."""
 
-    capabilities: ClassVar["StorageCapabilities"]
-
     protocol: str
+    backend_type: str
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         return
@@ -330,7 +328,7 @@ class ObjectStoreProtocol(Protocol):
         msg = "Async arrow writing not implemented"
         raise NotImplementedError(msg)
 
-    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
+    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
         """Async stream Arrow record batches from matching objects."""
         msg = "Async arrow streaming not implemented"
         raise NotImplementedError(msg)
