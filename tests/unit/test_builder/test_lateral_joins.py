@@ -13,11 +13,7 @@ if TYPE_CHECKING:
 
 def test_lateral_join_basic() -> None:
     """Test basic LATERAL JOIN syntax generation."""
-    query = (
-        sql.select("u.name", "arr.value")
-        .from_("users u")
-        .lateral_join("UNNEST(u.tags)", alias="arr")
-    )
+    query = sql.select("u.name", "arr.value").from_("users u").lateral_join("UNNEST(u.tags)", alias="arr")
 
     stmt = query.build()
 
@@ -29,9 +25,7 @@ def test_lateral_join_basic() -> None:
 def test_lateral_join_with_parameter() -> None:
     """Test LATERAL JOIN with lateral parameter in join() method."""
     query = (
-        sql.select("u.name", "t.value")
-        .from_("users u")
-        .join("generate_series(1, u.count)", alias="t", lateral=True)
+        sql.select("u.name", "t.value").from_("users u").join("generate_series(1, u.count)", alias="t", lateral=True)
     )
 
     stmt = query.build()
@@ -42,11 +36,7 @@ def test_lateral_join_with_parameter() -> None:
 
 def test_left_lateral_join() -> None:
     """Test LEFT LATERAL JOIN generation."""
-    query = (
-        sql.select("u.name", "arr.value")
-        .from_("users u")
-        .left_lateral_join("UNNEST(u.tags)", alias="arr")
-    )
+    query = sql.select("u.name", "arr.value").from_("users u").left_lateral_join("UNNEST(u.tags)", alias="arr")
 
     stmt = query.build()
 
@@ -56,11 +46,7 @@ def test_left_lateral_join() -> None:
 
 def test_cross_lateral_join() -> None:
     """Test CROSS LATERAL JOIN generation."""
-    query = (
-        sql.select("u.name", "arr.value")
-        .from_("users u")
-        .cross_lateral_join("UNNEST(u.tags)", alias="arr")
-    )
+    query = sql.select("u.name", "arr.value").from_("users u").cross_lateral_join("UNNEST(u.tags)", alias="arr")
 
     stmt = query.build()
 
@@ -72,13 +58,7 @@ def test_lateral_join_with_on_condition() -> None:
     """Test LATERAL JOIN with explicit ON condition."""
     # Use a simpler table function for this test
     query = (
-        sql.select("u.name", "s.value")
-        .from_("users u")
-        .lateral_join(
-            "generate_series(1, 10)",
-            on="true",
-            alias="s"
-        )
+        sql.select("u.name", "s.value").from_("users u").lateral_join("generate_series(1, 10)", on="true", alias="s")
     )
 
     stmt = query.build()
@@ -91,11 +71,7 @@ def test_lateral_join_subquery() -> None:
     """Test LATERAL JOIN with subquery builder."""
     subquery = sql.select("value").from_("user_stats").where("user_id = u.id")
 
-    query = (
-        sql.select("u.name", "s.value")
-        .from_("users u")
-        .lateral_join(subquery, alias="s")
-    )
+    query = sql.select("u.name", "s.value").from_("users u").lateral_join(subquery, alias="s")
 
     stmt = query.build()
 
@@ -107,11 +83,7 @@ def test_join_builder_lateral() -> None:
     """Test JoinBuilder with LATERAL functionality."""
     lateral_join_expr = sql.lateral_join_("UNNEST(u.tags)").on("true")
 
-    query = (
-        sql.select("u.name", "arr.value")
-        .from_("users u")
-        .join(lateral_join_expr)
-    )
+    query = sql.select("u.name", "arr.value").from_("users u").join(lateral_join_expr)
 
     stmt = query.build()
 
@@ -124,27 +96,19 @@ def test_join_builder_left_lateral() -> None:
     """Test LEFT LATERAL JoinBuilder."""
     join_expr = sql.left_lateral_join_("UNNEST(u.tags)").on("true")
 
-    query = (
-        sql.select("u.name", "arr.value")
-        .from_("users u")
-        .join(join_expr)
-    )
+    query = sql.select("u.name", "arr.value").from_("users u").join(join_expr)
 
     stmt = query.build()
 
     assert "LATERAL" in stmt.sql
-    assert ("LEFT LATERAL" in stmt.sql or ("LEFT" in stmt.sql and "LATERAL" in stmt.sql))
+    assert "LEFT LATERAL" in stmt.sql or ("LEFT" in stmt.sql and "LATERAL" in stmt.sql)
 
 
 def test_join_builder_cross_lateral() -> None:
     """Test CROSS LATERAL JoinBuilder."""
     # Get the actual join expression by calling the builder pattern correctly
     # CROSS joins don't use ON clause, so we need to handle them differently
-    query = (
-        sql.select("u.name", "arr.value")
-        .from_("users u")
-        .cross_lateral_join("UNNEST(u.tags)", alias="arr")
-    )
+    query = sql.select("u.name", "arr.value").from_("users u").cross_lateral_join("UNNEST(u.tags)", alias="arr")
 
     stmt = query.build()
 
@@ -158,10 +122,7 @@ def test_multiple_lateral_joins() -> None:
         sql.select("u.name", "tags.tag", "stats.value")
         .from_("users u")
         .lateral_join("UNNEST(u.tags)", alias="tags")
-        .left_lateral_join(
-            "generate_series(1, u.count)",
-            alias="stats"
-        )
+        .left_lateral_join("generate_series(1, u.count)", alias="stats")
     )
 
     stmt = query.build()
@@ -176,18 +137,10 @@ def test_multiple_lateral_joins() -> None:
 def test_lateral_join_with_table_function() -> None:
     """Test LATERAL JOIN with various table functions."""
     # PostgreSQL UNNEST
-    query1 = (
-        sql.select("*")
-        .from_("users u")
-        .lateral_join("UNNEST(u.email_addresses)", alias="emails")
-    )
+    query1 = sql.select("*").from_("users u").lateral_join("UNNEST(u.email_addresses)", alias="emails")
 
     # PostgreSQL json_array_elements
-    query2 = (
-        sql.select("*")
-        .from_("documents d")
-        .lateral_join("json_array_elements(d.tags)", alias="tag_elements")
-    )
+    query2 = sql.select("*").from_("documents d").lateral_join("json_array_elements(d.tags)", alias="tag_elements")
 
     stmt1 = query1.build()
     stmt2 = query2.build()
@@ -198,11 +151,7 @@ def test_lateral_join_with_table_function() -> None:
 
 def test_lateral_join_aliases() -> None:
     """Test proper alias handling in LATERAL joins."""
-    query = (
-        sql.select("u.name", "elem.value")
-        .from_("users u")
-        .lateral_join("UNNEST(u.tags)", alias="elem")
-    )
+    query = sql.select("u.name", "elem.value").from_("users u").lateral_join("UNNEST(u.tags)", alias="elem")
 
     stmt = query.build()
 
@@ -276,11 +225,10 @@ def test_select_with_lateral_context() -> None:
     assert "LATERAL" in stmt.sql
 
 
-@pytest.mark.parametrize("join_method,expected_pattern", [
-    ("lateral_join", "LATERAL"),
-    ("left_lateral_join", "LEFT"),
-    ("cross_lateral_join", "CROSS"),
-])
+@pytest.mark.parametrize(
+    "join_method,expected_pattern",
+    [("lateral_join", "LATERAL"), ("left_lateral_join", "LEFT"), ("cross_lateral_join", "CROSS")],
+)
 def test_lateral_join_methods_patterns(join_method: str, expected_pattern: str) -> None:
     """Test that LATERAL join methods generate expected SQL patterns."""
     query = sql.select("*").from_("users u")
@@ -321,4 +269,3 @@ def test_lateral_join_sql_factory_properties() -> None:
     assert "LATERAL" in stmt1.sql
     assert ("LEFT" in stmt2.sql or "left" in stmt2.sql.lower()) and "LATERAL" in stmt2.sql
     assert "LATERAL" in stmt3.sql
-
