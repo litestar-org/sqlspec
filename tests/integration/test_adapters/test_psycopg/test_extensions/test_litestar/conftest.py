@@ -35,7 +35,7 @@ def psycopg_sync_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": ["litestar"],  # Include litestar extension migrations
+                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_psycopg_sync"}],  # Unique table for psycopg sync
             },
         )
         yield config
@@ -43,7 +43,7 @@ def psycopg_sync_migration_config(
         # Cleanup: drop test tables and close pool
         try:
             with config.provide_session() as driver:
-                driver.execute("DROP TABLE IF EXISTS litestar_sessions")
+                driver.execute("DROP TABLE IF EXISTS litestar_sessions_psycopg_sync")
                 driver.execute(f"DROP TABLE IF EXISTS {table_name}")
         except Exception:
             pass  # Ignore cleanup errors
@@ -71,7 +71,7 @@ async def psycopg_async_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": ["litestar"],  # Include litestar extension migrations
+                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_psycopg_async"}],  # Unique table for psycopg async
             },
         )
         yield config
@@ -79,7 +79,7 @@ async def psycopg_async_migration_config(
         # Cleanup: drop test tables and close pool
         try:
             async with config.provide_session() as driver:
-                await driver.execute("DROP TABLE IF EXISTS litestar_sessions")
+                await driver.execute("DROP TABLE IF EXISTS litestar_sessions_psycopg_async")
                 await driver.execute(f"DROP TABLE IF EXISTS {table_name}")
         except Exception:
             pass  # Ignore cleanup errors
@@ -117,17 +117,17 @@ async def psycopg_async_migrated_config(psycopg_async_migration_config: PsycopgA
 
 @pytest.fixture
 def sync_session_store(psycopg_sync_migrated_config: PsycopgSyncConfig) -> SQLSpecSessionStore:
-    """Create a sync session store with default table name."""
+    """Create a sync session store with unique table name."""
     return SQLSpecSessionStore(
         psycopg_sync_migrated_config,
-        table_name="litestar_sessions",  # Default table name
+        table_name="litestar_sessions_psycopg_sync",  # Unique table name for psycopg sync
     )
 
 
 @pytest.fixture
 def sync_session_backend_config() -> SQLSpecSessionConfig:
     """Create sync session backend configuration."""
-    return SQLSpecSessionConfig(key="psycopg-sync-session", max_age=3600, table_name="litestar_sessions")
+    return SQLSpecSessionConfig(key="psycopg-sync-session", max_age=3600, table_name="litestar_sessions_psycopg_sync")
 
 
 @pytest.fixture
@@ -138,17 +138,17 @@ def sync_session_backend(sync_session_backend_config: SQLSpecSessionConfig) -> S
 
 @pytest.fixture
 async def async_session_store(psycopg_async_migrated_config: PsycopgAsyncConfig) -> SQLSpecSessionStore:
-    """Create an async session store with default table name."""
+    """Create an async session store with unique table name."""
     return SQLSpecSessionStore(
         psycopg_async_migrated_config,
-        table_name="litestar_sessions",  # Default table name
+        table_name="litestar_sessions_psycopg_async",  # Unique table name for psycopg async
     )
 
 
 @pytest.fixture
 def async_session_backend_config() -> SQLSpecSessionConfig:
     """Create async session backend configuration."""
-    return SQLSpecSessionConfig(key="psycopg-async-session", max_age=3600, table_name="litestar_sessions")
+    return SQLSpecSessionConfig(key="psycopg-async-session", max_age=3600, table_name="litestar_sessions_psycopg_async")
 
 
 @pytest.fixture

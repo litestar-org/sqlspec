@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 from litestar import Litestar, get, post, put
-from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED, HTTP_404_NOT_FOUND
+from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
 from litestar.stores.registry import StoreRegistry
 from litestar.testing import AsyncTestClient
 
@@ -85,7 +85,7 @@ async def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLS
         """Get user profile data."""
         profile = request.session.get("profile")
         if not profile:
-            return {"error": "No profile found"}, HTTP_404_NOT_FOUND
+            return {"error": "No profile found"}
         return {"profile": profile}
 
     # Register the store in the app
@@ -112,7 +112,7 @@ async def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLS
 async def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
     """Test that SessionStore can be created with PsqlPy configuration."""
     assert session_store is not None
-    assert session_store._table_name == "litestar_sessions"
+    assert session_store._table_name == "litestar_sessions_psqlpy"
     assert session_store._session_id_column == "session_id"
     assert session_store._data_column == "data"
     assert session_store._expires_at_column == "expires_at"
@@ -130,10 +130,10 @@ async def test_session_store_postgres_table_structure(
             SELECT tablename FROM pg_tables
             WHERE tablename = %s
         """,
-            ["litestar_sessions"],
+            ["litestar_sessions_psqlpy"],
         )
         assert len(result.data) == 1
-        assert result.data[0]["tablename"] == "litestar_sessions"
+        assert result.data[0]["tablename"] == "litestar_sessions_psqlpy"
 
         # Verify column structure
         result = await driver.execute(
@@ -143,7 +143,7 @@ async def test_session_store_postgres_table_structure(
             WHERE table_name = %s
             ORDER BY ordinal_position
         """,
-            ["litestar_sessions"],
+            ["litestar_sessions_psqlpy"],
         )
 
         columns = {row["column_name"]: row for row in result.data}
@@ -246,16 +246,11 @@ async def test_session_persistence_across_requests(litestar_app: Litestar) -> No
 
 async def test_session_expiration(migrated_config: PsqlpyConfig) -> None:
     """Test session expiration handling."""
-    # Apply migrations to create the session table if needed
-    commands = AsyncMigrationCommands(migrated_config)
-    await commands.init(migrated_config.migration_config["script_location"], package=False)
-    await commands.upgrade()
-
-    # Create store with very short lifetime
-    session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+    # Create store with very short lifetime (migrations already applied by fixture)
+    session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions_psqlpy")
 
     session_config = SQLSpecSessionConfig(
-        table_name="litestar_sessions",
+        table_name="litestar_sessions_psqlpy",
         store="sessions",
         max_age=1,  # 1 second
     )
@@ -509,7 +504,7 @@ async def test_postgresql_jsonb_operations(session_store: SQLSpecSessionStore, m
             SELECT data->'config'->>'theme' as theme,
                    jsonb_array_length(data->'features') as feature_count,
                    data->'config'->'notifications'->>'email' as email_notif
-            FROM litestar_sessions
+            FROM litestar_sessions_psqlpy
             WHERE session_id = %s
         """,
             [session_id],
@@ -524,7 +519,7 @@ async def test_postgresql_jsonb_operations(session_store: SQLSpecSessionStore, m
         # Test JSONB update operations
         await driver.execute(
             """
-            UPDATE litestar_sessions
+            UPDATE litestar_sessions_psqlpy
             SET data = jsonb_set(data, '{config,theme}', '"light"')
             WHERE session_id = %s
         """,
@@ -636,7 +631,7 @@ async def test_migration_with_default_table_name(migrated_config: PsqlpyConfig) 
     # Create store using the migrated table
     store = SQLSpecSessionStore(
         config=migrated_config,
-        table_name="litestar_sessions",  # Default table name
+        table_name="litestar_sessions_psqlpy",  # Unique table name for psqlpy
     )
 
     # Test that the store works with the migrated table
@@ -673,9 +668,19 @@ async def test_migration_with_custom_table_name(psqlpy_migration_config_with_dic
     assert retrieved == test_data
     assert retrieved["adapter"] == "psqlpy"
 
-    # Verify default table doesn't exist
+    # Verify default table doesn't exist (clean up any existing default table first)
     async with psqlpy_migration_config_with_dict.provide_session() as driver:
+        # Clean up any conflicting tables from other PostgreSQL adapters
+        await driver.execute("DROP TABLE IF EXISTS litestar_sessions")
+        await driver.execute("DROP TABLE IF EXISTS litestar_sessions_asyncpg") 
+        await driver.execute("DROP TABLE IF EXISTS litestar_sessions_psycopg")
+
+        # Now verify it doesn't exist
         result = await driver.execute("SELECT tablename FROM pg_tables WHERE tablename = %s", ["litestar_sessions"])
+        assert len(result.data) == 0
+        result = await driver.execute("SELECT tablename FROM pg_tables WHERE tablename = %s", ["litestar_sessions_asyncpg"])
+        assert len(result.data) == 0
+        result = await driver.execute("SELECT tablename FROM pg_tables WHERE tablename = %s", ["litestar_sessions_psycopg"])
         assert len(result.data) == 0
 
 
@@ -689,7 +694,7 @@ async def test_migration_with_mixed_extensions(psqlpy_migration_config_mixed: Ps
     # The litestar extension should use default table name
     store = SQLSpecSessionStore(
         config=psqlpy_migration_config_mixed,
-        table_name="litestar_sessions",  # Default since string format was used
+        table_name="litestar_sessions_psqlpy",  # Unique table for psqlpy
     )
 
     # Test that the store works

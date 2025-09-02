@@ -45,7 +45,7 @@ async def oracle_async_session_store(oracle_async_migrated_config: OracleAsyncCo
     """Create an async session store instance using the migrated database."""
     return SQLSpecSessionStore(
         config=oracle_async_migrated_config,
-        table_name="litestar_sessions",  # Use the default table created by migration
+        table_name="litestar_sessions_oracle_async",  # Use the default table created by migration
         session_id_column="session_id",
         data_column="data",
         expires_at_column="expires_at",
@@ -58,7 +58,7 @@ def oracle_sync_session_store(oracle_sync_migrated_config: OracleSyncConfig) -> 
     """Create a sync session store instance using the migrated database."""
     return SQLSpecSessionStore(
         config=oracle_sync_migrated_config,
-        table_name="litestar_sessions",  # Use the default table created by migration
+        table_name="litestar_sessions_oracle_sync",  # Use the default table created by migration
         session_id_column="session_id",
         data_column="data",
         expires_at_column="expires_at",
@@ -71,7 +71,7 @@ async def oracle_async_session_config(oracle_async_migrated_config: OracleAsyncC
     """Create an async session configuration instance."""
     # Create the session configuration
     return SQLSpecSessionConfig(
-        table_name="litestar_sessions",
+        table_name="litestar_sessions_oracle_async",
         store="sessions",  # This will be the key in the stores registry
     )
 
@@ -81,7 +81,7 @@ def oracle_sync_session_config(oracle_sync_migrated_config: OracleSyncConfig) ->
     """Create a sync session configuration instance."""
     # Create the session configuration
     return SQLSpecSessionConfig(
-        table_name="litestar_sessions",
+        table_name="litestar_sessions_oracle_sync",
         store="sessions",  # This will be the key in the stores registry
     )
 
@@ -89,7 +89,7 @@ def oracle_sync_session_config(oracle_sync_migrated_config: OracleSyncConfig) ->
 async def test_oracle_async_session_store_creation(oracle_async_session_store: SQLSpecSessionStore) -> None:
     """Test that SessionStore can be created with Oracle async configuration."""
     assert oracle_async_session_store is not None
-    assert oracle_async_session_store._table_name == "litestar_sessions"
+    assert oracle_async_session_store._table_name == "litestar_sessions_oracle_async"
     assert oracle_async_session_store._session_id_column == "session_id"
     assert oracle_async_session_store._data_column == "data"
     assert oracle_async_session_store._expires_at_column == "expires_at"
@@ -99,7 +99,7 @@ async def test_oracle_async_session_store_creation(oracle_async_session_store: S
 def test_oracle_sync_session_store_creation(oracle_sync_session_store: SQLSpecSessionStore) -> None:
     """Test that SessionStore can be created with Oracle sync configuration."""
     assert oracle_sync_session_store is not None
-    assert oracle_sync_session_store._table_name == "litestar_sessions"
+    assert oracle_sync_session_store._table_name == "litestar_sessions_oracle_sync"
     assert oracle_sync_session_store._session_id_column == "session_id"
     assert oracle_sync_session_store._data_column == "data"
     assert oracle_sync_session_store._expires_at_column == "expires_at"
@@ -439,11 +439,11 @@ async def test_oracle_session_expiration(oracle_async_migration_config: OracleAs
     # Create store and config with very short lifetime
     session_store = SQLSpecSessionStore(
         config=oracle_async_migration_config,
-        table_name="litestar_sessions",  # Use the migrated table
+        table_name="litestar_sessions_oracle_async",  # Use the migrated table
     )
 
     session_config = SQLSpecSessionConfig(
-        table_name="litestar_sessions",
+        table_name="litestar_sessions_oracle_async",
         store="sessions",
         max_age=1,  # 1 second
     )
@@ -676,7 +676,7 @@ async def test_migration_with_default_table_name(oracle_async_migration_config: 
     # Create store using the migrated table
     store = SQLSpecSessionStore(
         config=oracle_async_migration_config,
-        table_name="litestar_sessions",  # Default table name
+        table_name="litestar_sessions_oracle_async",  # Default table name
     )
 
     # Test that the store works with the migrated table
@@ -729,7 +729,7 @@ async def test_migration_with_mixed_extensions(oracle_async_migration_config_mix
     # The litestar extension should use default table name
     store = SQLSpecSessionStore(
         config=oracle_async_migration_config_mixed,
-        table_name="litestar_sessions",  # Default since string format was used
+        table_name="litestar_sessions_oracle_async",  # Default since string format was used
     )
 
     # Test that the store works
@@ -869,7 +869,7 @@ async def test_session_cleanup_and_maintenance(oracle_async_migration_config: Or
 
     store = SQLSpecSessionStore(
         config=oracle_async_migration_config,
-        table_name="litestar_sessions",  # Use the migrated table
+        table_name="litestar_sessions_oracle_async",  # Use the migrated table
     )
 
     # Create sessions with different lifetimes
@@ -936,12 +936,12 @@ async def test_multiple_oracle_apps_with_separate_backends(oracle_async_migratio
     # Create separate Oracle stores for different applications
     oracle_store1 = SQLSpecSessionStore(
         config=oracle_async_migration_config,
-        table_name="litestar_sessions",  # Use migrated table
+        table_name="litestar_sessions_oracle_async",  # Use migrated table
     )
 
     oracle_store2 = SQLSpecSessionStore(
         config=oracle_async_migration_config,
-        table_name="litestar_sessions",  # Use migrated table
+        table_name="litestar_sessions_oracle_async",  # Use migrated table
     )
 
     oracle_config1 = SQLSpecSessionConfig(table_name="litestar_sessions", store="sessions1")

@@ -40,7 +40,7 @@ async def asyncpg_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": ["litestar"],  # Simple string format
+                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_asyncpg"}],  # Unique table for asyncpg
             },
         )
         yield config
@@ -127,14 +127,14 @@ async def session_store_default(asyncpg_migration_config: AsyncpgConfig) -> SQLS
     # Create store using the default migrated table
     return SQLSpecSessionStore(
         asyncpg_migration_config,
-        table_name="litestar_sessions",  # Default table name
+        table_name="litestar_sessions_asyncpg",  # Unique table name for asyncpg
     )
 
 
 @pytest.fixture
 def session_backend_config_default() -> SQLSpecSessionConfig:
     """Create session backend configuration with default table name."""
-    return SQLSpecSessionConfig(key="asyncpg-session", max_age=3600, table_name="litestar_sessions")
+    return SQLSpecSessionConfig(key="asyncpg-session", max_age=3600, table_name="litestar_sessions_asyncpg")
 
 
 @pytest.fixture
@@ -178,7 +178,7 @@ async def session_store(asyncpg_migration_config: AsyncpgConfig) -> SQLSpecSessi
     await commands.init(asyncpg_migration_config.migration_config["script_location"], package=False)
     await commands.upgrade()
 
-    return SQLSpecSessionStore(config=asyncpg_migration_config, table_name="litestar_sessions")
+    return SQLSpecSessionStore(config=asyncpg_migration_config, table_name="litestar_sessions_asyncpg")
 
 
 @pytest.fixture

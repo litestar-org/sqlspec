@@ -11,6 +11,7 @@ from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 
 if TYPE_CHECKING:
@@ -289,6 +290,16 @@ class SQLSpecSessionStore(Store):
 
             if result.data:
                 data = result.data[0][self._data_column]
+
+                # For SQLite and DuckDB, data is stored as JSON text and needs to be deserialized
+                dialect = str(driver.statement_config.dialect or "generic") if hasattr(driver, 'statement_config') and driver.statement_config else "generic"
+                if dialect in {"sqlite", "duckdb"} and isinstance(data, str):
+                    try:
+                        data = from_json(data)
+                    except Exception:
+                        logger.warning("Failed to deserialize JSON data for session %s", key)
+                        # Return the raw data if JSON parsing fails
+                        pass
 
                 # If renew_for is specified, update the expiration time
                 if renew_for is not None:
@@ -575,9 +586,22 @@ class SQLSpecSessionStore(Store):
         try:
             result = await ensure_async_(driver.execute)(select_sql)
 
+            # Check if we need to deserialize JSON for SQLite
+            dialect = str(driver.statement_config.dialect or "generic") if hasattr(driver, 'statement_config') and driver.statement_config else "generic"
+            
             for row in result.data:
                 session_id = row[self._session_id_column]
                 session_data = row[self._data_column]
+                
+                # For SQLite and DuckDB, data is stored as JSON text and needs to be deserialized
+                if dialect in {"sqlite", "duckdb"} and isinstance(session_data, str):
+                    try:
+                        session_data = from_json(session_data)
+                    except Exception:
+                        logger.warning("Failed to deserialize JSON data for session %s", session_id)
+                        # Return the raw data if JSON parsing fails
+                        pass
+                        
                 yield session_id, session_data
 
         except Exception:
