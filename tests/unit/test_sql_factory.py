@@ -802,7 +802,7 @@ def test_left_join_builder() -> None:
 
     assert "LEFT JOIN" in stmt.sql
     assert "posts" in stmt.sql
-    assert "users.id" in stmt.sql or "posts.user_id" in stmt.sql
+    assert '"users"."id"' in stmt.sql or '"posts"."user_id"' in stmt.sql
 
 
 def test_inner_join_builder_with_alias() -> None:
