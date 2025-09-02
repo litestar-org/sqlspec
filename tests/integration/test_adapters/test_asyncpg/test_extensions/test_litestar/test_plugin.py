@@ -122,7 +122,7 @@ async def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLS
 async def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
     """Test that SessionStore can be created with AsyncPG configuration."""
     assert session_store is not None
-    assert session_store._table_name == "litestar_sessions"
+    assert session_store._table_name == "litestar_sessions_asyncpg"
     assert session_store._session_id_column == "session_id"
     assert session_store._data_column == "data"
     assert session_store._expires_at_column == "expires_at"
@@ -140,10 +140,10 @@ async def test_session_store_postgres_table_structure(
             SELECT tablename FROM pg_tables
             WHERE tablename = $1
         """,
-            "litestar_sessions",
+            "litestar_sessions_asyncpg",
         )
         assert len(result.data) == 1
-        assert result.data[0]["tablename"] == "litestar_sessions"
+        assert result.data[0]["tablename"] == "litestar_sessions_asyncpg"
 
         # Verify column structure
         result = await driver.execute(
@@ -153,7 +153,7 @@ async def test_session_store_postgres_table_structure(
             WHERE table_name = $1
             ORDER BY ordinal_position
         """,
-            "litestar_sessions",
+            "litestar_sessions_asyncpg",
         )
 
         columns = {row["column_name"]: row for row in result.data}
@@ -173,7 +173,7 @@ async def test_session_store_postgres_table_structure(
             SELECT indexname FROM pg_indexes
             WHERE tablename = $1
         """,
-            "litestar_sessions",
+            "litestar_sessions_asyncpg",
         )
         index_names = [row["indexname"] for row in result.data]
         assert any("expires_at" in name for name in index_names)
@@ -268,10 +268,10 @@ async def test_session_persistence_across_requests(litestar_app: Litestar) -> No
 async def test_session_expiration(migrated_config: AsyncpgConfig) -> None:
     """Test session expiration handling."""
     # Create store with very short lifetime
-    session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+    session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions_asyncpg")
 
     session_config = SQLSpecSessionConfig(
-        table_name="litestar_sessions",
+        table_name="litestar_sessions_asyncpg",
         store="sessions",
         max_age=1,  # 1 second
     )

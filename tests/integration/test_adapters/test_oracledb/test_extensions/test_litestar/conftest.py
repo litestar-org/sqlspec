@@ -30,7 +30,7 @@ async def oracle_async_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": ["litestar"],  # Simple string format
+                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_oracle_async"}],  # Unique table for Oracle async
             },
         )
         yield config
@@ -55,7 +55,7 @@ def oracle_sync_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": ["litestar"],  # Simple string format
+                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_oracle_sync"}],  # Unique table for Oracle sync
             },
         )
         yield config
@@ -129,7 +129,7 @@ async def oracle_async_migration_config_mixed(
                 "script_location": str(migration_dir),
                 "version_table_name": "sqlspec_migrations",
                 "include_extensions": [
-                    "litestar",  # String format - will use default table name
+                    {"name": "litestar", "session_table": "litestar_sessions_oracle_async"},  # Unique table for Oracle async
                     {"name": "other_ext", "option": "value"},  # Dict format for hypothetical extension
                 ],
             },
@@ -151,7 +151,7 @@ def oracle_sync_migration_config_mixed(oracle_sync_config: OracleSyncConfig) -> 
                 "script_location": str(migration_dir),
                 "version_table_name": "sqlspec_migrations",
                 "include_extensions": [
-                    "litestar",  # String format - will use default table name
+                    {"name": "litestar", "session_table": "litestar_sessions_oracle_sync"},  # Unique table for Oracle sync
                     {"name": "other_ext", "option": "value"},  # Dict format for hypothetical extension
                 ],
             },
@@ -171,14 +171,14 @@ async def oracle_async_session_store_default(oracle_async_migration_config: Orac
     # Create store using the default migrated table
     return SQLSpecSessionStore(
         oracle_async_migration_config,
-        table_name="litestar_sessions",  # Default table name
+        table_name="litestar_sessions_oracle_async",  # Unique table name for Oracle async
     )
 
 
 @pytest.fixture
 def oracle_async_session_backend_config_default() -> SQLSpecSessionConfig:
     """Create async session backend configuration with default table name."""
-    return SQLSpecSessionConfig(key="oracle-async-session", max_age=3600, table_name="litestar_sessions")
+    return SQLSpecSessionConfig(key="oracle-async-session", max_age=3600, table_name="litestar_sessions_oracle_async")
 
 
 @pytest.fixture
@@ -200,14 +200,14 @@ def oracle_sync_session_store_default(oracle_sync_migration_config: OracleSyncCo
     # Create store using the default migrated table
     return SQLSpecSessionStore(
         oracle_sync_migration_config,
-        table_name="litestar_sessions",  # Default table name
+        table_name="litestar_sessions_oracle_sync",  # Unique table name for Oracle sync
     )
 
 
 @pytest.fixture
 def oracle_sync_session_backend_config_default() -> SQLSpecSessionConfig:
     """Create sync session backend configuration with default table name."""
-    return SQLSpecSessionConfig(key="oracle-sync-session", max_age=3600, table_name="litestar_sessions")
+    return SQLSpecSessionConfig(key="oracle-sync-session", max_age=3600, table_name="litestar_sessions_oracle_sync")
 
 
 @pytest.fixture

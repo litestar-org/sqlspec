@@ -37,7 +37,7 @@ def adbc_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": ["litestar"],  # Critical for session table creation
+                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_adbc"}],  # Unique table for ADBC
             },
         )
         yield config
@@ -91,7 +91,7 @@ def adbc_migration_config_mixed(
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
                 "include_extensions": [
-                    "litestar",  # String format - will use default table name
+                    {"name": "litestar", "session_table": "litestar_sessions_adbc"},  # Unique table for ADBC
                     {"name": "other_ext", "option": "value"},  # Dict format for hypothetical extension
                 ],
             },
@@ -110,7 +110,7 @@ def session_backend_default(adbc_migration_config: AdbcConfig) -> SQLSpecSession
     # Create session store using the default migrated table
     return SQLSpecSessionStore(
         config=adbc_migration_config,
-        table_name="litestar_sessions",  # Default table name
+        table_name="litestar_sessions_adbc",  # Unique table name for ADBC
     )
 
 

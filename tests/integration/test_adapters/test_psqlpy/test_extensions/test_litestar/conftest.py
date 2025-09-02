@@ -34,7 +34,7 @@ async def psqlpy_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": ["litestar"],  # Simple string format
+                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_psqlpy"}],  # Unique table for psqlpy
             },
         )
         yield config
@@ -89,7 +89,7 @@ async def psqlpy_migration_config_mixed(
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
                 "include_extensions": [
-                    "litestar",  # String format - will use default table name
+                    {"name": "litestar", "session_table": "litestar_sessions_psqlpy"},  # Unique table for psqlpy
                     {"name": "other_ext", "option": "value"},  # Dict format for hypothetical extension
                 ],
             },
@@ -109,14 +109,14 @@ async def session_store_default(psqlpy_migration_config: PsqlpyConfig) -> SQLSpe
     # Create store using the default migrated table
     return SQLSpecSessionStore(
         psqlpy_migration_config,
-        table_name="litestar_sessions",  # Default table name
+        table_name="litestar_sessions_psqlpy",  # Unique table name for psqlpy
     )
 
 
 @pytest.fixture
 def session_backend_config_default() -> SQLSpecSessionConfig:
     """Create session backend configuration with default table name."""
-    return SQLSpecSessionConfig(key="psqlpy-session", max_age=3600, table_name="litestar_sessions")
+    return SQLSpecSessionConfig(key="psqlpy-session", max_age=3600, table_name="litestar_sessions_psqlpy")
 
 
 @pytest.fixture
@@ -164,7 +164,7 @@ async def migrated_config(psqlpy_migration_config: PsqlpyConfig) -> PsqlpyConfig
 @pytest.fixture
 async def session_store(migrated_config: PsqlpyConfig) -> SQLSpecSessionStore:
     """Create a session store using migrated config."""
-    return SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+    return SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions_psqlpy")
 
 
 @pytest.fixture

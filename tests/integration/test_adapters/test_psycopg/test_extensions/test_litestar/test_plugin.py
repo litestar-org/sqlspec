@@ -27,7 +27,7 @@ def sync_session_store(psycopg_sync_migrated_config: PsycopgSyncConfig) -> SQLSp
     """Create a session store using the migrated sync config."""
     return SQLSpecSessionStore(
         config=psycopg_sync_migrated_config,
-        table_name="litestar_sessions",
+        table_name="litestar_sessions_psycopg_sync",
         session_id_column="session_id",
         data_column="data",
         expires_at_column="expires_at",
@@ -40,7 +40,7 @@ async def async_session_store(psycopg_async_migrated_config: PsycopgAsyncConfig)
     """Create a session store using the migrated async config."""
     return SQLSpecSessionStore(
         config=psycopg_async_migrated_config,
-        table_name="litestar_sessions",
+        table_name="litestar_sessions_psycopg_sync",
         session_id_column="session_id",
         data_column="data",
         expires_at_column="expires_at",
@@ -51,13 +51,13 @@ async def async_session_store(psycopg_async_migrated_config: PsycopgAsyncConfig)
 @pytest.fixture
 def sync_session_config() -> SQLSpecSessionConfig:
     """Create a session config for sync tests."""
-    return SQLSpecSessionConfig(table_name="litestar_sessions", store="sessions", max_age=3600)
+    return SQLSpecSessionConfig(table_name="litestar_sessions_psycopg_sync", store="sessions", max_age=3600)
 
 
 @pytest.fixture
 async def async_session_config() -> SQLSpecSessionConfig:
     """Create a session config for async tests."""
-    return SQLSpecSessionConfig(table_name="litestar_sessions", store="sessions", max_age=3600)
+    return SQLSpecSessionConfig(table_name="litestar_sessions_psycopg_sync", store="sessions", max_age=3600)
 
 
 @pytest.fixture
@@ -241,7 +241,7 @@ async def async_litestar_app(
 def test_sync_store_creation(sync_session_store: SQLSpecSessionStore) -> None:
     """Test that sync session store can be created."""
     assert sync_session_store is not None
-    assert sync_session_store._table_name == "litestar_sessions"
+    assert sync_session_store._table_name == "litestar_sessions_psycopg_sync"
     assert sync_session_store._session_id_column == "session_id"
     assert sync_session_store._data_column == "data"
     assert sync_session_store._expires_at_column == "expires_at"
@@ -251,7 +251,7 @@ def test_sync_store_creation(sync_session_store: SQLSpecSessionStore) -> None:
 async def test_async_store_creation(async_session_store: SQLSpecSessionStore) -> None:
     """Test that async session store can be created."""
     assert async_session_store is not None
-    assert async_session_store._table_name == "litestar_sessions"
+    assert async_session_store._table_name == "litestar_sessions_psycopg_async"
     assert async_session_store._session_id_column == "session_id"
     assert async_session_store._data_column == "data"
     assert async_session_store._expires_at_column == "expires_at"
@@ -265,7 +265,7 @@ def test_sync_table_verification(
     with psycopg_sync_migrated_config.provide_session() as driver:
         result = run_(driver.execute)(
             "SELECT column_name, data_type FROM information_schema.columns "
-            "WHERE table_name = 'litestar_sessions' ORDER BY ordinal_position"
+            "WHERE table_name = 'litestar_sessions_psycopg_sync' ORDER BY ordinal_position"
         )
 
         columns = {row["column_name"]: row["data_type"] for row in result.data}
@@ -286,7 +286,7 @@ async def test_async_table_verification(
     async with psycopg_async_migrated_config.provide_session() as driver:
         result = await driver.execute(
             "SELECT column_name, data_type FROM information_schema.columns "
-            "WHERE table_name = 'litestar_sessions' ORDER BY ordinal_position"
+            "WHERE table_name = 'litestar_sessions_psycopg_sync' ORDER BY ordinal_position"
         )
 
         columns = {row["column_name"]: row["data_type"] for row in result.data}
@@ -477,10 +477,10 @@ async def test_async_session_persistence(async_litestar_app: Litestar) -> None:
 def test_sync_session_expiration(psycopg_sync_migrated_config: PsycopgSyncConfig) -> None:
     """Test session expiration handling with sync driver."""
     # Create store with very short lifetime
-    session_store = SQLSpecSessionStore(config=psycopg_sync_migrated_config, table_name="litestar_sessions")
+    session_store = SQLSpecSessionStore(config=psycopg_sync_migrated_config, table_name="litestar_sessions_psycopg_sync")
 
     session_config = SQLSpecSessionConfig(
-        table_name="litestar_sessions",
+        table_name="litestar_sessions_psycopg_sync",
         store="sessions",
         max_age=1,  # 1 second
     )
@@ -521,10 +521,10 @@ def test_sync_session_expiration(psycopg_sync_migrated_config: PsycopgSyncConfig
 async def test_async_session_expiration(psycopg_async_migrated_config: PsycopgAsyncConfig) -> None:
     """Test session expiration handling with async driver."""
     # Create store with very short lifetime
-    session_store = SQLSpecSessionStore(config=psycopg_async_migrated_config, table_name="litestar_sessions")
+    session_store = SQLSpecSessionStore(config=psycopg_async_migrated_config, table_name="litestar_sessions_psycopg_async")
 
     session_config = SQLSpecSessionConfig(
-        table_name="litestar_sessions",
+        table_name="litestar_sessions_psycopg_sync",
         store="sessions",
         max_age=1,  # 1 second
     )

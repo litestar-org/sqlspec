@@ -281,16 +281,11 @@ async def test_session_persistence_across_requests(
         assert len(data["documents"]) == 0
 
 
-async def test_session_expiration(aiosqlite_migration_config: AiosqliteConfig) -> None:
+async def test_session_expiration(migrated_config: AiosqliteConfig) -> None:
     """Test session expiration handling with SQLite."""
-    # Apply migrations first
-    commands = AsyncMigrationCommands(aiosqlite_migration_config)
-    await commands.init(aiosqlite_migration_config.migration_config["script_location"], package=False)
-    await commands.upgrade()
-
-    # Create store and config with very short lifetime
+    # Create store and config with very short lifetime (migrations already applied by fixture)
     session_store = SQLSpecSessionStore(
-        config=aiosqlite_migration_config,
+        config=migrated_config,
         table_name="litestar_sessions",  # Use the migrated table
     )
 

@@ -221,7 +221,17 @@ def _convert_psqlpy_parameters(value: Any) -> Any:
         except (UnicodeDecodeError, Exception):
             return value
 
-    if isinstance(value, (dict, list, tuple, uuid.UUID, datetime.datetime, datetime.date)):
+    # Handle complex data structures for psqlpy
+    if isinstance(value, (list, tuple)):
+        # For JSON operations, psqlpy needs the list as-is
+        # For array operations, ensure all elements are properly converted
+        return [_convert_psqlpy_parameters(item) for item in value]
+
+    if isinstance(value, dict):
+        # For JSON operations, psqlpy needs dicts as-is, but ensure nested values are converted
+        return {k: _convert_psqlpy_parameters(v) for k, v in value.items()}
+
+    if isinstance(value, (uuid.UUID, datetime.datetime, datetime.date)):
         return value
 
     return value

@@ -47,6 +47,10 @@ def up(context: "Optional[MigrationContext]" = None) -> "list[str]":
         data_type = "TEXT"
         timestamp_type = "DATETIME"
         created_at_default = "DEFAULT CURRENT_TIMESTAMP"
+    elif dialect == "duckdb":
+        data_type = "VARCHAR"  # DuckDB prefers VARCHAR for JSON storage
+        timestamp_type = "TIMESTAMP"
+        created_at_default = "DEFAULT CURRENT_TIMESTAMP"
     else:
         # Generic fallback
         data_type = "TEXT"
