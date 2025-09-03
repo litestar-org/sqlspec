@@ -628,6 +628,42 @@ class SQLFactory:
         """Create a CROSS JOIN builder."""
         return JoinBuilder("cross join")
 
+    @property
+    def lateral_join_(self) -> "JoinBuilder":
+        """Create a LATERAL JOIN builder.
+
+        Returns:
+            JoinBuilder configured for LATERAL JOIN
+
+        Example:
+            ```python
+            query = (
+                sql.select("u.name", "arr.value")
+                .from_("users u")
+                .join(sql.lateral_join_("UNNEST(u.tags)").on("true"))
+            )
+            ```
+        """
+        return JoinBuilder("lateral join", lateral=True)
+
+    @property
+    def left_lateral_join_(self) -> "JoinBuilder":
+        """Create a LEFT LATERAL JOIN builder.
+
+        Returns:
+            JoinBuilder configured for LEFT LATERAL JOIN
+        """
+        return JoinBuilder("left join", lateral=True)
+
+    @property
+    def cross_lateral_join_(self) -> "JoinBuilder":
+        """Create a CROSS LATERAL JOIN builder.
+
+        Returns:
+            JoinBuilder configured for CROSS LATERAL JOIN
+        """
+        return JoinBuilder("cross join", lateral=True)
+
     def __getattr__(self, name: str) -> "Column":
         """Dynamically create column references.
 
