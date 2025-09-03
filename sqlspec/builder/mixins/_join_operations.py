@@ -14,7 +14,6 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_query_builder_parameters
 
 if TYPE_CHECKING:
-    from sqlspec.builder._column import ColumnExpression
     from sqlspec.core.statement import SQL
     from sqlspec.protocols import SQLBuilderProtocol
 
@@ -309,21 +308,6 @@ class JoinBuilder:
         self._table: Optional[Union[str, exp.Expression]] = None
         self._condition: Optional[exp.Expression] = None
         self._alias: Optional[str] = None
-
-    def __eq__(self, other: object) -> "ColumnExpression":  # type: ignore[override]
-        """Equal to (==) - not typically used but needed for type consistency."""
-        from sqlspec.builder._column import ColumnExpression
-
-        # JoinBuilder doesn't have a direct expression, so this is a placeholder
-        # In practice, this shouldn't be called as joins are used differently
-        placeholder_expr = exp.Literal.string(f"join_{self._join_type.lower()}")
-        if other is None:
-            return ColumnExpression(exp.Is(this=placeholder_expr, expression=exp.Null()))
-        return ColumnExpression(exp.EQ(this=placeholder_expr, expression=exp.convert(other)))
-
-    def __hash__(self) -> int:
-        """Make JoinBuilder hashable."""
-        return hash(id(self))
 
     def __call__(self, table: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Set the table to join.
