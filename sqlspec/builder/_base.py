@@ -19,7 +19,7 @@ from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_sql_method, has_with_method
+from sqlspec.utils.type_guards import has_expression_and_parameters, has_sql_method, has_with_method
 
 if TYPE_CHECKING:
     from sqlspec.core.result import SQLResult
@@ -208,6 +208,43 @@ class QueryBuilder(ABC):
 
         return f"{base_name}_{uuid.uuid4().hex[:8]}"
 
+    def _merge_cte_parameters(self, cte_name: str, parameters: dict[str, Any]) -> dict[str, str]:
+        """Merge CTE parameters with unique naming to prevent collisions.
+
+        Args:
+            cte_name: The name of the CTE for parameter prefixing
+            parameters: The CTE's parameter dictionary
+
+        Returns:
+            Mapping of old parameter names to new unique names
+        """
+        param_mapping = {}
+        for old_name, value in parameters.items():
+            new_name = self._generate_unique_parameter_name(f"{cte_name}_{old_name}")
+            param_mapping[old_name] = new_name
+            self.add_parameter(value, name=new_name)
+        return param_mapping
+
+    def _update_placeholders_in_expression(
+        self, expression: exp.Expression, param_mapping: dict[str, str]
+    ) -> exp.Expression:
+        """Update parameter placeholders in expression to use new names.
+
+        Args:
+            expression: The SQLGlot expression to update
+            param_mapping: Mapping of old parameter names to new names
+
+        Returns:
+            Updated expression with new placeholder names
+        """
+
+        def placeholder_replacer(node: exp.Expression) -> exp.Expression:
+            if isinstance(node, exp.Placeholder) and str(node.this) in param_mapping:
+                return exp.Placeholder(this=param_mapping[str(node.this)])
+            return node
+
+        return expression.transform(placeholder_replacer, copy=False)
+
     def _generate_builder_cache_key(self, config: "Optional[StatementConfig]" = None) -> str:
         """Generate cache key based on builder state and configuration.
 
@@ -276,9 +313,12 @@ class QueryBuilder(ABC):
                 msg = f"CTE query builder expression must be a Select, got {type(query._expression).__name__}."
                 self._raise_sql_builder_error(msg)
             cte_select_expression = query._expression
-            for p_name, p_value in query.parameters.items():
-                unique_name = self._generate_unique_parameter_name(p_name)
-                self.add_parameter(p_value, unique_name)
+            param_mapping = self._merge_cte_parameters(alias, query.parameters)
+            updated_expression = self._update_placeholders_in_expression(cte_select_expression, param_mapping)
+            if not isinstance(updated_expression, exp.Select):
+                msg = f"Updated CTE expression must be a Select, got {type(updated_expression).__name__}."
+                self._raise_sql_builder_error(msg)
+            cte_select_expression = updated_expression
 
         elif isinstance(query, str):
             try:
@@ -297,7 +337,6 @@ class QueryBuilder(ABC):
         else:
             msg = f"Invalid query type for CTE: {type(query).__name__}"
             self._raise_sql_builder_error(msg)
-            return self
 
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
@@ -440,7 +479,7 @@ class QueryBuilder(ABC):
             config.dialect is not None
             and config.dialect != safe_query.dialect
             and self._expression is not None
-            and hasattr(self._expression, "sql")
+            and has_sql_method(self._expression)
         ):
             try:
                 sql_string = self._expression.sql(dialect=config.dialect, pretty=True)
@@ -459,26 +498,34 @@ class QueryBuilder(ABC):
         Returns:
             str: The SQL string for this query.
         """
-        try:
-            return self.build().sql
-        except Exception:
-            return super().__str__()
+        return self.build().sql
 
     @property
     def dialect_name(self) -> "Optional[str]":
         """Returns the name of the dialect, if set."""
         if isinstance(self.dialect, str):
             return self.dialect
-        if self.dialect is not None:
-            if isinstance(self.dialect, type) and issubclass(self.dialect, Dialect):
-                return self.dialect.__name__.lower()
-            if isinstance(self.dialect, Dialect):
-                return type(self.dialect).__name__.lower()
-            try:
-                return self.dialect.__name__.lower()
-            except AttributeError:
-                pass
-        return None
+        if self.dialect is None:
+            return None
+        if isinstance(self.dialect, type) and issubclass(self.dialect, Dialect):
+            return self.dialect.__name__.lower()
+        if isinstance(self.dialect, Dialect):
+            return type(self.dialect).__name__.lower()
+        return getattr(self.dialect, "__name__", str(self.dialect)).lower()
+
+    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
+        """Merge parameters from a SQL object into the builder.
+
+        Args:
+            sql_obj: Object with parameters attribute containing parameter mappings
+        """
+        if not has_expression_and_parameters(sql_obj):
+            return
+
+        sql_parameters = getattr(sql_obj, "parameters", {})
+        for param_name, param_value in sql_parameters.items():
+            unique_name = self._generate_unique_parameter_name(param_name)
+            self.add_parameter(param_value, name=unique_name)
 
     @property
     def parameters(self) -> dict[str, Any]:

@@ -31,6 +31,18 @@ class CommonTableExpressionMixin:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
+    def _generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate unique parameter name - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
+    def _update_placeholders_in_expression(
+        self, expression: exp.Expression, param_mapping: dict[str, str]
+    ) -> exp.Expression:
+        """Update parameter placeholders - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
     def with_(
         self, name: str, query: Union[Any, str], recursive: bool = False, columns: Optional[list[str]] = None
     ) -> Self:
@@ -69,8 +81,15 @@ class CommonTableExpressionMixin:
             parameters = built_query.parameters
             if parameters:
                 if isinstance(parameters, dict):
+                    param_mapping = {}
                     for param_name, param_value in parameters.items():
-                        self.add_parameter(param_value, name=param_name)
+                        unique_name = self._generate_unique_parameter_name(f"{name}_{param_name}")
+                        param_mapping[param_name] = unique_name
+                        self.add_parameter(param_value, name=unique_name)
+
+                    # Update placeholders in the parsed expression
+                    if cte_expr and param_mapping:
+                        cte_expr = self._update_placeholders_in_expression(cte_expr, param_mapping)
                 elif isinstance(parameters, (list, tuple)):
                     for param_value in parameters:
                         self.add_parameter(param_value)

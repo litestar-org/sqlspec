@@ -10,7 +10,12 @@ from typing import Any, Final, Optional, Union, cast
 from sqlglot import exp, maybe_parse, parse_one
 
 from sqlspec.core.parameters import ParameterStyle
-from sqlspec.utils.type_guards import has_expression_attr, has_parameter_builder
+from sqlspec.utils.type_guards import (
+    has_expression_and_parameters,
+    has_expression_and_sql,
+    has_expression_attr,
+    has_parameter_builder,
+)
 
 
 def parse_column_expression(
@@ -38,12 +43,12 @@ def parse_column_expression(
         return column_input
 
     # Handle SQL objects (from sql.raw with parameters)
-    if hasattr(column_input, "expression") and hasattr(column_input, "sql"):
+    if has_expression_and_sql(column_input):
         # This is likely a SQL object
         expression = getattr(column_input, "expression", None)
         if expression is not None and isinstance(expression, exp.Expression):
             # Merge parameters from SQL object into builder if available
-            if builder and hasattr(column_input, "parameters") and hasattr(builder, "add_parameter"):
+            if builder and has_expression_and_parameters(column_input) and hasattr(builder, "add_parameter"):
                 sql_parameters = getattr(column_input, "parameters", {})
                 for param_name, param_value in sql_parameters.items():
                     builder.add_parameter(param_value, name=param_name)
@@ -51,19 +56,16 @@ def parse_column_expression(
         # If expression is None, fall back to parsing the raw SQL
         sql_text = getattr(column_input, "sql", "")
         # Merge parameters even when parsing raw SQL
-        if builder and hasattr(column_input, "parameters") and hasattr(builder, "add_parameter"):
+        if builder and has_expression_and_parameters(column_input) and hasattr(builder, "add_parameter"):
             sql_parameters = getattr(column_input, "parameters", {})
             for param_name, param_value in sql_parameters.items():
                 builder.add_parameter(param_value, name=param_name)
         return exp.maybe_parse(sql_text) or exp.column(str(sql_text))
 
     if has_expression_attr(column_input):
-        try:
-            attr_value = column_input._expression
-            if isinstance(attr_value, exp.Expression):
-                return attr_value
-        except AttributeError:
-            pass
+        attr_value = getattr(column_input, "_expression", None)
+        if isinstance(attr_value, exp.Expression):
+            return attr_value
 
     return exp.maybe_parse(column_input) or exp.column(str(column_input))
 
@@ -178,14 +180,10 @@ def parse_condition_expression(
                 )
         condition_input = converted_condition
 
-    try:
-        return exp.condition(condition_input)
-    except Exception:
-        try:
-            parsed = exp.maybe_parse(condition_input)  # type: ignore[var-annotated]
-            return parsed or exp.condition(condition_input)
-        except Exception:
-            return exp.condition(condition_input)
+    parsed: Optional[exp.Expression] = exp.maybe_parse(condition_input)
+    if parsed:
+        return parsed
+    return exp.condition(condition_input)
 
 
 __all__ = ("parse_column_expression", "parse_condition_expression", "parse_order_expression", "parse_table_expression")
