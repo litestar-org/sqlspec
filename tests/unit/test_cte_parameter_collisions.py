@@ -18,10 +18,7 @@ def test_cte_parameter_collision_resolution() -> None:
     cte2 = sql.select("order_id").from_("orders").where_in("status", ["completed", "shipped"])
 
     # This should not raise an error about parameter collision
-    query = (sql.select("*")
-             .with_cte("recent_events", cte1)
-             .with_cte("recent_orders", cte2)
-             .from_("analytics"))
+    query = sql.select("*").with_cte("recent_events", cte1).with_cte("recent_orders", cte2).from_("analytics")
 
     stmt = query.build()
 
@@ -53,11 +50,13 @@ def test_cte_parameter_uniqueness_with_same_column_names() -> None:
     cte2 = sql.select("id", "name").from_("products").where_in("name", ["Widget", "Gadget"])
     cte3 = sql.select("id", "name").from_("categories").where_eq("name", "Electronics")
 
-    query = (sql.select("*")
-             .with_cte("active_users", cte1)
-             .with_cte("popular_products", cte2)
-             .with_cte("main_category", cte3)
-             .from_("dashboard"))
+    query = (
+        sql.select("*")
+        .with_cte("active_users", cte1)
+        .with_cte("popular_products", cte2)
+        .with_cte("main_category", cte3)
+        .from_("dashboard")
+    )
 
     stmt = query.build()
 
@@ -85,10 +84,7 @@ def test_cte_parameter_preservation() -> None:
     cte1 = sql.select("id").from_("table1").where_in("status", original_values[:2])
     cte2 = sql.select("id").from_("table2").where_eq("status", original_values[2])
 
-    query = (sql.select("*")
-             .with_cte("first_cte", cte1)
-             .with_cte("second_cte", cte2)
-             .from_("main"))
+    query = sql.select("*").with_cte("first_cte", cte1).with_cte("second_cte", cte2).from_("main")
 
     stmt = query.build()
 
@@ -103,16 +99,17 @@ def test_nested_cte_parameter_handling() -> None:
     # Create a complex nested scenario
     inner_cte = sql.select("user_id").from_("sessions").where_between("created_at", "2023-01-01", "2023-12-31")
 
-    outer_cte = (sql.select("user_id", "COUNT(*) as visit_count")
-                 .from_("visits")
-                 .where_in("user_id", inner_cte)
-                 .where_gt("duration", 300)
-                 .group_by("user_id"))
+    outer_cte = (
+        sql.select("user_id", "COUNT(*) as visit_count")
+        .from_("visits")
+        .where_in("user_id", inner_cte)
+        .where_gt("duration", 300)
+        .group_by("user_id")
+    )
 
-    final_query = (sql.select("*")
-                   .with_cte("active_sessions", inner_cte)
-                   .with_cte("frequent_visitors", outer_cte)
-                   .from_("users"))
+    final_query = (
+        sql.select("*").with_cte("active_sessions", inner_cte).with_cte("frequent_visitors", outer_cte).from_("users")
+    )
 
     stmt = final_query.build()
 
@@ -129,20 +126,23 @@ def test_nested_cte_parameter_handling() -> None:
 def test_cte_with_multiple_where_conditions() -> None:
     """Test CTE parameter collision with multiple WHERE conditions."""
     # Create CTEs with multiple conditions on same column names
-    cte1 = (sql.select("*").from_("orders")
-            .where_eq("status", "pending")
-            .where_gt("amount", 100)
-            .where_like("customer_name", "%Smith%"))
+    cte1 = (
+        sql.select("*")
+        .from_("orders")
+        .where_eq("status", "pending")
+        .where_gt("amount", 100)
+        .where_like("customer_name", "%Smith%")
+    )
 
-    cte2 = (sql.select("*").from_("invoices")
-            .where_eq("status", "paid")
-            .where_lt("amount", 50)
-            .where_like("customer_name", "%Johnson%"))
+    cte2 = (
+        sql.select("*")
+        .from_("invoices")
+        .where_eq("status", "paid")
+        .where_lt("amount", 50)
+        .where_like("customer_name", "%Johnson%")
+    )
 
-    query = (sql.select("*")
-             .with_cte("pending_orders", cte1)
-             .with_cte("small_invoices", cte2)
-             .from_("financials"))
+    query = sql.select("*").with_cte("pending_orders", cte1).with_cte("small_invoices", cte2).from_("financials")
 
     stmt = query.build()
 
@@ -154,7 +154,7 @@ def test_cte_with_multiple_where_conditions() -> None:
     invoice_params = [name for name in param_names if "small_invoices" in name]
 
     assert len(pending_params) == 3  # status, amount, customer_name
-    assert len(invoice_params) == 3   # status, amount, customer_name
+    assert len(invoice_params) == 3  # status, amount, customer_name
 
     # Verify values are correct
     assert stmt.parameters[next(name for name in pending_params if "status" in name)] == "pending"
@@ -165,11 +165,13 @@ def test_cte_parameter_collision_with_main_query_params() -> None:
     """Test that CTE parameters don't collide with main query parameters."""
     cte = sql.select("id").from_("products").where_eq("category", "electronics")
 
-    query = (sql.select("*")
-             .with_cte("electronics", cte)
-             .from_("orders")
-             .where_eq("category", "books")  # Same parameter name as CTE
-             .where_in("product_id", cte))
+    query = (
+        sql.select("*")
+        .with_cte("electronics", cte)
+        .from_("orders")
+        .where_eq("category", "books")  # Same parameter name as CTE
+        .where_in("product_id", cte)
+    )
 
     stmt = query.build()
 
@@ -190,9 +192,7 @@ def test_cte_with_empty_parameters() -> None:
     """Test CTE handling when no parameters are involved."""
     cte = sql.select("id", "name").from_("users").limit(10)
 
-    query = (sql.select("*")
-             .with_cte("limited_users", cte)
-             .from_("orders"))
+    query = sql.select("*").with_cte("limited_users", cte).from_("orders")
 
     stmt = query.build()
 
@@ -208,17 +208,21 @@ def test_multiple_cte_levels_parameter_isolation() -> None:
     level1 = sql.select("user_id").from_("events").where_eq("type", "login")
 
     # Level 2 CTE that references Level 1
-    level2 = (sql.select("user_id", "COUNT(*) as login_count")
-              .from_("daily_stats")
-              .where_in("user_id", level1)
-              .where_eq("type", "summary"))  # Same parameter name "type"
+    level2 = (
+        sql.select("user_id", "COUNT(*) as login_count")
+        .from_("daily_stats")
+        .where_in("user_id", level1)
+        .where_eq("type", "summary")
+    )  # Same parameter name "type"
 
     # Main query
-    query = (sql.select("*")
-             .with_cte("login_events", level1)
-             .with_cte("login_summary", level2)
-             .from_("reports")
-             .where_eq("type", "monthly"))  # Another "type" parameter
+    query = (
+        sql.select("*")
+        .with_cte("login_events", level1)
+        .with_cte("login_summary", level2)
+        .from_("reports")
+        .where_eq("type", "monthly")
+    )  # Another "type" parameter
 
     stmt = query.build()
 

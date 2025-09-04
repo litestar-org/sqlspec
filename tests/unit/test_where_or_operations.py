@@ -14,10 +14,7 @@ pytestmark = pytest.mark.xdist_group("builder")
 
 def test_or_where_basic_chaining() -> None:
     """Test basic OR chaining with or_where method."""
-    query = (sql.select("*")
-             .from_("users")
-             .where_eq("role", "admin")
-             .or_where_eq("role", "moderator"))
+    query = sql.select("*").from_("users").where_eq("role", "admin").or_where_eq("role", "moderator")
 
     stmt = query.build()
 
@@ -46,13 +43,11 @@ def test_or_where_requires_existing_where() -> None:
 
 def test_where_or_grouping() -> None:
     """Test where_or method for grouping multiple OR conditions."""
-    query = (sql.select("*")
-             .from_("users")
-             .where_or(
-                 ("role", "admin"),
-                 ("role", "moderator"),
-                 ("permissions", "LIKE", "%admin%")
-             ))
+    query = (
+        sql.select("*")
+        .from_("users")
+        .where_or(("role", "admin"), ("role", "moderator"), ("permissions", "LIKE", "%admin%"))
+    )
 
     stmt = query.build()
 
@@ -81,21 +76,20 @@ def test_where_or_empty_conditions() -> None:
 
 def test_mixed_and_or_conditions() -> None:
     """Test mixing AND and OR conditions properly."""
-    query = (sql.select("*")
-             .from_("products")
-             .where_eq("category", "electronics")  # AND condition
-             .where_or(
-                 ("price", "<", 100),
-                 ("on_sale", True)
-             )  # OR group
-             .where_is_not_null("inventory_count"))  # Another AND condition
+    query = (
+        sql.select("*")
+        .from_("products")
+        .where_eq("category", "electronics")  # AND condition
+        .where_or(("price", "<", 100), ("on_sale", True))  # OR group
+        .where_is_not_null("inventory_count")
+    )  # Another AND condition
 
     stmt = query.build()
 
     # Should have proper AND/OR structure
     assert "AND" in stmt.sql
     assert "OR" in stmt.sql
-    assert ("IS NOT NULL" in stmt.sql or ("NOT" in stmt.sql and "IS NULL" in stmt.sql))  # SQLGlot may format differently
+    assert "IS NOT NULL" in stmt.sql or ("NOT" in stmt.sql and "IS NULL" in stmt.sql)  # SQLGlot may format differently
 
     # Should have parameters for all conditions
     param_values = list(stmt.parameters.values())
@@ -106,11 +100,9 @@ def test_mixed_and_or_conditions() -> None:
 
 def test_or_where_with_string_conditions() -> None:
     """Test or_where with raw string conditions."""
-    query = (sql.select("*")
-             .from_("events")
-             .where_eq("status", "active")
-             .or_where("priority > 5")
-             .or_where("urgent = true"))
+    query = (
+        sql.select("*").from_("events").where_eq("status", "active").or_where("priority > 5").or_where("urgent = true")
+    )
 
     stmt = query.build()
 
@@ -125,11 +117,13 @@ def test_or_where_with_string_conditions() -> None:
 
 def test_or_where_with_parameterized_strings() -> None:
     """Test or_where with parameterized string conditions."""
-    query = (sql.select("*")
-             .from_("users")
-             .where_eq("status", "active")
-             .or_where("age > ?", 65)
-             .or_where("department = :dept", dept="admin"))
+    query = (
+        sql.select("*")
+        .from_("users")
+        .where_eq("status", "active")
+        .or_where("age > ?", 65)
+        .or_where("department = :dept", dept="admin")
+    )
 
     stmt = query.build()
 
@@ -145,14 +139,16 @@ def test_or_where_with_parameterized_strings() -> None:
 
 def test_or_where_helper_methods() -> None:
     """Test all or_where_* helper methods work correctly."""
-    query = (sql.select("*")
-             .from_("posts")
-             .where_eq("status", "draft")
-             .or_where_eq("status", "review")
-             .or_where_neq("author_id", 1)
-             .or_where_in("category", ["tech", "news"])
-             .or_where_like("title", "%urgent%")
-             .or_where_is_null("deleted_at"))
+    query = (
+        sql.select("*")
+        .from_("posts")
+        .where_eq("status", "draft")
+        .or_where_eq("status", "review")
+        .or_where_neq("author_id", 1)
+        .or_where_in("category", ["tech", "news"])
+        .or_where_like("title", "%urgent%")
+        .or_where_is_null("deleted_at")
+    )
 
     stmt = query.build()
 
@@ -173,10 +169,7 @@ def test_or_where_in_with_subquery() -> None:
     """Test or_where_in with subquery."""
     subquery = sql.select("user_id").from_("banned_users").where_eq("status", "active")
 
-    query = (sql.select("*")
-             .from_("posts")
-             .where_eq("published", True)
-             .or_where_in("author_id", subquery))
+    query = sql.select("*").from_("posts").where_eq("published", True).or_where_in("author_id", subquery)
 
     stmt = query.build()
 
@@ -192,22 +185,20 @@ def test_or_where_in_with_subquery() -> None:
 
 def test_complex_nested_or_conditions() -> None:
     """Test complex nested OR conditions with parentheses."""
-    query = (sql.select("*")
-             .from_("orders")
-             .where_eq("customer_id", 123)
-             .where_or(
-                 ("status", "pending"),
-                 ("status", "processing"),
-                 ("priority", ">", 5)
-             )
-             .where_between("created_at", "2023-01-01", "2023-12-31"))
+    query = (
+        sql.select("*")
+        .from_("orders")
+        .where_eq("customer_id", 123)
+        .where_or(("status", "pending"), ("status", "processing"), ("priority", ">", 5))
+        .where_between("created_at", "2023-01-01", "2023-12-31")
+    )
 
     stmt = query.build()
 
     # Should have proper grouping and multiple conditions
     assert "AND" in stmt.sql
     assert "OR" in stmt.sql
-    assert ("BETWEEN" in stmt.sql or ("created_at" in stmt.sql and "<=" in stmt.sql))  # SQLGlot may expand BETWEEN
+    assert "BETWEEN" in stmt.sql or ("created_at" in stmt.sql and "<=" in stmt.sql)  # SQLGlot may expand BETWEEN
 
     # Verify all parameter values
     param_values = list(stmt.parameters.values())
@@ -221,11 +212,13 @@ def test_complex_nested_or_conditions() -> None:
 
 def test_or_where_with_tuples() -> None:
     """Test or_where with tuple conditions."""
-    query = (sql.select("*")
-             .from_("products")
-             .where("price > 100")
-             .or_where(("category", "electronics"))  # 2-tuple equality
-             .or_where(("rating", ">=", 4.5)))       # 3-tuple with operator
+    query = (
+        sql.select("*")
+        .from_("products")
+        .where("price > 100")
+        .or_where(("category", "electronics"))  # 2-tuple equality
+        .or_where(("rating", ">=", 4.5))
+    )  # 3-tuple with operator
 
     stmt = query.build()
 
@@ -243,14 +236,16 @@ def test_or_where_with_tuples() -> None:
 
 def test_where_or_with_mixed_condition_types() -> None:
     """Test where_or with mixed condition types."""
-    query = (sql.select("*")
-             .from_("users")
-             .where_or(
-                 ("role", "admin"),           # 2-tuple
-                 ("age", ">", 65),           # 3-tuple
-                 "department = 'IT'",        # string
-                 ("permissions", "LIKE", "%write%")  # 3-tuple with LIKE
-             ))
+    query = (
+        sql.select("*")
+        .from_("users")
+        .where_or(
+            ("role", "admin"),  # 2-tuple
+            ("age", ">", 65),  # 3-tuple
+            "department = 'IT'",  # string
+            ("permissions", "LIKE", "%write%"),  # 3-tuple with LIKE
+        )
+    )
 
     stmt = query.build()
 
@@ -270,12 +265,14 @@ def test_where_or_with_mixed_condition_types() -> None:
 
 def test_or_where_preserves_parameter_naming() -> None:
     """Test that OR conditions preserve descriptive parameter naming."""
-    query = (sql.select("*")
-             .from_("events")
-             .where_eq("event_type", "click")
-             .or_where_eq("event_type", "view")
-             .or_where_in("user_category", ["premium", "trial"])
-             .or_where_between("timestamp", "2023-01-01", "2023-02-01"))
+    query = (
+        sql.select("*")
+        .from_("events")
+        .where_eq("event_type", "click")
+        .or_where_eq("event_type", "view")
+        .or_where_in("user_category", ["premium", "trial"])
+        .or_where_between("timestamp", "2023-01-01", "2023-02-01")
+    )
 
     stmt = query.build()
 
@@ -292,10 +289,12 @@ def test_or_where_preserves_parameter_naming() -> None:
 
 def test_or_where_with_update_statements() -> None:
     """Test OR clauses work with UPDATE statements."""
-    query = (sql.update("users")
-             .set("last_active", "2023-12-01")
-             .where_eq("status", "inactive")
-             .or_where_lt("last_login", "2023-01-01"))
+    query = (
+        sql.update("users")
+        .set("last_active", "2023-12-01")
+        .where_eq("status", "inactive")
+        .or_where_lt("last_login", "2023-01-01")
+    )
 
     stmt = query.build()
 
@@ -314,11 +313,13 @@ def test_or_where_with_update_statements() -> None:
 
 def test_or_where_with_delete_statements() -> None:
     """Test OR clauses work with DELETE statements."""
-    query = (sql.delete()
-             .from_("logs")
-             .where_lt("created_at", "2023-01-01")
-             .or_where_eq("level", "DEBUG")
-             .or_where_is_null("user_id"))
+    query = (
+        sql.delete()
+        .from_("logs")
+        .where_lt("created_at", "2023-01-01")
+        .or_where_eq("level", "DEBUG")
+        .or_where_is_null("user_id")
+    )
 
     stmt = query.build()
 
@@ -337,13 +338,15 @@ def test_or_where_with_delete_statements() -> None:
 
 def test_chained_or_operations() -> None:
     """Test multiple chained OR operations work correctly."""
-    query = (sql.select("*")
-             .from_("products")
-             .where_eq("category", "books")
-             .or_where_eq("category", "music")
-             .or_where_eq("category", "movies")
-             .or_where(("price", "<", 20))
-             .or_where_is_null("discontinued"))
+    query = (
+        sql.select("*")
+        .from_("products")
+        .where_eq("category", "books")
+        .or_where_eq("category", "music")
+        .or_where_eq("category", "movies")
+        .or_where(("price", "<", 20))
+        .or_where_is_null("discontinued")
+    )
 
     stmt = query.build()
 
@@ -400,25 +403,27 @@ def test_performance_with_many_or_conditions() -> None:
 def test_or_where_complete_method_parity() -> None:
     """Test that all where_* methods have corresponding or_where_* methods."""
     # Test basic OR methods - no complex methods to avoid interference
-    query = (sql.select("*")
-             .from_("test_table")
-             .where_eq("base", "condition")
-             .or_where_eq("col1", "value1")
-             .or_where_neq("col2", "value2")
-             .or_where_lt("col3", 10)
-             .or_where_lte("col4", 20)
-             .or_where_gt("col5", 30)
-             .or_where_gte("col6", 40)
-             .or_where_between("col7", 1, 100)
-             .or_where_like("col8", "%pattern%")
-             .or_where_not_like("col9", "%bad%")
-             .or_where_ilike("col10", "%CASE%")
-             .or_where_is_null("col11")
-             .or_where_is_not_null("col12")
-             .or_where_null("col13")  # Alias
-             .or_where_not_null("col14")  # Alias
-             .or_where_in("col15", ["a", "b", "c"])
-             .or_where_not_in("col16", ["x", "y", "z"]))
+    query = (
+        sql.select("*")
+        .from_("test_table")
+        .where_eq("base", "condition")
+        .or_where_eq("col1", "value1")
+        .or_where_neq("col2", "value2")
+        .or_where_lt("col3", 10)
+        .or_where_lte("col4", 20)
+        .or_where_gt("col5", 30)
+        .or_where_gte("col6", 40)
+        .or_where_between("col7", 1, 100)
+        .or_where_like("col8", "%pattern%")
+        .or_where_not_like("col9", "%bad%")
+        .or_where_ilike("col10", "%CASE%")
+        .or_where_is_null("col11")
+        .or_where_is_not_null("col12")
+        .or_where_null("col13")  # Alias
+        .or_where_not_null("col14")  # Alias
+        .or_where_in("col15", ["a", "b", "c"])
+        .or_where_not_in("col16", ["x", "y", "z"])
+    )
 
     basic_stmt = query.build()
     assert "OR" in basic_stmt.sql, f"Expected OR in basic methods SQL: {basic_stmt.sql}"
@@ -433,9 +438,7 @@ def test_or_where_complete_method_parity() -> None:
 
 def test_or_where_complex_methods() -> None:
     """Test OR methods that work with subqueries and complex operations."""
-    query = (sql.select("*")
-             .from_("test_table")
-             .where_eq("base", "condition"))
+    query = sql.select("*").from_("test_table").where_eq("base", "condition")
 
     # Test EXISTS/NOT EXISTS
     subquery = sql.select("id").from_("related").where_eq("status", "active")
@@ -472,13 +475,14 @@ def test_or_where_subquery_methods() -> None:
     # Test IN with subquery (already tested but adding for completeness)
     in_subquery = sql.select("user_id").from_("banned_users").where_eq("banned", True)
 
-    query = (base_query
-             .or_where_exists(exists_subquery)
-             .or_where_not_exists(exists_subquery)
-             .or_where_any("user_id", any_subquery)
-             .or_where_not_any("user_id", any_subquery)
-             .or_where_in("user_id", in_subquery)
-             .or_where_not_in("user_id", in_subquery))
+    query = (
+        base_query.or_where_exists(exists_subquery)
+        .or_where_not_exists(exists_subquery)
+        .or_where_any("user_id", any_subquery)
+        .or_where_not_any("user_id", any_subquery)
+        .or_where_in("user_id", in_subquery)
+        .or_where_not_in("user_id", in_subquery)
+    )
 
     stmt = query.build()
 
@@ -498,11 +502,13 @@ def test_or_where_subquery_methods() -> None:
 
 def test_or_where_aliases_work() -> None:
     """Test that or_where_null and or_where_not_null aliases work correctly."""
-    query = (sql.select("*")
-             .from_("products")
-             .where_eq("active", True)
-             .or_where_null("deleted_at")  # Should be alias for or_where_is_null
-             .or_where_not_null("created_at"))  # Should be alias for or_where_is_not_null
+    query = (
+        sql.select("*")
+        .from_("products")
+        .where_eq("active", True)
+        .or_where_null("deleted_at")  # Should be alias for or_where_is_null
+        .or_where_not_null("created_at")
+    )  # Should be alias for or_where_is_not_null
 
     stmt = query.build()
 
@@ -517,11 +523,13 @@ def test_or_where_aliases_work() -> None:
 
 def test_or_where_ilike_case_insensitive() -> None:
     """Test that or_where_ilike works for case-insensitive pattern matching."""
-    query = (sql.select("*")
-             .from_("articles")
-             .where_eq("published", True)
-             .or_where_ilike("title", "%PYTHON%")  # Should match regardless of case
-             .or_where_like("content", "%exactly%"))  # Regular LIKE for comparison
+    query = (
+        sql.select("*")
+        .from_("articles")
+        .where_eq("published", True)
+        .or_where_ilike("title", "%PYTHON%")  # Should match regardless of case
+        .or_where_like("content", "%exactly%")
+    )  # Regular LIKE for comparison
 
     stmt = query.build()
 
