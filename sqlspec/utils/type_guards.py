@@ -68,6 +68,8 @@ __all__ = (
     "has_attr",
     "has_bytes_conversion",
     "has_dict_attribute",
+    "has_expression_and_parameters",
+    "has_expression_and_sql",
     "has_expression_attr",
     "has_expressions",
     "has_expressions_attribute",
@@ -1211,3 +1213,32 @@ def is_typed_parameter(obj: Any) -> "TypeGuard[Any]":
     from sqlspec.core.parameters import TypedParameter
 
     return isinstance(obj, TypedParameter)
+
+
+def has_expression_and_sql(obj: Any) -> bool:
+    """Check if an object has both 'expression' and 'sql' attributes.
+
+    This is commonly used to identify SQL objects in the builder system.
+
+    Args:
+        obj: The object to check
+
+    Returns:
+        True if the object has both attributes, False otherwise
+    """
+    return hasattr(obj, "expression") and hasattr(obj, "sql")
+
+
+def has_expression_and_parameters(obj: Any) -> bool:
+    """Check if an object has both 'expression' and 'parameters' attributes.
+
+    This is used to identify objects that contain both SQL expressions
+    and parameter mappings.
+
+    Args:
+        obj: The object to check
+
+    Returns:
+        True if the object has both attributes, False otherwise
+    """
+    return hasattr(obj, "expression") and hasattr(obj, "parameters")
