@@ -19,7 +19,7 @@ from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_sql_method, has_with_method
+from sqlspec.utils.type_guards import has_expression_and_parameters, has_sql_method, has_with_method
 
 if TYPE_CHECKING:
     from sqlspec.core.result import SQLResult
@@ -455,7 +455,7 @@ class QueryBuilder(ABC):
 
         if isinstance(safe_query.parameters, dict):
             kwargs = safe_query.parameters
-            parameters: Optional[tuple] = None
+            parameters: Optional[tuple[Any, ...]] = None
         else:
             kwargs = None
             parameters = (
@@ -479,7 +479,7 @@ class QueryBuilder(ABC):
             config.dialect is not None
             and config.dialect != safe_query.dialect
             and self._expression is not None
-            and hasattr(self._expression, "sql")
+            and has_sql_method(self._expression)
         ):
             try:
                 sql_string = self._expression.sql(dialect=config.dialect, pretty=True)
@@ -498,26 +498,34 @@ class QueryBuilder(ABC):
         Returns:
             str: The SQL string for this query.
         """
-        try:
-            return self.build().sql
-        except Exception:
-            return super().__str__()
+        return self.build().sql
 
     @property
     def dialect_name(self) -> "Optional[str]":
         """Returns the name of the dialect, if set."""
         if isinstance(self.dialect, str):
             return self.dialect
-        if self.dialect is not None:
-            if isinstance(self.dialect, type) and issubclass(self.dialect, Dialect):
-                return self.dialect.__name__.lower()
-            if isinstance(self.dialect, Dialect):
-                return type(self.dialect).__name__.lower()
-            try:
-                return self.dialect.__name__.lower()
-            except AttributeError:
-                pass
-        return None
+        if self.dialect is None:
+            return None
+        if isinstance(self.dialect, type) and issubclass(self.dialect, Dialect):
+            return self.dialect.__name__.lower()
+        if isinstance(self.dialect, Dialect):
+            return type(self.dialect).__name__.lower()
+        return getattr(self.dialect, "__name__", str(self.dialect)).lower()
+
+    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
+        """Merge parameters from a SQL object into the builder.
+
+        Args:
+            sql_obj: Object with parameters attribute containing parameter mappings
+        """
+        if not has_expression_and_parameters(sql_obj):
+            return
+
+        sql_parameters = getattr(sql_obj, "parameters", {})
+        for param_name, param_value in sql_parameters.items():
+            unique_name = self._generate_unique_parameter_name(param_name)
+            self.add_parameter(param_value, name=unique_name)
 
     @property
     def parameters(self) -> dict[str, Any]:

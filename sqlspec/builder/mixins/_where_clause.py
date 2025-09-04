@@ -5,7 +5,7 @@ Provides mixins for WHERE and HAVING clause functionality with
 parameter binding and various condition operators.
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 if TYPE_CHECKING:
     from sqlspec.core.statement import SQL
@@ -16,7 +16,13 @@ from typing_extensions import Self
 
 from sqlspec.builder._parsing_utils import parse_column_expression, parse_condition_expression
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import has_query_builder_parameters, has_sqlglot_expression, is_iterable_parameters
+from sqlspec.utils.type_guards import (
+    has_expression_and_parameters,
+    has_expression_and_sql,
+    has_query_builder_parameters,
+    has_sqlglot_expression,
+    is_iterable_parameters,
+)
 
 
 def _extract_column_name(column: Union[str, exp.Column]) -> str:
@@ -58,6 +64,76 @@ class WhereClauseMixin:
 
     # Type annotation for PyRight - this will be provided by the base class
     _expression: Optional[exp.Expression]
+
+    def _create_parameterized_condition(
+        self,
+        column: Union[str, exp.Column],
+        value: Any,
+        condition_factory: "Callable[[exp.Expression, exp.Placeholder], exp.Expression]",
+    ) -> exp.Expression:
+        """Create a parameterized condition using the provided factory function.
+
+        Args:
+            column: Column expression
+            value: Parameter value
+            condition_factory: Function that creates the condition expression
+
+        Returns:
+            The created condition expression
+        """
+        builder = cast("SQLBuilderProtocol", self)
+        column_name = _extract_column_name(column)
+        param_name = builder._generate_unique_parameter_name(column_name)
+        _, param_name = builder.add_parameter(value, name=param_name)
+        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        placeholder = exp.Placeholder(this=param_name)
+        return condition_factory(col_expr, placeholder)
+
+    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
+        """Merge parameters from a SQL object into the builder.
+
+        Args:
+            sql_obj: Object with parameters attribute containing parameter mappings
+        """
+        if not has_expression_and_parameters(sql_obj):
+            return
+
+        builder = cast("SQLBuilderProtocol", self)
+        sql_parameters = getattr(sql_obj, "parameters", {})
+        for param_name, param_value in sql_parameters.items():
+            unique_name = builder._generate_unique_parameter_name(param_name)
+            builder.add_parameter(param_value, name=unique_name)
+
+    def _apply_or_where(self, where_method: "Callable[..., Self]", *args: Any, **kwargs: Any) -> Self:
+        """Apply a where method but use OR logic instead of AND.
+
+        This allows reusing all where_* methods for or_where_* functionality.
+
+        Args:
+            where_method: The where method to apply (e.g., self.where_eq)
+            *args: Arguments to pass to the where method
+            **kwargs: Keyword arguments to pass to the where method
+
+        Returns:
+            Self with OR condition applied
+        """
+        # Create a temporary clone to capture the condition
+        original_expr = self._expression
+
+        # Apply the where method to get the condition
+        where_method(*args, **kwargs)
+
+        # Get the last condition added by extracting it from the modified expression
+        if isinstance(self._expression, (exp.Select, exp.Update, exp.Delete)) and original_expr != self._expression:
+            last_where = self._expression.find(exp.Where)
+            if last_where and last_where.this:
+                condition = last_where.this
+                # Restore original expression
+                self._expression = original_expr
+                # Apply as OR
+                return self.or_where(condition)
+
+        return self
 
     def _handle_in_operator(
         self, column_exp: exp.Expression, value: Any, column_name: str = "column"
@@ -143,75 +219,56 @@ class WhereClauseMixin:
         msg = f"NOT BETWEEN operator requires a tuple of two values, got {type(value).__name__}"
         raise SQLBuilderError(msg)
 
-    def _process_tuple_condition(self, condition: tuple) -> exp.Expression:
+    def _process_tuple_condition(self, condition: "tuple[Any, ...]") -> exp.Expression:
         """Process tuple-based WHERE conditions."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name_raw = str(condition[0])
+        if len(condition) == 2:
+            # (column, value) tuple for equality
+            column, value = condition
+            return self._create_parameterized_condition(
+                column, value, lambda col, placeholder: exp.EQ(this=col, expression=placeholder)
+            )
+
+        if len(condition) != 3:
+            msg = f"Condition tuple must have 2 or 3 elements, got {len(condition)}"
+            raise SQLBuilderError(msg)
+
+        # (column, operator, value) tuple
+        column_name_raw, operator, value = condition
+        operator = str(operator).upper()
         column_exp = parse_column_expression(column_name_raw)
         column_name = _extract_column_name(column_name_raw)
 
-        if len(condition) == 2:
-            # (column, value) tuple for equality
-            value = condition[1]
-            param_name = builder._generate_unique_parameter_name(column_name)
-            _, param_name = builder.add_parameter(value, name=param_name)
-            return exp.EQ(this=column_exp, expression=exp.Placeholder(this=param_name))
+        # Simple operators that use direct parameterization
+        simple_operators = {
+            "=": lambda col, placeholder: exp.EQ(this=col, expression=placeholder),
+            "!=": lambda col, placeholder: exp.NEQ(this=col, expression=placeholder),
+            "<>": lambda col, placeholder: exp.NEQ(this=col, expression=placeholder),
+            ">": lambda col, placeholder: exp.GT(this=col, expression=placeholder),
+            ">=": lambda col, placeholder: exp.GTE(this=col, expression=placeholder),
+            "<": lambda col, placeholder: exp.LT(this=col, expression=placeholder),
+            "<=": lambda col, placeholder: exp.LTE(this=col, expression=placeholder),
+            "LIKE": lambda col, placeholder: exp.Like(this=col, expression=placeholder),
+            "NOT LIKE": lambda col, placeholder: exp.Not(this=exp.Like(this=col, expression=placeholder)),
+        }
 
-        if len(condition) == 3:
-            # (column, operator, value) tuple
-            operator = str(condition[1]).upper()
-            value = condition[2]
+        if operator in simple_operators:
+            return self._create_parameterized_condition(column_name_raw, value, simple_operators[operator])
 
-            if operator == "=":
-                param_name = builder._generate_unique_parameter_name(column_name)
-                _, param_name = builder.add_parameter(value, name=param_name)
-                return exp.EQ(this=column_exp, expression=exp.Placeholder(this=param_name))
-            if operator in {"!=", "<>"}:
-                param_name = builder._generate_unique_parameter_name(column_name)
-                _, param_name = builder.add_parameter(value, name=param_name)
-                return exp.NEQ(this=column_exp, expression=exp.Placeholder(this=param_name))
-            if operator == ">":
-                param_name = builder._generate_unique_parameter_name(column_name)
-                _, param_name = builder.add_parameter(value, name=param_name)
-                return exp.GT(this=column_exp, expression=exp.Placeholder(this=param_name))
-            if operator == ">=":
-                param_name = builder._generate_unique_parameter_name(column_name)
-                _, param_name = builder.add_parameter(value, name=param_name)
-                return exp.GTE(this=column_exp, expression=exp.Placeholder(this=param_name))
-            if operator == "<":
-                param_name = builder._generate_unique_parameter_name(column_name)
-                _, param_name = builder.add_parameter(value, name=param_name)
-                return exp.LT(this=column_exp, expression=exp.Placeholder(this=param_name))
-            if operator == "<=":
-                param_name = builder._generate_unique_parameter_name(column_name)
-                _, param_name = builder.add_parameter(value, name=param_name)
-                return exp.LTE(this=column_exp, expression=exp.Placeholder(this=param_name))
-            if operator == "LIKE":
-                param_name = builder._generate_unique_parameter_name(column_name)
-                _, param_name = builder.add_parameter(value, name=param_name)
-                return exp.Like(this=column_exp, expression=exp.Placeholder(this=param_name))
-            if operator == "NOT LIKE":
-                param_name = builder._generate_unique_parameter_name(column_name)
-                _, param_name = builder.add_parameter(value, name=param_name)
-                return exp.Not(this=exp.Like(this=column_exp, expression=exp.Placeholder(this=param_name)))
+        # Complex operators that need special handling
+        if operator == "IN":
+            return self._handle_in_operator(column_exp, value, column_name)
+        if operator == "NOT IN":
+            return self._handle_not_in_operator(column_exp, value, column_name)
+        if operator == "IS":
+            return self._handle_is_operator(column_exp, value)
+        if operator == "IS NOT":
+            return self._handle_is_not_operator(column_exp, value)
+        if operator == "BETWEEN":
+            return self._handle_between_operator(column_exp, value, column_name)
+        if operator == "NOT BETWEEN":
+            return self._handle_not_between_operator(column_exp, value, column_name)
 
-            if operator == "IN":
-                return self._handle_in_operator(column_exp, value, column_name)
-            if operator == "NOT IN":
-                return self._handle_not_in_operator(column_exp, value, column_name)
-            if operator == "IS":
-                return self._handle_is_operator(column_exp, value)
-            if operator == "IS NOT":
-                return self._handle_is_not_operator(column_exp, value)
-            if operator == "BETWEEN":
-                return self._handle_between_operator(column_exp, value, column_name)
-            if operator == "NOT BETWEEN":
-                return self._handle_not_between_operator(column_exp, value, column_name)
-
-            msg = f"Unsupported operator: {operator}"
-            raise SQLBuilderError(msg)
-
-        msg = f"Condition tuple must have 2 or 3 elements, got {len(condition)}"
+        msg = f"Unsupported operator: {operator}"
         raise SQLBuilderError(msg)
 
     def where(
@@ -326,26 +383,18 @@ class WhereClauseMixin:
                 where_expr = builder._parameterize_expression(raw_expr)
             else:
                 where_expr = parse_condition_expression(str(condition))
-        elif hasattr(condition, "expression") and hasattr(condition, "sql"):
+        elif has_expression_and_sql(condition):
             # Handle SQL objects (from sql.raw with parameters)
             expression = getattr(condition, "expression", None)
             if expression is not None and isinstance(expression, exp.Expression):
                 # Merge parameters from SQL object into builder
-                if hasattr(condition, "parameters") and hasattr(builder, "add_parameter"):
-                    sql_parameters = getattr(condition, "parameters", {})
-                    for param_name, param_value in sql_parameters.items():
-                        unique_name = builder._generate_unique_parameter_name(param_name)
-                        builder.add_parameter(param_value, name=unique_name)
+                self._merge_sql_object_parameters(condition)
                 where_expr = expression
             else:
                 # If expression is None, fall back to parsing the raw SQL
                 sql_text = getattr(condition, "sql", "")
                 # Merge parameters even when parsing raw SQL
-                if hasattr(condition, "parameters") and hasattr(builder, "add_parameter"):
-                    sql_parameters = getattr(condition, "parameters", {})
-                    for param_name, param_value in sql_parameters.items():
-                        unique_name = builder._generate_unique_parameter_name(param_name)
-                        builder.add_parameter(param_value, name=unique_name)
+                self._merge_sql_object_parameters(condition)
                 where_expr = parse_condition_expression(sql_text)
         else:
             msg = f"Unsupported condition type: {type(condition).__name__}"
@@ -360,62 +409,40 @@ class WhereClauseMixin:
 
     def where_eq(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add WHERE column = value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = col_expr.eq(exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(column, value, lambda col, placeholder: col.eq(placeholder))
         return self.where(condition)
 
     def where_neq(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add WHERE column != value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = col_expr.neq(exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(column, value, lambda col, placeholder: col.neq(placeholder))
         return self.where(condition)
 
     def where_lt(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add WHERE column < value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = exp.LT(this=col_expr, expression=exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(
+            column, value, lambda col, placeholder: exp.LT(this=col, expression=placeholder)
+        )
         return self.where(condition)
 
     def where_lte(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add WHERE column <= value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = exp.LTE(this=col_expr, expression=exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(
+            column, value, lambda col, placeholder: exp.LTE(this=col, expression=placeholder)
+        )
         return self.where(condition)
 
     def where_gt(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add WHERE column > value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = exp.GT(this=col_expr, expression=exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(
+            column, value, lambda col, placeholder: exp.GT(this=col, expression=placeholder)
+        )
         return self.where(condition)
 
     def where_gte(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add WHERE column >= value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = exp.GTE(this=col_expr, expression=exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(
+            column, value, lambda col, placeholder: exp.GTE(this=col, expression=placeholder)
+        )
         return self.where(condition)
 
     def where_between(self, column: Union[str, exp.Column], low: Any, high: Any) -> Self:
@@ -446,22 +473,16 @@ class WhereClauseMixin:
 
     def where_not_like(self, column: Union[str, exp.Column], pattern: str) -> Self:
         """Add WHERE column NOT LIKE pattern clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(pattern, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = col_expr.like(exp.Placeholder(this=param_name)).not_()
+        condition = self._create_parameterized_condition(
+            column, pattern, lambda col, placeholder: col.like(placeholder).not_()
+        )
         return self.where(condition)
 
     def where_ilike(self, column: Union[str, exp.Column], pattern: str) -> Self:
         """Add WHERE column ILIKE pattern clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(pattern, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = col_expr.ilike(exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(
+            column, pattern, lambda col, placeholder: col.ilike(placeholder)
+        )
         return self.where(condition)
 
     def where_is_null(self, column: Union[str, exp.Column]) -> Self:
@@ -734,7 +755,7 @@ class WhereClauseMixin:
 
         return self
 
-    def where_or(self, *conditions: Union[str, tuple, exp.Expression]) -> Self:
+    def where_or(self, *conditions: Union[str, "tuple[Any, ...]", exp.Expression]) -> Self:
         """Combine multiple conditions with OR logic.
 
         Args:
@@ -914,22 +935,12 @@ class WhereClauseMixin:
     # OR helper methods for consistency with existing where_* methods
     def or_where_eq(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add OR column = value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = col_expr.eq(exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(column, value, lambda col, placeholder: col.eq(placeholder))
         return self.or_where(condition)
 
     def or_where_neq(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add OR column != value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = col_expr.neq(exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(column, value, lambda col, placeholder: col.neq(placeholder))
         return self.or_where(condition)
 
     def or_where_in(self, column: Union[str, exp.Column], values: Any) -> Self:
@@ -943,11 +954,11 @@ class WhereClauseMixin:
                 param_mapping = {}
                 if subquery_builder_parameters:
                     for p_name, p_value in subquery_builder_parameters.items():
-                        unique_name = cast("Any", builder)._generate_unique_parameter_name(p_name)
+                        unique_name = builder._generate_unique_parameter_name(p_name)
                         param_mapping[p_name] = unique_name
-                        cast("Any", builder).add_parameter(p_value, name=unique_name)
+                        builder.add_parameter(p_value, name=unique_name)
                 subquery = values.build()  # pyright: ignore
-                subquery_parsed = exp.maybe_parse(subquery.sql, dialect=cast("Any", builder).dialect_name)  # pyright: ignore
+                subquery_parsed = exp.maybe_parse(subquery.sql, dialect=builder.dialect_name)  # pyright: ignore
                 if param_mapping and subquery_parsed:
                     subquery_parsed = cast("Any", builder)._update_placeholders_in_expression(
                         subquery_parsed, param_mapping
@@ -955,7 +966,7 @@ class WhereClauseMixin:
                 subquery_exp = (
                     exp.paren(subquery_parsed)
                     if subquery_parsed
-                    else exp.paren(exp.maybe_parse(subquery.sql, dialect=cast("Any", builder).dialect_name))  # pyright: ignore
+                    else exp.paren(exp.maybe_parse(subquery.sql, dialect=builder.dialect_name))  # pyright: ignore
                 )  # pyright: ignore
             else:
                 subquery_exp = values  # type: ignore[assignment]
@@ -1004,42 +1015,30 @@ class WhereClauseMixin:
 
     def or_where_lt(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add OR column < value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = exp.LT(this=col_expr, expression=exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(
+            column, value, lambda col, placeholder: exp.LT(this=col, expression=placeholder)
+        )
         return self.or_where(condition)
 
     def or_where_lte(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add OR column <= value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = exp.LTE(this=col_expr, expression=exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(
+            column, value, lambda col, placeholder: exp.LTE(this=col, expression=placeholder)
+        )
         return self.or_where(condition)
 
     def or_where_gt(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add OR column > value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = exp.GT(this=col_expr, expression=exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(
+            column, value, lambda col, placeholder: exp.GT(this=col, expression=placeholder)
+        )
         return self.or_where(condition)
 
     def or_where_gte(self, column: Union[str, exp.Column], value: Any) -> Self:
         """Add OR column >= value clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = exp.GTE(this=col_expr, expression=exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(
+            column, value, lambda col, placeholder: exp.GTE(this=col, expression=placeholder)
+        )
         return self.or_where(condition)
 
     def or_where_between(self, column: Union[str, exp.Column], low: Any, high: Any) -> Self:
@@ -1056,12 +1055,9 @@ class WhereClauseMixin:
 
     def or_where_not_like(self, column: Union[str, exp.Column], pattern: str) -> Self:
         """Add OR column NOT LIKE pattern clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(pattern, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = col_expr.like(exp.Placeholder(this=param_name)).not_()
+        condition = self._create_parameterized_condition(
+            column, pattern, lambda col, placeholder: col.like(placeholder).not_()
+        )
         return self.or_where(condition)
 
     def or_where_not_in(self, column: Union[str, exp.Column], values: Any) -> Self:
@@ -1075,11 +1071,11 @@ class WhereClauseMixin:
                 param_mapping = {}
                 if subquery_builder_parameters:
                     for p_name, p_value in subquery_builder_parameters.items():
-                        unique_name = cast("Any", builder)._generate_unique_parameter_name(p_name)
+                        unique_name = builder._generate_unique_parameter_name(p_name)
                         param_mapping[p_name] = unique_name
-                        cast("Any", builder).add_parameter(p_value, name=unique_name)
+                        builder.add_parameter(p_value, name=unique_name)
                 subquery = values.build()  # pyright: ignore
-                subquery_parsed = exp.maybe_parse(subquery.sql, dialect=cast("Any", builder).dialect_name)  # pyright: ignore
+                subquery_parsed = exp.maybe_parse(subquery.sql, dialect=builder.dialect_name)  # pyright: ignore
                 if param_mapping and subquery_parsed:
                     subquery_parsed = cast("Any", builder)._update_placeholders_in_expression(
                         subquery_parsed, param_mapping
@@ -1087,7 +1083,7 @@ class WhereClauseMixin:
                 subquery_exp = (
                     exp.paren(subquery_parsed)
                     if subquery_parsed
-                    else exp.paren(exp.maybe_parse(subquery.sql, dialect=cast("Any", builder).dialect_name))  # pyright: ignore
+                    else exp.paren(exp.maybe_parse(subquery.sql, dialect=builder.dialect_name))  # pyright: ignore
                 )  # pyright: ignore
             else:
                 subquery_exp = values  # type: ignore[assignment]
@@ -1110,12 +1106,9 @@ class WhereClauseMixin:
 
     def or_where_ilike(self, column: Union[str, exp.Column], pattern: str) -> Self:
         """Add OR column ILIKE pattern clause."""
-        builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
-        _, param_name = builder.add_parameter(pattern, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        condition: exp.Expression = col_expr.ilike(exp.Placeholder(this=param_name))
+        condition = self._create_parameterized_condition(
+            column, pattern, lambda col, placeholder: col.ilike(placeholder)
+        )
         return self.or_where(condition)
 
     def or_where_null(self, column: Union[str, exp.Column]) -> Self:
@@ -1191,11 +1184,11 @@ class WhereClauseMixin:
                 param_mapping = {}
                 if subquery_builder_parameters:
                     for p_name, p_value in subquery_builder_parameters.items():
-                        unique_name = cast("Any", builder)._generate_unique_parameter_name(p_name)
+                        unique_name = builder._generate_unique_parameter_name(p_name)
                         param_mapping[p_name] = unique_name
-                        cast("Any", builder).add_parameter(p_value, name=unique_name)
+                        builder.add_parameter(p_value, name=unique_name)
                 subquery = values.build()  # pyright: ignore
-                subquery_parsed = exp.maybe_parse(subquery.sql, dialect=cast("Any", builder).dialect_name)  # pyright: ignore
+                subquery_parsed = exp.maybe_parse(subquery.sql, dialect=builder.dialect_name)  # pyright: ignore
                 if param_mapping and subquery_parsed:
                     subquery_parsed = cast("Any", builder)._update_placeholders_in_expression(
                         subquery_parsed, param_mapping
@@ -1203,7 +1196,7 @@ class WhereClauseMixin:
                 subquery_exp = (
                     exp.paren(subquery_parsed)
                     if subquery_parsed
-                    else exp.paren(exp.maybe_parse(subquery.sql, dialect=cast("Any", builder).dialect_name))  # pyright: ignore
+                    else exp.paren(exp.maybe_parse(subquery.sql, dialect=builder.dialect_name))  # pyright: ignore
                 )  # pyright: ignore
             else:
                 subquery_exp = values  # type: ignore[assignment]
@@ -1247,11 +1240,11 @@ class WhereClauseMixin:
                 param_mapping = {}
                 if subquery_builder_parameters:
                     for p_name, p_value in subquery_builder_parameters.items():
-                        unique_name = cast("Any", builder)._generate_unique_parameter_name(p_name)
+                        unique_name = builder._generate_unique_parameter_name(p_name)
                         param_mapping[p_name] = unique_name
-                        cast("Any", builder).add_parameter(p_value, name=unique_name)
+                        builder.add_parameter(p_value, name=unique_name)
                 subquery = values.build()  # pyright: ignore
-                subquery_parsed = exp.maybe_parse(subquery.sql, dialect=cast("Any", builder).dialect_name)  # pyright: ignore
+                subquery_parsed = exp.maybe_parse(subquery.sql, dialect=builder.dialect_name)  # pyright: ignore
                 if param_mapping and subquery_parsed:
                     subquery_parsed = cast("Any", builder)._update_placeholders_in_expression(
                         subquery_parsed, param_mapping
@@ -1259,7 +1252,7 @@ class WhereClauseMixin:
                 subquery_exp = (
                     exp.paren(subquery_parsed)
                     if subquery_parsed
-                    else exp.paren(exp.maybe_parse(subquery.sql, dialect=cast("Any", builder).dialect_name))  # pyright: ignore
+                    else exp.paren(exp.maybe_parse(subquery.sql, dialect=builder.dialect_name))  # pyright: ignore
                 )  # pyright: ignore
             else:
                 subquery_exp = values  # type: ignore[assignment]

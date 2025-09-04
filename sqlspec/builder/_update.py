@@ -176,7 +176,7 @@ class Update(
             msg = "No UPDATE expression to build or expression is of the wrong type."
             raise SQLBuilderError(msg)
 
-        if getattr(self._expression, "this", None) is None:
+        if self._expression.this is None:
             msg = "No table specified for UPDATE statement."
             raise SQLBuilderError(msg)
 

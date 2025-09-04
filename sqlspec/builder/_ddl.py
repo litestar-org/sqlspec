@@ -12,6 +12,7 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.core.result import SQLResult
+from sqlspec.utils.type_guards import has_sqlglot_expression, has_with_method
 
 if TYPE_CHECKING:
     from sqlspec.builder._column import ColumnExpression
@@ -436,8 +437,8 @@ class CreateTable(DDLBuilder):
             self._raise_sql_builder_error("Check constraint must have a condition")
 
         condition_str: str
-        if hasattr(condition, "sqlglot_expression"):
-            sqlglot_expr = getattr(condition, "sqlglot_expression", None)
+        if has_sqlglot_expression(condition):
+            sqlglot_expr = condition.sqlglot_expression
             condition_str = sqlglot_expr.sql(dialect=self.dialect) if sqlglot_expr else str(condition)
         else:
             condition_str = str(condition)
@@ -970,15 +971,15 @@ class CreateTableAsSelect(DDLBuilder):
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
-            select_parameters = getattr(self._select_query, "parameters", None)
+            select_parameters = self._select_query.parameters
         elif isinstance(self._select_query, Select):
-            select_expr = getattr(self._select_query, "_expression", None)
-            select_parameters = getattr(self._select_query, "_parameters", None)
+            select_expr = self._select_query._expression
+            select_parameters = self._select_query._parameters
 
-            with_ctes = getattr(self._select_query, "_with_ctes", {})
+            with_ctes = self._select_query._with_ctes
             if with_ctes and select_expr and isinstance(select_expr, exp.Select):
                 for alias, cte in with_ctes.items():
-                    if hasattr(select_expr, "with_"):
+                    if has_with_method(select_expr):
                         select_expr = select_expr.with_(cte.this, as_=alias, copy=False)
         elif isinstance(self._select_query, str):
             select_expr = exp.maybe_parse(self._select_query)
@@ -1097,10 +1098,10 @@ class CreateMaterializedView(DDLBuilder):
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
-            select_parameters = getattr(self._select_query, "parameters", None)
+            select_parameters = self._select_query.parameters
         elif isinstance(self._select_query, Select):
-            select_expr = getattr(self._select_query, "_expression", None)
-            select_parameters = getattr(self._select_query, "_parameters", None)
+            select_expr = self._select_query._expression
+            select_parameters = self._select_query._parameters
         elif isinstance(self._select_query, str):
             select_expr = exp.maybe_parse(self._select_query)
             select_parameters = None
@@ -1195,10 +1196,10 @@ class CreateView(DDLBuilder):
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
-            select_parameters = getattr(self._select_query, "parameters", None)
+            select_parameters = self._select_query.parameters
         elif isinstance(self._select_query, Select):
-            select_expr = getattr(self._select_query, "_expression", None)
-            select_parameters = getattr(self._select_query, "_parameters", None)
+            select_expr = self._select_query._expression
+            select_parameters = self._select_query._parameters
         elif isinstance(self._select_query, str):
             select_expr = exp.maybe_parse(self._select_query)
             select_parameters = None

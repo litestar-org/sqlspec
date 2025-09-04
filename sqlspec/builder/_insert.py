@@ -13,6 +13,7 @@ from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder.mixins import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin, ReturningClauseMixin
 from sqlspec.core.result import SQLResult
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.type_guards import has_expression_and_sql
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -124,12 +125,9 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
             return self.values_from_dict(kwargs)
 
         if len(values) == 1:
-            try:
-                values_0 = values[0]
-                if hasattr(values_0, "items"):
-                    return self.values_from_dict(values_0)
-            except (AttributeError, TypeError):
-                pass
+            values_0 = values[0]
+            if hasattr(values_0, "items") and hasattr(values_0, "keys"):
+                return self.values_from_dict(values_0)
 
         insert_expr = self._get_insert_expression()
 
@@ -141,24 +139,18 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         for i, value in enumerate(values):
             if isinstance(value, exp.Expression):
                 value_placeholders.append(value)
-            elif hasattr(value, "expression") and hasattr(value, "sql"):
+            elif has_expression_and_sql(value):
                 # Handle SQL objects (from sql.raw with parameters)
                 expression = getattr(value, "expression", None)
                 if expression is not None and isinstance(expression, exp.Expression):
                     # Merge parameters from SQL object into builder
-                    if hasattr(value, "parameters"):
-                        sql_parameters = getattr(value, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
+                    self._merge_sql_object_parameters(value)
                     value_placeholders.append(expression)
                 else:
                     # If expression is None, fall back to parsing the raw SQL
                     sql_text = getattr(value, "sql", "")
                     # Merge parameters even when parsing raw SQL
-                    if hasattr(value, "parameters"):
-                        sql_parameters = getattr(value, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
+                    self._merge_sql_object_parameters(value)
                     # Check if sql_text is callable (like Expression.sql method)
                     if callable(sql_text):
                         sql_text = str(value)
@@ -376,7 +368,7 @@ class ConflictBuilder:
         # Create SET expressions for the UPDATE
         set_expressions = []
         for col, val in kwargs.items():
-            if hasattr(val, "expression") and hasattr(val, "sql"):
+            if has_expression_and_sql(val):
                 # Handle SQL objects (from sql.raw with parameters)
                 expression = getattr(val, "expression", None)
                 if expression is not None and isinstance(expression, exp.Expression):
