@@ -4,15 +4,14 @@ This module provides utilities for tracking correlation IDs across
 database operations, enabling distributed tracing and debugging.
 """
 
-from __future__ import annotations
-
 import uuid
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, MutableMapping
+    from collections.abc import MutableMapping
     from logging import LoggerAdapter
 
 __all__ = ("CorrelationContext", "correlation_context", "get_correlation_adapter")
@@ -25,10 +24,10 @@ class CorrelationContext:
     across async and sync operations.
     """
 
-    _correlation_id: ContextVar[str | None] = ContextVar("sqlspec_correlation_id", default=None)
+    _correlation_id: ContextVar[Optional[str]] = ContextVar("sqlspec_correlation_id", default=None)
 
     @classmethod
-    def get(cls) -> str | None:
+    def get(cls) -> Optional[str]:
         """Get the current correlation ID.
 
         Returns:
@@ -37,7 +36,7 @@ class CorrelationContext:
         return cls._correlation_id.get()
 
     @classmethod
-    def set(cls, correlation_id: str | None) -> None:
+    def set(cls, correlation_id: Optional[str]) -> None:
         """Set the correlation ID.
 
         Args:
@@ -56,7 +55,7 @@ class CorrelationContext:
 
     @classmethod
     @contextmanager
-    def context(cls, correlation_id: str | None = None) -> Generator[str, None, None]:
+    def context(cls, correlation_id: Optional[str] = None) -> Generator[str, None, None]:
         """Context manager for correlation ID scope.
 
         Args:
@@ -93,7 +92,7 @@ class CorrelationContext:
 
 
 @contextmanager
-def correlation_context(correlation_id: str | None = None) -> Generator[str, None, None]:
+def correlation_context(correlation_id: Optional[str] = None) -> Generator[str, None, None]:
     """Convenience context manager for correlation ID tracking.
 
     Args:
@@ -115,7 +114,7 @@ def correlation_context(correlation_id: str | None = None) -> Generator[str, Non
         yield cid
 
 
-def get_correlation_adapter(logger: Any) -> LoggerAdapter:
+def get_correlation_adapter(logger: Any) -> "LoggerAdapter[Any]":
     """Get a logger adapter that automatically includes correlation ID.
 
     Args:
@@ -126,10 +125,10 @@ def get_correlation_adapter(logger: Any) -> LoggerAdapter:
     """
     from logging import LoggerAdapter
 
-    class CorrelationAdapter(LoggerAdapter):
+    class CorrelationAdapter(LoggerAdapter[Any]):
         """Logger adapter that adds correlation ID to all logs."""
 
-        def process(self, msg: str, kwargs: MutableMapping[str, Any]) -> tuple[str, dict[str, Any]]:
+        def process(self, msg: str, kwargs: "MutableMapping[str, Any]") -> "tuple[str, dict[str, Any]]":
             """Add correlation ID to the log record.
 
             Args:

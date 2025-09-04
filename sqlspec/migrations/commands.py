@@ -10,6 +10,7 @@ from rich.table import Table
 
 from sqlspec._sql import sql
 from sqlspec.migrations.base import BaseMigrationCommands
+from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.utils.logging import get_logger
@@ -35,7 +36,14 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         super().__init__(config)
         self.tracker = config.migration_tracker_type(self.version_table)
-        self.runner = SyncMigrationRunner(self.migrations_path)
+
+        # Create context with extension configurations
+        context = MigrationContext.from_config(config)
+        context.extension_config = self.extension_configs
+
+        self.runner = SyncMigrationRunner(
+            self.migrations_path, self._discover_extension_migrations(), context, self.extension_configs
+        )
 
     def init(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.
@@ -203,15 +211,22 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
     """Asynchronous migration commands."""
 
-    def __init__(self, sqlspec_config: "AsyncConfigT") -> None:
+    def __init__(self, config: "AsyncConfigT") -> None:
         """Initialize migration commands.
 
         Args:
-            sqlspec_config: The SQLSpec configuration.
+            config: The SQLSpec configuration.
         """
-        super().__init__(sqlspec_config)
-        self.tracker = sqlspec_config.migration_tracker_type(self.version_table)
-        self.runner = AsyncMigrationRunner(self.migrations_path)
+        super().__init__(config)
+        self.tracker = config.migration_tracker_type(self.version_table)
+
+        # Create context with extension configurations
+        context = MigrationContext.from_config(config)
+        context.extension_config = self.extension_configs
+
+        self.runner = AsyncMigrationRunner(
+            self.migrations_path, self._discover_extension_migrations(), context, self.extension_configs
+        )
 
     async def init(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.

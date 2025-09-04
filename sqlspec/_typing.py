@@ -608,7 +608,8 @@ except ImportError:
 FSSPEC_INSTALLED = bool(find_spec("fsspec"))
 OBSTORE_INSTALLED = bool(find_spec("obstore"))
 PGVECTOR_INSTALLED = bool(find_spec("pgvector"))
-
+UUID_UTILS_INSTALLED = bool(find_spec("uuid_utils"))
+NANOID_INSTALLED = bool(find_spec("fastnanoid"))
 
 __all__ = (
     "AIOSQL_INSTALLED",
@@ -617,6 +618,7 @@ __all__ = (
     "FSSPEC_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
+    "NANOID_INSTALLED",
     "OBSTORE_INSTALLED",
     "OPENTELEMETRY_INSTALLED",
     "PGVECTOR_INSTALLED",
@@ -625,6 +627,7 @@ __all__ = (
     "PYDANTIC_INSTALLED",
     "UNSET",
     "UNSET_STUB",
+    "UUID_UTILS_INSTALLED",
     "AiosqlAsyncProtocol",
     "AiosqlParamType",
     "AiosqlProtocol",
