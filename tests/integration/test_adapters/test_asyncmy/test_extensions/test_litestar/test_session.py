@@ -234,9 +234,7 @@ async def test_asyncmy_store_operations(session_store) -> None:
     """Test AsyncMy store operations directly."""
     # Test basic store operations
     session_id = "test-session-asyncmy"
-    test_data = {
-        "user_id": 456,
-    }
+    test_data = {"user_id": 456}
 
     # Set data
     await session_store.set(session_id, test_data, expires_in=3600)

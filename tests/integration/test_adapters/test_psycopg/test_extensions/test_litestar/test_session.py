@@ -4,7 +4,6 @@ import asyncio
 import tempfile
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
-from typing import Any
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -228,7 +227,7 @@ async def test_psycopg_async_migration_creates_correct_table(psycopg_async_confi
 
 def test_psycopg_sync_session_basic_operations(sync_session_store: SQLSpecSessionStore) -> None:
     """Test basic session operations with Psycopg sync backend."""
-    
+
     # Test only direct store operations which should work
     test_data = {"user_id": 54321, "username": "psycopg_sync_user"}
     run_(sync_session_store.set)("test-key", test_data, expires_in=3600)
@@ -243,7 +242,7 @@ def test_psycopg_sync_session_basic_operations(sync_session_store: SQLSpecSessio
 
 async def test_psycopg_async_session_basic_operations(async_session_store: SQLSpecSessionStore) -> None:
     """Test basic session operations with Psycopg async backend."""
-    
+
     # Test only direct store operations which should work
     test_data = {"user_id": 98765, "username": "psycopg_async_user"}
     await async_session_store.set("test-key", test_data, expires_in=3600)
@@ -258,15 +257,15 @@ async def test_psycopg_async_session_basic_operations(async_session_store: SQLSp
 
 def test_psycopg_sync_session_persistence(sync_session_store: SQLSpecSessionStore) -> None:
     """Test that sessions persist across operations with Psycopg sync driver."""
-    
+
     # Test multiple set/get operations persist data
     session_id = "persistent-test-sync"
-    
+
     # Set initial data
     run_(sync_session_store.set)(session_id, {"count": 1}, expires_in=3600)
     result = run_(sync_session_store.get)(session_id)
     assert result == {"count": 1}
-    
+
     # Update data
     run_(sync_session_store.set)(session_id, {"count": 2}, expires_in=3600)
     result = run_(sync_session_store.get)(session_id)
@@ -275,15 +274,15 @@ def test_psycopg_sync_session_persistence(sync_session_store: SQLSpecSessionStor
 
 async def test_psycopg_async_session_persistence(async_session_store: SQLSpecSessionStore) -> None:
     """Test that sessions persist across operations with Psycopg async driver."""
-    
+
     # Test multiple set/get operations persist data
     session_id = "persistent-test-async"
-    
+
     # Set initial data
     await async_session_store.set(session_id, {"count": 1}, expires_in=3600)
     result = await async_session_store.get(session_id)
     assert result == {"count": 1}
-    
+
     # Update data
     await async_session_store.set(session_id, {"count": 2}, expires_in=3600)
     result = await async_session_store.get(session_id)
@@ -292,21 +291,22 @@ async def test_psycopg_async_session_persistence(async_session_store: SQLSpecSes
 
 def test_psycopg_sync_session_expiration(sync_session_store: SQLSpecSessionStore) -> None:
     """Test session expiration handling with Psycopg sync driver."""
-    
+
     # Test direct store expiration
     session_id = "expiring-test-sync"
-    
+
     # Set data with short expiration
     run_(sync_session_store.set)(session_id, {"test": "data"}, expires_in=1)
-    
+
     # Data should be available immediately
     result = run_(sync_session_store.get)(session_id)
     assert result == {"test": "data"}
-    
+
     # Wait for expiration
     import time
+
     time.sleep(2)
-    
+
     # Data should be expired
     result = run_(sync_session_store.get)(session_id)
     assert result is None
@@ -314,20 +314,20 @@ def test_psycopg_sync_session_expiration(sync_session_store: SQLSpecSessionStore
 
 async def test_psycopg_async_session_expiration(async_session_store: SQLSpecSessionStore) -> None:
     """Test session expiration handling with Psycopg async driver."""
-    
+
     # Test direct store expiration
     session_id = "expiring-test-async"
-    
+
     # Set data with short expiration
     await async_session_store.set(session_id, {"test": "data"}, expires_in=1)
-    
+
     # Data should be available immediately
     result = await async_session_store.get(session_id)
     assert result == {"test": "data"}
-    
+
     # Wait for expiration
     await asyncio.sleep(2)
-    
+
     # Data should be expired
     result = await async_session_store.get(session_id)
     assert result is None
@@ -335,44 +335,44 @@ async def test_psycopg_async_session_expiration(async_session_store: SQLSpecSess
 
 def test_psycopg_sync_concurrent_sessions(sync_session_store: SQLSpecSessionStore) -> None:
     """Test handling of concurrent sessions with Psycopg sync driver."""
-    
+
     # Test multiple concurrent session operations
     session_ids = ["session1", "session2", "session3"]
-    
+
     # Set different data in different sessions
     run_(sync_session_store.set)(session_ids[0], {"user_id": 101}, expires_in=3600)
     run_(sync_session_store.set)(session_ids[1], {"user_id": 202}, expires_in=3600)
     run_(sync_session_store.set)(session_ids[2], {"user_id": 303}, expires_in=3600)
-    
+
     # Each session should maintain its own data
     result1 = run_(sync_session_store.get)(session_ids[0])
     assert result1 == {"user_id": 101}
-    
+
     result2 = run_(sync_session_store.get)(session_ids[1])
     assert result2 == {"user_id": 202}
-    
+
     result3 = run_(sync_session_store.get)(session_ids[2])
     assert result3 == {"user_id": 303}
 
 
 async def test_psycopg_async_concurrent_sessions(async_session_store: SQLSpecSessionStore) -> None:
     """Test handling of concurrent sessions with Psycopg async driver."""
-    
+
     # Test multiple concurrent session operations
     session_ids = ["session1", "session2", "session3"]
-    
+
     # Set different data in different sessions
     await async_session_store.set(session_ids[0], {"user_id": 101}, expires_in=3600)
     await async_session_store.set(session_ids[1], {"user_id": 202}, expires_in=3600)
     await async_session_store.set(session_ids[2], {"user_id": 303}, expires_in=3600)
-    
+
     # Each session should maintain its own data
     result1 = await async_session_store.get(session_ids[0])
     assert result1 == {"user_id": 101}
-    
+
     result2 = await async_session_store.get(session_ids[1])
     assert result2 == {"user_id": 202}
-    
+
     result3 = await async_session_store.get(session_ids[2])
     assert result3 == {"user_id": 303}
 

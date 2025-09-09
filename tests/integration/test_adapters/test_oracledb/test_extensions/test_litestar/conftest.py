@@ -30,7 +30,9 @@ async def oracle_async_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_oracle_async"}],  # Unique table for Oracle async
+                "include_extensions": [
+                    {"name": "litestar", "session_table": "litestar_sessions_oracle_async"}
+                ],  # Unique table for Oracle async
             },
         )
         yield config
@@ -55,7 +57,9 @@ def oracle_sync_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_oracle_sync"}],  # Unique table for Oracle sync
+                "include_extensions": [
+                    {"name": "litestar", "session_table": "litestar_sessions_oracle_sync"}
+                ],  # Unique table for Oracle sync
             },
         )
         yield config
@@ -129,7 +133,10 @@ async def oracle_async_migration_config_mixed(
                 "script_location": str(migration_dir),
                 "version_table_name": "sqlspec_migrations",
                 "include_extensions": [
-                    {"name": "litestar", "session_table": "litestar_sessions_oracle_async"},  # Unique table for Oracle async
+                    {
+                        "name": "litestar",
+                        "session_table": "litestar_sessions_oracle_async",
+                    },  # Unique table for Oracle async
                     {"name": "other_ext", "option": "value"},  # Dict format for hypothetical extension
                 ],
             },
@@ -151,7 +158,10 @@ def oracle_sync_migration_config_mixed(oracle_sync_config: OracleSyncConfig) -> 
                 "script_location": str(migration_dir),
                 "version_table_name": "sqlspec_migrations",
                 "include_extensions": [
-                    {"name": "litestar", "session_table": "litestar_sessions_oracle_sync"},  # Unique table for Oracle sync
+                    {
+                        "name": "litestar",
+                        "session_table": "litestar_sessions_oracle_sync",
+                    },  # Unique table for Oracle sync
                     {"name": "other_ext", "option": "value"},  # Dict format for hypothetical extension
                 ],
             },

@@ -37,7 +37,9 @@ def adbc_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_adbc"}],  # Unique table for ADBC
+                "include_extensions": [
+                    {"name": "litestar", "session_table": "litestar_sessions_adbc"}
+                ],  # Unique table for ADBC
             },
         )
         yield config

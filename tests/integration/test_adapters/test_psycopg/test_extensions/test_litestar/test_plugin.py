@@ -477,7 +477,9 @@ async def test_async_session_persistence(async_litestar_app: Litestar) -> None:
 def test_sync_session_expiration(psycopg_sync_migrated_config: PsycopgSyncConfig) -> None:
     """Test session expiration handling with sync driver."""
     # Create store with very short lifetime
-    session_store = SQLSpecSessionStore(config=psycopg_sync_migrated_config, table_name="litestar_sessions_psycopg_sync")
+    session_store = SQLSpecSessionStore(
+        config=psycopg_sync_migrated_config, table_name="litestar_sessions_psycopg_sync"
+    )
 
     session_config = SQLSpecSessionConfig(
         table_name="litestar_sessions_psycopg_sync",
@@ -521,7 +523,9 @@ def test_sync_session_expiration(psycopg_sync_migrated_config: PsycopgSyncConfig
 async def test_async_session_expiration(psycopg_async_migrated_config: PsycopgAsyncConfig) -> None:
     """Test session expiration handling with async driver."""
     # Create store with very short lifetime
-    session_store = SQLSpecSessionStore(config=psycopg_async_migrated_config, table_name="litestar_sessions_psycopg_async")
+    session_store = SQLSpecSessionStore(
+        config=psycopg_async_migrated_config, table_name="litestar_sessions_psycopg_async"
+    )
 
     session_config = SQLSpecSessionConfig(
         table_name="litestar_sessions_psycopg_sync",

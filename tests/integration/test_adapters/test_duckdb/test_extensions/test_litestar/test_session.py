@@ -41,6 +41,7 @@ def duckdb_config(request: pytest.FixtureRequest) -> DuckDBConfig:
 @pytest.fixture
 async def session_store(duckdb_config: DuckDBConfig) -> SQLSpecSessionStore:
     """Create a session store with migrations applied using unique table names."""
+
     # Apply migrations synchronously (DuckDB uses sync commands like SQLite)
     @async_
     def apply_migrations() -> None:
@@ -63,6 +64,7 @@ async def session_store(duckdb_config: DuckDBConfig) -> SQLSpecSessionStore:
 
 async def test_duckdb_migration_creates_correct_table(duckdb_config: DuckDBConfig) -> None:
     """Test that Litestar migration creates the correct table structure for DuckDB."""
+
     # Apply migrations
     @async_
     def apply_migrations():
@@ -96,7 +98,7 @@ async def test_duckdb_migration_creates_correct_table(duckdb_config: DuckDBConfi
 
 async def test_duckdb_session_basic_operations(session_store: SQLSpecSessionStore) -> None:
     """Test basic session operations with DuckDB backend."""
-    
+
     # Test only direct store operations
     test_data = {"user_id": 123, "name": "test"}
     await session_store.set("test-key", test_data, expires_in=3600)
@@ -111,15 +113,15 @@ async def test_duckdb_session_basic_operations(session_store: SQLSpecSessionStor
 
 async def test_duckdb_session_persistence(session_store: SQLSpecSessionStore) -> None:
     """Test that sessions persist across operations with DuckDB."""
-    
+
     # Test multiple set/get operations persist data
     session_id = "persistent-test"
-    
+
     # Set initial data
     await session_store.set(session_id, {"count": 1}, expires_in=3600)
     result = await session_store.get(session_id)
     assert result == {"count": 1}
-    
+
     # Update data
     await session_store.set(session_id, {"count": 2}, expires_in=3600)
     result = await session_store.get(session_id)
@@ -128,20 +130,20 @@ async def test_duckdb_session_persistence(session_store: SQLSpecSessionStore) ->
 
 async def test_duckdb_session_expiration(session_store: SQLSpecSessionStore) -> None:
     """Test session expiration handling with DuckDB."""
-    
+
     # Test direct store expiration
     session_id = "expiring-test"
-    
+
     # Set data with short expiration
     await session_store.set(session_id, {"test": "data"}, expires_in=1)
-    
+
     # Data should be available immediately
     result = await session_store.get(session_id)
     assert result == {"test": "data"}
-    
+
     # Wait for expiration
     await asyncio.sleep(2)
-    
+
     # Data should be expired
     result = await session_store.get(session_id)
     assert result is None
@@ -149,22 +151,22 @@ async def test_duckdb_session_expiration(session_store: SQLSpecSessionStore) -> 
 
 async def test_duckdb_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
     """Test handling of concurrent sessions with DuckDB."""
-    
+
     # Test multiple concurrent session operations
     session_ids = ["session1", "session2", "session3"]
-    
+
     # Set different data in different sessions
     await session_store.set(session_ids[0], {"user_id": 101}, expires_in=3600)
     await session_store.set(session_ids[1], {"user_id": 202}, expires_in=3600)
     await session_store.set(session_ids[2], {"user_id": 303}, expires_in=3600)
-    
+
     # Each session should maintain its own data
     result1 = await session_store.get(session_ids[0])
     assert result1 == {"user_id": 101}
-    
+
     result2 = await session_store.get(session_ids[1])
     assert result2 == {"user_id": 202}
-    
+
     result3 = await session_store.get(session_ids[2])
     assert result3 == {"user_id": 303}
 
@@ -206,9 +208,7 @@ async def test_duckdb_store_operations(session_store: SQLSpecSessionStore) -> No
     """Test DuckDB store operations directly."""
     # Test basic store operations
     session_id = "test-session-duckdb"
-    test_data = {
-        "user_id": 789,
-    }
+    test_data = {"user_id": 789}
 
     # Set data
     await session_store.set(session_id, test_data, expires_in=3600)

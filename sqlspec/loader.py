@@ -12,9 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import unquote, urlparse
 
-from sqlspec.core import SQL, StatementConfig
+from sqlspec.core import SQL
 from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
-from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, StorageOperationFailedError
 from sqlspec.storage.registry import storage_registry as default_storage_registry
 from sqlspec.utils.correlation import CorrelationContext
@@ -530,7 +529,7 @@ class SQLFileLoader:
         statement = NamedStatement(name=normalized_name, sql=sql.strip(), dialect=dialect, start_line=0)
         self._queries[normalized_name] = statement
         self._query_to_file[normalized_name] = "<directly added>"
- 
+
     def get_file(self, path: Union[str, Path]) -> "Optional[SQLFile]":
         """Get a loaded SQLFile object by path.
 
