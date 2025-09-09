@@ -103,7 +103,7 @@ def test_bigquery_migration_creates_correct_table(bigquery_config: BigQueryConfi
 
 def test_bigquery_session_basic_operations_simple(session_store: SQLSpecSessionStore) -> None:
     """Test basic session operations with BigQuery backend."""
-    
+
     # Test only direct store operations which should work
     test_data = {"user_id": 54321, "username": "bigqueryuser"}
     run_(session_store.set)("test-key", test_data, expires_in=3600)
@@ -118,15 +118,15 @@ def test_bigquery_session_basic_operations_simple(session_store: SQLSpecSessionS
 
 def test_bigquery_session_persistence(session_store: SQLSpecSessionStore) -> None:
     """Test that sessions persist across operations with BigQuery."""
-    
+
     # Test multiple set/get operations persist data
     session_id = "persistent-test"
-    
+
     # Set initial data
     run_(session_store.set)(session_id, {"count": 1}, expires_in=3600)
     result = run_(session_store.get)(session_id)
     assert result == {"count": 1}
-    
+
     # Update data
     run_(session_store.set)(session_id, {"count": 2}, expires_in=3600)
     result = run_(session_store.get)(session_id)
@@ -135,20 +135,20 @@ def test_bigquery_session_persistence(session_store: SQLSpecSessionStore) -> Non
 
 def test_bigquery_session_expiration(session_store: SQLSpecSessionStore) -> None:
     """Test session expiration handling with BigQuery."""
-    
+
     # Test direct store expiration
     session_id = "expiring-test"
-    
+
     # Set data with short expiration
     run_(session_store.set)(session_id, {"test": "data"}, expires_in=1)
-    
+
     # Data should be available immediately
     result = run_(session_store.get)(session_id)
     assert result == {"test": "data"}
-    
+
     # Wait for expiration
     time.sleep(2)
-    
+
     # Data should be expired
     result = run_(session_store.get)(session_id)
     assert result is None
@@ -156,22 +156,22 @@ def test_bigquery_session_expiration(session_store: SQLSpecSessionStore) -> None
 
 def test_bigquery_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
     """Test handling of concurrent sessions with BigQuery."""
-    
+
     # Test multiple concurrent session operations
     session_ids = ["session1", "session2", "session3"]
-    
+
     # Set different data in different sessions
     run_(session_store.set)(session_ids[0], {"user_id": 101}, expires_in=3600)
     run_(session_store.set)(session_ids[1], {"user_id": 202}, expires_in=3600)
     run_(session_store.set)(session_ids[2], {"user_id": 303}, expires_in=3600)
-    
+
     # Each session should maintain its own data
     result1 = run_(session_store.get)(session_ids[0])
     assert result1 == {"user_id": 101}
-    
+
     result2 = run_(session_store.get)(session_ids[1])
     assert result2 == {"user_id": 202}
-    
+
     result3 = run_(session_store.get)(session_ids[2])
     assert result3 == {"user_id": 303}
 
@@ -213,9 +213,7 @@ def test_bigquery_store_operations(session_store: SQLSpecSessionStore) -> None:
     """Test BigQuery store operations directly."""
     # Test basic store operations
     session_id = "test-session-bigquery"
-    test_data = {
-        "user_id": 789,
-    }
+    test_data = {"user_id": 789}
 
     # Set data
     run_(session_store.set)(session_id, test_data, expires_in=3600)

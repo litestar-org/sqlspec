@@ -11,7 +11,7 @@ from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 
 if TYPE_CHECKING:
@@ -71,6 +71,17 @@ class SQLSpecSessionStore(Store):
         self._expires_at_column = expires_at_column
         self._created_at_column = created_at_column
 
+    def _get_current_time_for_dialect(self, dialect: str) -> Union[str, datetime, Any]:
+        """Get current time in the format expected by the database dialect."""
+        current_time = datetime.now(timezone.utc)
+        if dialect == "sqlite":
+            return current_time.isoformat()
+        if dialect == "oracle":
+            # Oracle needs TO_DATE function with format mask for WHERE clauses
+            current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
+            return sql.raw(f"TO_DATE('{current_time_str}', 'YYYY-MM-DD HH24:MI:SS')")
+        return current_time
+
     def _get_dialect_from_config(self) -> str:
         """Get database dialect from configuration without entering async context.
 
@@ -111,7 +122,7 @@ class SQLSpecSessionStore(Store):
         Args:
             dialect: Database dialect
             session_id: Session identifier
-            data: Session data (adapter will handle JSON serialization via type_coercion_map)
+            data: Session data to store
             expires_at: Session expiration time
 
         Returns:
@@ -119,36 +130,62 @@ class SQLSpecSessionStore(Store):
         """
         current_time = datetime.now(timezone.utc)
 
-        # For SQLite, convert datetimes to ISO format strings
+        # Handle data serialization based on database dialect
+        # Check if we can determine the config module for ADBC handling
+        config_module = self._config.__class__.__module__.lower() if self._config else ""
+
+        if dialect in {"postgres", "postgresql"}:
+            data_value = to_json(data) if "adbc" in config_module or "psqlpy" in config_module else data
+        elif dialect in {"sqlite", "duckdb", "mysql", "mariadb"}:
+            # These databases need JSON strings for TEXT columns
+            data_value = to_json(data)
+        elif dialect == "oracle":
+            # Oracle needs JSON strings, with CLOB handling for large data
+            data_value = to_json(data)
+        else:
+            # Default: serialize to JSON string
+            data_value = to_json(data)
+
+        # Handle datetime values based on database dialect
         if dialect == "sqlite":
             expires_at_value: Union[str, datetime] = expires_at.isoformat()
             current_time_value: Union[str, datetime] = current_time.isoformat()
         elif dialect == "oracle":
-            # Oracle needs special datetime handling - remove timezone info and use raw datetime
-            expires_at_value = expires_at.replace(tzinfo=None)
-            current_time_value = current_time.replace(tzinfo=None)
+            # Oracle needs special datetime handling - use TO_DATE function with format mask
+            expires_at_str = expires_at.strftime("%Y-%m-%d %H:%M:%S")
+            current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
+            expires_at_value: Union[str, datetime, Any] = sql.raw(
+                f"TO_DATE('{expires_at_str}', 'YYYY-MM-DD HH24:MI:SS')"
+            )
+            current_time_value: Union[str, datetime, Any] = sql.raw(
+                f"TO_DATE('{current_time_str}', 'YYYY-MM-DD HH24:MI:SS')"
+            )
         else:
             expires_at_value = expires_at
             current_time_value = current_time
 
         # For databases that support native upsert, use those features
         if dialect in {"postgres", "postgresql"}:
-            return [
-                (
-                    sql.insert(self._table_name)
-                    .columns(
-                        self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column
+            # For ADBC and psqlpy PostgreSQL, fallback to check-update-insert pattern due to type conversion issues
+            if "adbc" in config_module or "psqlpy" in config_module:
+                pass  # Skip UPSERT and fall through to check-update-insert
+            else:
+                return [
+                    (
+                        sql.insert(self._table_name)
+                        .columns(
+                            self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column
+                        )
+                        .values(session_id, data_value, expires_at_value, current_time_value)
+                        .on_conflict(self._session_id_column)
+                        .do_update(
+                            **{
+                                self._data_column: sql.raw("EXCLUDED." + self._data_column),
+                                self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
+                            }
+                        )
                     )
-                    .values(session_id, data, expires_at_value, current_time_value)
-                    .on_conflict(self._session_id_column)
-                    .do_update(
-                        **{
-                            self._data_column: sql.raw("EXCLUDED." + self._data_column),
-                            self._expires_at_column: sql.raw("EXCLUDED." + self._expires_at_column),
-                        }
-                    )
-                )
-            ]
+                ]
 
         if dialect in {"mysql", "mariadb"}:
             # MySQL UPSERT using ON DUPLICATE KEY UPDATE
@@ -158,7 +195,7 @@ class SQLSpecSessionStore(Store):
                     .columns(
                         self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column
                     )
-                    .values(session_id, data, expires_at_value, current_time_value)
+                    .values(session_id, data_value, expires_at_value, current_time_value)
                     .on_duplicate_key_update(
                         **{
                             self._data_column: sql.raw(f"VALUES({self._data_column})"),
@@ -176,7 +213,7 @@ class SQLSpecSessionStore(Store):
                     .columns(
                         self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column
                     )
-                    .values(session_id, data, expires_at_value, current_time_value)
+                    .values(session_id, data_value, expires_at_value, current_time_value)
                     .on_conflict(self._session_id_column)
                     .do_update(
                         **{
@@ -187,43 +224,7 @@ class SQLSpecSessionStore(Store):
                 )
             ]
 
-        if dialect == "oracle":
-            # Oracle MERGE statement implementation using SQL builder
-            merge_builder = (
-                sql.merge(self._table_name)
-                .using(
-                    {
-                        self._session_id_column: session_id,
-                        self._data_column: data,
-                        self._expires_at_column: expires_at_value,
-                        self._created_at_column: current_time_value,
-                    },
-                    alias="s",
-                )
-                .on(f"t.{self._session_id_column} = s.{self._session_id_column}")
-                .when_matched_then_update(
-                    {
-                        self._data_column: f"s.{self._data_column}",
-                        self._expires_at_column: f"s.{self._expires_at_column}",
-                    }
-                )
-                .when_not_matched_then_insert(
-                    columns=[
-                        self._session_id_column,
-                        self._data_column,
-                        self._expires_at_column,
-                        self._created_at_column,
-                    ],
-                    values=[
-                        f"s.{self._session_id_column}",
-                        f"s.{self._data_column}",
-                        f"s.{self._expires_at_column}",
-                        f"s.{self._created_at_column}",
-                    ],
-                )
-            )
-
-            return [merge_builder.to_statement()]
+        # Oracle MERGE has syntax issues, use check-update-insert pattern instead
 
         # For other databases, use check-update-insert pattern
         check_exists = (
@@ -232,18 +233,38 @@ class SQLSpecSessionStore(Store):
             .where(sql.column(self._session_id_column) == session_id)
         )
 
-        update_sql = (
-            sql.update(self._table_name)
-            .set(self._data_column, data)
-            .set(self._expires_at_column, expires_at_value)
-            .where(sql.column(self._session_id_column) == session_id)
-        )
+        # For ADBC and psqlpy PostgreSQL with JSONB columns, we need to cast JSON strings to JSONB
+        if dialect in {"postgres", "postgresql"} and ("adbc" in config_module or "psqlpy" in config_module):
+            # Use raw SQL with explicit JSONB casting for ADBC and psqlpy
+            update_sql = sql.raw(
+                f"UPDATE {self._table_name} SET {self._data_column} = :data_value::jsonb, "
+                f"{self._expires_at_column} = :expires_at_value WHERE {self._session_id_column} = :session_id",
+                data_value=data_value,
+                expires_at_value=expires_at_value,
+                session_id=session_id,
+            )
+            insert_sql = sql.raw(
+                f"INSERT INTO {self._table_name} ({self._session_id_column}, {self._data_column}, "
+                f"{self._expires_at_column}, {self._created_at_column}) "
+                f"VALUES (:session_id, :data_value::jsonb, :expires_at_value, :current_time_value)",
+                session_id=session_id,
+                data_value=data_value,
+                expires_at_value=expires_at_value,
+                current_time_value=current_time_value,
+            )
+        else:
+            update_sql = (
+                sql.update(self._table_name)
+                .set(self._data_column, data_value)
+                .set(self._expires_at_column, expires_at_value)
+                .where(sql.column(self._session_id_column) == session_id)
+            )
 
-        insert_sql = (
-            sql.insert(self._table_name)
-            .columns(self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column)
-            .values(session_id, data, expires_at_value, current_time_value)
-        )
+            insert_sql = (
+                sql.insert(self._table_name)
+                .columns(self._session_id_column, self._data_column, self._expires_at_column, self._created_at_column)
+                .values(session_id, data_value, expires_at_value, current_time_value)
+            )
 
         return [check_exists, update_sql, insert_sql]
 
@@ -276,30 +297,66 @@ class SQLSpecSessionStore(Store):
         Returns:
             Session data or None
         """
+        # Get dialect and current time in the appropriate format
+        dialect = (
+            str(driver.statement_config.dialect or "generic")
+            if hasattr(driver, "statement_config") and driver.statement_config
+            else self._get_dialect_from_config()
+        )
+        current_time = self._get_current_time_for_dialect(dialect)
+
         select_sql = (
             sql.select(self._data_column)
             .from_(self._table_name)
-            .where(
-                (sql.column(self._session_id_column) == key)
-                & (sql.column(self._expires_at_column) > datetime.now(timezone.utc))
-            )
+            .where((sql.column(self._session_id_column) == key) & (sql.column(self._expires_at_column) > current_time))
         )
 
         try:
             result = await ensure_async_(driver.execute)(select_sql)
 
             if result.data:
-                data = result.data[0][self._data_column]
+                # Oracle returns uppercase column names by default, handle both cases
+                row = result.data[0]
+                if self._data_column in row:
+                    data = row[self._data_column]
+                elif self._data_column.upper() in row:
+                    data = row[self._data_column.upper()]
+                else:
+                    # Fallback to lowercase
+                    data = row[self._data_column.lower()]
 
-                # For SQLite and DuckDB, data is stored as JSON text and needs to be deserialized
-                dialect = str(driver.statement_config.dialect or "generic") if hasattr(driver, 'statement_config') and driver.statement_config else "generic"
-                if dialect in {"sqlite", "duckdb"} and isinstance(data, str):
+                # For databases that store JSON as text/strings, data needs to be deserialized
+                dialect = (
+                    str(driver.statement_config.dialect or "generic")
+                    if hasattr(driver, "statement_config") and driver.statement_config
+                    else "generic"
+                )
+                config_module = self._config.__class__.__module__.lower() if self._config else ""
+
+                # Handle Oracle LOB objects first
+                if dialect == "oracle" and hasattr(data, "read"):
+                    # Oracle CLOB/LOB object - read the content
+                    try:
+                        data = data.read()
+                    except Exception:
+                        logger.warning("Failed to read Oracle LOB data for session %s", key)
+                        data = str(data)
+
+                # Check if we need to deserialize JSON from string
+                needs_json_deserialization = False
+                if dialect in {"sqlite", "duckdb", "mysql", "mariadb", "oracle"}:
+                    # These databases store JSON data as TEXT
+                    needs_json_deserialization = True
+                elif dialect in {"postgres", "postgresql"} and ("adbc" in config_module or "psqlpy" in config_module):
+                    # ADBC and psqlpy PostgreSQL return JSONB as JSON strings
+                    needs_json_deserialization = True
+
+                if needs_json_deserialization and isinstance(data, str):
                     try:
                         data = from_json(data)
                     except Exception:
                         logger.warning("Failed to deserialize JSON data for session %s", key)
                         # Return the raw data if JSON parsing fails
-                        pass
 
                 # If renew_for is specified, update the expiration time
                 if renew_for is not None:
@@ -311,7 +368,6 @@ class SQLSpecSessionStore(Store):
 
         except Exception:
             logger.exception("Failed to retrieve session %s", key)
-            return None
         return None
 
     async def _update_expiration(
@@ -400,6 +456,9 @@ class SQLSpecSessionStore(Store):
                 else:
                     await ensure_async_(driver.execute)(insert_sql)
 
+                # Commit the transaction
+                await ensure_async_(driver.commit)()
+
         except Exception as e:
             msg = f"Failed to store session: {e}"
             logger.exception("Failed to store session %s", key)
@@ -444,9 +503,15 @@ class SQLSpecSessionStore(Store):
         Returns:
             True if session exists and is not expired
         """
-        current_time = datetime.now(timezone.utc)
-
         async with with_ensure_async_(self._config.provide_session()) as driver:
+            # Get dialect and current time in the appropriate format
+            dialect = (
+                str(driver.statement_config.dialect or "generic")
+                if hasattr(driver, "statement_config") and driver.statement_config
+                else self._get_dialect_from_config()
+            )
+            current_time = self._get_current_time_for_dialect(dialect)
+
             select_sql = (
                 sql.select(sql.count().as_("count"))
                 .from_(self._table_name)
@@ -457,7 +522,16 @@ class SQLSpecSessionStore(Store):
 
             try:
                 result = await ensure_async_(driver.execute)(select_sql)
-                return bool(result.data[0]["count"] > 0)
+                # Oracle returns uppercase column names by default, handle both cases
+                row = result.data[0]
+                if "count" in row:
+                    count = row["count"]
+                elif "COUNT" in row:
+                    count = row["COUNT"]
+                else:
+                    # Fallback - try to find any count column
+                    count = row.get("count", row.get("COUNT", 0))
+                return bool(count > 0)
             except Exception:
                 logger.exception("Failed to check if session %s exists", key)
                 return False
@@ -484,7 +558,28 @@ class SQLSpecSessionStore(Store):
                 result = await ensure_async_(driver.execute)(select_sql)
 
             if result.data:
-                expires_at = result.data[0][self._expires_at_column]
+                # Oracle returns uppercase column names by default, handle both cases
+                row = result.data[0]
+                if self._expires_at_column in row:
+                    expires_at = row[self._expires_at_column]
+                elif self._expires_at_column.upper() in row:
+                    expires_at = row[self._expires_at_column.upper()]
+                else:
+                    # Fallback to lowercase
+                    expires_at = row[self._expires_at_column.lower()]
+
+                # Handle different datetime formats from different databases
+                if isinstance(expires_at, str):
+                    # SQLite stores dates as ISO strings, parse them back
+                    try:
+                        expires_at = datetime.fromisoformat(expires_at)
+                    except ValueError:
+                        # Fallback for different formats
+                        from dateutil import parser
+
+                        expires_at = parser.parse(expires_at)
+
+                # Ensure timezone awareness
                 if expires_at.tzinfo is None:
                     expires_at = expires_at.replace(tzinfo=timezone.utc)
 
@@ -524,13 +619,19 @@ class SQLSpecSessionStore(Store):
 
     async def delete_expired(self) -> None:
         """Delete expired sessions."""
-        current_time = datetime.now(timezone.utc)
-
         async with with_ensure_async_(self._config.provide_session()) as driver:
+            # Get dialect and current time in the appropriate format
+            dialect = (
+                str(driver.statement_config.dialect or "generic")
+                if hasattr(driver, "statement_config") and driver.statement_config
+                else self._get_dialect_from_config()
+            )
+            current_time = self._get_current_time_for_dialect(dialect)
+
             await self._delete_expired_sessions(driver, current_time)
 
     async def _delete_expired_sessions(
-        self, driver: Union[SyncDriverAdapterBase, AsyncDriverAdapterBase], current_time: datetime
+        self, driver: Union[SyncDriverAdapterBase, AsyncDriverAdapterBase], current_time: Union[str, datetime]
     ) -> None:
         """Internal method to delete expired sessions.
 
@@ -559,14 +660,20 @@ class SQLSpecSessionStore(Store):
         Yields:
             Tuples of (session_id, session_data)
         """
-        current_time = datetime.now(timezone.utc)
-
         async with with_ensure_async_(self._config.provide_session()) as driver:
+            # Get dialect and current time in the appropriate format
+            dialect = (
+                str(driver.statement_config.dialect or "generic")
+                if hasattr(driver, "statement_config") and driver.statement_config
+                else self._get_dialect_from_config()
+            )
+            current_time = self._get_current_time_for_dialect(dialect)
+
             async for item in self._get_all_sessions(driver, current_time):
                 yield item
 
     async def _get_all_sessions(
-        self, driver: Union[SyncDriverAdapterBase, AsyncDriverAdapterBase], current_time: datetime
+        self, driver: Union[SyncDriverAdapterBase, AsyncDriverAdapterBase], current_time: Union[str, datetime]
     ) -> "AsyncIterator[tuple[str, Any]]":
         """Internal method to get all sessions.
 
@@ -587,21 +694,52 @@ class SQLSpecSessionStore(Store):
             result = await ensure_async_(driver.execute)(select_sql)
 
             # Check if we need to deserialize JSON for SQLite
-            dialect = str(driver.statement_config.dialect or "generic") if hasattr(driver, 'statement_config') and driver.statement_config else "generic"
-            
+            dialect = (
+                str(driver.statement_config.dialect or "generic")
+                if hasattr(driver, "statement_config") and driver.statement_config
+                else "generic"
+            )
+
             for row in result.data:
-                session_id = row[self._session_id_column]
-                session_data = row[self._data_column]
-                
-                # For SQLite and DuckDB, data is stored as JSON text and needs to be deserialized
-                if dialect in {"sqlite", "duckdb"} and isinstance(session_data, str):
+                # Oracle returns uppercase column names by default, handle both cases
+                if self._session_id_column in row:
+                    session_id = row[self._session_id_column]
+                elif self._session_id_column.upper() in row:
+                    session_id = row[self._session_id_column.upper()]
+                else:
+                    session_id = row[self._session_id_column.lower()]
+
+                if self._data_column in row:
+                    session_data = row[self._data_column]
+                elif self._data_column.upper() in row:
+                    session_data = row[self._data_column.upper()]
+                else:
+                    session_data = row[self._data_column.lower()]
+
+                # Handle Oracle LOB objects first
+                if dialect == "oracle" and hasattr(session_data, "read"):
+                    # Oracle CLOB/LOB object - read the content
+                    try:
+                        session_data = session_data.read()
+                    except Exception:
+                        logger.warning("Failed to read Oracle LOB data for session %s", session_id)
+                        session_data = str(session_data)
+
+                # For databases that store JSON as text, data needs to be deserialized
+                config_module = self._config.__class__.__module__.lower() if self._config else ""
+                needs_json_deserialization = False
+                if dialect in {"sqlite", "duckdb", "mysql", "mariadb", "oracle"} or (
+                    dialect in {"postgres", "postgresql"} and ("adbc" in config_module or "psqlpy" in config_module)
+                ):
+                    needs_json_deserialization = True
+
+                if needs_json_deserialization and isinstance(session_data, str):
                     try:
                         session_data = from_json(session_data)
                     except Exception:
                         logger.warning("Failed to deserialize JSON data for session %s", session_id)
                         # Return the raw data if JSON parsing fails
-                        pass
-                        
+
                 yield session_id, session_data
 
         except Exception:

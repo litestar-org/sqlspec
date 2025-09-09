@@ -4,13 +4,8 @@ import asyncio
 import tempfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any
 
 import pytest
-from litestar import Litestar, get, post
-from litestar.middleware.session.server_side import ServerSideSessionConfig
-from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
-from litestar.testing import AsyncTestClient
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
@@ -76,7 +71,7 @@ async def session_store(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionStore:
         if isinstance(ext, dict) and ext.get("name") == "litestar":
             session_table_name = ext.get("session_table", "litestar_sessions_asyncpg")
             break
-    
+
     return SQLSpecSessionStore(asyncpg_config, table_name=session_table_name)
 
 
@@ -99,12 +94,15 @@ async def test_asyncpg_migration_creates_correct_table(asyncpg_config: AsyncpgCo
 
     # Verify table was created with correct PostgreSQL-specific types
     async with asyncpg_config.provide_session() as driver:
-        result = await driver.execute("""
+        result = await driver.execute(
+            """
             SELECT column_name, data_type
             FROM information_schema.columns
             WHERE table_name = %s
             AND column_name IN ('data', 'expires_at')
-        """, session_table)
+        """,
+            session_table,
+        )
 
         columns = {row["column_name"]: row["data_type"] for row in result.data}
 
@@ -113,11 +111,14 @@ async def test_asyncpg_migration_creates_correct_table(asyncpg_config: AsyncpgCo
         assert "timestamp" in columns.get("expires_at", "").lower()
 
         # Verify all expected columns exist
-        result = await driver.execute("""
+        result = await driver.execute(
+            """
             SELECT column_name
             FROM information_schema.columns
             WHERE table_name = %s
-        """, session_table)
+        """,
+            session_table,
+        )
         columns = {row["column_name"] for row in result.data}
         assert "session_id" in columns
         assert "data" in columns
@@ -127,7 +128,7 @@ async def test_asyncpg_migration_creates_correct_table(asyncpg_config: AsyncpgCo
 
 async def test_asyncpg_session_basic_operations(session_store: SQLSpecSessionStore) -> None:
     """Test basic session operations with AsyncPG backend."""
-    
+
     # Test only direct store operations which should work
     test_data = {"user_id": 54321, "username": "pguser"}
     await session_store.set("test-key", test_data, expires_in=3600)
@@ -142,15 +143,15 @@ async def test_asyncpg_session_basic_operations(session_store: SQLSpecSessionSto
 
 async def test_asyncpg_session_persistence(session_store: SQLSpecSessionStore) -> None:
     """Test that sessions persist across operations with AsyncPG."""
-    
+
     # Test multiple set/get operations persist data
     session_id = "persistent-test"
-    
+
     # Set initial data
     await session_store.set(session_id, {"count": 1}, expires_in=3600)
     result = await session_store.get(session_id)
     assert result == {"count": 1}
-    
+
     # Update data
     await session_store.set(session_id, {"count": 2}, expires_in=3600)
     result = await session_store.get(session_id)
@@ -159,20 +160,20 @@ async def test_asyncpg_session_persistence(session_store: SQLSpecSessionStore) -
 
 async def test_asyncpg_session_expiration(session_store: SQLSpecSessionStore) -> None:
     """Test session expiration handling with AsyncPG."""
-    
+
     # Test direct store expiration
     session_id = "expiring-test"
-    
+
     # Set data with short expiration
     await session_store.set(session_id, {"test": "data"}, expires_in=1)
-    
+
     # Data should be available immediately
     result = await session_store.get(session_id)
     assert result == {"test": "data"}
-    
+
     # Wait for expiration
     await asyncio.sleep(2)
-    
+
     # Data should be expired
     result = await session_store.get(session_id)
     assert result is None
@@ -180,22 +181,22 @@ async def test_asyncpg_session_expiration(session_store: SQLSpecSessionStore) ->
 
 async def test_asyncpg_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
     """Test handling of concurrent sessions with AsyncPG."""
-    
+
     # Test multiple concurrent session operations
     session_ids = ["session1", "session2", "session3"]
-    
+
     # Set different data in different sessions
     await session_store.set(session_ids[0], {"user_id": 101}, expires_in=3600)
     await session_store.set(session_ids[1], {"user_id": 202}, expires_in=3600)
     await session_store.set(session_ids[2], {"user_id": 303}, expires_in=3600)
-    
+
     # Each session should maintain its own data
     result1 = await session_store.get(session_ids[0])
     assert result1 == {"user_id": 101}
-    
+
     result2 = await session_store.get(session_ids[1])
     assert result2 == {"user_id": 202}
-    
+
     result3 = await session_store.get(session_ids[2])
     assert result3 == {"user_id": 303}
 
@@ -231,8 +232,6 @@ async def test_asyncpg_session_cleanup(session_store: SQLSpecSessionStore) -> No
     for session_id in persistent_ids:
         result = await session_store.get(session_id)
         assert result is not None
-
-
 
 
 async def test_asyncpg_store_operations(session_store: SQLSpecSessionStore) -> None:

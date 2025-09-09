@@ -310,24 +310,18 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         # Create SET expressions for MySQL ON DUPLICATE KEY UPDATE
         set_expressions = []
         for col, val in kwargs.items():
-            if hasattr(val, "expression") and hasattr(val, "sql"):
+            if has_expression_and_sql(val):
                 # Handle SQL objects (from sql.raw with parameters)
                 expression = getattr(val, "expression", None)
                 if expression is not None and isinstance(expression, exp.Expression):
                     # Merge parameters from SQL object into builder
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
+                    self._merge_sql_object_parameters(val)
                     value_expr = expression
                 else:
                     # If expression is None, fall back to parsing the raw SQL
                     sql_text = getattr(val, "sql", "")
                     # Merge parameters even when parsing raw SQL
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
+                    self._merge_sql_object_parameters(val)
                     # Check if sql_text is callable (like Expression.sql method)
                     if callable(sql_text):
                         sql_text = str(val)

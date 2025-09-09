@@ -34,7 +34,9 @@ async def psqlpy_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_psqlpy"}],  # Unique table for psqlpy
+                "include_extensions": [
+                    {"name": "litestar", "session_table": "litestar_sessions_psqlpy"}
+                ],  # Unique table for psqlpy
             },
         )
         yield config

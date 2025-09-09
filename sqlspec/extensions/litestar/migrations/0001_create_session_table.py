@@ -105,10 +105,13 @@ def up(context: "Optional[MigrationContext]" = None) -> "list[str]":
             """,
         ]
 
+    # Determine session_id column type based on dialect
+    session_id_type = "TEXT" if dialect in {"postgres", "postgresql"} else "VARCHAR(255)"
+
     return [
         f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
-            session_id VARCHAR(255) PRIMARY KEY,
+            session_id {session_id_type} PRIMARY KEY,
             data {data_type} NOT NULL,
             expires_at {timestamp_type} NOT NULL,
             created_at {timestamp_type} NOT NULL {created_at_default}

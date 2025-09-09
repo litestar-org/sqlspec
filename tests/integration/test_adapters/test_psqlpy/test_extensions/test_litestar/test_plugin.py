@@ -672,15 +672,19 @@ async def test_migration_with_custom_table_name(psqlpy_migration_config_with_dic
     async with psqlpy_migration_config_with_dict.provide_session() as driver:
         # Clean up any conflicting tables from other PostgreSQL adapters
         await driver.execute("DROP TABLE IF EXISTS litestar_sessions")
-        await driver.execute("DROP TABLE IF EXISTS litestar_sessions_asyncpg") 
+        await driver.execute("DROP TABLE IF EXISTS litestar_sessions_asyncpg")
         await driver.execute("DROP TABLE IF EXISTS litestar_sessions_psycopg")
 
         # Now verify it doesn't exist
         result = await driver.execute("SELECT tablename FROM pg_tables WHERE tablename = %s", ["litestar_sessions"])
         assert len(result.data) == 0
-        result = await driver.execute("SELECT tablename FROM pg_tables WHERE tablename = %s", ["litestar_sessions_asyncpg"])
+        result = await driver.execute(
+            "SELECT tablename FROM pg_tables WHERE tablename = %s", ["litestar_sessions_asyncpg"]
+        )
         assert len(result.data) == 0
-        result = await driver.execute("SELECT tablename FROM pg_tables WHERE tablename = %s", ["litestar_sessions_psycopg"])
+        result = await driver.execute(
+            "SELECT tablename FROM pg_tables WHERE tablename = %s", ["litestar_sessions_psycopg"]
+        )
         assert len(result.data) == 0
 
 

@@ -35,7 +35,9 @@ def psycopg_sync_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_psycopg_sync"}],  # Unique table for psycopg sync
+                "include_extensions": [
+                    {"name": "litestar", "session_table": "litestar_sessions_psycopg_sync"}
+                ],  # Unique table for psycopg sync
             },
         )
         yield config
@@ -71,7 +73,9 @@ async def psycopg_async_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_psycopg_async"}],  # Unique table for psycopg async
+                "include_extensions": [
+                    {"name": "litestar", "session_table": "litestar_sessions_psycopg_async"}
+                ],  # Unique table for psycopg async
             },
         )
         yield config

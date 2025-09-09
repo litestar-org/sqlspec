@@ -40,7 +40,9 @@ async def asyncpg_migration_config(
             migration_config={
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
-                "include_extensions": [{"name": "litestar", "session_table": "litestar_sessions_asyncpg"}],  # Unique table for asyncpg
+                "include_extensions": [
+                    {"name": "litestar", "session_table": "litestar_sessions_asyncpg"}
+                ],  # Unique table for asyncpg
             },
         )
         yield config
