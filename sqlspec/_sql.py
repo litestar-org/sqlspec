@@ -137,21 +137,18 @@ class SQLFactory:
         self.dialect = dialect
 
     def __call__(self, statement: str, dialect: DialectType = None) -> "Any":
-        """Create a SelectBuilder from a SQL string, only allowing SELECT/CTE queries.
+        """Create a SelectBuilder from a SQL string, or SQL object for DML with RETURNING.
 
         Args:
             statement: The SQL statement string.
-            parameters: Optional parameters for the query.
-            *filters: Optional filters.
-            config: Optional config.
             dialect: Optional SQL dialect.
-            **kwargs: Additional parameters.
 
         Returns:
-            SelectBuilder instance.
+            SelectBuilder instance for SELECT/WITH statements,
+            SQL object for DML statements with RETURNING clause.
 
         Raises:
-            SQLBuilderError: If the SQL is not a SELECT/CTE statement.
+            SQLBuilderError: If the SQL is not a SELECT/CTE/DML+RETURNING statement.
         """
 
         try:
@@ -175,8 +172,13 @@ class SQLFactory:
             builder = Select(dialect=dialect or self.dialect)
             builder._expression = parsed_expr
             return builder
+
+        if actual_type_str in {"INSERT", "UPDATE", "DELETE"} and parsed_expr.args.get("returning") is not None:
+            return SQL(statement)
+
         msg = (
-            f"sql(...) only supports SELECT statements. Detected type: {actual_type_str}. "
+            f"sql(...) only supports SELECT statements or DML statements with RETURNING clause. "
+            f"Detected type: {actual_type_str}. "
             f"Use sql.{actual_type_str.lower()}() instead."
         )
         raise SQLBuilderError(msg)
