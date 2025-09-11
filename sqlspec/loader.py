@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import unquote, urlparse
 
+from sqlspec.core import SQL
 from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
-from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, StorageOperationFailedError
 from sqlspec.storage.registry import storage_registry as default_storage_registry
 from sqlspec.utils.correlation import CorrelationContext

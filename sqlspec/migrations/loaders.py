@@ -164,17 +164,21 @@ class SQLFileLoader(BaseMigrationLoader):
 class PythonFileLoader(BaseMigrationLoader):
     """Loader for Python migration files."""
 
-    __slots__ = ("migrations_dir", "project_root")
+    __slots__ = ("context", "migrations_dir", "project_root")
 
-    def __init__(self, migrations_dir: Path, project_root: "Optional[Path]" = None) -> None:
+    def __init__(
+        self, migrations_dir: Path, project_root: "Optional[Path]" = None, context: "Optional[Any]" = None
+    ) -> None:
         """Initialize Python file loader.
 
         Args:
             migrations_dir: Directory containing migration files.
             project_root: Optional project root directory for imports.
+            context: Optional migration context to pass to functions.
         """
         self.migrations_dir = migrations_dir
         self.project_root = project_root if project_root is not None else self._find_project_root(migrations_dir)
+        self.context = context
 
     async def get_up_sql(self, path: Path) -> list[str]:
         """Load Python migration and execute upgrade function.
@@ -208,10 +212,16 @@ class PythonFileLoader(BaseMigrationLoader):
                 msg = f"'{func_name}' is not callable in {path}"
                 raise MigrationLoadError(msg)
 
+            # Check if function accepts context parameter
+            sig = inspect.signature(upgrade_func)
+            accepts_context = "context" in sig.parameters or len(sig.parameters) > 0
+
             if inspect.iscoroutinefunction(upgrade_func):
-                sql_result = await upgrade_func()
+                sql_result = (
+                    await upgrade_func(self.context) if accepts_context and self.context else await upgrade_func()
+                )
             else:
-                sql_result = upgrade_func()
+                sql_result = upgrade_func(self.context) if accepts_context and self.context else upgrade_func()
 
             return self._normalize_and_validate_sql(sql_result, path)
 
@@ -239,10 +249,16 @@ class PythonFileLoader(BaseMigrationLoader):
             if not callable(downgrade_func):
                 return []
 
+            # Check if function accepts context parameter
+            sig = inspect.signature(downgrade_func)
+            accepts_context = "context" in sig.parameters or len(sig.parameters) > 0
+
             if inspect.iscoroutinefunction(downgrade_func):
-                sql_result = await downgrade_func()
+                sql_result = (
+                    await downgrade_func(self.context) if accepts_context and self.context else await downgrade_func()
+                )
             else:
-                sql_result = downgrade_func()
+                sql_result = downgrade_func(self.context) if accepts_context and self.context else downgrade_func()
 
             return self._normalize_and_validate_sql(sql_result, path)
 
@@ -380,7 +396,7 @@ class PythonFileLoader(BaseMigrationLoader):
 
 
 def get_migration_loader(
-    file_path: Path, migrations_dir: Path, project_root: "Optional[Path]" = None
+    file_path: Path, migrations_dir: Path, project_root: "Optional[Path]" = None, context: "Optional[Any]" = None
 ) -> BaseMigrationLoader:
     """Factory function to get appropriate loader for migration file.
 
@@ -388,6 +404,7 @@ def get_migration_loader(
         file_path: Path to the migration file.
         migrations_dir: Directory containing migration files.
         project_root: Optional project root directory for Python imports.
+        context: Optional migration context to pass to Python migrations.
 
     Returns:
         Appropriate loader instance for the file type.
@@ -398,7 +415,7 @@ def get_migration_loader(
     suffix = file_path.suffix
 
     if suffix == ".py":
-        return PythonFileLoader(migrations_dir, project_root)
+        return PythonFileLoader(migrations_dir, project_root, context)
     if suffix == ".sql":
         return SQLFileLoader()
     msg = f"Unsupported migration file type: {suffix}"

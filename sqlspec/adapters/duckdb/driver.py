@@ -1,5 +1,7 @@
 """DuckDB driver implementation."""
 
+import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import duckdb
@@ -11,6 +13,7 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -31,7 +34,14 @@ duckdb_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
         default_execution_parameter_style=ParameterStyle.QMARK,
         supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
-        type_coercion_map={},
+        type_coercion_map={
+            bool: int,
+            datetime.datetime: lambda v: v.isoformat(),
+            datetime.date: lambda v: v.isoformat(),
+            Decimal: str,
+            dict: to_json,
+            list: to_json,
+        },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,

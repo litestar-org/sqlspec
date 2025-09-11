@@ -1,1 +1,1 @@
-"""Extension unit tests."""
+"""Unit tests for SQLSpec extensions."""

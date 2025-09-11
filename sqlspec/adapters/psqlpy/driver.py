@@ -19,6 +19,7 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -214,7 +215,23 @@ def _convert_psqlpy_parameters(value: Any) -> Any:
 
         return value
 
-    if isinstance(value, (dict, list, tuple, uuid.UUID, datetime.datetime, datetime.date)):
+    if isinstance(value, bytes):
+        try:
+            return from_json(value)
+        except (UnicodeDecodeError, Exception):
+            return value
+
+    # Handle complex data structures for psqlpy
+    if isinstance(value, (list, tuple)):
+        # For JSON operations, psqlpy needs the list as-is
+        # For array operations, ensure all elements are properly converted
+        return [_convert_psqlpy_parameters(item) for item in value]
+
+    if isinstance(value, dict):
+        # For JSON operations, psqlpy needs dicts as-is, but ensure nested values are converted
+        return {k: _convert_psqlpy_parameters(v) for k, v in value.items()}
+
+    if isinstance(value, (uuid.UUID, datetime.datetime, datetime.date)):
         return value
 
     return value

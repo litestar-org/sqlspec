@@ -161,7 +161,7 @@ class SQL:
         self._process_parameters(*parameters, **kwargs)
 
     def _create_auto_config(
-        self, statement: "Union[str, exp.Expression, 'SQL']", parameters: tuple, kwargs: dict[str, Any]
+        self, statement: "Union[str, exp.Expression, 'SQL']", parameters: "tuple[Any, ...]", kwargs: "dict[str, Any]"
     ) -> "StatementConfig":
         """Create default StatementConfig when none provided.
 
@@ -205,7 +205,7 @@ class SQL:
         if sql_obj._processed_state is not Empty:
             self._processed_state = sql_obj._processed_state
 
-    def _should_auto_detect_many(self, parameters: tuple) -> bool:
+    def _should_auto_detect_many(self, parameters: "tuple[Any, ...]") -> bool:
         """Detect execute_many mode from parameter structure.
 
         Args:
