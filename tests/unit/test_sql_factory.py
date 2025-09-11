@@ -1575,3 +1575,151 @@ def test_querybuilder_parameter_conversion_preserves_functionality() -> None:
     assert len(complex_stmt.parameters) == 2
     assert "2023-01-01" in complex_stmt.parameters.values()
     assert "click" in complex_stmt.parameters.values()
+
+
+def test_sql_call_with_update_returning() -> None:
+    """Test that sql() accepts UPDATE statements with RETURNING clause."""
+    update_sql = "UPDATE books SET title = :title, pages = :pages WHERE id = :id RETURNING *"
+    query = sql(update_sql)
+
+    assert isinstance(query, SQL)
+    assert query.returns_rows()
+    assert "UPDATE" in query.sql.upper()
+    assert "RETURNING" in query.sql.upper()
+
+
+def test_sql_call_with_insert_returning() -> None:
+    """Test that sql() accepts INSERT statements with RETURNING clause."""
+    insert_sql = "INSERT INTO books (title, pages) VALUES (:title, :pages) RETURNING id, title"
+    query = sql(insert_sql)
+
+    assert isinstance(query, SQL)
+    assert query.returns_rows()
+    assert "INSERT" in query.sql.upper()
+    assert "RETURNING" in query.sql.upper()
+
+
+def test_sql_call_with_delete_returning() -> None:
+    """Test that sql() accepts DELETE statements with RETURNING clause."""
+    delete_sql = "DELETE FROM books WHERE id = :id RETURNING id, title"
+    query = sql(delete_sql)
+
+    assert isinstance(query, SQL)
+    assert query.returns_rows()
+    assert "DELETE" in query.sql.upper()
+    assert "RETURNING" in query.sql.upper()
+
+
+def test_sql_call_rejects_update_without_returning() -> None:
+    """Test that sql() rejects UPDATE statements without RETURNING clause."""
+    update_sql = "UPDATE books SET title = :title WHERE id = :id"
+
+    with pytest.raises(SQLBuilderError) as exc_info:
+        sql(update_sql)
+
+    assert "only supports SELECT statements or DML statements with RETURNING clause" in str(exc_info.value)
+    assert "UPDATE" in str(exc_info.value)
+
+
+def test_sql_call_rejects_insert_without_returning() -> None:
+    """Test that sql() rejects INSERT statements without RETURNING clause."""
+    insert_sql = "INSERT INTO books (title, pages) VALUES (:title, :pages)"
+
+    with pytest.raises(SQLBuilderError) as exc_info:
+        sql(insert_sql)
+
+    assert "only supports SELECT statements or DML statements with RETURNING clause" in str(exc_info.value)
+    assert "INSERT" in str(exc_info.value)
+
+
+def test_sql_call_rejects_delete_without_returning() -> None:
+    """Test that sql() rejects DELETE statements without RETURNING clause."""
+    delete_sql = "DELETE FROM books WHERE id = :id"
+
+    with pytest.raises(SQLBuilderError) as exc_info:
+        sql(delete_sql)
+
+    assert "only supports SELECT statements or DML statements with RETURNING clause" in str(exc_info.value)
+    assert "DELETE" in str(exc_info.value)
+
+
+def test_sql_update_method_with_returning() -> None:
+    """Test that sql.update() returns SQL object for statements with RETURNING."""
+    update_sql = "UPDATE books SET title = :title WHERE id = :id RETURNING *"
+    query = sql.update(update_sql)
+
+    assert isinstance(query, SQL)
+    assert query.returns_rows()
+
+
+def test_sql_insert_method_with_returning() -> None:
+    """Test that sql.insert() returns SQL object for statements with RETURNING."""
+    insert_sql = "INSERT INTO books (title) VALUES (:title) RETURNING id, title"
+    query = sql.insert(insert_sql)
+
+    assert isinstance(query, SQL)
+    assert query.returns_rows()
+
+
+def test_sql_delete_method_with_returning() -> None:
+    """Test that sql.delete() returns SQL object for statements with RETURNING."""
+    delete_sql = "DELETE FROM books WHERE id = :id RETURNING *"
+    query = sql.delete(delete_sql)
+
+    assert isinstance(query, SQL)
+    assert query.returns_rows()
+
+
+def test_sql_update_method_without_returning_returns_builder() -> None:
+    """Test that sql.update() returns Update builder for statements without RETURNING."""
+    from sqlspec.builder import Update
+
+    update_sql = "UPDATE books SET title = :title WHERE id = :id"
+    query = sql.update(update_sql)
+
+    assert isinstance(query, Update)
+    assert not isinstance(query, SQL)
+
+
+def test_sql_insert_method_without_returning_returns_builder() -> None:
+    """Test that sql.insert() returns Insert builder for statements without RETURNING."""
+    from sqlspec.builder import Insert
+
+    insert_sql = "INSERT INTO books (title) VALUES (:title)"
+    query = sql.insert(insert_sql)
+
+    assert isinstance(query, Insert)
+    assert not isinstance(query, SQL)
+
+
+def test_sql_delete_method_without_returning_returns_builder() -> None:
+    """Test that sql.delete() returns Delete builder for statements without RETURNING."""
+    from sqlspec.builder import Delete
+
+    delete_sql = "DELETE FROM books WHERE id = :id"
+    query = sql.delete(delete_sql)
+
+    assert isinstance(query, Delete)
+    assert not isinstance(query, SQL)
+
+
+def test_select_statements_still_work_with_sql_call() -> None:
+    """Test that SELECT statements continue to work with sql()."""
+    from sqlspec.builder import Select
+
+    select_sql = "SELECT * FROM books WHERE id = :id"
+    query = sql(select_sql)
+
+    assert isinstance(query, Select)
+    assert not isinstance(query, SQL)
+
+
+def test_with_statements_still_work_with_sql_call() -> None:
+    """Test that WITH statements continue to work with sql()."""
+    from sqlspec.builder import Select
+
+    with_sql = "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (ORDER BY id) as rn FROM books) SELECT * FROM ranked"
+    query = sql(with_sql)
+
+    assert isinstance(query, Select)
+    assert not isinstance(query, SQL)
