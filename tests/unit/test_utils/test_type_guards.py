@@ -695,7 +695,7 @@ def test_extract_dataclass_fields_conflicting_include_exclude() -> None:
     """Test extract_dataclass_fields raises error for conflicting include/exclude."""
     instance = SampleDataclass(name="test", age=25)
 
-    with pytest.raises(ValueError, match="Fields .* are both included and excluded"):
+    with pytest.raises(ValueError, match="Fields .* are both included and excluded"):  # noqa: RUF043
         extract_dataclass_fields(instance, include={"name"}, exclude={"name"})
 
 

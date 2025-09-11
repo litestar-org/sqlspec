@@ -270,7 +270,7 @@ def test_adapter_with_empty_extra() -> None:
 
     CorrelationContext.set("test-id")
 
-    msg, kwargs = adapter.process("Test message", {"extra": {}})
+    _msg, kwargs = adapter.process("Test message", {"extra": {}})
 
     assert kwargs["extra"]["correlation_id"] == "test-id"
 
