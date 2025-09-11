@@ -204,7 +204,7 @@ class SQLFactory:
             select_builder.select(*columns_or_sql)
         return select_builder
 
-    def insert(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Union[Insert, SQL]":
+    def insert(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Insert":
         builder_dialect = dialect or self.dialect
         builder = Insert(dialect=builder_dialect)
         if table_or_sql:
@@ -221,7 +221,7 @@ class SQLFactory:
             return builder.into(table_or_sql)
         return builder
 
-    def update(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Union[Update, SQL]":
+    def update(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Update":
         builder_dialect = dialect or self.dialect
         builder = Update(dialect=builder_dialect)
         if table_or_sql:
@@ -237,7 +237,7 @@ class SQLFactory:
             return builder.table(table_or_sql)
         return builder
 
-    def delete(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Union[Delete, SQL]":
+    def delete(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Delete":
         builder_dialect = dialect or self.dialect
         builder = Delete(dialect=builder_dialect)
         if table_or_sql and self._looks_like_sql(table_or_sql):
@@ -445,14 +445,12 @@ class SQLFactory:
 
         return False
 
-    def _populate_insert_from_sql(self, builder: "Insert", sql_string: str) -> "Union[Insert, SQL]":
+    def _populate_insert_from_sql(self, builder: "Insert", sql_string: str) -> "Insert":
         """Parse SQL string and populate INSERT builder using SQLGlot directly."""
         try:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Insert):
-                if parsed_expr.args.get("returning") is not None:
-                    return SQL(sql_string)
                 builder._expression = parsed_expr
                 return builder
 
@@ -481,14 +479,12 @@ class SQLFactory:
             logger.warning("Failed to parse SELECT SQL, falling back to traditional mode: %s", e)
         return builder
 
-    def _populate_update_from_sql(self, builder: "Update", sql_string: str) -> "Union[Update, SQL]":
+    def _populate_update_from_sql(self, builder: "Update", sql_string: str) -> "Update":
         """Parse SQL string and populate UPDATE builder using SQLGlot directly."""
         try:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
-                if parsed_expr.args.get("returning") is not None:
-                    return SQL(sql_string)
                 builder._expression = parsed_expr
                 return builder
 
@@ -498,14 +494,12 @@ class SQLFactory:
             logger.warning("Failed to parse UPDATE SQL, falling back to traditional mode: %s", e)
         return builder
 
-    def _populate_delete_from_sql(self, builder: "Delete", sql_string: str) -> "Union[Delete, SQL]":
+    def _populate_delete_from_sql(self, builder: "Delete", sql_string: str) -> "Delete":
         """Parse SQL string and populate DELETE builder using SQLGlot directly."""
         try:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
-                if parsed_expr.args.get("returning") is not None:
-                    return SQL(sql_string)
                 builder._expression = parsed_expr
                 return builder
 

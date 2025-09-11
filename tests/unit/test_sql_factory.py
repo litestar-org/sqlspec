@@ -1644,30 +1644,45 @@ def test_sql_call_rejects_delete_without_returning() -> None:
 
 
 def test_sql_update_method_with_returning() -> None:
-    """Test that sql.update() returns SQL object for statements with RETURNING."""
+    """Test that sql.update() returns Update builder for statements with RETURNING (use sql() for SQL object)."""
+    from sqlspec.builder import Update
+
     update_sql = "UPDATE books SET title = :title WHERE id = :id RETURNING *"
     query = sql.update(update_sql)
 
-    assert isinstance(query, SQL)
-    assert query.returns_rows()
+    assert isinstance(query, Update)
+    # For RETURNING statements, use sql() instead to get SQL object
+    sql_query = sql(update_sql)
+    assert isinstance(sql_query, SQL)
+    assert sql_query.returns_rows()
 
 
 def test_sql_insert_method_with_returning() -> None:
-    """Test that sql.insert() returns SQL object for statements with RETURNING."""
+    """Test that sql.insert() returns Insert builder for statements with RETURNING (use sql() for SQL object)."""
+    from sqlspec.builder import Insert
+
     insert_sql = "INSERT INTO books (title) VALUES (:title) RETURNING id, title"
     query = sql.insert(insert_sql)
 
-    assert isinstance(query, SQL)
-    assert query.returns_rows()
+    assert isinstance(query, Insert)
+    # For RETURNING statements, use sql() instead to get SQL object
+    sql_query = sql(insert_sql)
+    assert isinstance(sql_query, SQL)
+    assert sql_query.returns_rows()
 
 
 def test_sql_delete_method_with_returning() -> None:
-    """Test that sql.delete() returns SQL object for statements with RETURNING."""
+    """Test that sql.delete() returns Delete builder for statements with RETURNING (use sql() for SQL object)."""
+    from sqlspec.builder import Delete
+
     delete_sql = "DELETE FROM books WHERE id = :id RETURNING *"
     query = sql.delete(delete_sql)
 
-    assert isinstance(query, SQL)
-    assert query.returns_rows()
+    assert isinstance(query, Delete)
+    # For RETURNING statements, use sql() instead to get SQL object
+    sql_query = sql(delete_sql)
+    assert isinstance(sql_query, SQL)
+    assert sql_query.returns_rows()
 
 
 def test_sql_update_method_without_returning_returns_builder() -> None:
