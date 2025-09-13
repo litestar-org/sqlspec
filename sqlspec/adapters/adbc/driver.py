@@ -521,7 +521,9 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         try:
             if not prepared_parameters:
-                cursor._rowcount = 0
+                # TODO: Replace with proper cursor protocol method
+                if hasattr(cursor, '_rowcount'):
+                    cursor._rowcount = 0
                 row_count = 0
             elif isinstance(prepared_parameters, list) and prepared_parameters:
                 processed_params = []
@@ -596,7 +598,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             Execution result with statement counts
         """
         if statement.is_script:
-            sql = statement._raw_sql
+            sql = statement.raw_sql
             prepared_parameters: list[Any] = []
         else:
             sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)

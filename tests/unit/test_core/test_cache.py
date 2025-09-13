@@ -30,10 +30,12 @@ from sqlspec.core.cache import (
     CacheStats,
     CacheStatsAggregate,
     ExpressionCache,
+    MultiLevelCache,
     ParameterCache,
     StatementCache,
     UnifiedCache,
     clear_all_caches,
+    get_cache,
     get_cache_config,
     get_cache_statistics,
     get_cache_stats,
@@ -43,7 +45,6 @@ from sqlspec.core.cache import (
     get_statement_cache,
     log_cache_stats,
     reset_cache_stats,
-    sql_cache,
     update_cache_config,
 )
 
@@ -756,17 +757,18 @@ def test_log_cache_stats_function() -> None:
         mock_logger.info.assert_called_once()
 
 
-def test_sql_cache_interface() -> None:
-    """Test SQL compilation cache interface for compatibility."""
-    cache_key = "test_sql_cache_key"
+def test_multi_level_cache_interface() -> None:
+    """Test multi-level cache interface."""
+    cache = get_cache()
+    cache_key = "test_cache_key"
     cache_value = ("SELECT * FROM users WHERE id = $1", [1])
 
-    sql_cache.set(cache_key, cache_value)
+    cache.put("statement", cache_key, cache_value, "postgres")
 
-    result = sql_cache.get(cache_key)
+    result = cache.get("statement", cache_key, "postgres")
     assert result == cache_value
 
-    result_none = sql_cache.get("non_existent_key")
+    result_none = cache.get("statement", "non_existent_key", "postgres")
     assert result_none is None
 
 

@@ -623,12 +623,12 @@ class OrderByFilter(StatementFilter):
         col_expr = exp.column(self.field_name)
         order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
 
-        if statement._statement is None:
+        if statement.statement_expression is None:
             new_statement = exp.Select().order_by(order_expr)
-        elif isinstance(statement._statement, exp.Select):
-            new_statement = statement._statement.order_by(order_expr)
+        elif isinstance(statement.statement_expression, exp.Select):
+            new_statement = statement.statement_expression.order_by(order_expr)
         else:
-            new_statement = exp.Select().from_(statement._statement).order_by(order_expr)
+            new_statement = exp.Select().from_(statement.statement_expression).order_by(order_expr)
 
         return statement.copy(statement=new_statement)
 

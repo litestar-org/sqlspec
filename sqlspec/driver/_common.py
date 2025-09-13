@@ -7,7 +7,7 @@ from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
 from sqlspec.core import SQL, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
-from sqlspec.core.cache import get_cache_config, sql_cache
+from sqlspec.core.cache import get_cache, get_cache_config
 from sqlspec.core.splitter import split_sql_script
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
@@ -413,7 +413,8 @@ class CommonDriverAttributesMixin:
         cache_key = None
         if cache_config.compiled_cache_enabled and statement_config.enable_caching:
             cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_parameters)
-            cached_result = sql_cache.get(cache_key)
+            cache = get_cache()
+            cached_result = cache.get("statement", cache_key, str(statement.dialect) if statement.dialect else None)
             if cached_result is not None:
                 return cached_result
 
@@ -430,7 +431,8 @@ class CommonDriverAttributesMixin:
             )
 
         if cache_key is not None:
-            sql_cache.set(cache_key, (compiled_sql, prepared_parameters))
+            cache = get_cache()
+            cache.put("statement", cache_key, (compiled_sql, prepared_parameters), str(statement.dialect) if statement.dialect else None)
 
         return compiled_sql, prepared_parameters
 

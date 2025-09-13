@@ -906,3 +906,21 @@ class Case:
         """
         case_expr = exp.Case(ifs=self._conditions, default=self._default)
         return cast("exp.Alias", exp.alias_(case_expr, alias))
+    
+    @property
+    def conditions(self) -> "list[exp.If]":
+        """Get CASE conditions (public API).
+        
+        Returns:
+            List of If expressions representing WHEN clauses
+        """
+        return self._conditions
+    
+    @property
+    def default(self) -> Optional[exp.Expression]:
+        """Get CASE default value (public API).
+        
+        Returns:
+            Default expression for the ELSE clause, or None
+        """
+        return self._default

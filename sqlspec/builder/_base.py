@@ -90,6 +90,36 @@ class QueryBuilder(ABC):
             self._raise_sql_builder_error(
                 "QueryBuilder._create_base_expression must return a valid sqlglot expression."
             )
+    
+    def get_expression(self) -> Optional[exp.Expression]:
+        """Get expression reference (no copy).
+        
+        Returns:
+            The current SQLGlot expression or None if not set
+        """
+        return self._expression
+    
+    def set_expression(self, expression: exp.Expression) -> None:
+        """Set expression with validation.
+        
+        Args:
+            expression: SQLGlot expression to set
+            
+        Raises:
+            TypeError: If expression is not a SQLGlot Expression
+        """
+        if not isinstance(expression, exp.Expression):
+            msg = f"Expected Expression, got {type(expression)}"
+            raise TypeError(msg)
+        self._expression = expression
+    
+    def has_expression(self) -> bool:
+        """Check if expression exists.
+        
+        Returns:
+            True if expression is set, False otherwise
+        """
+        return self._expression is not None
 
     @abstractmethod
     def _create_base_expression(self) -> exp.Expression:

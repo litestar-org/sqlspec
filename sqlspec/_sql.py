@@ -170,7 +170,7 @@ class SQLFactory:
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
             builder = Select(dialect=dialect or self.dialect)
-            builder._expression = parsed_expr
+            builder.set_expression(parsed_expr)
             return builder
 
         if actual_type_str in {"INSERT", "UPDATE", "DELETE"} and parsed_expr.args.get("returning") is not None:
@@ -451,7 +451,7 @@ class SQLFactory:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Insert):
-                builder._expression = parsed_expr
+                builder.set_expression(parsed_expr)
                 return builder
 
             if isinstance(parsed_expr, exp.Select):
@@ -470,7 +470,7 @@ class SQLFactory:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Select):
-                builder._expression = parsed_expr
+                builder.set_expression(parsed_expr)
                 return builder
 
             logger.warning("Cannot create SELECT from %s statement", type(parsed_expr).__name__)
@@ -485,7 +485,7 @@ class SQLFactory:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
-                builder._expression = parsed_expr
+                builder.set_expression(parsed_expr)
                 return builder
 
             logger.warning("Cannot create UPDATE from %s statement", type(parsed_expr).__name__)
@@ -500,7 +500,7 @@ class SQLFactory:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
-                builder._expression = parsed_expr
+                builder.set_expression(parsed_expr)
                 return builder
 
             logger.warning("Cannot create DELETE from %s statement", type(parsed_expr).__name__)
@@ -515,7 +515,7 @@ class SQLFactory:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Merge):
-                builder._expression = parsed_expr
+                builder.set_expression(parsed_expr)
                 return builder
 
             logger.warning("Cannot create MERGE from %s statement", type(parsed_expr).__name__)
@@ -1068,11 +1068,11 @@ class SQLFactory:
         if isinstance(value, str):
             return exp.column(value)
         if isinstance(value, Column):
-            return value._expression
+            return value.sqlglot_expression
         if isinstance(value, ExpressionWrapper):
             return value.expression
         if isinstance(value, Case):
-            return exp.Case(ifs=value._conditions, default=value._default)
+            return exp.Case(ifs=value.conditions, default=value.default)
         if isinstance(value, exp.Expression):
             return value
         return exp.convert(value)

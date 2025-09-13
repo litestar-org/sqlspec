@@ -27,17 +27,18 @@ if TYPE_CHECKING:
 
 __all__ = (
     "CacheKey",
-    "CacheStats",
+    "CacheStats", 
     "ExpressionCache",
+    "MultiLevelCache",
     "ParameterCache",
     "StatementCache",
     "UnifiedCache",
+    "get_cache",
     "get_cache_config",
     "get_default_cache",
     "get_expression_cache",
     "get_parameter_cache",
     "get_statement_cache",
-    "sql_cache",
 )
 
 T = TypeVar("T")
@@ -801,24 +802,83 @@ def log_cache_stats() -> None:
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class SQLCompilationCache:
-    """Wrapper around StatementCache for compatibility."""
+class MultiLevelCache:
+    """Single cache with namespace isolation - no connection pool complexity."""
+    
+    __slots__ = ("_cache",)
+    
+    def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: Optional[int] = DEFAULT_TTL_SECONDS) -> None:
+        """Initialize multi-level cache.
+        
+        Args:
+            max_size: Maximum number of cache entries
+            ttl_seconds: Time-to-live in seconds (None for no expiration)
+        """
+        self._cache = UnifiedCache(max_size, ttl_seconds)
+    
+    def get(self, level: str, key: str, dialect: Optional[str] = None) -> Optional[Any]:
+        """Get value from cache with level and dialect namespace.
+        
+        Args:
+            level: Cache level (e.g., "statement", "expression", "parameter") 
+            key: Cache key
+            dialect: SQL dialect (optional)
+            
+        Returns:
+            Cached value or None if not found
+        """
+        full_key = f"{level}:{dialect or 'default'}:{key}"
+        return self._cache.get(CacheKey((full_key,)))
+    
+    def put(self, level: str, key: str, value: Any, dialect: Optional[str] = None) -> None:
+        """Put value in cache with level and dialect namespace.
+        
+        Args:
+            level: Cache level (e.g., "statement", "expression", "parameter")
+            key: Cache key
+            value: Value to cache
+            dialect: SQL dialect (optional)
+        """
+        full_key = f"{level}:{dialect or 'default'}:{key}"
+        self._cache.put(CacheKey((full_key,)), value)
+    
+    def delete(self, level: str, key: str, dialect: Optional[str] = None) -> bool:
+        """Delete entry from cache.
+        
+        Args:
+            level: Cache level
+            key: Cache key to delete
+            dialect: SQL dialect (optional)
+            
+        Returns:
+            True if key was found and deleted, False otherwise
+        """
+        full_key = f"{level}:{dialect or 'default'}:{key}"
+        return self._cache.delete(CacheKey((full_key,)))
+    
+    def clear(self) -> None:
+        """Clear all cache entries."""
+        self._cache.clear()
+    
+    def get_stats(self) -> CacheStats:
+        """Get cache statistics."""
+        return self._cache.get_stats()
 
-    __slots__ = ("_statement_cache", "_unified_cache")
 
-    def __init__(self) -> None:
-        self._statement_cache = get_statement_cache()
-        self._unified_cache = get_default_cache()
-
-    def get(self, cache_key: str) -> Optional[tuple[str, Any]]:
-        """Get cached compiled SQL and parameters."""
-        key = CacheKey((cache_key,))
-        return self._unified_cache.get(key)
-
-    def set(self, cache_key: str, value: tuple[str, Any]) -> None:
-        """Set cached compiled SQL and parameters."""
-        key = CacheKey((cache_key,))
-        self._unified_cache.put(key, value)
+_multi_level_cache: Optional[MultiLevelCache] = None
 
 
-sql_cache = SQLCompilationCache()
+def get_cache() -> MultiLevelCache:
+    """Get the multi-level cache instance.
+    
+    Returns:
+        Singleton multi-level cache instance
+    """
+    global _multi_level_cache
+    if _multi_level_cache is None:
+        with _cache_lock:
+            if _multi_level_cache is None:
+                _multi_level_cache = MultiLevelCache()
+    return _multi_level_cache
+
+

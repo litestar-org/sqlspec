@@ -269,6 +269,15 @@ class SQL:
     def sql(self) -> str:
         """Get the raw SQL string."""
         return self._raw_sql
+    
+    @property
+    def raw_sql(self) -> str:
+        """Get raw SQL string (public API).
+        
+        Returns:
+            The raw SQL string
+        """
+        return self._raw_sql
 
     @property
     def parameters(self) -> Any:
@@ -310,6 +319,17 @@ class SQL:
     def _statement(self) -> "Optional[exp.Expression]":
         """Internal SQLGlot expression."""
         return self.expression
+    
+    @property
+    def statement_expression(self) -> "Optional[exp.Expression]":
+        """Get parsed statement expression (public API).
+        
+        Returns:
+            Parsed SQLGlot expression or None if not parsed
+        """
+        if self._processed_state is not Empty:
+            return self._processed_state.parsed_expression
+        return None
 
     @property
     def is_many(self) -> bool:
