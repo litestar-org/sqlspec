@@ -13,6 +13,7 @@ Components:
 
 import threading
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from mypy_extensions import mypyc_attr
@@ -27,12 +28,17 @@ if TYPE_CHECKING:
 
 __all__ = (
     "CacheKey",
-    "CacheStats", 
+    "CacheStats",
+    "CachedStatement",
     "ExpressionCache",
+    "Filter",
     "MultiLevelCache",
     "ParameterCache",
+    "ParametersView",
     "StatementCache",
     "UnifiedCache",
+    "canonicalize_filters",
+    "create_cache_key",
     "get_cache",
     "get_cache_config",
     "get_default_cache",
@@ -802,64 +808,168 @@ def log_cache_stats() -> None:
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
+class ParametersView:
+    """Read-only view of parameters without copying.
+
+    Provides read-only access to parameters without making copies,
+    enabling zero-copy parameter access patterns.
+    """
+
+    __slots__ = ("_named_ref", "_positional_ref")
+
+    def __init__(self, positional: list[Any], named: dict[str, Any]) -> None:
+        """Initialize parameters view.
+
+        Args:
+            positional: List of positional parameters (will be referenced, not copied)
+            named: Dictionary of named parameters (will be referenced, not copied)
+        """
+        self._positional_ref = positional
+        self._named_ref = named
+
+    def get_positional(self, index: int) -> Any:
+        """Get positional parameter by index.
+
+        Args:
+            index: Parameter index
+
+        Returns:
+            Parameter value
+        """
+        return self._positional_ref[index]
+
+    def get_named(self, key: str) -> Any:
+        """Get named parameter by key.
+
+        Args:
+            key: Parameter name
+
+        Returns:
+            Parameter value
+        """
+        return self._named_ref[key]
+
+    def has_named(self, key: str) -> bool:
+        """Check if named parameter exists.
+
+        Args:
+            key: Parameter name
+
+        Returns:
+            True if parameter exists
+        """
+        return key in self._named_ref
+
+    @property
+    def positional_count(self) -> int:
+        """Number of positional parameters."""
+        return len(self._positional_ref)
+
+    @property
+    def named_count(self) -> int:
+        """Number of named parameters."""
+        return len(self._named_ref)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+@dataclass(frozen=True)
+class CachedStatement:
+    """Immutable cached statement result.
+
+    This class stores compiled SQL and parameters in an immutable format
+    that can be safely shared between different parts of the system without
+    risk of mutation. Tuple parameters ensure no copying is needed.
+    """
+
+    compiled_sql: str
+    parameters: tuple[Any, ...]  # Tuple instead of list for immutability
+    expression: Optional["exp.Expression"]
+
+    def get_parameters_view(self) -> "ParametersView":
+        """Get read-only parameter view.
+
+        Returns:
+            View object that provides read-only access to parameters
+        """
+        return ParametersView(list(self.parameters), {})
+
+
+def create_cache_key(level: str, key: str, dialect: Optional[str] = None) -> str:
+    """Create optimized cache key using string concatenation.
+
+    Args:
+        level: Cache level (statement, expression, parameter)
+        key: Base cache key
+        dialect: SQL dialect (optional)
+
+    Returns:
+        Optimized cache key string
+    """
+    return f"{level}:{dialect or 'default'}:{key}"
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
 class MultiLevelCache:
     """Single cache with namespace isolation - no connection pool complexity."""
-    
+
     __slots__ = ("_cache",)
-    
+
     def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: Optional[int] = DEFAULT_TTL_SECONDS) -> None:
         """Initialize multi-level cache.
-        
+
         Args:
             max_size: Maximum number of cache entries
             ttl_seconds: Time-to-live in seconds (None for no expiration)
         """
         self._cache = UnifiedCache(max_size, ttl_seconds)
-    
+
     def get(self, level: str, key: str, dialect: Optional[str] = None) -> Optional[Any]:
         """Get value from cache with level and dialect namespace.
-        
+
         Args:
-            level: Cache level (e.g., "statement", "expression", "parameter") 
+            level: Cache level (e.g., "statement", "expression", "parameter")
             key: Cache key
             dialect: SQL dialect (optional)
-            
+
         Returns:
             Cached value or None if not found
         """
-        full_key = f"{level}:{dialect or 'default'}:{key}"
-        return self._cache.get(CacheKey((full_key,)))
-    
+        full_key = create_cache_key(level, key, dialect)
+        cache_key = CacheKey((full_key,))
+        return self._cache.get(cache_key)
+
     def put(self, level: str, key: str, value: Any, dialect: Optional[str] = None) -> None:
         """Put value in cache with level and dialect namespace.
-        
+
         Args:
             level: Cache level (e.g., "statement", "expression", "parameter")
             key: Cache key
             value: Value to cache
             dialect: SQL dialect (optional)
         """
-        full_key = f"{level}:{dialect or 'default'}:{key}"
-        self._cache.put(CacheKey((full_key,)), value)
-    
+        full_key = create_cache_key(level, key, dialect)
+        cache_key = CacheKey((full_key,))
+        self._cache.put(cache_key, value)
+
     def delete(self, level: str, key: str, dialect: Optional[str] = None) -> bool:
         """Delete entry from cache.
-        
+
         Args:
             level: Cache level
             key: Cache key to delete
             dialect: SQL dialect (optional)
-            
+
         Returns:
             True if key was found and deleted, False otherwise
         """
-        full_key = f"{level}:{dialect or 'default'}:{key}"
-        return self._cache.delete(CacheKey((full_key,)))
-    
+        full_key = create_cache_key(level, key, dialect)
+        cache_key = CacheKey((full_key,))
+        return self._cache.delete(cache_key)
+
     def clear(self) -> None:
         """Clear all cache entries."""
         self._cache.clear()
-    
+
     def get_stats(self) -> CacheStats:
         """Get cache statistics."""
         return self._cache.get_stats()
@@ -870,7 +980,7 @@ _multi_level_cache: Optional[MultiLevelCache] = None
 
 def get_cache() -> MultiLevelCache:
     """Get the multi-level cache instance.
-    
+
     Returns:
         Singleton multi-level cache instance
     """
@@ -882,3 +992,36 @@ def get_cache() -> MultiLevelCache:
     return _multi_level_cache
 
 
+@dataclass(frozen=True)
+class Filter:
+    """Immutable filter that can be safely shared."""
+
+    field_name: str
+    operation: str
+    value: Any
+
+    def __post_init__(self) -> None:
+        """Validate filter parameters."""
+        if not self.field_name:
+            msg = "Field name cannot be empty"
+            raise ValueError(msg)
+        if not self.operation:
+            msg = "Operation cannot be empty"
+            raise ValueError(msg)
+
+
+def canonicalize_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
+    """Create canonical representation of filters for cache keys.
+
+    Args:
+        filters: List of filters to canonicalize
+
+    Returns:
+        Tuple of unique filters sorted by field_name, operation, then value
+    """
+    if not filters:
+        return ()
+
+    # Deduplicate and sort for canonical representation
+    unique_filters = set(filters)
+    return tuple(sorted(unique_filters, key=lambda f: (f.field_name, f.operation, str(f.value))))

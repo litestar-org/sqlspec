@@ -253,11 +253,11 @@ class Column:
     def __hash__(self) -> int:
         """Hash based on table and column name."""
         return hash((self.table, self.name))
-    
+
     @property
     def sqlglot_expression(self) -> exp.Expression:
         """Get the underlying SQLGlot expression (public API).
-        
+
         Returns:
             The SQLGlot expression for this column
         """

@@ -206,16 +206,16 @@ class CommonDriverAttributesMixin:
             sql_statement = statement.to_statement(statement_config)
             if parameters or kwargs:
                 merged_parameters = (
-                    (*sql_statement._positional_parameters, *parameters)
+                    (*sql_statement.positional_parameters, *parameters)
                     if parameters
-                    else sql_statement._positional_parameters
+                    else sql_statement.positional_parameters
                 )
                 return SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
             return sql_statement
         if isinstance(statement, SQL):
             if parameters or kwargs:
                 merged_parameters = (
-                    (*statement._positional_parameters, *parameters) if parameters else statement._positional_parameters
+                    (*statement.positional_parameters, *parameters) if parameters else statement.positional_parameters
                 )
                 return SQL(statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
             needs_rebuild = False
@@ -232,14 +232,14 @@ class CommonDriverAttributesMixin:
                 needs_rebuild = True
 
             if needs_rebuild:
-                sql_text = statement._raw_sql or statement.sql
+                sql_text = statement.raw_sql or statement.sql
 
                 if statement.is_many and statement.parameters:
                     new_sql = SQL(sql_text, statement.parameters, statement_config=statement_config, is_many=True)
                 elif statement._named_parameters:
                     new_sql = SQL(sql_text, statement_config=statement_config, **statement._named_parameters)
                 else:
-                    new_sql = SQL(sql_text, *statement._positional_parameters, statement_config=statement_config)
+                    new_sql = SQL(sql_text, *statement.positional_parameters, statement_config=statement_config)
 
                 return new_sql
             return statement
@@ -416,7 +416,7 @@ class CommonDriverAttributesMixin:
             cache = get_cache()
             cached_result = cache.get("statement", cache_key, str(statement.dialect) if statement.dialect else None)
             if cached_result is not None:
-                return cached_result
+                return cached_result  # type: ignore[no-any-return]  # Cache stores tuple[str, Any]
 
         prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
         compiled_sql, execution_parameters = prepared_statement.compile()
@@ -432,7 +432,12 @@ class CommonDriverAttributesMixin:
 
         if cache_key is not None:
             cache = get_cache()
-            cache.put("statement", cache_key, (compiled_sql, prepared_parameters), str(statement.dialect) if statement.dialect else None)
+            cache.put(
+                "statement",
+                cache_key,
+                (compiled_sql, prepared_parameters),
+                str(statement.dialect) if statement.dialect else None,
+            )
 
         return compiled_sql, prepared_parameters
 
@@ -564,8 +569,8 @@ class CommonDriverAttributesMixin:
             count_expr.set("limit", None)
             count_expr.set("offset", None)
 
-            return SQL(count_expr, *original_sql._positional_parameters, statement_config=original_sql.statement_config)
+            return SQL(count_expr, *original_sql.positional_parameters, statement_config=original_sql.statement_config)
 
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
-        return SQL(count_expr, *original_sql._positional_parameters, statement_config=original_sql.statement_config)
+        return SQL(count_expr, *original_sql.positional_parameters, statement_config=original_sql.statement_config)

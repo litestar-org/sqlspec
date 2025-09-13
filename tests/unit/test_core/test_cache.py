@@ -30,7 +30,6 @@ from sqlspec.core.cache import (
     CacheStats,
     CacheStatsAggregate,
     ExpressionCache,
-    MultiLevelCache,
     ParameterCache,
     StatementCache,
     UnifiedCache,

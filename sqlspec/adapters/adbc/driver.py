@@ -522,7 +522,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         try:
             if not prepared_parameters:
                 # TODO: Replace with proper cursor protocol method
-                if hasattr(cursor, '_rowcount'):
+                if hasattr(cursor, "_rowcount"):
                     cursor._rowcount = 0
                 row_count = 0
             elif isinstance(prepared_parameters, list) and prepared_parameters:

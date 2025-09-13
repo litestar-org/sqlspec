@@ -142,7 +142,7 @@ def parse_condition_expression(
             from sqlspec.builder.mixins._where_clause import _extract_column_name
 
             column_name = _extract_column_name(column)
-            param_name = builder._generate_unique_parameter_name(column_name)
+            param_name = builder.generate_unique_parameter_name(column_name)
             _, param_name = builder.add_parameter(value, name=param_name)
             return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
         if isinstance(value, str):

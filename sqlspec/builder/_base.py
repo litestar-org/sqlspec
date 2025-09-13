@@ -90,21 +90,21 @@ class QueryBuilder(ABC):
             self._raise_sql_builder_error(
                 "QueryBuilder._create_base_expression must return a valid sqlglot expression."
             )
-    
+
     def get_expression(self) -> Optional[exp.Expression]:
         """Get expression reference (no copy).
-        
+
         Returns:
             The current SQLGlot expression or None if not set
         """
         return self._expression
-    
+
     def set_expression(self, expression: exp.Expression) -> None:
         """Set expression with validation.
-        
+
         Args:
             expression: SQLGlot expression to set
-            
+
         Raises:
             TypeError: If expression is not a SQLGlot Expression
         """
@@ -112,10 +112,10 @@ class QueryBuilder(ABC):
             msg = f"Expected Expression, got {type(expression)}"
             raise TypeError(msg)
         self._expression = expression
-    
+
     def has_expression(self) -> bool:
         """Check if expression exists.
-        
+
         Returns:
             True if expression is set, False otherwise
         """
@@ -337,12 +337,13 @@ class QueryBuilder(ABC):
         cte_select_expression: exp.Select
 
         if isinstance(query, QueryBuilder):
-            if query._expression is None:
+            query_expr = query.get_expression()
+            if query_expr is None:
                 self._raise_sql_builder_error("CTE query builder has no expression.")
-            if not isinstance(query._expression, exp.Select):
-                msg = f"CTE query builder expression must be a Select, got {type(query._expression).__name__}."
+            if not isinstance(query_expr, exp.Select):
+                msg = f"CTE query builder expression must be a Select, got {type(query_expr).__name__}."
                 self._raise_sql_builder_error(msg)
-            cte_select_expression = query._expression
+            cte_select_expression = query_expr
             param_mapping = self._merge_cte_parameters(alias, query.parameters)
             updated_expression = self._update_placeholders_in_expression(cte_select_expression, param_mapping)
             if not isinstance(updated_expression, exp.Select):
@@ -561,3 +562,12 @@ class QueryBuilder(ABC):
     def parameters(self) -> dict[str, Any]:
         """Public access to query parameters."""
         return self._parameters
+
+    @property
+    def with_ctes(self) -> "dict[str, exp.CTE]":
+        """Get WITH clause CTEs (public API)."""
+        return dict(self._with_ctes)
+
+    def generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate unique parameter name (public API)."""
+        return self._generate_unique_parameter_name(base_name)

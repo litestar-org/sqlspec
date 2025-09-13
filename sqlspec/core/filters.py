@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 __all__ = (
     "AnyCollectionFilter",
     "BeforeAfterFilter",
+    "Filter",
     "FilterTypeT",
     "FilterTypes",
     "InAnyFilter",
@@ -52,6 +53,8 @@ __all__ = (
     "SearchFilter",
     "StatementFilter",
     "apply_filter",
+    "canonicalize_filters",
+    "create_filters",
 )
 
 T = TypeVar("T")
@@ -571,9 +574,9 @@ class LimitOffsetFilter(PaginationFilter):
         offset_placeholder = exp.Placeholder(this=offset_param_name)
 
         try:
-            current_statement = sqlglot.parse_one(statement._raw_sql, dialect=getattr(statement, "_dialect", None))
+            current_statement = sqlglot.parse_one(statement.raw_sql, dialect=statement.dialect)
         except Exception:
-            current_statement = exp.Select().from_(f"({statement._raw_sql})")
+            current_statement = exp.Select().from_(f"({statement.raw_sql})")
 
         if isinstance(current_statement, exp.Select):
             new_statement = current_statement.limit(limit_placeholder).offset(offset_placeholder)
@@ -829,3 +832,96 @@ FilterTypes: TypeAlias = Union[
     AnyCollectionFilter[Any],
     NotAnyCollectionFilter[Any],
 ]
+
+
+# New immutable filter system for zero-copy architecture
+
+from dataclasses import dataclass
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class Filter:
+    """Immutable filter that can be safely shared.
+
+    This is part of the zero-copy architecture where filters can be
+    shared between SQL objects without risk of mutation.
+    """
+
+    field_name: str
+    operation: str
+    value: Any
+
+    def apply(self, expression: exp.Expression) -> exp.Expression:
+        """Apply filter returning new expression.
+
+        Args:
+            expression: SQLGlot expression to modify
+
+        Returns:
+            New expression with filter applied
+        """
+        return expression.transform(self._create_transformer())
+
+    def _create_transformer(self) -> Callable[[exp.Expression], exp.Expression]:
+        """Create transformer function for this filter."""
+
+        def transform_node(node: exp.Expression) -> exp.Expression:
+            # Filter logic without mutating node
+            if isinstance(node, exp.Column) and node.name == self.field_name:
+                return self._apply_operation(node)
+            return node
+
+        return transform_node
+
+    def _apply_operation(self, column_expr: exp.Expression) -> exp.Expression:
+        """Apply the specific operation to a column expression."""
+        if self.operation == "=":
+            return exp.EQ(this=column_expr, expression=exp.convert(self.value))
+        if self.operation == ">":
+            return exp.GT(this=column_expr, expression=exp.convert(self.value))
+        if self.operation == "<":
+            return exp.LT(this=column_expr, expression=exp.convert(self.value))
+        if self.operation == "LIKE":
+            return exp.Like(this=column_expr, expression=exp.convert(self.value))
+        if self.operation == "ORDER":
+            if str(self.value).lower() == "desc":
+                return column_expr.desc()
+            return column_expr.asc()
+        # Fallback for other operations
+        return column_expr
+
+
+def create_filters(filters: "list[StatementFilter]") -> tuple[Filter, ...]:
+    """Convert mutable filters to immutable ones.
+
+    Args:
+        filters: List of mutable StatementFilter objects
+
+    Returns:
+        Tuple of immutable Filter objects
+    """
+    immutable_filters = []
+    for filter_obj in filters:
+        # Try to extract key information from the filter
+        if hasattr(filter_obj, "field_name") and hasattr(filter_obj, "get_cache_key"):
+            # This is a basic approach - in real implementation, each filter type
+            # would need specific conversion logic
+            field_name = getattr(filter_obj, "field_name", "unknown")
+            operation = type(filter_obj).__name__.replace("Filter", "").upper()
+            value = getattr(filter_obj, "values", getattr(filter_obj, "value", None))
+            immutable_filters.append(Filter(field_name, operation, value))
+
+    return tuple(immutable_filters)
+
+
+def canonicalize_filters(filters: "list[Filter]") -> tuple[Filter, ...]:
+    """Sort filters by field_name, operation for consistent hashing.
+
+    Args:
+        filters: List of Filter objects
+
+    Returns:
+        Canonically sorted tuple of filters
+    """
+    return tuple(sorted(filters, key=lambda f: (f.field_name, f.operation)))

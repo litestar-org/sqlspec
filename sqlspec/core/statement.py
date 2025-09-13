@@ -269,11 +269,11 @@ class SQL:
     def sql(self) -> str:
         """Get the raw SQL string."""
         return self._raw_sql
-    
+
     @property
     def raw_sql(self) -> str:
         """Get raw SQL string (public API).
-        
+
         Returns:
             The raw SQL string
         """
@@ -285,6 +285,21 @@ class SQL:
         if self._named_parameters:
             return self._named_parameters
         return self._positional_parameters or []
+
+    @property
+    def positional_parameters(self) -> "list[Any]":
+        """Get positional parameters (public API)."""
+        return self._positional_parameters or []
+
+    @property
+    def named_parameters(self) -> "dict[str, Any]":
+        """Get named parameters (public API)."""
+        return self._named_parameters
+
+    @property
+    def original_parameters(self) -> Any:
+        """Get original parameters (public API)."""
+        return self._original_parameters
 
     @property
     def operation_type(self) -> "OperationType":
@@ -319,11 +334,11 @@ class SQL:
     def _statement(self) -> "Optional[exp.Expression]":
         """Internal SQLGlot expression."""
         return self.expression
-    
+
     @property
     def statement_expression(self) -> "Optional[exp.Expression]":
         """Get parsed statement expression (public API).
-        
+
         Returns:
             Parsed SQLGlot expression or None if not parsed
         """

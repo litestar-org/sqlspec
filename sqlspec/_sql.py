@@ -725,9 +725,6 @@ class SQLFactory:
             try:
                 parsed: exp.Expression = exp.maybe_parse(sql_fragment)
                 return parsed
-                if sql_fragment.strip().replace("_", "").replace(".", "").isalnum():
-                    return exp.to_identifier(sql_fragment)
-                return exp.Literal.string(sql_fragment)
             except Exception as e:
                 msg = f"Failed to parse raw SQL fragment '{sql_fragment}': {e}"
                 raise SQLBuilderError(msg) from e
