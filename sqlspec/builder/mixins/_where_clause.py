@@ -1,4 +1,5 @@
 # ruff: noqa: PLR2004
+# pyright: reportPrivateUsage=false, reportPrivateImportUsage=false
 """WHERE and HAVING clause mixins.
 
 Provides mixins for WHERE and HAVING clause functionality with
@@ -14,7 +15,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec.builder._parsing_utils import parse_column_expression, parse_condition_expression
+from sqlspec.builder._parsing_utils import extract_column_name, parse_column_expression, parse_condition_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
@@ -23,31 +24,6 @@ from sqlspec.utils.type_guards import (
     has_sqlglot_expression,
     is_iterable_parameters,
 )
-
-
-def _extract_column_name(column: Union[str, exp.Column]) -> str:
-    """Extract column name from column expression for parameter naming.
-
-    Args:
-        column: Column expression (string or SQLGlot Column)
-
-    Returns:
-        Column name as string for use as parameter name
-    """
-    if isinstance(column, str):
-        # Handle simple column names and table.column references
-        if "." in column:
-            return column.split(".")[-1]  # Return just the column part
-        return column
-    if isinstance(column, exp.Column):
-        # Extract the column name from SQLGlot Column expression
-        try:
-            return str(column.this.this)
-        except AttributeError:
-            return str(column.this) if column.this else "column"
-    # Fallback for any unexpected types (defensive programming)
-    return "column"
-
 
 if TYPE_CHECKING:
     from sqlspec.builder._column import ColumnExpression
@@ -82,7 +58,7 @@ class WhereClauseMixin:
             The created condition expression
         """
         builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -236,7 +212,7 @@ class WhereClauseMixin:
         column_name_raw, operator, value = condition
         operator = str(operator).upper()
         column_exp = parse_column_expression(column_name_raw)
-        column_name = _extract_column_name(column_name_raw)
+        column_name = extract_column_name(column_name_raw)
 
         # Simple operators that use direct parameterization
         simple_operators = {
@@ -448,7 +424,7 @@ class WhereClauseMixin:
     def where_between(self, column: Union[str, exp.Column], low: Any, high: Any) -> Self:
         """Add WHERE column BETWEEN low AND high clause."""
         builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         low_param = builder._generate_unique_parameter_name(f"{column_name}_low")
         high_param = builder._generate_unique_parameter_name(f"{column_name}_high")
         _, low_param = builder.add_parameter(low, name=low_param)
@@ -460,7 +436,7 @@ class WhereClauseMixin:
     def where_like(self, column: Union[str, exp.Column], pattern: str, escape: Optional[str] = None) -> Self:
         """Add WHERE column LIKE pattern clause."""
         builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(pattern, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -519,7 +495,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
             msg = "Unsupported type for 'values' in WHERE IN"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -548,7 +524,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
             msg = "Values for where_not_in must be a non-string iterable or subquery."
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -638,7 +614,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, bytes):
             msg = "Unsupported type for 'values' in WHERE ANY"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -678,7 +654,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, bytes):
             msg = "Unsupported type for 'values' in WHERE NOT ANY"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -975,7 +951,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
             msg = "Unsupported type for 'values' in OR WHERE IN"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -990,7 +966,7 @@ class WhereClauseMixin:
     def or_where_like(self, column: Union[str, exp.Column], pattern: str, escape: Optional[str] = None) -> Self:
         """Add OR column LIKE pattern clause."""
         builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(pattern, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -1044,7 +1020,7 @@ class WhereClauseMixin:
     def or_where_between(self, column: Union[str, exp.Column], low: Any, high: Any) -> Self:
         """Add OR column BETWEEN low AND high clause."""
         builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         low_param = builder._generate_unique_parameter_name(f"{column_name}_low")
         high_param = builder._generate_unique_parameter_name(f"{column_name}_high")
         _, low_param = builder.add_parameter(low, name=low_param)
@@ -1092,7 +1068,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
             msg = "Values for or_where_not_in must be a non-string iterable or subquery."
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -1216,7 +1192,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, bytes):
             msg = "Unsupported type for 'values' in OR WHERE ANY"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -1272,7 +1248,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, bytes):
             msg = "Unsupported type for 'values' in OR WHERE NOT ANY"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:

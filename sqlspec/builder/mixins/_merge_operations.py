@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """MERGE operation mixins.
 
 Provides mixins for MERGE statement functionality including INTO,

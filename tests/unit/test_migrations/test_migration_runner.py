@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for MigrationRunner functionality.
 
 Tests for MigrationRunner core functionality including:

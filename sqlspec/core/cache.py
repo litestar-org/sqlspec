@@ -22,6 +22,8 @@ from typing_extensions import TypeVar
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     import sqlglot.expressions as exp
 
     from sqlspec.core.statement import SQL
@@ -31,7 +33,7 @@ __all__ = (
     "CacheStats",
     "CachedStatement",
     "ExpressionCache",
-    "Filter",
+    "FiltersView",
     "MultiLevelCache",
     "ParameterCache",
     "ParametersView",
@@ -393,7 +395,7 @@ class StatementCache:
 
         key_data = (
             "statement",
-            statement._raw_sql,
+            statement.raw_sql,
             hash(statement),
             str(statement.dialect) if statement.dialect else None,
             statement.is_many,
@@ -1025,3 +1027,68 @@ def canonicalize_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
     # Deduplicate and sort for canonical representation
     unique_filters = set(filters)
     return tuple(sorted(unique_filters, key=lambda f: (f.field_name, f.operation, str(f.value))))
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class FiltersView:
+    """Read-only view of filters without copying.
+
+    Provides zero-copy access to filters with methods for querying,
+    iteration, and canonical representation generation.
+    """
+
+    __slots__ = ("_filters_ref",)
+
+    def __init__(self, filters: "list[Any]") -> None:
+        """Initialize filters view.
+
+        Args:
+            filters: List of filters (will be referenced, not copied)
+        """
+        self._filters_ref = filters
+
+    def __len__(self) -> int:
+        """Get number of filters."""
+        return len(self._filters_ref)
+
+    def __iter__(self) -> "Iterator[Any]":
+        """Iterate over filters."""
+        return iter(self._filters_ref)
+
+    def get_by_field(self, field_name: str) -> "list[Any]":
+        """Get all filters for a specific field.
+
+        Args:
+            field_name: Field name to filter by
+
+        Returns:
+            List of filters matching the field name
+        """
+        return [f for f in self._filters_ref if hasattr(f, "field_name") and f.field_name == field_name]
+
+    def has_field(self, field_name: str) -> bool:
+        """Check if any filter exists for a field.
+
+        Args:
+            field_name: Field name to check
+
+        Returns:
+            True if field has filters
+        """
+        return any(hasattr(f, "field_name") and f.field_name == field_name for f in self._filters_ref)
+
+    def to_canonical(self) -> "tuple[Any, ...]":
+        """Create canonical representation for cache keys.
+
+        Returns:
+            Canonical tuple representation of filters
+        """
+        # Convert to Filter objects if needed, then canonicalize
+        filter_objects = []
+        for f in self._filters_ref:
+            if isinstance(f, Filter):
+                filter_objects.append(f)
+            elif hasattr(f, "field_name") and hasattr(f, "operation") and hasattr(f, "value"):
+                filter_objects.append(Filter(f.field_name, f.operation, f.value))
+
+        return canonicalize_filters(filter_objects)

@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """INSERT operation mixins.
 
 Provides mixins for INSERT statement functionality including
@@ -137,8 +138,8 @@ class InsertValuesMixin:
                 msg = "Cannot mix positional values with keyword values."
                 raise SQLBuilderError(msg)
             try:
-                _columns = self._columns
-                if not _columns:
+                cols = self._columns
+                if not cols:
                     self.columns(*kwargs.keys())
             except AttributeError:
                 pass
@@ -156,8 +157,8 @@ class InsertValuesMixin:
         elif len(values) == 1 and hasattr(values[0], "items"):
             mapping = values[0]
             try:
-                _columns = self._columns
-                if not _columns:
+                cols = self._columns
+                if not cols:
                     self.columns(*mapping.keys())
             except AttributeError:
                 pass
@@ -174,9 +175,9 @@ class InsertValuesMixin:
                     row_exprs.append(exp.Placeholder(this=param_name))
         else:
             try:
-                _columns = self._columns
-                if _columns and len(values) != len(_columns):
-                    msg = f"Number of values ({len(values)}) does not match the number of specified columns ({len(_columns)})."
+                cols = self._columns
+                if cols and len(values) != len(cols):
+                    msg = f"Number of values ({len(values)}) does not match the number of specified columns ({len(cols)})."
                     raise SQLBuilderError(msg)
             except AttributeError:
                 pass
@@ -186,11 +187,9 @@ class InsertValuesMixin:
                     row_exprs.append(v)
                 else:
                     try:
-                        _columns = self._columns
-                        if _columns and i < len(_columns):
-                            column_name = (
-                                str(_columns[i]).split(".")[-1] if "." in str(_columns[i]) else str(_columns[i])
-                            )
+                        cols = self._columns
+                        if cols and i < len(cols):
+                            column_name = str(cols[i]).split(".")[-1] if "." in str(cols[i]) else str(cols[i])
                             param_name = self._generate_unique_parameter_name(column_name)
                         else:
                             param_name = self._generate_unique_parameter_name(f"value_{i + 1}")

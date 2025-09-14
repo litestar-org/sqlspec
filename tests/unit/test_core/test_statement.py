@@ -1,3 +1,5 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for sqlspec.core.statement module.
 
 This test module validates the SQL class and StatementConfig implementations.

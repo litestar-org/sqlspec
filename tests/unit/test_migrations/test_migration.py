@@ -1,3 +1,5 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for Migration class functionality.
 
 Tests for Migration core functionality including:

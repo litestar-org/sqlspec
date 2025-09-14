@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for the core.compiler module.
 
 This module tests the SQLProcessor and CompiledSQL classes.

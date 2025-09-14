@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for the SQLSpec cache system.
 
 This module tests the unified caching system. Tests cover:

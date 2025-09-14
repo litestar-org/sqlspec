@@ -1,3 +1,5 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Tests for sqlspec.utils.sync_tools module.
 
 Tests synchronization tools including async/sync conversion utilities,

@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """SELECT clause mixins.
 
 Provides mixins for SELECT statement functionality including column selection,

@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union

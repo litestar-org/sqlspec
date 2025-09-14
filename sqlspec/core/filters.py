@@ -22,6 +22,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections import abc
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Union
 
@@ -37,7 +38,6 @@ if TYPE_CHECKING:
 __all__ = (
     "AnyCollectionFilter",
     "BeforeAfterFilter",
-    "Filter",
     "FilterTypeT",
     "FilterTypes",
     "InAnyFilter",
@@ -94,7 +94,7 @@ class StatementFilter(ABC):
         Returns:
             List of resolved parameter names (same length as proposed_names)
         """
-        existing_params = set(statement._named_parameters.keys())
+        existing_params = set(statement.named_parameters.keys())
         existing_params.update(statement.parameters.keys() if isinstance(statement.parameters, dict) else [])
 
         resolved_names = []
@@ -118,45 +118,36 @@ class StatementFilter(ABC):
         """
 
 
+@dataclass(frozen=True)
 class BeforeAfterFilter(StatementFilter):
     """Filter for datetime range queries.
 
     Applies WHERE clauses for before/after datetime filtering.
     """
 
-    __slots__ = ("_param_name_after", "_param_name_before", "after", "before", "field_name")
-
     field_name: str
-    before: Optional[datetime]
-    after: Optional[datetime]
+    before: Optional[datetime] = None
+    after: Optional[datetime] = None
 
-    def __init__(self, field_name: str, before: Optional[datetime] = None, after: Optional[datetime] = None) -> None:
-        """Initialize the BeforeAfterFilter.
-
-        Args:
-            field_name: Name of the model attribute to filter on.
-            before: Filter results where field earlier than this.
-            after: Filter results where field later than this.
-        """
-        self.field_name = field_name
-        self.before = before
-        self.after = after
-
-        self._param_name_before: Optional[str] = None
-        self._param_name_after: Optional[str] = None
-
+    def get_param_names(self) -> list[str]:
+        """Get parameter names without storing them."""
+        names = []
         if self.before:
-            self._param_name_before = f"{self.field_name}_before"
+            names.append(f"{self.field_name}_before")
         if self.after:
-            self._param_name_after = f"{self.field_name}_after"
+            names.append(f"{self.field_name}_after")
+        return names
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_parameters = {}
-        if self.before and self._param_name_before:
-            named_parameters[self._param_name_before] = self.before
-        if self.after and self._param_name_after:
-            named_parameters[self._param_name_after] = self.after
+        param_names = self.get_param_names()
+        param_idx = 0
+        if self.before:
+            named_parameters[param_names[param_idx]] = self.before
+            param_idx += 1
+        if self.after:
+            named_parameters[param_names[param_idx]] = self.after
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
@@ -164,12 +155,7 @@ class BeforeAfterFilter(StatementFilter):
         conditions: list[Condition] = []
         col_expr = exp.column(self.field_name)
 
-        proposed_names = []
-        if self.before and self._param_name_before:
-            proposed_names.append(self._param_name_before)
-        if self.after and self._param_name_after:
-            proposed_names.append(self._param_name_after)
-
+        proposed_names = self.get_param_names()
         if not proposed_names:
             return statement
 
@@ -177,13 +163,13 @@ class BeforeAfterFilter(StatementFilter):
 
         param_idx = 0
         result = statement
-        if self.before and self._param_name_before:
+        if self.before:
             before_param_name = resolved_names[param_idx]
             param_idx += 1
             conditions.append(exp.LT(this=col_expr, expression=exp.Placeholder(this=before_param_name)))
             result = result.add_named_parameter(before_param_name, self.before)
 
-        if self.after and self._param_name_after:
+        if self.after:
             after_param_name = resolved_names[param_idx]
             conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=after_param_name)))
             result = result.add_named_parameter(after_param_name, self.after)
@@ -198,58 +184,42 @@ class BeforeAfterFilter(StatementFilter):
         return ("BeforeAfterFilter", self.field_name, self.before, self.after)
 
 
+@dataclass(frozen=True)
 class OnBeforeAfterFilter(StatementFilter):
     """Filter for inclusive datetime range queries.
 
     Applies WHERE clauses for on-or-before/on-or-after datetime filtering.
     """
 
-    __slots__ = ("_param_name_on_or_after", "_param_name_on_or_before", "field_name", "on_or_after", "on_or_before")
-
     field_name: str
-    on_or_before: Optional[datetime]
-    on_or_after: Optional[datetime]
+    on_or_before: Optional[datetime] = None
+    on_or_after: Optional[datetime] = None
 
-    def __init__(
-        self, field_name: str, on_or_before: Optional[datetime] = None, on_or_after: Optional[datetime] = None
-    ) -> None:
-        """Initialize the OnBeforeAfterFilter.
-
-        Args:
-            field_name: Name of the model attribute to filter on.
-            on_or_before: Filter results where field is on or earlier than this.
-            on_or_after: Filter results where field on or later than this.
-        """
-        self.field_name = field_name
-        self.on_or_before = on_or_before
-        self.on_or_after = on_or_after
-
-        self._param_name_on_or_before: Optional[str] = None
-        self._param_name_on_or_after: Optional[str] = None
-
+    def get_param_names(self) -> list[str]:
+        """Get parameter names without storing them."""
+        names = []
         if self.on_or_before:
-            self._param_name_on_or_before = f"{self.field_name}_on_or_before"
+            names.append(f"{self.field_name}_on_or_before")
         if self.on_or_after:
-            self._param_name_on_or_after = f"{self.field_name}_on_or_after"
+            names.append(f"{self.field_name}_on_or_after")
+        return names
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_parameters = {}
-        if self.on_or_before and self._param_name_on_or_before:
-            named_parameters[self._param_name_on_or_before] = self.on_or_before
-        if self.on_or_after and self._param_name_on_or_after:
-            named_parameters[self._param_name_on_or_after] = self.on_or_after
+        param_names = self.get_param_names()
+        param_idx = 0
+        if self.on_or_before:
+            named_parameters[param_names[param_idx]] = self.on_or_before
+            param_idx += 1
+        if self.on_or_after:
+            named_parameters[param_names[param_idx]] = self.on_or_after
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         conditions: list[Condition] = []
 
-        proposed_names = []
-        if self.on_or_before and self._param_name_on_or_before:
-            proposed_names.append(self._param_name_on_or_before)
-        if self.on_or_after and self._param_name_on_or_after:
-            proposed_names.append(self._param_name_on_or_after)
-
+        proposed_names = self.get_param_names()
         if not proposed_names:
             return statement
 
@@ -257,7 +227,7 @@ class OnBeforeAfterFilter(StatementFilter):
 
         param_idx = 0
         result = statement
-        if self.on_or_before and self._param_name_on_or_before:
+        if self.on_or_before:
             before_param_name = resolved_names[param_idx]
             param_idx += 1
             conditions.append(
@@ -265,7 +235,7 @@ class OnBeforeAfterFilter(StatementFilter):
             )
             result = result.add_named_parameter(before_param_name, self.on_or_before)
 
-        if self.on_or_after and self._param_name_on_or_after:
+        if self.on_or_after:
             after_param_name = resolved_names[param_idx]
             conditions.append(
                 exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=after_param_name))
@@ -291,39 +261,29 @@ class InAnyFilter(StatementFilter, ABC, Generic[T]):
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
 class InCollectionFilter(InAnyFilter[T]):
     """Filter for IN clause queries.
 
     Constructs WHERE ... IN (...) clauses.
     """
 
-    __slots__ = ("_param_names", "field_name", "values")
-
     field_name: str
-    values: Optional[abc.Collection[T]]
+    values: Optional[abc.Collection[T]] = None
 
-    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
-        """Initialize the InCollectionFilter.
-
-        Args:
-            field_name: Name of the model attribute to filter on.
-            values: Values for ``IN`` clause. An empty list will return an empty result set,
-                however, if ``None``, the filter is not applied to the query, and all rows are returned.
-        """
-        self.field_name = field_name
-        self.values = values
-
-        self._param_names: list[str] = []
-        if self.values:
-            for i, _ in enumerate(self.values):
-                self._param_names.append(f"{self.field_name}_in_{i}")
+    def get_param_names(self) -> list[str]:
+        """Get parameter names without storing them."""
+        if not self.values:
+            return []
+        return [f"{self.field_name}_in_{i}" for i, _ in enumerate(self.values)]
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
+            param_names = self.get_param_names()
             for i, value in enumerate(self.values):
-                named_parameters[self._param_names[i]] = value
+                named_parameters[param_names[i]] = value
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
@@ -333,7 +293,7 @@ class InCollectionFilter(InAnyFilter[T]):
         if not self.values:
             return statement.where(exp.false())
 
-        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+        resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
         placeholder_expressions: list[exp.Placeholder] = [
             exp.Placeholder(this=param_name) for param_name in resolved_names
@@ -351,45 +311,37 @@ class InCollectionFilter(InAnyFilter[T]):
         return ("InCollectionFilter", self.field_name, values_tuple)
 
 
+@dataclass(frozen=True)
 class NotInCollectionFilter(InAnyFilter[T]):
     """Filter for NOT IN clause queries.
 
     Constructs WHERE ... NOT IN (...) clauses.
     """
 
-    __slots__ = ("_param_names", "field_name", "values")
-
     field_name: str
-    values: Optional[abc.Collection[T]]
+    values: Optional[abc.Collection[T]] = None
 
-    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
-        """Initialize the NotInCollectionFilter.
-
-        Args:
-            field_name: Name of the model attribute to filter on.
-            values: Values for ``NOT IN`` clause. An empty list or ``None`` will return all rows.
-        """
-        self.field_name = field_name
-        self.values = values
-
-        self._param_names: list[str] = []
-        if self.values:
-            for i, _ in enumerate(self.values):
-                self._param_names.append(f"{self.field_name}_notin_{i}_{id(self)}")
+    def get_param_names(self) -> list[str]:
+        """Get parameter names without storing them."""
+        if not self.values:
+            return []
+        # Use object id to ensure uniqueness between instances
+        return [f"{self.field_name}_notin_{i}_{id(self)}" for i, _ in enumerate(self.values)]
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
+            param_names = self.get_param_names()
             for i, value in enumerate(self.values):
-                named_parameters[self._param_names[i]] = value
+                named_parameters[param_names[i]] = value
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None or not self.values:
             return statement
 
-        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+        resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
         placeholder_expressions: list[exp.Placeholder] = [
             exp.Placeholder(this=param_name) for param_name in resolved_names
@@ -409,40 +361,29 @@ class NotInCollectionFilter(InAnyFilter[T]):
         return ("NotInCollectionFilter", self.field_name, values_tuple)
 
 
+@dataclass(frozen=True)
 class AnyCollectionFilter(InAnyFilter[T]):
     """Filter for PostgreSQL-style ANY clause queries.
 
     Constructs WHERE column_name = ANY (array_expression) clauses.
     """
 
-    __slots__ = ("_param_names", "field_name", "values")
-
     field_name: str
-    values: Optional[abc.Collection[T]]
+    values: Optional[abc.Collection[T]] = None
 
-    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
-        """Initialize the AnyCollectionFilter.
-
-        Args:
-            field_name: Name of the model attribute to filter on.
-            values: Values for ``= ANY (...)`` clause. An empty list will result in a condition
-                that is always false (no rows returned). If ``None``, the filter is not applied
-                to the query, and all rows are returned.
-        """
-        self.field_name = field_name
-        self.values = values
-
-        self._param_names: list[str] = []
-        if self.values:
-            for i, _ in enumerate(self.values):
-                self._param_names.append(f"{self.field_name}_any_{i}")
+    def get_param_names(self) -> list[str]:
+        """Get parameter names without storing them."""
+        if not self.values:
+            return []
+        return [f"{self.field_name}_any_{i}" for i, _ in enumerate(self.values)]
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
+            param_names = self.get_param_names()
             for i, value in enumerate(self.values):
-                named_parameters[self._param_names[i]] = value
+                named_parameters[param_names[i]] = value
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
@@ -452,7 +393,7 @@ class AnyCollectionFilter(InAnyFilter[T]):
         if not self.values:
             return statement.where(exp.false())
 
-        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+        resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
         placeholder_expressions: list[exp.Expression] = [
             exp.Placeholder(this=param_name) for param_name in resolved_names
@@ -471,44 +412,36 @@ class AnyCollectionFilter(InAnyFilter[T]):
         return ("AnyCollectionFilter", self.field_name, values_tuple)
 
 
+@dataclass(frozen=True)
 class NotAnyCollectionFilter(InAnyFilter[T]):
     """Filter for PostgreSQL-style NOT ANY clause queries.
 
     Constructs WHERE NOT (column_name = ANY (array_expression)) clauses.
     """
 
-    __slots__ = ("_param_names", "field_name", "values")
+    field_name: str
+    values: Optional[abc.Collection[T]] = None
 
-    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
-        """Initialize the NotAnyCollectionFilter.
-
-        Args:
-            field_name: Name of the model attribute to filter on.
-            values: Values for ``NOT (... = ANY (...))`` clause. An empty list will result in a
-                condition that is always true (all rows returned, filter effectively ignored).
-                If ``None``, the filter is not applied to the query, and all rows are returned.
-        """
-        self.field_name = field_name
-        self.values = values
-
-        self._param_names: list[str] = []
-        if self.values:
-            for i, _ in enumerate(self.values):
-                self._param_names.append(f"{self.field_name}_not_any_{i}")
+    def get_param_names(self) -> list[str]:
+        """Get parameter names without storing them."""
+        if not self.values:
+            return []
+        return [f"{self.field_name}_not_any_{i}" for i, _ in enumerate(self.values)]
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_parameters = {}
         if self.values:
+            param_names = self.get_param_names()
             for i, value in enumerate(self.values):
-                named_parameters[self._param_names[i]] = value
+                named_parameters[param_names[i]] = value
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None or not self.values:
             return statement
 
-        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+        resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
         placeholder_expressions: list[exp.Expression] = [
             exp.Placeholder(this=param_name) for param_name in resolved_names
@@ -538,36 +471,27 @@ class PaginationFilter(StatementFilter, ABC):
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
 class LimitOffsetFilter(PaginationFilter):
     """Filter for LIMIT and OFFSET clauses.
 
     Adds pagination support through LIMIT/OFFSET SQL clauses.
     """
 
-    __slots__ = ("_limit_param_name", "_offset_param_name", "limit", "offset")
-
     limit: int
     offset: int
 
-    def __init__(self, limit: int, offset: int) -> None:
-        """Initialize the LimitOffsetFilter.
-
-        Args:
-            limit: Value for ``LIMIT`` clause of query.
-            offset: Value for ``OFFSET`` clause of query.
-        """
-        self.limit = limit
-        self.offset = offset
-
-        self._limit_param_name = "limit"
-        self._offset_param_name = "offset"
+    def get_param_names(self) -> list[str]:
+        """Get parameter names without storing them."""
+        return ["limit", "offset"]
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        return [], {self._limit_param_name: self.limit, self._offset_param_name: self.offset}
+        param_names = self.get_param_names()
+        return [], {param_names[0]: self.limit, param_names[1]: self.offset}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        resolved_names = self._resolve_parameter_conflicts(statement, [self._limit_param_name, self._offset_param_name])
+        resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
         limit_param_name, offset_param_name = resolved_names
 
         limit_placeholder = exp.Placeholder(this=limit_param_name)
@@ -593,26 +517,15 @@ class LimitOffsetFilter(PaginationFilter):
         return ("LimitOffsetFilter", self.limit, self.offset)
 
 
+@dataclass(frozen=True)
 class OrderByFilter(StatementFilter):
     """Filter for ORDER BY clauses.
 
     Adds sorting capability to SQL queries.
     """
 
-    __slots__ = ("field_name", "sort_order")
-
     field_name: str
-    sort_order: Literal["asc", "desc"]
-
-    def __init__(self, field_name: str, sort_order: Literal["asc", "desc"] = "asc") -> None:
-        """Initialize the OrderByFilter.
-
-        Args:
-            field_name: Name of the model attribute to sort on.
-            sort_order: Sort ascending or descending.
-        """
-        self.field_name = field_name
-        self.sort_order = sort_order
+    sort_order: Literal["asc", "desc"] = "asc"
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
@@ -640,50 +553,40 @@ class OrderByFilter(StatementFilter):
         return ("OrderByFilter", self.field_name, self.sort_order)
 
 
+@dataclass(frozen=True)
 class SearchFilter(StatementFilter):
     """Filter for text search queries.
 
     Constructs WHERE field_name LIKE '%value%' clauses.
     """
 
-    __slots__ = ("_param_name", "field_name", "ignore_case", "value")
-
     field_name: Union[str, set[str]]
     value: str
-    ignore_case: Optional[bool]
+    ignore_case: Optional[bool] = False
 
-    def __init__(self, field_name: Union[str, set[str]], value: str, ignore_case: Optional[bool] = False) -> None:
-        """Initialize the SearchFilter.
-
-        Args:
-            field_name: Name of the model attribute to search on.
-            value: Search value.
-            ignore_case: Should the search be case insensitive.
-        """
-        self.field_name = field_name
-        self.value = value
-        self.ignore_case = ignore_case
-
-        self._param_name: Optional[str] = None
-        if self.value:
-            if isinstance(self.field_name, str):
-                self._param_name = f"{self.field_name}_search"
-            else:
-                self._param_name = "search_value"
+    def get_param_name(self) -> Optional[str]:
+        """Get parameter name without storing it."""
+        if not self.value:
+            return None
+        if isinstance(self.field_name, str):
+            return f"{self.field_name}_search"
+        return "search_value"
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_parameters = {}
-        if self.value and self._param_name:
+        param_name = self.get_param_name()
+        if self.value and param_name:
             search_value_with_wildcards = f"%{self.value}%"
-            named_parameters[self._param_name] = search_value_with_wildcards
+            named_parameters[param_name] = search_value_with_wildcards
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        if not self.value or not self._param_name:
+        param_name = self.get_param_name()
+        if not self.value or not param_name:
             return statement
 
-        resolved_names = self._resolve_parameter_conflicts(statement, [self._param_name])
+        resolved_names = self._resolve_parameter_conflicts(statement, [param_name])
         param_name = resolved_names[0]
 
         pattern_expr = exp.Placeholder(this=param_name)
@@ -714,44 +617,36 @@ class SearchFilter(StatementFilter):
         return ("SearchFilter", field_names, self.value, self.ignore_case)
 
 
+@dataclass(frozen=True)
 class NotInSearchFilter(SearchFilter):
     """Filter for negated text search queries.
 
     Constructs WHERE field_name NOT LIKE '%value%' clauses.
     """
 
-    __slots__ = ()
-
-    def __init__(self, field_name: Union[str, set[str]], value: str, ignore_case: Optional[bool] = False) -> None:
-        """Initialize the NotInSearchFilter.
-
-        Args:
-            field_name: Name of the model attribute to search on.
-            value: Search value.
-            ignore_case: Should the search be case insensitive.
-        """
-        super().__init__(field_name, value, ignore_case)
-
-        self._param_name: Optional[str] = None
-        if self.value:
-            if isinstance(self.field_name, str):
-                self._param_name = f"{self.field_name}_not_search"
-            else:
-                self._param_name = "not_search_value"
+    def get_param_name(self) -> Optional[str]:
+        """Get parameter name without storing it."""
+        if not self.value:
+            return None
+        if isinstance(self.field_name, str):
+            return f"{self.field_name}_not_search"
+        return "not_search_value"
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_parameters = {}
-        if self.value and self._param_name:
+        param_name = self.get_param_name()
+        if self.value and param_name:
             search_value_with_wildcards = f"%{self.value}%"
-            named_parameters[self._param_name] = search_value_with_wildcards
+            named_parameters[param_name] = search_value_with_wildcards
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        if not self.value or not self._param_name:
+        param_name = self.get_param_name()
+        if not self.value or not param_name:
             return statement
 
-        resolved_names = self._resolve_parameter_conflicts(statement, [self._param_name])
+        resolved_names = self._resolve_parameter_conflicts(statement, [param_name])
         param_name = resolved_names[0]
 
         pattern_expr = exp.Placeholder(this=param_name)
@@ -834,94 +729,34 @@ FilterTypes: TypeAlias = Union[
 ]
 
 
-# New immutable filter system for zero-copy architecture
+def create_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter", ...]:
+    """Convert mutable filters to immutable tuple.
 
-from dataclasses import dataclass
-from typing import Callable
-
-
-@dataclass(frozen=True)
-class Filter:
-    """Immutable filter that can be safely shared.
-
-    This is part of the zero-copy architecture where filters can be
-    shared between SQL objects without risk of mutation.
-    """
-
-    field_name: str
-    operation: str
-    value: Any
-
-    def apply(self, expression: exp.Expression) -> exp.Expression:
-        """Apply filter returning new expression.
-
-        Args:
-            expression: SQLGlot expression to modify
-
-        Returns:
-            New expression with filter applied
-        """
-        return expression.transform(self._create_transformer())
-
-    def _create_transformer(self) -> Callable[[exp.Expression], exp.Expression]:
-        """Create transformer function for this filter."""
-
-        def transform_node(node: exp.Expression) -> exp.Expression:
-            # Filter logic without mutating node
-            if isinstance(node, exp.Column) and node.name == self.field_name:
-                return self._apply_operation(node)
-            return node
-
-        return transform_node
-
-    def _apply_operation(self, column_expr: exp.Expression) -> exp.Expression:
-        """Apply the specific operation to a column expression."""
-        if self.operation == "=":
-            return exp.EQ(this=column_expr, expression=exp.convert(self.value))
-        if self.operation == ">":
-            return exp.GT(this=column_expr, expression=exp.convert(self.value))
-        if self.operation == "<":
-            return exp.LT(this=column_expr, expression=exp.convert(self.value))
-        if self.operation == "LIKE":
-            return exp.Like(this=column_expr, expression=exp.convert(self.value))
-        if self.operation == "ORDER":
-            if str(self.value).lower() == "desc":
-                return column_expr.desc()
-            return column_expr.asc()
-        # Fallback for other operations
-        return column_expr
-
-
-def create_filters(filters: "list[StatementFilter]") -> tuple[Filter, ...]:
-    """Convert mutable filters to immutable ones.
+    Since StatementFilter classes are now immutable (frozen dataclasses),
+    we just need to convert to a tuple for consistent sharing.
 
     Args:
-        filters: List of mutable StatementFilter objects
+        filters: List of StatementFilter objects (already immutable)
 
     Returns:
-        Tuple of immutable Filter objects
+        Tuple of StatementFilter objects
     """
-    immutable_filters = []
-    for filter_obj in filters:
-        # Try to extract key information from the filter
-        if hasattr(filter_obj, "field_name") and hasattr(filter_obj, "get_cache_key"):
-            # This is a basic approach - in real implementation, each filter type
-            # would need specific conversion logic
-            field_name = getattr(filter_obj, "field_name", "unknown")
-            operation = type(filter_obj).__name__.replace("Filter", "").upper()
-            value = getattr(filter_obj, "values", getattr(filter_obj, "value", None))
-            immutable_filters.append(Filter(field_name, operation, value))
-
-    return tuple(immutable_filters)
+    return tuple(filters)
 
 
-def canonicalize_filters(filters: "list[Filter]") -> tuple[Filter, ...]:
-    """Sort filters by field_name, operation for consistent hashing.
+def canonicalize_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter", ...]:
+    """Sort filters by type and field_name for consistent hashing.
 
     Args:
-        filters: List of Filter objects
+        filters: List of StatementFilter objects
 
     Returns:
         Canonically sorted tuple of filters
     """
-    return tuple(sorted(filters, key=lambda f: (f.field_name, f.operation)))
+
+    def sort_key(f: "StatementFilter") -> tuple[str, str]:
+        class_name = type(f).__name__
+        field_name = getattr(f, "field_name", "")
+        return (class_name, str(field_name))
+
+    return tuple(sorted(filters, key=sort_key))

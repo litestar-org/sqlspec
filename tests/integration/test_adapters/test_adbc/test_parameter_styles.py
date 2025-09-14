@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Test different parameter styles and None handling for ADBC drivers.
 
 This file tests comprehensive None parameter handling for ADBC,

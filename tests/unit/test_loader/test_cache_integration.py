@@ -1,3 +1,5 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for cache integration in SQL loader.
 
 Tests cache integration with architecture including:

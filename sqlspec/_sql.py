@@ -724,16 +724,15 @@ class SQLFactory:
         if not parameters:
             try:
                 parsed: exp.Expression = exp.maybe_parse(sql_fragment)
-                return parsed
             except Exception as e:
                 msg = f"Failed to parse raw SQL fragment '{sql_fragment}': {e}"
                 raise SQLBuilderError(msg) from e
+            return parsed
 
         return SQL(sql_fragment, parameters)
 
-    @staticmethod
     def count(
-        column: Union[str, exp.Expression, "ExpressionWrapper", "Case", "Column"] = "*", distinct: bool = False
+        self, column: Union[str, exp.Expression, "ExpressionWrapper", "Case", "Column"] = "*", distinct: bool = False
     ) -> AggregateExpression:
         """Create a COUNT expression.
 
@@ -747,7 +746,7 @@ class SQLFactory:
         if isinstance(column, str) and column == "*":
             expr = exp.Count(this=exp.Star(), distinct=distinct)
         else:
-            col_expr = SQLFactory._extract_expression(column)
+            col_expr = self._extract_expression(column)
             expr = exp.Count(this=col_expr, distinct=distinct)
         return AggregateExpression(expr)
 

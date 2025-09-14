@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Tests for synchronous database adapters."""
 
 from typing import Any

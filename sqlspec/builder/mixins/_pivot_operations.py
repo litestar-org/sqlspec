@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """PIVOT and UNPIVOT operation mixins.
 
 Provides mixins for PIVOT and UNPIVOT operations in SELECT statements.

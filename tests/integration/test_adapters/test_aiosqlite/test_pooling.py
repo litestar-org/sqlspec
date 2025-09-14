@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Integration tests for aiosqlite connection pooling."""
 
 from __future__ import annotations

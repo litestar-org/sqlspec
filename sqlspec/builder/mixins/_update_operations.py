@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """UPDATE operation mixins.
 
 Provides mixins for UPDATE statement functionality including

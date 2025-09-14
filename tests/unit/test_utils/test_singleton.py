@@ -1,3 +1,5 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Tests for sqlspec.utils.singleton module.
 
 Tests singleton pattern implementation using metaclass.

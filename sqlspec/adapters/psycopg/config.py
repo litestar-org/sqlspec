@@ -173,8 +173,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         logger.info("Closing Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
-            if hasattr(self.pool_instance, "_closed"):
-                self.pool_instance._closed = True
+            self.pool_instance._closed = True  # pyright: ignore[reportPrivateUsage]
 
             self.pool_instance.close()
             logger.info("Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
@@ -350,8 +349,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             return
 
         try:
-            if hasattr(self.pool_instance, "_closed"):
-                self.pool_instance._closed = True
+            self.pool_instance._closed = True  # pyright: ignore[reportPrivateUsage]
 
             await self.pool_instance.close()
         finally:

@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for StorageRegistry."""
 
 import tempfile

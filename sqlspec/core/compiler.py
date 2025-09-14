@@ -216,7 +216,7 @@ class SQLProcessor:
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 sqlglot_sql = processed_sql
             else:
-                sqlglot_sql, _ = self._parameter_processor._get_sqlglot_compatible_sql(
+                sqlglot_sql, _ = self._parameter_processor.get_sqlglot_compatible_sql(
                     sql, parameters, self._config.parameter_config, dialect_str
                 )
 

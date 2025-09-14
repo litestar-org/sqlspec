@@ -521,9 +521,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         try:
             if not prepared_parameters:
-                # TODO: Replace with proper cursor protocol method
-                if hasattr(cursor, "_rowcount"):
-                    cursor._rowcount = 0
+                cursor._rowcount = 0  # pyright: ignore[reportPrivateUsage]
                 row_count = 0
             elif isinstance(prepared_parameters, list) and prepared_parameters:
                 processed_params = []

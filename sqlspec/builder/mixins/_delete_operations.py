@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """DELETE operation mixins.
 
 Provides mixins for DELETE statement functionality including

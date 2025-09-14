@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for SQLSpec SQL loading integration.
 
 Tests the integration of SQLFileLoader functionality into the SQLSpec base class,

@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """CTE and set operation mixins.
 
 Provides mixins for Common Table Expressions (WITH clause) and

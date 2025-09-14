@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Tests for sqlspec.utils.fixtures module.
 
 Tests fixture loading utilities including synchronous and asynchronous

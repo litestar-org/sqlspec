@@ -236,8 +236,8 @@ class CommonDriverAttributesMixin:
 
                 if statement.is_many and statement.parameters:
                     new_sql = SQL(sql_text, statement.parameters, statement_config=statement_config, is_many=True)
-                elif statement._named_parameters:
-                    new_sql = SQL(sql_text, statement_config=statement_config, **statement._named_parameters)
+                elif statement.named_parameters:
+                    new_sql = SQL(sql_text, statement_config=statement_config, **statement.named_parameters)
                 else:
                     new_sql = SQL(sql_text, *statement.positional_parameters, statement_config=statement_config)
 

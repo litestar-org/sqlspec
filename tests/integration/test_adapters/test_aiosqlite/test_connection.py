@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Test AIOSQLite connection functionality."""
 
 from __future__ import annotations
