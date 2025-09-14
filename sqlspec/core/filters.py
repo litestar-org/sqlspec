@@ -22,7 +22,6 @@ import uuid
 from abc import ABC, abstractmethod
 from collections import abc
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Union
 
@@ -74,7 +73,7 @@ class StatementFilter(ABC):
         Parameters should be provided via extract_parameters().
         """
 
-    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract parameters that this filter contributes.
 
         Returns:
@@ -118,16 +117,30 @@ class StatementFilter(ABC):
         """
 
 
-@dataclass(frozen=True)
 class BeforeAfterFilter(StatementFilter):
     """Filter for datetime range queries.
 
     Applies WHERE clauses for before/after datetime filtering.
     """
 
-    field_name: str
-    before: Optional[datetime] = None
-    after: Optional[datetime] = None
+    __slots__ = ("_after", "_before", "_field_name")
+
+    def __init__(self, field_name: str, before: Optional[datetime] = None, after: Optional[datetime] = None) -> None:
+        self._field_name = field_name
+        self._before = before
+        self._after = after
+
+    @property
+    def field_name(self) -> str:
+        return self._field_name
+
+    @property
+    def before(self) -> Optional[datetime]:
+        return self._before
+
+    @property
+    def after(self) -> Optional[datetime]:
+        return self._after
 
     def get_param_names(self) -> list[str]:
         """Get parameter names without storing them."""
@@ -184,16 +197,32 @@ class BeforeAfterFilter(StatementFilter):
         return ("BeforeAfterFilter", self.field_name, self.before, self.after)
 
 
-@dataclass(frozen=True)
 class OnBeforeAfterFilter(StatementFilter):
     """Filter for inclusive datetime range queries.
 
     Applies WHERE clauses for on-or-before/on-or-after datetime filtering.
     """
 
-    field_name: str
-    on_or_before: Optional[datetime] = None
-    on_or_after: Optional[datetime] = None
+    __slots__ = ("_field_name", "_on_or_after", "_on_or_before")
+
+    def __init__(
+        self, field_name: str, on_or_before: Optional[datetime] = None, on_or_after: Optional[datetime] = None
+    ) -> None:
+        self._field_name = field_name
+        self._on_or_before = on_or_before
+        self._on_or_after = on_or_after
+
+    @property
+    def field_name(self) -> str:
+        return self._field_name
+
+    @property
+    def on_or_before(self) -> Optional[datetime]:
+        return self._on_or_before
+
+    @property
+    def on_or_after(self) -> Optional[datetime]:
+        return self._on_or_after
 
     def get_param_names(self) -> list[str]:
         """Get parameter names without storing them."""
@@ -261,15 +290,25 @@ class InAnyFilter(StatementFilter, ABC, Generic[T]):
         raise NotImplementedError
 
 
-@dataclass(frozen=True)
 class InCollectionFilter(InAnyFilter[T]):
     """Filter for IN clause queries.
 
     Constructs WHERE ... IN (...) clauses.
     """
 
-    field_name: str
-    values: Optional[abc.Collection[T]] = None
+    __slots__ = ("_field_name", "_values")
+
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]] = None) -> None:
+        self._field_name = field_name
+        self._values = values
+
+    @property
+    def field_name(self) -> str:
+        return self._field_name
+
+    @property
+    def values(self) -> Optional[abc.Collection[T]]:
+        return self._values
 
     def get_param_names(self) -> list[str]:
         """Get parameter names without storing them."""
@@ -311,15 +350,25 @@ class InCollectionFilter(InAnyFilter[T]):
         return ("InCollectionFilter", self.field_name, values_tuple)
 
 
-@dataclass(frozen=True)
 class NotInCollectionFilter(InAnyFilter[T]):
     """Filter for NOT IN clause queries.
 
     Constructs WHERE ... NOT IN (...) clauses.
     """
 
-    field_name: str
-    values: Optional[abc.Collection[T]] = None
+    __slots__ = ("_field_name", "_values")
+
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]] = None) -> None:
+        self._field_name = field_name
+        self._values = values
+
+    @property
+    def field_name(self) -> str:
+        return self._field_name
+
+    @property
+    def values(self) -> Optional[abc.Collection[T]]:
+        return self._values
 
     def get_param_names(self) -> list[str]:
         """Get parameter names without storing them."""
@@ -361,15 +410,25 @@ class NotInCollectionFilter(InAnyFilter[T]):
         return ("NotInCollectionFilter", self.field_name, values_tuple)
 
 
-@dataclass(frozen=True)
 class AnyCollectionFilter(InAnyFilter[T]):
     """Filter for PostgreSQL-style ANY clause queries.
 
     Constructs WHERE column_name = ANY (array_expression) clauses.
     """
 
-    field_name: str
-    values: Optional[abc.Collection[T]] = None
+    __slots__ = ("_field_name", "_values")
+
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]] = None) -> None:
+        self._field_name = field_name
+        self._values = values
+
+    @property
+    def field_name(self) -> str:
+        return self._field_name
+
+    @property
+    def values(self) -> Optional[abc.Collection[T]]:
+        return self._values
 
     def get_param_names(self) -> list[str]:
         """Get parameter names without storing them."""
@@ -412,15 +471,25 @@ class AnyCollectionFilter(InAnyFilter[T]):
         return ("AnyCollectionFilter", self.field_name, values_tuple)
 
 
-@dataclass(frozen=True)
 class NotAnyCollectionFilter(InAnyFilter[T]):
     """Filter for PostgreSQL-style NOT ANY clause queries.
 
     Constructs WHERE NOT (column_name = ANY (array_expression)) clauses.
     """
 
-    field_name: str
-    values: Optional[abc.Collection[T]] = None
+    __slots__ = ("_field_name", "_values")
+
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]] = None) -> None:
+        self._field_name = field_name
+        self._values = values
+
+    @property
+    def field_name(self) -> str:
+        return self._field_name
+
+    @property
+    def values(self) -> Optional[abc.Collection[T]]:
+        return self._values
 
     def get_param_names(self) -> list[str]:
         """Get parameter names without storing them."""
@@ -471,15 +540,25 @@ class PaginationFilter(StatementFilter, ABC):
         raise NotImplementedError
 
 
-@dataclass(frozen=True)
 class LimitOffsetFilter(PaginationFilter):
     """Filter for LIMIT and OFFSET clauses.
 
     Adds pagination support through LIMIT/OFFSET SQL clauses.
     """
 
-    limit: int
-    offset: int
+    __slots__ = ("_limit", "_offset")
+
+    def __init__(self, limit: int, offset: int) -> None:
+        self._limit = limit
+        self._offset = offset
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    @property
+    def offset(self) -> int:
+        return self._offset
 
     def get_param_names(self) -> list[str]:
         """Get parameter names without storing them."""
@@ -517,15 +596,25 @@ class LimitOffsetFilter(PaginationFilter):
         return ("LimitOffsetFilter", self.limit, self.offset)
 
 
-@dataclass(frozen=True)
 class OrderByFilter(StatementFilter):
     """Filter for ORDER BY clauses.
 
     Adds sorting capability to SQL queries.
     """
 
-    field_name: str
-    sort_order: Literal["asc", "desc"] = "asc"
+    __slots__ = ("_field_name", "_sort_order")
+
+    def __init__(self, field_name: str, sort_order: Literal["asc", "desc"] = "asc") -> None:
+        self._field_name = field_name
+        self._sort_order = sort_order
+
+    @property
+    def field_name(self) -> str:
+        return self._field_name
+
+    @property
+    def sort_order(self) -> Literal["asc", "desc"]:
+        return self._sort_order  # pyright: ignore
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
@@ -553,16 +642,30 @@ class OrderByFilter(StatementFilter):
         return ("OrderByFilter", self.field_name, self.sort_order)
 
 
-@dataclass(frozen=True)
 class SearchFilter(StatementFilter):
     """Filter for text search queries.
 
     Constructs WHERE field_name LIKE '%value%' clauses.
     """
 
-    field_name: Union[str, set[str]]
-    value: str
-    ignore_case: Optional[bool] = False
+    __slots__ = ("_field_name", "_ignore_case", "_value")
+
+    def __init__(self, field_name: Union[str, set[str]], value: str, ignore_case: Optional[bool] = False) -> None:
+        self._field_name = field_name
+        self._value = value
+        self._ignore_case = ignore_case
+
+    @property
+    def field_name(self) -> Union[str, set[str]]:
+        return self._field_name
+
+    @property
+    def value(self) -> str:
+        return self._value
+
+    @property
+    def ignore_case(self) -> Optional[bool]:
+        return self._ignore_case
 
     def get_param_name(self) -> Optional[str]:
         """Get parameter name without storing it."""
@@ -617,7 +720,6 @@ class SearchFilter(StatementFilter):
         return ("SearchFilter", field_names, self.value, self.ignore_case)
 
 
-@dataclass(frozen=True)
 class NotInSearchFilter(SearchFilter):
     """Filter for negated text search queries.
 
@@ -732,7 +834,7 @@ FilterTypes: TypeAlias = Union[
 def create_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter", ...]:
     """Convert mutable filters to immutable tuple.
 
-    Since StatementFilter classes are now immutable (frozen dataclasses),
+    Since StatementFilter classes are now immutable (with read-only properties),
     we just need to convert to a tuple for consistent sharing.
 
     Args:

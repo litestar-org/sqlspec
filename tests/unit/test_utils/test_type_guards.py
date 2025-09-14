@@ -5,13 +5,11 @@ Uses function-based pytest approach as per CLAUDE.md requirements.
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import Any, Optional, cast
 
 import msgspec
 import pytest
-
-if TYPE_CHECKING:
-    from sqlglot import exp
+from sqlglot import exp
 
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
@@ -64,6 +62,8 @@ from sqlspec.utils.type_guards import (
 
 pytestmark = pytest.mark.xdist_group("utils")
 
+_UNSET = object()
+
 
 @dataclass
 class SampleDataclass:
@@ -74,18 +74,36 @@ class SampleDataclass:
     optional_field: "Optional[str]" = None
 
 
-class MockSQLGlotExpression(exp.Expression):
-    """Mock SQLGlot expression for testing."""
+class MockSQLGlotExpression:
+    """Mock SQLGlot expression for testing type guard functions.
+
+    This mock allows us to test cases where attributes don't exist,
+    which is needed to test the AttributeError handling in type guards.
+    """
 
     def __init__(
         self,
-        this: "Optional[Any]" = None,
-        expressions: "Optional[list[Any]]" = None,
-        parent: "Optional[Any]" = None,
+        this: Any = _UNSET,
+        expressions: Any = _UNSET,
+        parent: Any = _UNSET,
         args: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Call parent constructor with proper args
-        super().__init__(this=this, expressions=expressions or [], parent=parent, **args or {})
+        # Only set attributes if they were explicitly provided
+        if this is not _UNSET:
+            self.this = this
+        if expressions is not _UNSET:
+            self.expressions = expressions
+        if parent is not _UNSET:
+            self.parent = parent
+
+        # SQLGlot expressions always have an args dict
+        self.args = args or {}
+
+        # Set any additional attributes from args
+        if args:
+            for key, value in args.items():
+                if key not in {"this", "expressions", "parent"}:
+                    setattr(self, key, value)
 
 
 class MockLiteral:
@@ -606,7 +624,7 @@ def test_get_initial_expression_with_attribute() -> None:
             self.initial_expression = mock_expr
 
     context = MockContext()
-    assert get_initial_expression(context) is mock_expr
+    assert get_initial_expression(context) is mock_expr  # type: ignore[comparison-overlap]
 
 
 def test_get_initial_expression_without_attribute() -> None:
