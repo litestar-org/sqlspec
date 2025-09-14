@@ -26,8 +26,9 @@ class InsertIntoClauseMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def into(self, table: str) -> Self:
         """Set the target table for the INSERT statement.
@@ -41,14 +42,17 @@ class InsertIntoClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self._expression is None:
-            self._expression = exp.Insert()
-        if not isinstance(self._expression, exp.Insert):
+        current_expr = self.get_expression()
+        if current_expr is None:
+            self.set_expression(exp.Insert())
+            current_expr = self.get_expression()
+
+        if not isinstance(current_expr, exp.Insert):
             msg = "Cannot set target table on a non-INSERT expression."
             raise SQLBuilderError(msg)
 
         setattr(self, "_table", table)
-        self._expression.set("this", exp.to_table(table))
+        current_expr.set("this", exp.to_table(table))
         return self
 
 
@@ -58,8 +62,9 @@ class InsertValuesMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     _columns: Any  # Provided by QueryBuilder
 
@@ -75,14 +80,17 @@ class InsertValuesMixin:
 
     def columns(self, *columns: Union[str, exp.Expression]) -> Self:
         """Set the columns for the INSERT statement and synchronize the _columns attribute on the builder."""
-        if self._expression is None:
-            self._expression = exp.Insert()
-        if not isinstance(self._expression, exp.Insert):
+        current_expr = self.get_expression()
+        if current_expr is None:
+            self.set_expression(exp.Insert())
+            current_expr = self.get_expression()
+
+        if not isinstance(current_expr, exp.Insert):
             msg = "Cannot set columns on a non-INSERT expression."
             raise SQLBuilderError(msg)
 
         # Get the current table from the expression
-        current_this = self._expression.args.get("this")
+        current_this = current_expr.args.get("this")
         if current_this is None:
             msg = "Table must be set using .into() before setting columns."
             raise SQLBuilderError(msg)
@@ -96,11 +104,11 @@ class InsertValuesMixin:
 
             # Create Schema object with table and columns
             schema = exp.Schema(this=table_name, expressions=column_identifiers)
-            self._expression.set("this", schema)
+            current_expr.set("this", schema)
         # No columns specified - ensure we have just a Table object
         elif isinstance(current_this, exp.Schema):
             table_name = current_this.this
-            self._expression.set("this", exp.Table(this=table_name))
+            current_expr.set("this", exp.Table(this=table_name))
 
         try:
             cols = self._columns
@@ -127,9 +135,12 @@ class InsertValuesMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self._expression is None:
-            self._expression = exp.Insert()
-        if not isinstance(self._expression, exp.Insert):
+        current_expr = self.get_expression()
+        if current_expr is None:
+            self.set_expression(exp.Insert())
+            current_expr = self.get_expression()
+
+        if not isinstance(current_expr, exp.Insert):
             msg = "Cannot add values to a non-INSERT expression."
             raise SQLBuilderError(msg)
 
@@ -199,7 +210,7 @@ class InsertValuesMixin:
                     row_exprs.append(exp.Placeholder(this=param_name))
 
         values_expr = exp.Values(expressions=[row_exprs])
-        self._expression.set("expression", values_expr)
+        current_expr.set("expression", values_expr)
         return self
 
     def add_values(self, values: Sequence[Any]) -> Self:
@@ -220,8 +231,9 @@ class InsertFromSelectMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     _table: Any  # Provided by QueryBuilder
 
@@ -249,9 +261,12 @@ class InsertFromSelectMixin:
         except AttributeError:
             msg = "The target table must be set using .into() before adding values."
             raise SQLBuilderError(msg)
-        if self._expression is None:
-            self._expression = exp.Insert()
-        if not isinstance(self._expression, exp.Insert):
+        current_expr = self.get_expression()
+        if current_expr is None:
+            self.set_expression(exp.Insert())
+            current_expr = self.get_expression()
+
+        if not isinstance(current_expr, exp.Insert):
             msg = "Cannot set INSERT source on a non-INSERT expression."
             raise SQLBuilderError(msg)
         subquery_parameters = select_builder._parameters
@@ -260,7 +275,7 @@ class InsertFromSelectMixin:
                 self.add_parameter(p_value, name=p_name)
         select_expr = select_builder._expression
         if select_expr and isinstance(select_expr, exp.Select):
-            self._expression.set("expression", select_expr.copy())
+            current_expr.set("expression", select_expr.copy())
         else:
             msg = "SelectBuilder must have a valid SELECT expression."
             raise SQLBuilderError(msg)

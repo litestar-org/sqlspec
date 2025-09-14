@@ -29,7 +29,10 @@ class MergeIntoClauseMixin:
     """Mixin providing INTO clause for MERGE builders."""
 
     __slots__ = ()
-    _expression: Optional[exp.Expression]
+
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def into(self, table: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Set the target table for the MERGE operation (INTO clause).
@@ -42,11 +45,14 @@ class MergeIntoClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self._expression is None:
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
-        self._expression.set("this", exp.to_table(table, alias=alias) if isinstance(table, str) else table)
+        current_expr = self.get_expression()
+        if current_expr is None or not isinstance(current_expr, exp.Merge):
+            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
+            current_expr = self.get_expression()
+
+        # Type guard: current_expr is now guaranteed to be an Expression
+        assert current_expr is not None
+        current_expr.set("this", exp.to_table(table, alias=alias) if isinstance(table, str) else table)
         return self
 
 
@@ -55,7 +61,10 @@ class MergeUsingClauseMixin:
     """Mixin providing USING clause for MERGE builders."""
 
     __slots__ = ()
-    _expression: Optional[exp.Expression]
+
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
@@ -76,11 +85,13 @@ class MergeUsingClauseMixin:
         Raises:
             SQLBuilderError: If the current expression is not a MERGE statement or if the source type is unsupported.
         """
-        if self._expression is None:
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
+        current_expr = self.get_expression()
+        if current_expr is None or not isinstance(current_expr, exp.Merge):
+            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
+            current_expr = self.get_expression()
 
+        # Type guard: current_expr is now guaranteed to be an Expression
+        assert current_expr is not None
         source_expr: exp.Expression
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
@@ -100,7 +111,7 @@ class MergeUsingClauseMixin:
             msg = f"Unsupported source type for USING clause: {type(source)}"
             raise SQLBuilderError(msg)
 
-        self._expression.set("using", source_expr)
+        current_expr.set("using", source_expr)
         return self
 
 
@@ -109,7 +120,10 @@ class MergeOnClauseMixin:
     """Mixin providing ON clause for MERGE builders."""
 
     __slots__ = ()
-    _expression: Optional[exp.Expression]
+
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def on(self, condition: Union[str, exp.Expression]) -> Self:
         """Set the join condition for the MERGE operation (ON clause).
@@ -124,11 +138,13 @@ class MergeOnClauseMixin:
         Raises:
             SQLBuilderError: If the current expression is not a MERGE statement or if the condition type is unsupported.
         """
-        if self._expression is None:
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
+        current_expr = self.get_expression()
+        if current_expr is None or not isinstance(current_expr, exp.Merge):
+            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
+            current_expr = self.get_expression()
 
+        # Type guard: current_expr is now guaranteed to be an Expression
+        assert current_expr is not None
         condition_expr: exp.Expression
         if isinstance(condition, str):
             parsed_condition: Optional[exp.Expression] = exp.maybe_parse(
@@ -144,7 +160,7 @@ class MergeOnClauseMixin:
             msg = f"Unsupported condition type for ON clause: {type(condition)}"
             raise SQLBuilderError(msg)
 
-        self._expression.set("on", condition_expr)
+        current_expr.set("on", condition_expr)
         return self
 
 
@@ -153,7 +169,10 @@ class MergeMatchedClauseMixin:
     """Mixin providing WHEN MATCHED THEN ... clauses for MERGE builders."""
 
     __slots__ = ()
-    _expression: Optional[exp.Expression]
+
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
@@ -171,15 +190,17 @@ class MergeMatchedClauseMixin:
         Args:
             when_clause: The WHEN clause to add.
         """
-        if self._expression is None:
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[misc]
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[misc]
+        current_expr = self.get_expression()
+        if current_expr is None or not isinstance(current_expr, exp.Merge):
+            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
+            current_expr = self.get_expression()
 
-        whens = self._expression.args.get("whens")
+        # Type guard: current_expr is now guaranteed to be an Expression
+        assert current_expr is not None
+        whens = current_expr.args.get("whens")
         if not whens:
             whens = exp.Whens(expressions=[])
-            self._expression.set("whens", whens)
+            current_expr.set("whens", whens)
 
         whens.append("expressions", when_clause)
 
@@ -316,7 +337,9 @@ class MergeNotMatchedClauseMixin:
 
     __slots__ = ()
 
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
@@ -416,7 +439,9 @@ class MergeNotMatchedBySourceClauseMixin:
 
     __slots__ = ()
 
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""

@@ -24,8 +24,10 @@ class CommonTableExpressionMixin:
     """Mixin providing WITH clause (Common Table Expressions) support for SQL builders."""
 
     __slots__ = ()
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     _with_ctes: Any  # Provided by QueryBuilder
     dialect: Any  # Provided by QueryBuilder
@@ -133,10 +135,12 @@ class SetOperationMixin:
     """Mixin providing set operations (UNION, INTERSECT, EXCEPT) for SELECT builders."""
 
     __slots__ = ()
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
 
-    _parameters: dict[str, Any]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
+    def set_parameters(self, parameters: "dict[str, Any]") -> None: ...
+
     dialect: Any = None
 
     def build(self) -> Any:
@@ -190,7 +194,7 @@ class SetOperationMixin:
                 merged_parameters[new_param_name] = param_value
             else:
                 merged_parameters[param_name] = param_value
-        new_builder._parameters = merged_parameters
+        new_builder.set_parameters(merged_parameters)
         return new_builder
 
     def intersect(self, other: Any) -> Self:
@@ -218,7 +222,7 @@ class SetOperationMixin:
         cast("QueryBuilder", new_builder).set_expression(intersect_expr)
         merged_parameters = dict(left_query.parameters)
         merged_parameters.update(right_query.parameters)
-        new_builder._parameters = merged_parameters
+        new_builder.set_parameters(merged_parameters)
         return new_builder
 
     def except_(self, other: Any) -> Self:
@@ -246,5 +250,5 @@ class SetOperationMixin:
         cast("QueryBuilder", new_builder).set_expression(except_expr)
         merged_parameters = dict(left_query.parameters)
         merged_parameters.update(right_query.parameters)
-        new_builder._parameters = merged_parameters
+        new_builder.set_parameters(merged_parameters)
         return new_builder

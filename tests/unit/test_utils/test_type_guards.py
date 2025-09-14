@@ -74,7 +74,7 @@ class SampleDataclass:
     optional_field: "Optional[str]" = None
 
 
-class MockSQLGlotExpression:
+class MockSQLGlotExpression(exp.Expression):
     """Mock SQLGlot expression for testing."""
 
     def __init__(
@@ -84,13 +84,8 @@ class MockSQLGlotExpression:
         parent: "Optional[Any]" = None,
         args: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        if this is not None:
-            self.this = this
-        if expressions is not None:
-            self.expressions = expressions
-        if parent is not None:
-            self.parent = parent
-        self.args = args or {}
+        # Call parent constructor with proper args
+        super().__init__(this=this, expressions=expressions or [], parent=parent, **args or {})
 
 
 class MockLiteral:

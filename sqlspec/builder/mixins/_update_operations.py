@@ -26,8 +26,9 @@ class UpdateTableClauseMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def table(self, table_name: str, alias: Optional[str] = None) -> Self:
         """Set the table to update.
@@ -39,10 +40,14 @@ class UpdateTableClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self._expression is None or not isinstance(self._expression, exp.Update):
-            self._expression = exp.Update(this=None, expressions=[], joins=[])
+        current_expr = self.get_expression()
+        if current_expr is None or not isinstance(current_expr, exp.Update):
+            self.set_expression(exp.Update(this=None, expressions=[], joins=[]))
+            current_expr = self.get_expression()
+
+        assert current_expr is not None
         table_expr: exp.Expression = exp.to_table(table_name, alias=alias)
-        self._expression.set("this", table_expr)
+        current_expr.set("this", table_expr)
         setattr(self, "_table", table_name)
         return self
 
@@ -53,8 +58,9 @@ class UpdateSetClauseMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
@@ -131,9 +137,12 @@ class UpdateSetClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self._expression is None:
-            self._expression = exp.Update()
-        if not isinstance(self._expression, exp.Update):
+        current_expr = self.get_expression()
+        if current_expr is None:
+            self.set_expression(exp.Update())
+            current_expr = self.get_expression()
+
+        if not isinstance(current_expr, exp.Update):
             msg = "Cannot add SET clause to non-UPDATE expression."
             raise SQLBuilderError(msg)
         assignments = []
@@ -150,8 +159,8 @@ class UpdateSetClauseMixin:
         else:
             msg = "Invalid arguments for set(): use (column, value), mapping, or kwargs."
             raise SQLBuilderError(msg)
-        existing = self._expression.args.get("expressions", [])
-        self._expression.set("expressions", existing + assignments)
+        existing = current_expr.args.get("expressions", [])
+        current_expr.set("expressions", existing + assignments)
         return self
 
 
@@ -161,8 +170,9 @@ class UpdateFromClauseMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def from_(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
         """Add a FROM clause to the UPDATE statement.
@@ -177,7 +187,8 @@ class UpdateFromClauseMixin:
         Raises:
             SQLBuilderError: If the current expression is not an UPDATE statement.
         """
-        if self._expression is None or not isinstance(self._expression, exp.Update):
+        current_expr = self.get_expression()
+        if current_expr is None or not isinstance(current_expr, exp.Update):
             msg = "Cannot add FROM clause to non-UPDATE expression. Set the main table first."
             raise SQLBuilderError(msg)
         table_expr: exp.Expression
@@ -195,9 +206,9 @@ class UpdateFromClauseMixin:
         else:
             msg = f"Unsupported table type for FROM clause: {type(table)}"
             raise SQLBuilderError(msg)
-        if self._expression.args.get("from") is None:
-            self._expression.set("from", exp.From(expressions=[]))
-        from_clause = self._expression.args["from"]
+        if current_expr.args.get("from") is None:
+            current_expr.set("from", exp.From(expressions=[]))
+        from_clause = current_expr.args["from"]
         if hasattr(from_clause, "append"):
             from_clause.append("expressions", table_expr)
         else:

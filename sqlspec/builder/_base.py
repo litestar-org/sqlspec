@@ -563,6 +563,10 @@ class QueryBuilder(ABC):
         """Public access to query parameters."""
         return self._parameters
 
+    def set_parameters(self, parameters: dict[str, Any]) -> None:
+        """Set query parameters (public API)."""
+        self._parameters = parameters.copy()
+
     @property
     def with_ctes(self) -> "dict[str, exp.CTE]":
         """Get WITH clause CTEs (public API)."""

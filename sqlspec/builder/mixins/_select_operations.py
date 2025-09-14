@@ -29,8 +29,9 @@ class SelectClauseMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def select(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn", "SQL", "Case"]) -> Self:
         """Add columns to SELECT clause.
@@ -42,13 +43,17 @@ class SelectClauseMixin:
             The current builder instance for method chaining.
         """
         builder = cast("SQLBuilderProtocol", self)
-        if builder._expression is None:
-            builder._expression = exp.Select()
-        if not isinstance(builder._expression, exp.Select):
+        current_expr = self.get_expression()
+        if current_expr is None:
+            self.set_expression(exp.Select())
+            current_expr = self.get_expression()
+
+        if not isinstance(current_expr, exp.Select):
             msg = "Cannot add select columns to a non-SELECT expression."
             raise SQLBuilderError(msg)
         for column in columns:
-            builder._expression = builder._expression.select(parse_column_expression(column, builder), copy=False)
+            current_expr = current_expr.select(parse_column_expression(column, builder), copy=False)
+        self.set_expression(current_expr)
         return cast("Self", builder)
 
     def distinct(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn", "SQL"]) -> Self:
@@ -130,13 +135,13 @@ class SelectClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self._expression is None or not isinstance(self._expression, exp.Select):
+        current_expr = self.get_expression()
+        if current_expr is None or not isinstance(current_expr, exp.Select):
             return self
 
         for column in columns:
-            self._expression = self._expression.group_by(
-                exp.column(column) if isinstance(column, str) else column, copy=False
-            )
+            current_expr = current_expr.group_by(exp.column(column) if isinstance(column, str) else column, copy=False)
+        self.set_expression(current_expr)
         return self
 
     def group_by_rollup(self, *columns: Union[str, exp.Expression]) -> Self:
@@ -481,9 +486,12 @@ class SelectClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self._expression is None:
-            self._expression = exp.Select()
-        if not isinstance(self._expression, exp.Select):
+        current_expr = self.get_expression()
+        if current_expr is None:
+            self.set_expression(exp.Select())
+            current_expr = self.get_expression()
+
+        if not isinstance(current_expr, exp.Select):
             msg = "Cannot add window function to a non-SELECT expression."
             raise SQLBuilderError(msg)
 
@@ -526,7 +534,8 @@ class SelectClauseMixin:
                 over_args["frame"] = frame_expr
 
         window_expr = exp.Window(this=func_expr_parsed, **over_args)
-        self._expression.select(exp.alias_(window_expr, alias) if alias else window_expr, copy=False)
+        current_expr = current_expr.select(exp.alias_(window_expr, alias) if alias else window_expr, copy=False)
+        self.set_expression(current_expr)
         return self
 
     def case_(self, alias: "Optional[str]" = None) -> "CaseBuilder":
