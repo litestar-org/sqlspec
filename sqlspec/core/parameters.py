@@ -755,17 +755,30 @@ class ParameterConverter:
             parameter_styles = {p.style for p in param_info}
             has_mixed_styles = len(parameter_styles) > 1
 
+            # Build unique parameter mapping to avoid duplicates when same parameter appears multiple times
+            unique_params: dict[str, Any] = {}
+            param_order: list[str] = []
+
             if has_mixed_styles:
                 param_keys = list(parameters.keys())
                 for param in param_info:
-                    value, found = self._extract_param_value_mixed_styles(param, parameters, param_keys)
-                    if found:
-                        param_values.append(value)
+                    param_key = param.placeholder_text
+                    if param_key not in unique_params:
+                        value, found = self._extract_param_value_mixed_styles(param, parameters, param_keys)
+                        if found:
+                            unique_params[param_key] = value
+                            param_order.append(param_key)
             else:
                 for param in param_info:
-                    value, found = self._extract_param_value_single_style(param, parameters)
-                    if found:
-                        param_values.append(value)
+                    param_key = param.placeholder_text
+                    if param_key not in unique_params:
+                        value, found = self._extract_param_value_single_style(param, parameters)
+                        if found:
+                            unique_params[param_key] = value
+                            param_order.append(param_key)
+
+            # Build parameter values list from unique parameters in order
+            param_values = [unique_params[param_key] for param_key in param_order]
 
             if preserve_parameter_format and original_parameters is not None:
                 return self._preserve_original_format(param_values, original_parameters)
