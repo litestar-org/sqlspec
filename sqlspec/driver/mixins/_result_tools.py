@@ -109,8 +109,13 @@ def _default_msgspec_deserializer(
     if isinstance(target_type, type) and issubclass(target_type, Enum) and isinstance(value, Enum):
         return value.value
 
-    if isinstance(value, target_type):
-        return value
+    # Check if value is already the correct type (but avoid parameterized generics)
+    try:
+        if isinstance(target_type, type) and isinstance(value, target_type):
+            return value
+    except TypeError:
+        # Handle parameterized generics like list[int] which can't be used with isinstance
+        pass
 
     if isinstance(target_type, type):
         try:
@@ -218,6 +223,25 @@ class ToSchemaMixin:
                 except Exception as e:
                     logger.debug("Field name transformation failed for msgspec schema: %s", e)
                     transformed_data = data
+
+            # Pre-process numpy arrays to lists before msgspec conversion
+            if NUMPY_INSTALLED:
+                try:
+                    import numpy as np
+
+                    def _convert_numpy_arrays_in_data(obj: Any) -> Any:
+                        """Recursively convert numpy arrays to lists in data structures."""
+                        if isinstance(obj, np.ndarray):
+                            return obj.tolist()
+                        if isinstance(obj, dict):
+                            return {k: _convert_numpy_arrays_in_data(v) for k, v in obj.items()}
+                        if isinstance(obj, (list, tuple)):
+                            return type(obj)(_convert_numpy_arrays_in_data(item) for item in obj)
+                        return obj
+
+                    transformed_data = _convert_numpy_arrays_in_data(transformed_data)
+                except ImportError:
+                    pass
 
             if not isinstance(transformed_data, Sequence):
                 return convert(obj=transformed_data, type=schema_type, from_attributes=True, dec_hook=deserializer)
