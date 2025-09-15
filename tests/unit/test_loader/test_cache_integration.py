@@ -1,3 +1,5 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for cache integration in SQL loader.
 
 Tests cache integration with architecture including:
@@ -48,7 +50,7 @@ SELECT 'no cache' as message;
 
 
 @patch("sqlspec.loader.get_cache_config")
-@patch("sqlspec.loader.get_default_cache")
+@patch("sqlspec.loader.get_cache")
 def test_cache_enabled_loading(mock_get_cache: Mock, mock_get_cache_config: Mock) -> None:
     """Test loading when cache is enabled."""
 
@@ -133,13 +135,16 @@ def mock_cache_setup() -> Generator[tuple[Mock, Mock, SQLFileLoader], None, None
     """Set up mock cache infrastructure for testing."""
     with (
         patch("sqlspec.loader.get_cache_config") as mock_config,
-        patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+        patch("sqlspec.loader.get_cache") as mock_cache_factory,
     ):
         mock_cache_config = Mock()
         mock_cache_config.compiled_cache_enabled = True
         mock_config.return_value = mock_cache_config
 
         mock_cache = Mock()
+        mock_cache.get = Mock()
+        mock_cache.put = Mock()
+        mock_cache.clear = Mock()
         mock_cache_factory.return_value = mock_cache
 
         loader = SQLFileLoader()
@@ -169,6 +174,8 @@ SELECT 'from cache' as source;
             loader._load_single_file(tf.name, None)
 
         mock_cache.get.assert_called_once()
+        call_args = mock_cache.get.call_args
+        assert call_args[0][0] == "file"  # First arg should be "file" namespace
 
         mock_cache.put.assert_not_called()
 
@@ -195,8 +202,12 @@ SELECT 'new content' as source;
         loader._load_single_file(tf.name, None)
 
         mock_cache.get.assert_called_once()
+        get_call_args = mock_cache.get.call_args
+        assert get_call_args[0][0] == "file"  # First arg should be "file" namespace
 
         mock_cache.put.assert_called_once()
+        put_call_args = mock_cache.put.call_args
+        assert put_call_args[0][0] == "file"  # First arg should be "file" namespace
 
         assert "new_query" in loader._queries
 
@@ -318,7 +329,7 @@ SELECT COUNT(*) FROM users;
 
         with (
             patch("sqlspec.loader.get_cache_config") as mock_config,
-            patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+            patch("sqlspec.loader.get_cache") as mock_cache_factory,
         ):
             mock_cache_config = Mock()
             mock_cache_config.compiled_cache_enabled = True
@@ -334,7 +345,8 @@ SELECT COUNT(*) FROM users;
 
             mock_cache.put.assert_called()
             cache_call_args = mock_cache.put.call_args[0]
-            cached_data = cache_call_args[1]
+            assert cache_call_args[0] == "file"  # First arg should be "file" namespace
+            cached_data = cache_call_args[2]  # Third arg is the value in MultiLevelCache.put
 
             assert isinstance(cached_data, CachedSQLFile)
 
@@ -365,7 +377,7 @@ SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE;
 
         with (
             patch("sqlspec.loader.get_cache_config") as mock_config,
-            patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+            patch("sqlspec.loader.get_cache") as mock_cache_factory,
             patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True),
         ):
             mock_cache_config = Mock()
@@ -388,7 +400,7 @@ def test_cache_clear_integration() -> None:
 
     with (
         patch("sqlspec.loader.get_cache_config") as mock_config,
-        patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+        patch("sqlspec.loader.get_cache") as mock_cache_factory,
     ):
         mock_cache_config = Mock()
         mock_cache_config.compiled_cache_enabled = True
@@ -414,7 +426,7 @@ def test_file_cache_only_clear() -> None:
 
     with (
         patch("sqlspec.loader.get_cache_config") as mock_config,
-        patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+        patch("sqlspec.loader.get_cache") as mock_cache_factory,
     ):
         mock_cache_config = Mock()
         mock_cache_config.compiled_cache_enabled = True
@@ -462,7 +474,7 @@ SELECT 'shared between loaders' as message;
 
         with (
             patch("sqlspec.loader.get_cache_config") as mock_config,
-            patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+            patch("sqlspec.loader.get_cache") as mock_cache_factory,
         ):
             mock_cache_config = Mock()
             mock_cache_config.compiled_cache_enabled = True
@@ -581,7 +593,7 @@ LIMIT 100;
 
         with (
             patch("sqlspec.loader.get_cache_config") as mock_config,
-            patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+            patch("sqlspec.loader.get_cache") as mock_cache_factory,
         ):
             mock_cache_config = Mock()
             mock_cache_config.compiled_cache_enabled = True

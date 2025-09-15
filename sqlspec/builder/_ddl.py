@@ -973,10 +973,10 @@ class CreateTableAsSelect(DDLBuilder):
             select_expr = self._select_query.expression
             select_parameters = self._select_query.parameters
         elif isinstance(self._select_query, Select):
-            select_expr = self._select_query._expression
-            select_parameters = self._select_query._parameters
+            select_expr = self._select_query.get_expression()
+            select_parameters = self._select_query.parameters
 
-            with_ctes = self._select_query._with_ctes
+            with_ctes = self._select_query.with_ctes
             if with_ctes and select_expr and isinstance(select_expr, exp.Select):
                 for alias, cte in with_ctes.items():
                     if has_with_method(select_expr):
@@ -1100,8 +1100,8 @@ class CreateMaterializedView(DDLBuilder):
             select_expr = self._select_query.expression
             select_parameters = self._select_query.parameters
         elif isinstance(self._select_query, Select):
-            select_expr = self._select_query._expression
-            select_parameters = self._select_query._parameters
+            select_expr = self._select_query.get_expression()
+            select_parameters = self._select_query.parameters
         elif isinstance(self._select_query, str):
             select_expr = exp.maybe_parse(self._select_query)
             select_parameters = None
@@ -1198,8 +1198,8 @@ class CreateView(DDLBuilder):
             select_expr = self._select_query.expression
             select_parameters = self._select_query.parameters
         elif isinstance(self._select_query, Select):
-            select_expr = self._select_query._expression
-            select_parameters = self._select_query._parameters
+            select_expr = self._select_query.get_expression()
+            select_parameters = self._select_query.parameters
         elif isinstance(self._select_query, str):
             select_expr = exp.maybe_parse(self._select_query)
             select_parameters = None

@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Tests for sqlspec.utils.statement_hashing module.
 
 Tests for SQL statement and expression hashing utilities used for cache key generation.
@@ -282,15 +283,15 @@ def test_hash_sql_statement_basic() -> None:
     """Test hash_sql_statement with basic SQL statement."""
 
     statement = Mock()
-    statement._statement = parse_one("SELECT 1")
-    statement._raw_sql = "SELECT 1"
-    statement._positional_parameters = None
-    statement._named_parameters = None
-    statement._original_parameters = None
-    statement._filters = None
-    statement._dialect = "sqlite"
-    statement._is_many = False
-    statement._is_script = False
+    statement.statement_expression = parse_one("SELECT 1")
+    statement.raw_sql = "SELECT 1"
+    statement.positional_parameters = []
+    statement.named_parameters = {}
+    statement.original_parameters = None
+    statement.filters = []
+    statement.dialect = "sqlite"
+    statement.is_many = False
+    statement.is_script = False
 
     result = hash_sql_statement(statement)
     assert isinstance(result, str)
@@ -300,15 +301,15 @@ def test_hash_sql_statement_basic() -> None:
 def test_hash_sql_statement_with_parameters() -> None:
     """Test hash_sql_statement with parameters."""
     statement = Mock()
-    statement._statement = parse_one("SELECT * FROM users WHERE id = ?")
-    statement._raw_sql = "SELECT * FROM users WHERE id = ?"
-    statement._positional_parameters = [123]
-    statement._named_parameters = {"user_id": 123}
-    statement._original_parameters = [123]
-    statement._filters = None
-    statement._dialect = "sqlite"
-    statement._is_many = False
-    statement._is_script = False
+    statement.statement_expression = parse_one("SELECT * FROM users WHERE id = ?")
+    statement.raw_sql = "SELECT * FROM users WHERE id = ?"
+    statement.positional_parameters = [123]
+    statement.named_parameters = {"user_id": 123}
+    statement.original_parameters = [123]
+    statement.filters = []
+    statement.dialect = "sqlite"
+    statement.is_many = False
+    statement.is_script = False
 
     result = hash_sql_statement(statement)
     assert isinstance(result, str)
@@ -318,15 +319,15 @@ def test_hash_sql_statement_with_parameters() -> None:
 def test_hash_sql_statement_raw_sql_fallback() -> None:
     """Test hash_sql_statement falls back to raw SQL when expression not available."""
     statement = Mock()
-    statement._statement = "SELECT 1"
-    statement._raw_sql = "SELECT 1"
-    statement._positional_parameters = None
-    statement._named_parameters = None
-    statement._original_parameters = None
-    statement._filters = None
-    statement._dialect = "sqlite"
-    statement._is_many = False
-    statement._is_script = False
+    statement.statement_expression = "SELECT 1"
+    statement.raw_sql = "SELECT 1"
+    statement.positional_parameters = []
+    statement.named_parameters = {}
+    statement.original_parameters = None
+    statement.filters = []
+    statement.dialect = "sqlite"
+    statement.is_many = False
+    statement.is_script = False
 
     with pytest.MonkeyPatch().context() as m:
         m.setattr("sqlspec.utils.type_guards.is_expression", lambda x: False)
@@ -521,13 +522,13 @@ def test_error_handling() -> None:
     """Test error handling in hash functions."""
 
     malformed_statement = Mock()
-    malformed_statement._positional_parameters = None
-    malformed_statement._named_parameters = None
-    malformed_statement._original_parameters = None
-    malformed_statement._filters = None
-    malformed_statement._dialect = "sqlite"
-    malformed_statement._is_many = False
-    malformed_statement._is_script = False
+    malformed_statement.positional_parameters = []
+    malformed_statement.named_parameters = {}
+    malformed_statement.original_parameters = None
+    malformed_statement.filters = []
+    malformed_statement.dialect = "sqlite"
+    malformed_statement.is_many = False
+    malformed_statement.is_script = False
 
     try:
         hash_sql_statement(malformed_statement)

@@ -140,18 +140,16 @@ def test_get_cache_stats_returns_statistics() -> None:
     """Test that get_cache_stats returns cache statistics."""
     stats = SQLSpec.get_cache_stats()
 
-    assert hasattr(stats, "sql_hit_rate")
-    assert hasattr(stats, "fragment_hit_rate")
-    assert hasattr(stats, "optimized_hit_rate")
-    assert hasattr(stats, "sql_size")
-    assert hasattr(stats, "fragment_size")
-    assert hasattr(stats, "optimized_size")
-    assert hasattr(stats, "sql_hits")
-    assert hasattr(stats, "sql_misses")
-    assert hasattr(stats, "fragment_hits")
-    assert hasattr(stats, "fragment_misses")
-    assert hasattr(stats, "optimized_hits")
-    assert hasattr(stats, "optimized_misses")
+    assert isinstance(stats, dict)
+    assert "multi_level" in stats
+
+    multi_stats = stats["multi_level"]
+
+    assert hasattr(multi_stats, "hit_rate")
+    assert hasattr(multi_stats, "hits")
+    assert hasattr(multi_stats, "misses")
+    assert hasattr(multi_stats, "evictions")
+    assert hasattr(multi_stats, "total_operations")
 
 
 def test_reset_cache_stats_clears_statistics() -> None:
@@ -159,12 +157,12 @@ def test_reset_cache_stats_clears_statistics() -> None:
     SQLSpec.reset_cache_stats()
     stats = SQLSpec.get_cache_stats()
 
-    assert stats.sql_hits == 0
-    assert stats.sql_misses == 0
-    assert stats.fragment_hits == 0
-    assert stats.fragment_misses == 0
-    assert stats.optimized_hits == 0
-    assert stats.optimized_misses == 0
+    multi_stats = stats["multi_level"]
+
+    assert multi_stats.hits == 0
+    assert multi_stats.misses == 0
+    assert multi_stats.evictions == 0
+    assert multi_stats.total_operations == 0
 
 
 def test_log_cache_stats_logs_to_configured_logger() -> None:
@@ -183,23 +181,21 @@ def test_log_cache_stats_logs_to_configured_logger() -> None:
         assert "Cache Statistics" in call_args[0][0]
 
 
+@patch("sqlspec.core.cache.get_cache")
 @patch("sqlspec.core.cache.get_default_cache")
-@patch("sqlspec.core.cache.get_statement_cache")
-def test_update_cache_config_clears_all_caches(
-    mock_get_statement_cache: MagicMock, mock_get_default_cache: MagicMock
-) -> None:
+def test_update_cache_config_clears_all_caches(mock_get_default_cache: MagicMock, mock_get_cache: MagicMock) -> None:
     """Test that updating cache configuration clears all existing caches."""
     mock_default_cache = MagicMock()
-    mock_statement_cache = MagicMock()
+    mock_multi_cache = MagicMock()
     mock_get_default_cache.return_value = mock_default_cache
-    mock_get_statement_cache.return_value = mock_statement_cache
+    mock_get_cache.return_value = mock_multi_cache
 
     new_config = CacheConfig(sql_cache_size=1000)
 
     SQLSpec.update_cache_config(new_config)
 
     mock_default_cache.clear.assert_called_once()
-    mock_statement_cache.clear.assert_called_once()
+    mock_multi_cache.clear.assert_called_once()
 
 
 def test_multiple_sqlspec_instances_share_cache_configuration() -> None:
@@ -291,7 +287,9 @@ def test_concurrent_statistics_access_is_thread_safe() -> None:
             for _ in range(50):
                 stats = SQLSpec.get_cache_stats()
                 SQLSpec.reset_cache_stats()
-                results.append(stats.sql_hits + stats.sql_misses)
+                multi_stats = stats["multi_level"]
+                total_ops = multi_stats.hits + multi_stats.misses
+                results.append(total_ops)
                 time.sleep(0.001)
         except Exception as e:
             errors.append(e)
@@ -555,7 +553,10 @@ def test_statistics_collection_during_configuration_changes() -> None:
             SQLSpec.update_cache_config(config)
 
             stats = SQLSpec.get_cache_stats()
-            assert hasattr(stats, "sql_hit_rate")
+            assert isinstance(stats, dict)
+            assert "multi_level" in stats
+            multi_stats = stats["multi_level"]
+            assert hasattr(multi_stats, "hit_rate")
 
             SQLSpec.reset_cache_stats()
 

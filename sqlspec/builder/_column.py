@@ -254,6 +254,15 @@ class Column:
         """Hash based on table and column name."""
         return hash((self.table, self.name))
 
+    @property
+    def sqlglot_expression(self) -> exp.Expression:
+        """Get the underlying SQLGlot expression (public API).
+
+        Returns:
+            The SQLGlot expression for this column
+        """
+        return self._expression
+
 
 class FunctionColumn:
     """Represents the result of a SQL function call on a column."""

@@ -18,6 +18,7 @@ from sqlspec.utils.type_guards import is_statement_filter, supports_where
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.core.cache import FiltersView
     from sqlspec.core.filters import StatementFilter
 
 
@@ -161,14 +162,14 @@ class SQL:
         self._process_parameters(*parameters, **kwargs)
 
     def _create_auto_config(
-        self, statement: "Union[str, exp.Expression, 'SQL']", parameters: tuple, kwargs: dict[str, Any]
+        self, _statement: "Union[str, exp.Expression, 'SQL']", _parameters: tuple, _kwargs: dict[str, Any]
     ) -> "StatementConfig":
         """Create default StatementConfig when none provided.
 
         Args:
-            statement: The SQL statement
-            parameters: Statement parameters
-            kwargs: Additional keyword arguments
+            _statement: The SQL statement (unused)
+            _parameters: Statement parameters (unused)
+            _kwargs: Additional keyword arguments (unused)
 
         Returns:
             Default StatementConfig instance
@@ -196,14 +197,14 @@ class SQL:
         Args:
             sql_obj: Existing SQL object to copy from
         """
-        self._raw_sql = sql_obj._raw_sql
-        self._filters = sql_obj._filters.copy()
-        self._named_parameters = sql_obj._named_parameters.copy()
-        self._positional_parameters = sql_obj._positional_parameters.copy()
-        self._is_many = sql_obj._is_many
-        self._is_script = sql_obj._is_script
-        if sql_obj._processed_state is not Empty:
-            self._processed_state = sql_obj._processed_state
+        self._raw_sql = sql_obj.raw_sql
+        self._filters = sql_obj.filters.copy()
+        self._named_parameters = sql_obj.named_parameters.copy()
+        self._positional_parameters = sql_obj.positional_parameters.copy()
+        self._is_many = sql_obj.is_many
+        self._is_script = sql_obj.is_script
+        if sql_obj.is_processed:
+            self._processed_state = sql_obj.get_processed_state()
 
     def _should_auto_detect_many(self, parameters: tuple) -> bool:
         """Detect execute_many mode from parameter structure.
@@ -271,11 +272,35 @@ class SQL:
         return self._raw_sql
 
     @property
+    def raw_sql(self) -> str:
+        """Get raw SQL string (public API).
+
+        Returns:
+            The raw SQL string
+        """
+        return self._raw_sql
+
+    @property
     def parameters(self) -> Any:
         """Get the original parameters."""
         if self._named_parameters:
             return self._named_parameters
         return self._positional_parameters or []
+
+    @property
+    def positional_parameters(self) -> "list[Any]":
+        """Get positional parameters (public API)."""
+        return self._positional_parameters or []
+
+    @property
+    def named_parameters(self) -> "dict[str, Any]":
+        """Get named parameters (public API)."""
+        return self._named_parameters
+
+    @property
+    def original_parameters(self) -> Any:
+        """Get original parameters (public API)."""
+        return self._original_parameters
 
     @property
     def operation_type(self) -> "OperationType":
@@ -301,6 +326,25 @@ class SQL:
         """Applied filters."""
         return self._filters.copy()
 
+    def get_filters_view(self) -> "FiltersView":
+        """Get zero-copy filters view (public API).
+
+        Returns:
+            Read-only view of filters without copying
+        """
+        from sqlspec.core.cache import FiltersView
+
+        return FiltersView(self._filters)
+
+    @property
+    def is_processed(self) -> bool:
+        """Check if SQL has been processed (public API)."""
+        return self._processed_state is not Empty
+
+    def get_processed_state(self) -> Any:
+        """Get processed state (public API)."""
+        return self._processed_state
+
     @property
     def dialect(self) -> "Optional[str]":
         """SQL dialect."""
@@ -310,6 +354,17 @@ class SQL:
     def _statement(self) -> "Optional[exp.Expression]":
         """Internal SQLGlot expression."""
         return self.expression
+
+    @property
+    def statement_expression(self) -> "Optional[exp.Expression]":
+        """Get parsed statement expression (public API).
+
+        Returns:
+            Parsed SQLGlot expression or None if not parsed
+        """
+        if self._processed_state is not Empty:
+            return self._processed_state.parsed_expression
+        return None
 
     @property
     def is_many(self) -> bool:

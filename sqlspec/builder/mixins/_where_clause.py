@@ -1,4 +1,5 @@
 # ruff: noqa: PLR2004
+# pyright: reportPrivateUsage=false, reportPrivateImportUsage=false
 """WHERE and HAVING clause mixins.
 
 Provides mixins for WHERE and HAVING clause functionality with
@@ -14,7 +15,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec.builder._parsing_utils import parse_column_expression, parse_condition_expression
+from sqlspec.builder._parsing_utils import extract_column_name, parse_column_expression, parse_condition_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
@@ -23,31 +24,6 @@ from sqlspec.utils.type_guards import (
     has_sqlglot_expression,
     is_iterable_parameters,
 )
-
-
-def _extract_column_name(column: Union[str, exp.Column]) -> str:
-    """Extract column name from column expression for parameter naming.
-
-    Args:
-        column: Column expression (string or SQLGlot Column)
-
-    Returns:
-        Column name as string for use as parameter name
-    """
-    if isinstance(column, str):
-        # Handle simple column names and table.column references
-        if "." in column:
-            return column.split(".")[-1]  # Return just the column part
-        return column
-    if isinstance(column, exp.Column):
-        # Extract the column name from SQLGlot Column expression
-        try:
-            return str(column.this.this)
-        except AttributeError:
-            return str(column.this) if column.this else "column"
-    # Fallback for any unexpected types (defensive programming)
-    return "column"
-
 
 if TYPE_CHECKING:
     from sqlspec.builder._column import ColumnExpression
@@ -62,8 +38,9 @@ class WhereClauseMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def _create_parameterized_condition(
         self,
@@ -82,7 +59,7 @@ class WhereClauseMixin:
             The created condition expression
         """
         builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -118,18 +95,20 @@ class WhereClauseMixin:
             Self with OR condition applied
         """
         # Create a temporary clone to capture the condition
-        original_expr = self._expression
+        original_expr = self.get_expression()
 
         # Apply the where method to get the condition
         where_method(*args, **kwargs)
 
         # Get the last condition added by extracting it from the modified expression
-        if isinstance(self._expression, (exp.Select, exp.Update, exp.Delete)) and original_expr != self._expression:
-            last_where = self._expression.find(exp.Where)
+        current_expr = self.get_expression()
+        if isinstance(current_expr, (exp.Select, exp.Update, exp.Delete)) and original_expr != current_expr:
+            last_where = current_expr.find(exp.Where)
             if last_where and last_where.this:
                 condition = last_where.this
                 # Restore original expression
-                self._expression = original_expr
+                if original_expr is not None:
+                    self.set_expression(original_expr)
                 # Apply as OR
                 return self.or_where(condition)
 
@@ -236,7 +215,7 @@ class WhereClauseMixin:
         column_name_raw, operator, value = condition
         operator = str(operator).upper()
         column_exp = parse_column_expression(column_name_raw)
-        column_name = _extract_column_name(column_name_raw)
+        column_name = extract_column_name(column_name_raw)
 
         # Simple operators that use direct parameterization
         simple_operators = {
@@ -299,16 +278,17 @@ class WhereClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self.__class__.__name__ == "Update" and not isinstance(self._expression, exp.Update):
+        current_expr = self.get_expression()
+        if self.__class__.__name__ == "Update" and not isinstance(current_expr, exp.Update):
             msg = "Cannot add WHERE clause to non-UPDATE expression"
             raise SQLBuilderError(msg)
 
         builder = cast("SQLBuilderProtocol", self)
-        if builder._expression is None:
+        if current_expr is None:
             msg = "Cannot add WHERE clause: expression is not initialized."
             raise SQLBuilderError(msg)
 
-        if isinstance(builder._expression, exp.Delete) and not builder._expression.args.get("this"):
+        if isinstance(current_expr, exp.Delete) and not current_expr.args.get("this"):
             msg = "WHERE clause requires a table to be set. Use from() to set the table first."
             raise SQLBuilderError(msg)
 
@@ -357,10 +337,11 @@ class WhereClauseMixin:
                 else:
                     where_expr = self._process_tuple_condition((condition, values[0]))
                 # Process this condition and skip the rest
-                if isinstance(builder._expression, (exp.Select, exp.Update, exp.Delete)):
-                    builder._expression = builder._expression.where(where_expr, copy=False)
+                if isinstance(current_expr, (exp.Select, exp.Update, exp.Delete)):
+                    updated_expr = current_expr.where(where_expr, copy=False)
+                    self.set_expression(updated_expr)
                 else:
-                    msg = f"WHERE clause not supported for {type(builder._expression).__name__}"
+                    msg = f"WHERE clause not supported for {type(current_expr).__name__}"
                     raise SQLBuilderError(msg)
                 return self
             else:
@@ -400,10 +381,11 @@ class WhereClauseMixin:
             msg = f"Unsupported condition type: {type(condition).__name__}"
             raise SQLBuilderError(msg)
 
-        if isinstance(builder._expression, (exp.Select, exp.Update, exp.Delete)):
-            builder._expression = builder._expression.where(where_expr, copy=False)
+        if isinstance(current_expr, (exp.Select, exp.Update, exp.Delete)):
+            updated_expr = current_expr.where(where_expr, copy=False)
+            self.set_expression(updated_expr)
         else:
-            msg = f"WHERE clause not supported for {type(builder._expression).__name__}"
+            msg = f"WHERE clause not supported for {type(current_expr).__name__}"
             raise SQLBuilderError(msg)
         return self
 
@@ -448,7 +430,7 @@ class WhereClauseMixin:
     def where_between(self, column: Union[str, exp.Column], low: Any, high: Any) -> Self:
         """Add WHERE column BETWEEN low AND high clause."""
         builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         low_param = builder._generate_unique_parameter_name(f"{column_name}_low")
         high_param = builder._generate_unique_parameter_name(f"{column_name}_high")
         _, low_param = builder.add_parameter(low, name=low_param)
@@ -460,7 +442,7 @@ class WhereClauseMixin:
     def where_like(self, column: Union[str, exp.Column], pattern: str, escape: Optional[str] = None) -> Self:
         """Add WHERE column LIKE pattern clause."""
         builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(pattern, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -519,7 +501,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
             msg = "Unsupported type for 'values' in WHERE IN"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -548,7 +530,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
             msg = "Values for where_not_in must be a non-string iterable or subquery."
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -638,7 +620,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, bytes):
             msg = "Unsupported type for 'values' in WHERE ANY"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -678,7 +660,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, bytes):
             msg = "Unsupported type for 'values' in WHERE NOT ANY"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -975,7 +957,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
             msg = "Unsupported type for 'values' in OR WHERE IN"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -990,7 +972,7 @@ class WhereClauseMixin:
     def or_where_like(self, column: Union[str, exp.Column], pattern: str, escape: Optional[str] = None) -> Self:
         """Add OR column LIKE pattern clause."""
         builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(pattern, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -1044,7 +1026,7 @@ class WhereClauseMixin:
     def or_where_between(self, column: Union[str, exp.Column], low: Any, high: Any) -> Self:
         """Add OR column BETWEEN low AND high clause."""
         builder = cast("SQLBuilderProtocol", self)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         low_param = builder._generate_unique_parameter_name(f"{column_name}_low")
         high_param = builder._generate_unique_parameter_name(f"{column_name}_high")
         _, low_param = builder.add_parameter(low, name=low_param)
@@ -1092,7 +1074,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
             msg = "Values for or_where_not_in must be a non-string iterable or subquery."
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -1216,7 +1198,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, bytes):
             msg = "Unsupported type for 'values' in OR WHERE ANY"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -1272,7 +1254,7 @@ class WhereClauseMixin:
         if not is_iterable_parameters(values) or isinstance(values, bytes):
             msg = "Unsupported type for 'values' in OR WHERE NOT ANY"
             raise SQLBuilderError(msg)
-        column_name = _extract_column_name(column)
+        column_name = extract_column_name(column)
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
@@ -1292,7 +1274,9 @@ class HavingClauseMixin:
 
     __slots__ = ()
 
-    _expression: Optional[exp.Expression]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     def having(self, condition: Union[str, exp.Expression]) -> Self:
         """Add HAVING clause.
@@ -1306,11 +1290,15 @@ class HavingClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self._expression is None:
-            self._expression = exp.Select()
-        if not isinstance(self._expression, exp.Select):
+        current_expr = self.get_expression()
+        if current_expr is None:
+            self.set_expression(exp.Select())
+            current_expr = self.get_expression()
+
+        if not isinstance(current_expr, exp.Select):
             msg = "Cannot add HAVING to a non-SELECT expression."
             raise SQLBuilderError(msg)
         having_expr = exp.condition(condition) if isinstance(condition, str) else condition
-        self._expression = self._expression.having(having_expr, copy=False)
+        updated_expr = current_expr.having(having_expr, copy=False)
+        self.set_expression(updated_expr)
         return self

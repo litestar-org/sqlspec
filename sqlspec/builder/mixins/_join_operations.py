@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """JOIN operation mixins.
 
 Provides mixins for JOIN operations in SELECT statements.

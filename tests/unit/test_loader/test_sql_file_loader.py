@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for SQLFileLoader class.
 
 Tests for SQLFileLoader core functionality including:

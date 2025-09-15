@@ -1,16 +1,20 @@
+# pyright: reportPrivateUsage=false
 """CTE and set operation mixins.
 
 Provides mixins for Common Table Expressions (WITH clause) and
 set operations (UNION, INTERSECT, EXCEPT).
 """
 
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
+
+if TYPE_CHECKING:
+    from sqlspec.builder._base import QueryBuilder
 
 __all__ = ("CommonTableExpressionMixin", "SetOperationMixin")
 
@@ -20,8 +24,10 @@ class CommonTableExpressionMixin:
     """Mixin providing WITH clause (Common Table Expressions) support for SQL builders."""
 
     __slots__ = ()
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
 
     _with_ctes: Any  # Provided by QueryBuilder
     dialect: Any  # Provided by QueryBuilder
@@ -60,12 +66,14 @@ class CommonTableExpressionMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self._expression is None:
+        builder = cast("QueryBuilder", self)
+        expression = builder.get_expression()
+        if expression is None:
             msg = "Cannot add WITH clause: expression not initialized."
             raise SQLBuilderError(msg)
 
-        if not isinstance(self._expression, (exp.Select, exp.Insert, exp.Update, exp.Delete)):
-            msg = f"Cannot add WITH clause to {type(self._expression).__name__} expression."
+        if not isinstance(expression, (exp.Select, exp.Insert, exp.Update, exp.Delete)):
+            msg = f"Cannot add WITH clause to {type(expression).__name__} expression."
             raise SQLBuilderError(msg)
 
         cte_expr: Optional[exp.Expression] = None
@@ -103,19 +111,18 @@ class CommonTableExpressionMixin:
         else:
             cte_alias_expr = exp.alias_(cte_expr, name)
 
-        existing_with = self._expression.args.get("with")
+        existing_with = expression.args.get("with")
         if existing_with:
             existing_with.expressions.append(cte_alias_expr)
             if recursive:
                 existing_with.set("recursive", recursive)
         else:
             # Only SELECT, INSERT, UPDATE support WITH clauses
-            if hasattr(self._expression, "with_") and isinstance(
-                self._expression, (exp.Select, exp.Insert, exp.Update)
-            ):
-                self._expression = self._expression.with_(cte_alias_expr, as_=name, copy=False)
+            if hasattr(expression, "with_") and isinstance(expression, (exp.Select, exp.Insert, exp.Update)):
+                updated_expression = expression.with_(cte_alias_expr, as_=name, copy=False)
+                builder.set_expression(updated_expression)
                 if recursive:
-                    with_clause = self._expression.find(exp.With)
+                    with_clause = updated_expression.find(exp.With)
                     if with_clause:
                         with_clause.set("recursive", recursive)
             self._with_ctes[name] = exp.CTE(this=cte_expr, alias=exp.to_table(name))
@@ -128,10 +135,12 @@ class SetOperationMixin:
     """Mixin providing set operations (UNION, INTERSECT, EXCEPT) for SELECT builders."""
 
     __slots__ = ()
-    # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
 
-    _parameters: dict[str, Any]
+    # Type annotations for PyRight - these will be provided by the base class
+    def get_expression(self) -> Optional[exp.Expression]: ...
+    def set_expression(self, expression: exp.Expression) -> None: ...
+    def set_parameters(self, parameters: "dict[str, Any]") -> None: ...
+
     dialect: Any = None
 
     def build(self) -> Any:
@@ -162,7 +171,7 @@ class SetOperationMixin:
         union_expr = exp.union(left_expr, right_expr, distinct=not all_)
         new_builder = type(self)()
         new_builder.dialect = self.dialect
-        new_builder._expression = union_expr
+        cast("QueryBuilder", new_builder).set_expression(union_expr)
         merged_parameters = dict(left_query.parameters)
         for param_name, param_value in right_query.parameters.items():
             if param_name in merged_parameters:
@@ -181,11 +190,11 @@ class SetOperationMixin:
 
                 right_expr = right_expr.transform(rename_parameter)
                 union_expr = exp.union(left_expr, right_expr, distinct=not all_)
-                new_builder._expression = union_expr
+                cast("QueryBuilder", new_builder).set_expression(union_expr)
                 merged_parameters[new_param_name] = param_value
             else:
                 merged_parameters[param_name] = param_value
-        new_builder._parameters = merged_parameters
+        new_builder.set_parameters(merged_parameters)
         return new_builder
 
     def intersect(self, other: Any) -> Self:
@@ -210,10 +219,10 @@ class SetOperationMixin:
         intersect_expr = exp.intersect(left_expr, right_expr, distinct=True)
         new_builder = type(self)()
         new_builder.dialect = self.dialect
-        new_builder._expression = intersect_expr
+        cast("QueryBuilder", new_builder).set_expression(intersect_expr)
         merged_parameters = dict(left_query.parameters)
         merged_parameters.update(right_query.parameters)
-        new_builder._parameters = merged_parameters
+        new_builder.set_parameters(merged_parameters)
         return new_builder
 
     def except_(self, other: Any) -> Self:
@@ -238,8 +247,8 @@ class SetOperationMixin:
         except_expr = exp.except_(left_expr, right_expr)
         new_builder = type(self)()
         new_builder.dialect = self.dialect
-        new_builder._expression = except_expr
+        cast("QueryBuilder", new_builder).set_expression(except_expr)
         merged_parameters = dict(left_query.parameters)
         merged_parameters.update(right_query.parameters)
-        new_builder._parameters = merged_parameters
+        new_builder.set_parameters(merged_parameters)
         return new_builder

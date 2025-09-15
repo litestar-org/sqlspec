@@ -13,7 +13,7 @@ from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
-from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
+from sqlspec.core.cache import get_cache, get_cache_config
 from sqlspec.core.hashing import hash_optimized_expression
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
@@ -90,6 +90,36 @@ class QueryBuilder(ABC):
             self._raise_sql_builder_error(
                 "QueryBuilder._create_base_expression must return a valid sqlglot expression."
             )
+
+    def get_expression(self) -> Optional[exp.Expression]:
+        """Get expression reference (no copy).
+
+        Returns:
+            The current SQLGlot expression or None if not set
+        """
+        return self._expression
+
+    def set_expression(self, expression: exp.Expression) -> None:
+        """Set expression with validation.
+
+        Args:
+            expression: SQLGlot expression to set
+
+        Raises:
+            TypeError: If expression is not a SQLGlot Expression
+        """
+        if not isinstance(expression, exp.Expression):
+            msg = f"Expected Expression, got {type(expression)}"
+            raise TypeError(msg)
+        self._expression = expression
+
+    def has_expression(self) -> bool:
+        """Check if expression exists.
+
+        Returns:
+            True if expression is set, False otherwise
+        """
+        return self._expression is not None
 
     @abstractmethod
     def _create_base_expression(self) -> exp.Expression:
@@ -307,12 +337,13 @@ class QueryBuilder(ABC):
         cte_select_expression: exp.Select
 
         if isinstance(query, QueryBuilder):
-            if query._expression is None:
+            query_expr = query.get_expression()
+            if query_expr is None:
                 self._raise_sql_builder_error("CTE query builder has no expression.")
-            if not isinstance(query._expression, exp.Select):
-                msg = f"CTE query builder expression must be a Select, got {type(query._expression).__name__}."
+            if not isinstance(query_expr, exp.Select):
+                msg = f"CTE query builder expression must be a Select, got {type(query_expr).__name__}."
                 self._raise_sql_builder_error(msg)
-            cte_select_expression = query._expression
+            cte_select_expression = query_expr
             param_mapping = self._merge_cte_parameters(alias, query.parameters)
             updated_expression = self._update_placeholders_in_expression(cte_select_expression, param_mapping)
             if not isinstance(updated_expression, exp.Select):
@@ -398,9 +429,8 @@ class QueryBuilder(ABC):
             expression, dialect=dialect_name, schema=self.schema, optimizer_settings=optimizer_settings
         )
 
-        cache_key_obj = CacheKey((cache_key,))
-        unified_cache = get_default_cache()
-        cached_optimized = unified_cache.get(cache_key_obj)
+        cache = get_cache()
+        cached_optimized = cache.get("optimized", cache_key)
         if cached_optimized:
             return cast("exp.Expression", cached_optimized)
 
@@ -409,7 +439,7 @@ class QueryBuilder(ABC):
                 expression, schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
             )
 
-            unified_cache.put(cache_key_obj, optimized)
+            cache.put("optimized", cache_key, optimized)
 
         except Exception:
             return expression
@@ -430,15 +460,14 @@ class QueryBuilder(ABC):
             return self._to_statement(config)
 
         cache_key_str = self._generate_builder_cache_key(config)
-        cache_key = CacheKey((cache_key_str,))
 
-        unified_cache = get_default_cache()
-        cached_sql = unified_cache.get(cache_key)
+        cache = get_cache()
+        cached_sql = cache.get("builder", cache_key_str)
         if cached_sql is not None:
             return cast("SQL", cached_sql)
 
         sql_statement = self._to_statement(config)
-        unified_cache.put(cache_key, sql_statement)
+        cache.put("builder", cache_key_str, sql_statement)
 
         return sql_statement
 
@@ -531,3 +560,16 @@ class QueryBuilder(ABC):
     def parameters(self) -> dict[str, Any]:
         """Public access to query parameters."""
         return self._parameters
+
+    def set_parameters(self, parameters: dict[str, Any]) -> None:
+        """Set query parameters (public API)."""
+        self._parameters = parameters.copy()
+
+    @property
+    def with_ctes(self) -> "dict[str, exp.CTE]":
+        """Get WITH clause CTEs (public API)."""
+        return dict(self._with_ctes)
+
+    def generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate unique parameter name (public API)."""
+        return self._generate_unique_parameter_name(base_name)

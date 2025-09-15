@@ -131,7 +131,7 @@ class Update(
             subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=self.dialect))
             table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
 
-            subquery_parameters = table._parameters
+            subquery_parameters = table.parameters
             if subquery_parameters:
                 for p_name, p_value in subquery_parameters.items():
                     self.add_parameter(p_value, name=p_name)

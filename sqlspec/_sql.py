@@ -170,7 +170,7 @@ class SQLFactory:
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
             builder = Select(dialect=dialect or self.dialect)
-            builder._expression = parsed_expr
+            builder.set_expression(parsed_expr)
             return builder
 
         if actual_type_str in {"INSERT", "UPDATE", "DELETE"} and parsed_expr.args.get("returning") is not None:
@@ -451,7 +451,7 @@ class SQLFactory:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Insert):
-                builder._expression = parsed_expr
+                builder.set_expression(parsed_expr)
                 return builder
 
             if isinstance(parsed_expr, exp.Select):
@@ -470,7 +470,7 @@ class SQLFactory:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Select):
-                builder._expression = parsed_expr
+                builder.set_expression(parsed_expr)
                 return builder
 
             logger.warning("Cannot create SELECT from %s statement", type(parsed_expr).__name__)
@@ -485,7 +485,7 @@ class SQLFactory:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
-                builder._expression = parsed_expr
+                builder.set_expression(parsed_expr)
                 return builder
 
             logger.warning("Cannot create UPDATE from %s statement", type(parsed_expr).__name__)
@@ -500,7 +500,7 @@ class SQLFactory:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
-                builder._expression = parsed_expr
+                builder.set_expression(parsed_expr)
                 return builder
 
             logger.warning("Cannot create DELETE from %s statement", type(parsed_expr).__name__)
@@ -515,7 +515,7 @@ class SQLFactory:
             parsed_expr: exp.Expression = exp.maybe_parse(sql_string, dialect=self.dialect)
 
             if isinstance(parsed_expr, exp.Merge):
-                builder._expression = parsed_expr
+                builder.set_expression(parsed_expr)
                 return builder
 
             logger.warning("Cannot create MERGE from %s statement", type(parsed_expr).__name__)
@@ -724,19 +724,15 @@ class SQLFactory:
         if not parameters:
             try:
                 parsed: exp.Expression = exp.maybe_parse(sql_fragment)
-                return parsed
-                if sql_fragment.strip().replace("_", "").replace(".", "").isalnum():
-                    return exp.to_identifier(sql_fragment)
-                return exp.Literal.string(sql_fragment)
             except Exception as e:
                 msg = f"Failed to parse raw SQL fragment '{sql_fragment}': {e}"
                 raise SQLBuilderError(msg) from e
+            return parsed
 
         return SQL(sql_fragment, parameters)
 
-    @staticmethod
     def count(
-        column: Union[str, exp.Expression, "ExpressionWrapper", "Case", "Column"] = "*", distinct: bool = False
+        self, column: Union[str, exp.Expression, "ExpressionWrapper", "Case", "Column"] = "*", distinct: bool = False
     ) -> AggregateExpression:
         """Create a COUNT expression.
 
@@ -750,7 +746,7 @@ class SQLFactory:
         if isinstance(column, str) and column == "*":
             expr = exp.Count(this=exp.Star(), distinct=distinct)
         else:
-            col_expr = SQLFactory._extract_expression(column)
+            col_expr = self._extract_expression(column)
             expr = exp.Count(this=col_expr, distinct=distinct)
         return AggregateExpression(expr)
 
@@ -1068,11 +1064,11 @@ class SQLFactory:
         if isinstance(value, str):
             return exp.column(value)
         if isinstance(value, Column):
-            return value._expression
+            return value.sqlglot_expression
         if isinstance(value, ExpressionWrapper):
             return value.expression
         if isinstance(value, Case):
-            return exp.Case(ifs=value._conditions, default=value._default)
+            return exp.Case(ifs=value.conditions, default=value.default)
         if isinstance(value, exp.Expression):
             return value
         return exp.convert(value)

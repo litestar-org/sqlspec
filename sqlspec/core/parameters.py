@@ -1064,7 +1064,7 @@ class ParameterProcessor:
 
         return processed_sql, processed_parameters
 
-    def _get_sqlglot_compatible_sql(
+    def get_sqlglot_compatible_sql(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, dialect: Optional[str] = None
     ) -> "tuple[str, Any]":
         """Get SQL normalized for parsing only (Phase 1 only).

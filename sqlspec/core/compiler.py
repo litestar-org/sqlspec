@@ -171,7 +171,7 @@ class SQLProcessor:
         if not self._config.enable_caching:
             return self._compile_uncached(sql, parameters, is_many)
 
-        cache_key = self._make_cache_key(sql, parameters)
+        cache_key = self._make_cache_key(sql, parameters, is_many)
 
         if cache_key in self._cache:
             result = self._cache[cache_key]
@@ -216,7 +216,7 @@ class SQLProcessor:
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 sqlglot_sql = processed_sql
             else:
-                sqlglot_sql, _ = self._parameter_processor._get_sqlglot_compatible_sql(
+                sqlglot_sql, _ = self._parameter_processor.get_sqlglot_compatible_sql(
                     sql, parameters, self._config.parameter_config, dialect_str
                 )
 
@@ -273,12 +273,13 @@ class SQLProcessor:
             logger.warning("Compilation failed, using fallback: %s", e)
             return CompiledSQL(compiled_sql=sql, execution_parameters=parameters, operation_type="UNKNOWN")
 
-    def _make_cache_key(self, sql: str, parameters: Any) -> str:
+    def _make_cache_key(self, sql: str, parameters: Any, is_many: bool = False) -> str:
         """Generate cache key.
 
         Args:
             sql: SQL string
             parameters: Parameter values
+            is_many: Whether this is for execute_many operation
 
         Returns:
             Cache key string
@@ -295,6 +296,7 @@ class SQLProcessor:
             dialect_str,
             self._config.enable_parsing,
             self._config.enable_transformations,
+            is_many,
         )
 
         hash_str = hashlib.sha256(str(hash_data).encode("utf-8")).hexdigest()[:16]

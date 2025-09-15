@@ -90,6 +90,10 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
             raise SQLBuilderError(ERR_MSG_INTERNAL_EXPRESSION_TYPE)
         return self._expression
 
+    def get_insert_expression(self) -> exp.Insert:
+        """Get the insert expression (public API)."""
+        return self._get_insert_expression()
+
     def values(self, *values: Any, **kwargs: Any) -> "Self":
         """Adds a row of values to the INSERT statement.
 
@@ -129,7 +133,7 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
             if hasattr(values_0, "items") and hasattr(values_0, "keys"):
                 return self.values_from_dict(values_0)
 
-        insert_expr = self._get_insert_expression()
+        insert_expr = self.get_insert_expression()
 
         if self._columns and len(values) != len(self._columns):
             msg = ERR_MSG_VALUES_COLUMNS_MISMATCH.format(values_len=len(values), columns_len=len(self._columns))
@@ -160,9 +164,9 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
                 if self._columns and i < len(self._columns):
                     column_str = str(self._columns[i])
                     column_name = column_str.rsplit(".", maxsplit=1)[-1] if "." in column_str else column_str
-                    param_name = self._generate_unique_parameter_name(column_name)
+                    param_name = self.generate_unique_parameter_name(column_name)
                 else:
-                    param_name = self._generate_unique_parameter_name(f"value_{i + 1}")
+                    param_name = self.generate_unique_parameter_name(f"value_{i + 1}")
                 _, param_name = self.add_parameter(value, name=param_name)
                 value_placeholders.append(exp.Placeholder(this=param_name))
 
@@ -336,7 +340,7 @@ class ConflictBuilder:
             ).do_nothing()
             ```
         """
-        insert_expr = self._insert_builder._get_insert_expression()
+        insert_expr = self._insert_builder.get_insert_expression()
 
         # Create ON CONFLICT with proper structure
         conflict_keys = [exp.to_identifier(col) for col in self._columns] if self._columns else None
@@ -363,7 +367,7 @@ class ConflictBuilder:
             )
             ```
         """
-        insert_expr = self._insert_builder._get_insert_expression()
+        insert_expr = self._insert_builder.get_insert_expression()
 
         # Create SET expressions for the UPDATE
         set_expressions = []
@@ -394,7 +398,7 @@ class ConflictBuilder:
                 value_expr = val
             else:
                 # Create parameter for regular values
-                param_name = self._insert_builder._generate_unique_parameter_name(col)
+                param_name = self._insert_builder.generate_unique_parameter_name(col)
                 _, param_name = self._insert_builder.add_parameter(val, name=param_name)
                 value_expr = exp.Placeholder(this=param_name)
 

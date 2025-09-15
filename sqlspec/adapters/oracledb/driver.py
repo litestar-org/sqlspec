@@ -286,6 +286,11 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
+        # Oracle-specific fix: Ensure parameters are in list format for executemany
+        # Oracle expects a list of sequences, not a tuple of sequences
+        if isinstance(prepared_parameters, tuple):
+            prepared_parameters = list(prepared_parameters)
+
         cursor.executemany(sql, prepared_parameters)
 
         # Calculate affected rows based on parameter count

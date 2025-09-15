@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for the SQLSpec cache system.
 
 This module tests the unified caching system. Tests cover:
@@ -5,12 +6,10 @@ This module tests the unified caching system. Tests cover:
 1. CacheKey - Immutable cache keys
 2. CacheStats - Cache statistics tracking and monitoring
 3. UnifiedCache - Main LRU cache implementation with TTL support
-4. StatementCache - Specialized caching for compiled SQL statements
-5. ExpressionCache - Specialized caching for parsed SQLGlot expressions
-6. ParameterCache - Specialized caching for processed parameters
-7. Cache management functions - Global cache management and configuration
-8. Thread safety - Concurrent access and operations
-9. Performance characteristics - O(1) operations and memory efficiency
+4. MultiLevelCache - Namespace-based cache with zero-copy views
+5. Cache management functions - Global cache management and configuration
+6. Thread safety - Concurrent access and operations
+7. Performance characteristics - O(1) operations and memory efficiency
 
 The cache system provides thread-safe caching with LRU eviction,
 TTL-based expiration, and statistics tracking for monitoring
@@ -19,7 +18,6 @@ across the entire SQLSpec system.
 
 import threading
 import time
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -28,22 +26,16 @@ from sqlspec.core.cache import (
     CacheConfig,
     CacheKey,
     CacheStats,
-    CacheStatsAggregate,
-    ExpressionCache,
-    ParameterCache,
-    StatementCache,
+    MultiLevelCache,
     UnifiedCache,
     clear_all_caches,
+    get_cache,
     get_cache_config,
     get_cache_statistics,
     get_cache_stats,
     get_default_cache,
-    get_expression_cache,
-    get_parameter_cache,
-    get_statement_cache,
     log_cache_stats,
     reset_cache_stats,
-    sql_cache,
     update_cache_config,
 )
 
@@ -335,227 +327,61 @@ def test_unified_cache_statistics_tracking() -> None:
     assert stats.evictions == 1
 
 
-def test_statement_cache_initialization() -> None:
-    """Test StatementCache initialization."""
-    stmt_cache = StatementCache(max_size=100)
+def test_multi_level_cache_statement_operations() -> None:
+    """Test MultiLevelCache statement namespace operations."""
+    cache = get_cache()
 
-    assert isinstance(stmt_cache._cache, UnifiedCache)
-    stats = stmt_cache.get_stats()
-    assert stats.hits == 0
-    assert stats.misses == 0
-
-
-@patch("sqlspec.core.statement.SQL")
-def test_statement_cache_compiled_storage_and_retrieval(mock_sql: MagicMock) -> None:
-    """Test storing and retrieving compiled SQL statements."""
-    stmt_cache = StatementCache()
-
-    mock_statement = MagicMock()
-    mock_statement._raw_sql = "SELECT * FROM users WHERE id = ?"
-    mock_statement.dialect = None
-    mock_statement.is_many = False
-    mock_statement.is_script = False
-    mock_sql.return_value = mock_statement
-
+    cache_key = "SELECT * FROM users WHERE id = ?"
     compiled_sql = "SELECT * FROM users WHERE id = $1"
     parameters = ["param1"]
-    stmt_cache.put_compiled(mock_statement, compiled_sql, parameters)
+    cache_value = (compiled_sql, parameters)
 
-    result = stmt_cache.get_compiled(mock_statement)
+    cache.put("statement", cache_key, cache_value)
+
+    result = cache.get("statement", cache_key)
     assert result is not None
     assert result[0] == compiled_sql
     assert result[1] == parameters
 
-
-@patch("sqlspec.core.statement.SQL")
-def test_statement_cache_key_generation(mock_sql: MagicMock) -> None:
-    """Test cache key generation for SQL statements."""
-    stmt_cache = StatementCache()
-
-    mock_statement1 = MagicMock()
-    mock_statement1._raw_sql = "SELECT * FROM users"
-    mock_statement1.dialect = "postgresql"
-    mock_statement1.is_many = False
-    mock_statement1.is_script = False
-
-    def _hash1(self: Any) -> int:
-        return hash("statement1")
-
-    mock_statement1.__hash__ = _hash1  # pyright: ignore[reportAttributeAccessIssue]
-
-    mock_statement2 = MagicMock()
-    mock_statement2._raw_sql = "SELECT * FROM orders"
-    mock_statement2.dialect = "postgresql"
-    mock_statement2.is_many = False
-    mock_statement2.is_script = False
-
-    def _hash2(self: Any) -> int:
-        return hash("statement2")
-
-    mock_statement2.__hash__ = _hash2  # pyright: ignore[reportAttributeAccessIssue]
-
-    key1 = stmt_cache._create_statement_key(mock_statement1)
-    key2 = stmt_cache._create_statement_key(mock_statement2)
-
-    assert key1 != key2
-    assert isinstance(key1, CacheKey)
-    assert isinstance(key2, CacheKey)
+    cache.delete("statement", cache_key)
+    assert cache.get("statement", cache_key) is None
 
 
-def test_statement_cache_clear_operation() -> None:
-    """Test clearing statement cache."""
-    stmt_cache = StatementCache()
-
-    test_key = CacheKey(("test", "data"))
-    stmt_cache._cache.put(test_key, ("SELECT 1", []))
-
-    assert stmt_cache._cache.size() == 1
-
-    stmt_cache.clear()
-    assert stmt_cache._cache.size() == 0
-
-
-def test_expression_cache_initialization() -> None:
-    """Test ExpressionCache initialization."""
-    expr_cache = ExpressionCache(max_size=50)
-
-    assert isinstance(expr_cache._cache, UnifiedCache)
-    stats = expr_cache.get_stats()
-    assert stats.hits == 0
-
-
-def test_expression_cache_key_generation() -> None:
-    """Test cache key generation for expressions."""
-    expr_cache = ExpressionCache()
-
-    sql1 = "SELECT * FROM users"
-    dialect1 = "postgresql"
-    key1 = expr_cache._create_expression_key(sql1, dialect1)
-
-    sql2 = "SELECT * FROM orders"
-    dialect2 = "postgresql"
-    key2 = expr_cache._create_expression_key(sql2, dialect2)
-
-    sql3 = sql1
-    dialect3 = "mysql"
-    key3 = expr_cache._create_expression_key(sql3, dialect3)
-
-    assert key1 != key2
-
-    assert key1 != key3
-
-
-def test_expression_cache_storage_and_retrieval() -> None:
-    """Test storing and retrieving parsed expressions."""
-    expr_cache = ExpressionCache()
+def test_multi_level_cache_expression_operations() -> None:
+    """Test MultiLevelCache expression namespace operations."""
+    cache = get_cache()
 
     sql = "SELECT * FROM users WHERE id = 1"
     dialect = "postgresql"
+    cache_key = f"{sql}::{dialect}"
     mock_expression = MagicMock()
     mock_expression.sql.return_value = sql
 
-    expr_cache.put_expression(sql, mock_expression, dialect)
+    cache.put("expression", cache_key, mock_expression)
 
-    result = expr_cache.get_expression(sql, dialect)
+    result = cache.get("expression", cache_key)
     assert result is mock_expression
 
-    result_different = expr_cache.get_expression(sql, "mysql")
-    assert result_different is None
+    result_missing = cache.get("expression", "missing_key")
+    assert result_missing is None
 
 
-def test_expression_cache_clear_operation() -> None:
-    """Test clearing expression cache."""
-    expr_cache = ExpressionCache()
-
-    sql = "SELECT 1"
-    expr_cache.put_expression(sql, MagicMock())
-    assert expr_cache._cache.size() == 1
-
-    expr_cache.clear()
-    assert expr_cache._cache.size() == 0
-
-
-def test_parameter_cache_initialization() -> None:
-    """Test ParameterCache initialization."""
-    param_cache = ParameterCache(max_size=200)
-
-    assert isinstance(param_cache._cache, UnifiedCache)
-    stats = param_cache.get_stats()
-    assert stats.hits == 0
-
-
-def test_parameter_cache_key_generation_dict_params() -> None:
-    """Test cache key generation for dictionary parameters."""
-    param_cache = ParameterCache()
-
-    params1 = {"user_id": 1, "name": "John"}
-    config_hash1 = hash("config1")
-    key1 = param_cache._create_parameter_key(params1, config_hash1)
-
-    params2 = {"user_id": 2, "name": "Jane"}
-    config_hash2 = hash("config1")
-    key2 = param_cache._create_parameter_key(params2, config_hash2)
-
-    params3 = params1
-    config_hash3 = hash("config2")
-    key3 = param_cache._create_parameter_key(params3, config_hash3)
-
-    assert key1 != key2
-
-    assert key1 != key3
-
-
-def test_parameter_cache_key_generation_list_params() -> None:
-    """Test cache key generation for list/tuple parameters."""
-    param_cache = ParameterCache()
-
-    params1 = [1, 2, 3]
-    params2 = (1, 2, 3)
-    config_hash = hash("config")
-
-    key1 = param_cache._create_parameter_key(params1, config_hash)
-    key2 = param_cache._create_parameter_key(params2, config_hash)
-
-    assert key1 == key2
-
-
-def test_parameter_cache_key_generation_unhashable_params() -> None:
-    """Test cache key generation for unhashable parameters."""
-    param_cache = ParameterCache()
-
-    params = [[1, 2], [3, 4]]
-    config_hash = hash("config")
-
-    key = param_cache._create_parameter_key(params, config_hash)
-    assert isinstance(key, CacheKey)
-
-
-def test_parameter_cache_storage_and_retrieval() -> None:
-    """Test storing and retrieving processed parameters."""
-    param_cache = ParameterCache()
+def test_multi_level_cache_parameter_operations() -> None:
+    """Test MultiLevelCache parameter namespace operations."""
+    cache = get_cache()
 
     original_params = {"user_id": 1, "name": "John"}
     processed_params = [1, "John"]
     config_hash = hash("config")
+    cache_key = f"{hash(str(original_params))}::{config_hash}"
 
-    param_cache.put_parameters(original_params, processed_params, config_hash)
+    cache.put("parameter", cache_key, processed_params)
 
-    result = param_cache.get_parameters(original_params, config_hash)
+    result = cache.get("parameter", cache_key)
     assert result == processed_params
 
-    result_different = param_cache.get_parameters(original_params, hash("different_config"))
-    assert result_different is None
-
-
-def test_parameter_cache_clear_operation() -> None:
-    """Test clearing parameter cache."""
-    param_cache = ParameterCache()
-
-    param_cache.put_parameters({"test": 1}, [1], hash("config"))
-    assert param_cache._cache.size() == 1
-
-    param_cache.clear()
-    assert param_cache._cache.size() == 0
+    cache.delete("parameter", cache_key)
+    assert cache.get("parameter", cache_key) is None
 
 
 def test_get_default_cache_singleton() -> None:
@@ -567,75 +393,45 @@ def test_get_default_cache_singleton() -> None:
     assert isinstance(cache1, UnifiedCache)
 
 
-def test_get_statement_cache_singleton() -> None:
-    """Test that get_statement_cache returns the same instance."""
-    cache1 = get_statement_cache()
-    cache2 = get_statement_cache()
+def test_get_cache_singleton() -> None:
+    """Test that get_cache returns the same instance."""
+    cache1 = get_cache()
+    cache2 = get_cache()
 
     assert cache1 is cache2
-    assert isinstance(cache1, StatementCache)
-
-
-def test_get_expression_cache_singleton() -> None:
-    """Test that get_expression_cache returns the same instance."""
-    cache1 = get_expression_cache()
-    cache2 = get_expression_cache()
-
-    assert cache1 is cache2
-    assert isinstance(cache1, ExpressionCache)
-
-
-def test_get_parameter_cache_singleton() -> None:
-    """Test that get_parameter_cache returns the same instance."""
-    cache1 = get_parameter_cache()
-    cache2 = get_parameter_cache()
-
-    assert cache1 is cache2
-    assert isinstance(cache1, ParameterCache)
+    assert isinstance(cache1, MultiLevelCache)
 
 
 def test_clear_all_caches_function() -> None:
     """Test clearing all global cache instances."""
 
     default_cache = get_default_cache()
-    stmt_cache = get_statement_cache()
-    expr_cache = get_expression_cache()
-    param_cache = get_parameter_cache()
+    multi_cache = get_cache()
 
     test_key = CacheKey(("test",))
     default_cache.put(test_key, "test_value")
-    stmt_cache._cache.put(test_key, ("SELECT 1", []))
-    expr_cache._cache.put(test_key, MagicMock())
-    param_cache._cache.put(test_key, [1, 2, 3])
+    multi_cache.put("test", "key1", "value1")
 
     assert default_cache.size() > 0
-    assert stmt_cache._cache.size() > 0
-    assert expr_cache._cache.size() > 0
-    assert param_cache._cache.size() > 0
+    assert multi_cache.get("test", "key1") == "value1"
 
     clear_all_caches()
 
     assert default_cache.size() == 0
-    assert stmt_cache._cache.size() == 0
-    assert expr_cache._cache.size() == 0
-    assert param_cache._cache.size() == 0
+    assert multi_cache.get("test", "key1") is None
 
 
 def test_get_cache_statistics_function() -> None:
     """Test getting statistics from all cache instances."""
 
     get_default_cache()
-    get_statement_cache()
-    get_expression_cache()
-    get_parameter_cache()
+    get_cache()
 
     stats_dict = get_cache_statistics()
 
     assert isinstance(stats_dict, dict)
     assert "default" in stats_dict
-    assert "statement" in stats_dict
-    assert "expression" in stats_dict
-    assert "parameter" in stats_dict
+    assert "multi_level" in stats_dict
 
     for stats in stats_dict.values():
         assert isinstance(stats, CacheStats)
@@ -693,55 +489,52 @@ def test_update_cache_config_function() -> None:
         update_cache_config(original_config)
 
 
-def test_cache_stats_aggregate_initialization() -> None:
-    """Test CacheStatsAggregate initialization."""
-    stats = CacheStatsAggregate()
+def test_multi_level_cache_namespace_isolation() -> None:
+    """Test that different namespaces in MultiLevelCache are isolated."""
+    cache = get_cache()
 
-    assert stats.sql_hit_rate == 0.0
-    assert stats.fragment_hit_rate == 0.0
-    assert stats.optimized_hit_rate == 0.0
-    assert stats.sql_size == 0
-    assert stats.fragment_size == 0
-    assert stats.optimized_size == 0
-    assert stats.sql_hits == 0
-    assert stats.sql_misses == 0
-    assert stats.fragment_hits == 0
-    assert stats.fragment_misses == 0
-    assert stats.optimized_hits == 0
-    assert stats.optimized_misses == 0
+    cache.put("statement", "key1", "value1")
+    cache.put("expression", "key1", "value2")
+    cache.put("parameter", "key1", "value3")
+
+    assert cache.get("statement", "key1") == "value1"
+    assert cache.get("expression", "key1") == "value2"
+    assert cache.get("parameter", "key1") == "value3"
+
+    cache.delete("statement", "key1")
+    assert cache.get("statement", "key1") is None
+    assert cache.get("expression", "key1") == "value2"
+    assert cache.get("parameter", "key1") == "value3"
 
 
 def test_get_cache_stats_aggregation() -> None:
     """Test cache statistics aggregation."""
-
     reset_cache_stats()
 
     stats = get_cache_stats()
-    assert isinstance(stats, CacheStatsAggregate)
-
-    assert stats.sql_hits == 0
-    assert stats.sql_misses == 0
+    assert isinstance(stats, dict)
+    assert "default" in stats
+    assert "multi_level" in stats
 
 
 def test_reset_cache_stats_function() -> None:
     """Test resetting all cache statistics."""
-
     default_cache = get_default_cache()
-    stmt_cache = get_statement_cache()
+    multi_cache = get_cache()
 
     test_key = CacheKey(("test",))
     default_cache.get(test_key)
-    stmt_cache._cache.get(test_key)
+    multi_cache.get("test", "key")
 
     reset_cache_stats()
 
     default_stats = default_cache.get_stats()
-    stmt_stats = stmt_cache.get_stats()
+    multi_stats = multi_cache.get_stats()
 
     assert default_stats.hits == 0
     assert default_stats.misses == 0
-    assert stmt_stats.hits == 0
-    assert stmt_stats.misses == 0
+    assert multi_stats.hits == 0
+    assert multi_stats.misses == 0
 
 
 def test_log_cache_stats_function() -> None:
@@ -756,17 +549,18 @@ def test_log_cache_stats_function() -> None:
         mock_logger.info.assert_called_once()
 
 
-def test_sql_cache_interface() -> None:
-    """Test SQL compilation cache interface for compatibility."""
-    cache_key = "test_sql_cache_key"
+def test_multi_level_cache_interface() -> None:
+    """Test multi-level cache interface."""
+    cache = get_cache()
+    cache_key = "test_cache_key"
     cache_value = ("SELECT * FROM users WHERE id = $1", [1])
 
-    sql_cache.set(cache_key, cache_value)
+    cache.put("statement", cache_key, cache_value, "postgres")
 
-    result = sql_cache.get(cache_key)
+    result = cache.get("statement", cache_key, "postgres")
     assert result == cache_value
 
-    result_none = sql_cache.get("non_existent_key")
+    result_none = cache.get("statement", "non_existent_key", "postgres")
     assert result_none is None
 
 

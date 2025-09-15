@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """ORDER BY, LIMIT, OFFSET, and RETURNING clause mixins.
 
 Provides mixins for query result ordering, limiting, and result

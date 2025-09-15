@@ -1,3 +1,5 @@
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
+# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for migration commands functionality.
 
 Tests focused on MigrationCommands class behavior including:

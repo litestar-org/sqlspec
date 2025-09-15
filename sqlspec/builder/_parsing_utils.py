@@ -18,6 +18,27 @@ from sqlspec.utils.type_guards import (
 )
 
 
+def extract_column_name(column: Union[str, exp.Column]) -> str:
+    """Extract column name from column expression for parameter naming.
+
+    Args:
+        column: Column expression (string or SQLGlot Column)
+
+    Returns:
+        Column name as string for use as parameter name
+    """
+    if isinstance(column, str):
+        if "." in column:
+            return column.split(".")[-1]
+        return column
+    if isinstance(column, exp.Column):
+        try:
+            return str(column.this.this)
+        except AttributeError:
+            return str(column.this) if column.this else "column"
+    return "column"
+
+
 def parse_column_expression(
     column_input: Union[str, exp.Expression, Any], builder: Optional[Any] = None
 ) -> exp.Expression:
@@ -139,10 +160,8 @@ def parse_condition_expression(
         if value is None:
             return exp.Is(this=column_expr, expression=exp.null())
         if builder and has_parameter_builder(builder):
-            from sqlspec.builder.mixins._where_clause import _extract_column_name
-
-            column_name = _extract_column_name(column)
-            param_name = builder._generate_unique_parameter_name(column_name)
+            column_name = extract_column_name(column)
+            param_name = builder.generate_unique_parameter_name(column_name)
             _, param_name = builder.add_parameter(value, name=param_name)
             return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
         if isinstance(value, str):

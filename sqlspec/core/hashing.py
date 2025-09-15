@@ -185,26 +185,24 @@ def hash_sql_statement(statement: "SQL") -> str:
     """
     from sqlspec.utils.type_guards import is_expression
 
-    if is_expression(statement._statement):
-        expr_hash = hash_expression(statement._statement)
-    else:
-        expr_hash = hash(statement._raw_sql)
+    stmt_expr = statement.statement_expression
+    expr_hash = hash_expression(stmt_expr) if is_expression(stmt_expr) else hash(statement.raw_sql)
 
     param_hash = hash_parameters(
-        positional_parameters=statement._positional_parameters,
-        named_parameters=statement._named_parameters,
-        original_parameters=statement._original_parameters,
+        positional_parameters=statement.positional_parameters,
+        named_parameters=statement.named_parameters,
+        original_parameters=statement.original_parameters,
     )
 
-    filter_hash = hash_filters(statement._filters)
+    filter_hash = hash_filters(statement.filters)
 
     state_components = [
         expr_hash,
         param_hash,
         filter_hash,
-        hash(statement._dialect),
-        hash(statement._is_many),
-        hash(statement._is_script),
+        hash(statement.dialect),
+        hash(statement.is_many),
+        hash(statement.is_script),
     ]
 
     return f"sql:{hash(tuple(state_components))}"
