@@ -15,6 +15,7 @@ from mypy_extensions import trait
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import (
     CATTRS_INSTALLED,
+    NUMPY_INSTALLED,
     ModelDTOT,
     ModelT,
     attrs_asdict,
@@ -41,12 +42,36 @@ logger = logging.getLogger(__name__)
 
 
 _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.time}
+
+
+def _is_list_type_target(target_type: Any) -> bool:
+    """Check if target type is a list type (e.g., list[float])."""
+    try:
+        return hasattr(target_type, "__origin__") and target_type.__origin__ is list
+    except (AttributeError, TypeError):
+        return False
+
+
+def _convert_numpy_to_list(target_type: Any, value: Any) -> Any:
+    """Convert numpy array to list if target is a list type."""
+    if not NUMPY_INSTALLED:
+        return value
+
+    import numpy as np
+
+    if isinstance(value, np.ndarray) and _is_list_type_target(target_type):
+        return value.tolist()
+
+    return value
+
+
 _DEFAULT_TYPE_DECODERS: Final[list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]]] = [
     (lambda x: x is UUID, lambda t, v: t(v.hex)),
     (lambda x: x is datetime.datetime, lambda t, v: t(v.isoformat())),
     (lambda x: x is datetime.date, lambda t, v: t(v.isoformat())),
     (lambda x: x is datetime.time, lambda t, v: t(v.isoformat())),
     (lambda x: x is Enum, lambda t, v: t(v.value)),
+    (_is_list_type_target, _convert_numpy_to_list),
 ]
 
 
@@ -63,6 +88,13 @@ def _default_msgspec_deserializer(
     Returns:
         Converted value or original value if conversion not applicable
     """
+    # Handle numpy arrays first for list types
+    if NUMPY_INSTALLED:
+        import numpy as np
+
+        if isinstance(value, np.ndarray) and _is_list_type_target(target_type):
+            return value.tolist()
+
     if type_decoders:
         for predicate, decoder in type_decoders:
             if predicate(target_type):
@@ -71,17 +103,19 @@ def _default_msgspec_deserializer(
     if target_type is UUID and isinstance(value, UUID):
         return value.hex
 
-    if target_type in _DATETIME_TYPES:
-        try:
-            return value.isoformat()
-        except AttributeError:
-            pass
+    if target_type in _DATETIME_TYPES and hasattr(value, "isoformat"):
+        return value.isoformat()  # pyright: ignore
 
     if isinstance(target_type, type) and issubclass(target_type, Enum) and isinstance(value, Enum):
         return value.value
 
-    if isinstance(value, target_type):
-        return value
+    # Check if value is already the correct type (but avoid parameterized generics)
+    try:
+        if isinstance(target_type, type) and isinstance(value, target_type):
+            return value
+    except TypeError:
+        # Handle parameterized generics like list[int] which can't be used with isinstance
+        pass
 
     if isinstance(target_type, type):
         try:
@@ -189,6 +223,25 @@ class ToSchemaMixin:
                 except Exception as e:
                     logger.debug("Field name transformation failed for msgspec schema: %s", e)
                     transformed_data = data
+
+            # Pre-process numpy arrays to lists before msgspec conversion
+            if NUMPY_INSTALLED:
+                try:
+                    import numpy as np
+
+                    def _convert_numpy_arrays_in_data(obj: Any) -> Any:
+                        """Recursively convert numpy arrays to lists in data structures."""
+                        if isinstance(obj, np.ndarray):
+                            return obj.tolist()
+                        if isinstance(obj, dict):
+                            return {k: _convert_numpy_arrays_in_data(v) for k, v in obj.items()}
+                        if isinstance(obj, (list, tuple)):
+                            return type(obj)(_convert_numpy_arrays_in_data(item) for item in obj)
+                        return obj
+
+                    transformed_data = _convert_numpy_arrays_in_data(transformed_data)
+                except ImportError:
+                    pass
 
             if not isinstance(transformed_data, Sequence):
                 return convert(obj=transformed_data, type=schema_type, from_attributes=True, dec_hook=deserializer)
