@@ -1061,3 +1061,164 @@ def test_preserve_parameter_names_in_conversion(converter: ParameterConverter) -
     assert isinstance(converted_params, dict)
     assert converted_params["user_name"] == "alice"
     assert converted_params["user_email"] == "alice@example.com"
+
+
+def test_duplicate_named_parameters_named_colon_to_numeric(converter: ParameterConverter) -> None:
+    """Test conversion from named colon parameters with duplicates to numeric style.
+
+    This reproduces the issue described in the bug report where duplicate named
+    parameters cause incorrect parameter counting.
+    """
+    # SQL with duplicate :embedding parameter (appears twice)
+    sql = "SELECT id, name, 1 - (embedding <=> :embedding) AS similarity FROM items WHERE 1 - (embedding <=> :embedding) > :threshold ORDER BY similarity DESC LIMIT :limit"
+
+    parameters = {"embedding": [0.1, 0.2, 0.3], "threshold": 0.5, "limit": 10}
+
+    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
+
+    # Should have exactly 3 parameters, not 4
+    assert isinstance(converted_params, (list, tuple))
+    assert len(converted_params) == 3
+
+    # Check the SQL has correct numeric placeholders
+    assert "$1" in converted_sql
+    assert "$2" in converted_sql
+    assert "$3" in converted_sql
+    assert "$4" not in converted_sql  # Should not have a 4th parameter
+
+    # Check parameter values are correct
+    assert converted_params[0] == [0.1, 0.2, 0.3]  # embedding value appears once
+    assert converted_params[1] == 0.5  # threshold
+    assert converted_params[2] == 10  # limit
+
+
+def test_duplicate_named_parameters_various_styles(converter: ParameterConverter) -> None:
+    """Test duplicate parameter handling with various parameter styles."""
+    test_cases = [
+        {
+            "style": ParameterStyle.NAMED_AT,
+            "sql": "SELECT * FROM table WHERE col1 = @param AND col2 = @param",
+            "expected_placeholders": ["@param"],
+        },
+        {
+            "style": ParameterStyle.NAMED_DOLLAR,
+            "sql": "SELECT * FROM table WHERE col1 = $param AND col2 = $param",
+            "expected_placeholders": ["$param"],
+        },
+        {
+            "style": ParameterStyle.NAMED_PYFORMAT,
+            "sql": "SELECT * FROM table WHERE col1 = %(param)s AND col2 = %(param)s",
+            "expected_placeholders": ["%(param)s"],
+        },
+    ]
+
+    for case in test_cases:
+        parameters = {"param": "test_value"}
+
+        converted_sql, converted_params = converter.convert_placeholder_style(
+            case["sql"],  # type: ignore[arg-type]
+            parameters,
+            ParameterStyle.NUMERIC,
+        )
+
+        # Should convert to single numeric parameter
+        assert isinstance(converted_params, (list, tuple))
+        assert len(converted_params) == 1
+        assert converted_params[0] == "test_value"
+
+        # Should have $1 twice in the SQL
+        assert converted_sql.count("$1") == 2
+        assert "$2" not in converted_sql
+
+
+def test_duplicate_parameters_mixed_with_unique(converter: ParameterConverter) -> None:
+    """Test duplicate parameters mixed with unique parameters."""
+    sql = "SELECT :a, :b, :a, :c, :b"
+    parameters = {"a": 1, "b": 2, "c": 3}
+
+    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
+
+    # Should have exactly 3 unique parameters
+    assert isinstance(converted_params, (list, tuple))
+    assert len(converted_params) == 3
+
+    # Check the correct values are extracted
+    assert 1 in converted_params  # a
+    assert 2 in converted_params  # b
+    assert 3 in converted_params  # c
+
+    # Check SQL has correct numeric placeholders in the right positions
+    # Original: :a, :b, :a, :c, :b
+    # Should become: $1, $2, $1, $3, $2
+    expected_positions = ["$1", "$2", "$1", "$3", "$2"]
+
+    # Extract placeholder positions from converted SQL
+    import re
+
+    placeholders_in_sql = [match.group() for match in re.finditer(r"\$\d+", converted_sql)]
+
+    assert placeholders_in_sql == expected_positions
+
+
+def test_duplicate_parameters_qmark_to_numeric(converter: ParameterConverter) -> None:
+    """Test duplicate qmark parameters conversion (edge case)."""
+    # This is a different case - qmark parameters are positional so duplicates would be different values
+    sql = "SELECT * FROM table WHERE col1 = ? AND col2 = ?"
+    parameters = [1, 2]
+
+    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
+
+    # Should have 2 parameters as they're positional
+    assert isinstance(converted_params, (list, tuple))
+    assert len(converted_params) == 2
+    assert list(converted_params) == [1, 2]
+
+    assert "$1" in converted_sql
+    assert "$2" in converted_sql
+
+
+def test_vector_similarity_search_example(converter: ParameterConverter) -> None:
+    """Test the exact example from the bug report."""
+    sql = """SELECT
+    id,
+    name,
+    1 - (embedding <=> :embedding) as similarity
+FROM
+    items
+WHERE
+    1 - (embedding <=> :embedding) > :threshold
+ORDER BY
+    similarity DESC
+LIMIT
+    :limit"""
+
+    parameters = {"embedding": [0.1, 0.2, 0.3], "threshold": 0.5, "limit": 10}
+
+    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
+
+    # Should have exactly 3 parameters despite :embedding appearing twice
+    assert isinstance(converted_params, (list, tuple))
+    assert len(converted_params) == 3
+
+    # Verify parameter values
+    assert [0.1, 0.2, 0.3] in converted_params
+    assert 0.5 in converted_params
+    assert 10 in converted_params
+
+
+def test_parameter_processor_duplicate_handling(processor: ParameterProcessor) -> None:
+    """Test the full parameter processor with duplicate parameters."""
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON, default_execution_parameter_style=ParameterStyle.NUMERIC
+    )
+
+    sql = "SELECT :param1, :param2, :param1 WHERE id = :param2"
+    parameters = {"param1": "value1", "param2": "value2"}
+
+    _processed_sql, processed_params = processor.process(sql, parameters, config, dialect="postgres")
+
+    # Should have exactly 2 unique parameters
+    assert isinstance(processed_params, (list, tuple))
+    assert len(processed_params) == 2
+    assert "value1" in processed_params
+    assert "value2" in processed_params
