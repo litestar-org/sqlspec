@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import unquote, urlparse
 
-from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
+from sqlspec.core.cache import get_cache, get_cache_config
 from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, StorageOperationFailedError
 from sqlspec.storage.registry import storage_registry as default_storage_registry
@@ -438,9 +438,8 @@ class SQLFileLoader:
             return
 
         cache_key_str = self._generate_file_cache_key(file_path)
-        cache_key = CacheKey((cache_key_str,))
-        unified_cache = get_default_cache()
-        cached_file = unified_cache.get(cache_key)
+        cache = get_cache()
+        cached_file = cache.get("file", cache_key_str)
 
         if (
             cached_file is not None
@@ -475,7 +474,7 @@ class SQLFileLoader:
                     file_statements[stored_name] = self._queries[query_name]
 
             cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_statements=file_statements)
-            unified_cache.put(cache_key, cached_file_data)
+            cache.put("file", cache_key_str, cached_file_data)
 
     def _load_file_without_cache(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
         """Load a single SQL file without using cache.
@@ -592,15 +591,15 @@ class SQLFileLoader:
 
         cache_config = get_cache_config()
         if cache_config.compiled_cache_enabled:
-            unified_cache = get_default_cache()
-            unified_cache.clear()
+            cache = get_cache()
+            cache.clear()
 
     def clear_file_cache(self) -> None:
         """Clear the file cache only, keeping loaded queries."""
         cache_config = get_cache_config()
         if cache_config.compiled_cache_enabled:
-            unified_cache = get_default_cache()
-            unified_cache.clear()
+            cache = get_cache()
+            cache.clear()
 
     def get_query_text(self, name: str) -> str:
         """Get raw SQL text for a query.

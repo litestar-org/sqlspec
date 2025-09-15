@@ -26,27 +26,20 @@ if TYPE_CHECKING:
 
     import sqlglot.expressions as exp
 
-    from sqlspec.core.statement import SQL
 
 __all__ = (
     "CacheKey",
     "CacheStats",
     "CachedStatement",
-    "ExpressionCache",
     "FiltersView",
     "MultiLevelCache",
-    "ParameterCache",
     "ParametersView",
-    "StatementCache",
     "UnifiedCache",
     "canonicalize_filters",
     "create_cache_key",
     "get_cache",
     "get_cache_config",
     "get_default_cache",
-    "get_expression_cache",
-    "get_parameter_cache",
-    "get_statement_cache",
 )
 
 T = TypeVar("T")
@@ -348,202 +341,7 @@ class UnifiedCache:
             return not (ttl is not None and time.time() - node.timestamp > ttl)
 
 
-@mypyc_attr(allow_interpreted_subclasses=False)
-class StatementCache:
-    """Cache for compiled SQL statements."""
-
-    def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
-        """Initialize statement cache.
-
-        Args:
-            max_size: Maximum number of statements to cache
-        """
-        self._cache: UnifiedCache = UnifiedCache(max_size)
-
-    def get_compiled(self, statement: "SQL") -> Optional[tuple[str, Any]]:
-        """Get compiled SQL and parameters from cache.
-
-        Args:
-            statement: SQL statement to lookup
-
-        Returns:
-            Tuple of (compiled_sql, parameters) or None if not found
-        """
-        cache_key = self._create_statement_key(statement)
-        return self._cache.get(cache_key)
-
-    def put_compiled(self, statement: "SQL", compiled_sql: str, parameters: Any) -> None:
-        """Cache compiled SQL and parameters.
-
-        Args:
-            statement: Original SQL statement
-            compiled_sql: Compiled SQL string
-            parameters: Processed parameters
-        """
-        cache_key = self._create_statement_key(statement)
-        self._cache.put(cache_key, (compiled_sql, parameters))
-
-    def _create_statement_key(self, statement: "SQL") -> CacheKey:
-        """Create cache key for SQL statement.
-
-        Args:
-            statement: SQL statement
-
-        Returns:
-            Cache key for the statement
-        """
-
-        key_data = (
-            "statement",
-            statement.raw_sql,
-            hash(statement),
-            str(statement.dialect) if statement.dialect else None,
-            statement.is_many,
-            statement.is_script,
-        )
-        return CacheKey(key_data)
-
-    def clear(self) -> None:
-        """Clear statement cache."""
-        self._cache.clear()
-
-    def get_stats(self) -> CacheStats:
-        """Get cache statistics."""
-        return self._cache.get_stats()
-
-
-@mypyc_attr(allow_interpreted_subclasses=False)
-class ExpressionCache:
-    """Cache for parsed expressions."""
-
-    def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
-        """Initialize expression cache.
-
-        Args:
-            max_size: Maximum number of expressions to cache
-        """
-        self._cache: UnifiedCache = UnifiedCache(max_size)
-
-    def get_expression(self, sql: str, dialect: Optional[str] = None) -> "Optional[exp.Expression]":
-        """Get parsed expression from cache.
-
-        Args:
-            sql: SQL string
-            dialect: SQL dialect
-
-        Returns:
-            Parsed expression or None if not found
-        """
-        cache_key = self._create_expression_key(sql, dialect)
-        return self._cache.get(cache_key)
-
-    def put_expression(self, sql: str, expression: "exp.Expression", dialect: Optional[str] = None) -> None:
-        """Cache parsed expression.
-
-        Args:
-            sql: SQL string
-            expression: Parsed SQLGlot expression
-            dialect: SQL dialect
-        """
-        cache_key = self._create_expression_key(sql, dialect)
-        self._cache.put(cache_key, expression)
-
-    def _create_expression_key(self, sql: str, dialect: Optional[str]) -> CacheKey:
-        """Create cache key for expression.
-
-        Args:
-            sql: SQL string
-            dialect: SQL dialect
-
-        Returns:
-            Cache key for the expression
-        """
-        key_data = ("expression", sql, dialect)
-        return CacheKey(key_data)
-
-    def clear(self) -> None:
-        """Clear expression cache."""
-        self._cache.clear()
-
-    def get_stats(self) -> CacheStats:
-        """Get cache statistics."""
-        return self._cache.get_stats()
-
-
-@mypyc_attr(allow_interpreted_subclasses=False)
-class ParameterCache:
-    """Cache for processed parameters."""
-
-    def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
-        """Initialize parameter cache.
-
-        Args:
-            max_size: Maximum number of parameter sets to cache
-        """
-        self._cache: UnifiedCache = UnifiedCache(max_size)
-
-    def get_parameters(self, original_params: Any, config_hash: int) -> Optional[Any]:
-        """Get processed parameters from cache.
-
-        Args:
-            original_params: Original parameters
-            config_hash: Hash of parameter processing configuration
-
-        Returns:
-            Processed parameters or None if not found
-        """
-        cache_key = self._create_parameter_key(original_params, config_hash)
-        return self._cache.get(cache_key)
-
-    def put_parameters(self, original_params: Any, processed_params: Any, config_hash: int) -> None:
-        """Cache processed parameters.
-
-        Args:
-            original_params: Original parameters
-            processed_params: Processed parameters
-            config_hash: Hash of parameter processing configuration
-        """
-        cache_key = self._create_parameter_key(original_params, config_hash)
-        self._cache.put(cache_key, processed_params)
-
-    def _create_parameter_key(self, params: Any, config_hash: int) -> CacheKey:
-        """Create cache key for parameters.
-
-        Args:
-            params: Parameters to cache
-            config_hash: Configuration hash
-
-        Returns:
-            Cache key for the parameters
-        """
-
-        try:
-            param_key: tuple[Any, ...]
-            if isinstance(params, dict):
-                param_key = tuple(sorted(params.items()))
-            elif isinstance(params, (list, tuple)):
-                param_key = tuple(params)
-            else:
-                param_key = (params,)
-
-            return CacheKey(("parameters", param_key, config_hash))
-        except (TypeError, ValueError):
-            param_key_fallback = (str(params), type(params).__name__)
-            return CacheKey(("parameters", param_key_fallback, config_hash))
-
-    def clear(self) -> None:
-        """Clear parameter cache."""
-        self._cache.clear()
-
-    def get_stats(self) -> CacheStats:
-        """Get cache statistics."""
-        return self._cache.get_stats()
-
-
 _default_cache: Optional[UnifiedCache] = None
-_statement_cache: Optional[StatementCache] = None
-_expression_cache: Optional[ExpressionCache] = None
-_parameter_cache: Optional[ParameterCache] = None
 _cache_lock = threading.Lock()
 
 
@@ -561,58 +359,12 @@ def get_default_cache() -> UnifiedCache:
     return _default_cache
 
 
-def get_statement_cache() -> StatementCache:
-    """Get the statement cache instance.
-
-    Returns:
-        Singleton statement cache instance
-    """
-    global _statement_cache
-    if _statement_cache is None:
-        with _cache_lock:
-            if _statement_cache is None:
-                _statement_cache = StatementCache()
-    return _statement_cache
-
-
-def get_expression_cache() -> ExpressionCache:
-    """Get the expression cache instance.
-
-    Returns:
-        Singleton expression cache instance
-    """
-    global _expression_cache
-    if _expression_cache is None:
-        with _cache_lock:
-            if _expression_cache is None:
-                _expression_cache = ExpressionCache()
-    return _expression_cache
-
-
-def get_parameter_cache() -> ParameterCache:
-    """Get the parameter cache instance.
-
-    Returns:
-        Singleton parameter cache instance
-    """
-    global _parameter_cache
-    if _parameter_cache is None:
-        with _cache_lock:
-            if _parameter_cache is None:
-                _parameter_cache = ParameterCache()
-    return _parameter_cache
-
-
 def clear_all_caches() -> None:
     """Clear all cache instances."""
     if _default_cache is not None:
         _default_cache.clear()
-    if _statement_cache is not None:
-        _statement_cache.clear()
-    if _expression_cache is not None:
-        _expression_cache.clear()
-    if _parameter_cache is not None:
-        _parameter_cache.clear()
+    cache = get_cache()
+    cache.clear()
 
 
 def get_cache_statistics() -> dict[str, CacheStats]:
@@ -624,12 +376,8 @@ def get_cache_statistics() -> dict[str, CacheStats]:
     stats = {}
     if _default_cache is not None:
         stats["default"] = _default_cache.get_stats()
-    if _statement_cache is not None:
-        stats["statement"] = _statement_cache.get_stats()
-    if _expression_cache is not None:
-        stats["expression"] = _expression_cache.get_stats()
-    if _parameter_cache is not None:
-        stats["parameter"] = _parameter_cache.get_stats()
+    cache = get_cache()
+    stats["multi_level"] = cache.get_stats()
     return stats
 
 
@@ -699,8 +447,8 @@ def update_cache_config(config: CacheConfig) -> None:
 
     unified_cache = get_default_cache()
     unified_cache.clear()
-    statement_cache = get_statement_cache()
-    statement_cache.clear()
+    cache = get_cache()
+    cache.clear()
 
     logger = get_logger("sqlspec.cache")
     logger.info(
@@ -714,87 +462,13 @@ def update_cache_config(config: CacheConfig) -> None:
     )
 
 
-@mypyc_attr(allow_interpreted_subclasses=False)
-class CacheStatsAggregate:
-    """Cache statistics from all cache instances."""
-
-    __slots__ = (
-        "fragment_capacity",
-        "fragment_hit_rate",
-        "fragment_hits",
-        "fragment_misses",
-        "fragment_size",
-        "optimized_capacity",
-        "optimized_hit_rate",
-        "optimized_hits",
-        "optimized_misses",
-        "optimized_size",
-        "sql_capacity",
-        "sql_hit_rate",
-        "sql_hits",
-        "sql_misses",
-        "sql_size",
-    )
-
-    def __init__(self) -> None:
-        """Initialize cache statistics."""
-        self.sql_hit_rate = 0.0
-        self.fragment_hit_rate = 0.0
-        self.optimized_hit_rate = 0.0
-        self.sql_size = 0
-        self.fragment_size = 0
-        self.optimized_size = 0
-        self.sql_capacity = 0
-        self.fragment_capacity = 0
-        self.optimized_capacity = 0
-        self.sql_hits = 0
-        self.sql_misses = 0
-        self.fragment_hits = 0
-        self.fragment_misses = 0
-        self.optimized_hits = 0
-        self.optimized_misses = 0
-
-
-def get_cache_stats() -> CacheStatsAggregate:
+def get_cache_stats() -> dict[str, CacheStats]:
     """Get cache statistics from all caches.
 
     Returns:
-        Cache statistics object
+        Dictionary of cache statistics
     """
-    stats_dict = get_cache_statistics()
-    stats = CacheStatsAggregate()
-
-    for cache_name, cache_stats in stats_dict.items():
-        hits = cache_stats.hits
-        misses = cache_stats.misses
-        size = 0
-
-        if "sql" in cache_name.lower():
-            stats.sql_hits += hits
-            stats.sql_misses += misses
-            stats.sql_size += size
-        elif "fragment" in cache_name.lower():
-            stats.fragment_hits += hits
-            stats.fragment_misses += misses
-            stats.fragment_size += size
-        elif "optimized" in cache_name.lower():
-            stats.optimized_hits += hits
-            stats.optimized_misses += misses
-            stats.optimized_size += size
-
-    sql_total = stats.sql_hits + stats.sql_misses
-    if sql_total > 0:
-        stats.sql_hit_rate = stats.sql_hits / sql_total
-
-    fragment_total = stats.fragment_hits + stats.fragment_misses
-    if fragment_total > 0:
-        stats.fragment_hit_rate = stats.fragment_hits / fragment_total
-
-    optimized_total = stats.optimized_hits + stats.optimized_misses
-    if optimized_total > 0:
-        stats.optimized_hit_rate = stats.optimized_hits / optimized_total
-
-    return stats
+    return get_cache_statistics()
 
 
 def reset_cache_stats() -> None:

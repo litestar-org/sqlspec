@@ -13,7 +13,7 @@ from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
-from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
+from sqlspec.core.cache import get_cache, get_cache_config
 from sqlspec.core.hashing import hash_optimized_expression
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
@@ -429,9 +429,8 @@ class QueryBuilder(ABC):
             expression, dialect=dialect_name, schema=self.schema, optimizer_settings=optimizer_settings
         )
 
-        cache_key_obj = CacheKey((cache_key,))
-        unified_cache = get_default_cache()
-        cached_optimized = unified_cache.get(cache_key_obj)
+        cache = get_cache()
+        cached_optimized = cache.get("optimized", cache_key)
         if cached_optimized:
             return cast("exp.Expression", cached_optimized)
 
@@ -440,7 +439,7 @@ class QueryBuilder(ABC):
                 expression, schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
             )
 
-            unified_cache.put(cache_key_obj, optimized)
+            cache.put("optimized", cache_key, optimized)
 
         except Exception:
             return expression
@@ -461,15 +460,14 @@ class QueryBuilder(ABC):
             return self._to_statement(config)
 
         cache_key_str = self._generate_builder_cache_key(config)
-        cache_key = CacheKey((cache_key_str,))
 
-        unified_cache = get_default_cache()
-        cached_sql = unified_cache.get(cache_key)
+        cache = get_cache()
+        cached_sql = cache.get("builder", cache_key_str)
         if cached_sql is not None:
             return cast("SQL", cached_sql)
 
         sql_statement = self._to_statement(config)
-        unified_cache.put(cache_key, sql_statement)
+        cache.put("builder", cache_key_str, sql_statement)
 
         return sql_statement
 

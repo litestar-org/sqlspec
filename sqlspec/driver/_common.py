@@ -7,7 +7,7 @@ from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
 from sqlspec.core import SQL, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
-from sqlspec.core.cache import get_cache, get_cache_config
+from sqlspec.core.cache import CachedStatement, get_cache, get_cache_config
 from sqlspec.core.splitter import split_sql_script
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
@@ -415,8 +415,8 @@ class CommonDriverAttributesMixin:
             cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_parameters)
             cache = get_cache()
             cached_result = cache.get("statement", cache_key, str(statement.dialect) if statement.dialect else None)
-            if cached_result is not None:
-                return cached_result  # type: ignore[no-any-return]  # Cache stores tuple[str, Any]
+            if cached_result is not None and isinstance(cached_result, CachedStatement):
+                return cached_result.compiled_sql, tuple(cached_result.parameters)
 
         prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
         compiled_sql, execution_parameters = prepared_statement.compile()
@@ -432,12 +432,12 @@ class CommonDriverAttributesMixin:
 
         if cache_key is not None:
             cache = get_cache()
-            cache.put(
-                "statement",
-                cache_key,
-                (compiled_sql, prepared_parameters),
-                str(statement.dialect) if statement.dialect else None,
+            cached_statement = CachedStatement(
+                compiled_sql=compiled_sql,
+                parameters=tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters,
+                expression=statement.expression,
             )
+            cache.put("statement", cache_key, cached_statement, str(statement.dialect) if statement.dialect else None)
 
         return compiled_sql, prepared_parameters
 

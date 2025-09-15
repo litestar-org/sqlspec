@@ -15,9 +15,8 @@ from sqlspec.config import (
 )
 from sqlspec.core.cache import (
     CacheConfig,
-    CacheStatsAggregate,
     get_cache_config,
-    get_cache_stats,
+    get_cache_statistics,
     log_cache_stats,
     reset_cache_stats,
     update_cache_config,
@@ -532,13 +531,13 @@ class SQLSpec:
         update_cache_config(config)
 
     @staticmethod
-    def get_cache_stats() -> CacheStatsAggregate:
+    def get_cache_stats() -> "dict[str, Any]":
         """Get current cache statistics.
 
         Returns:
             Cache statistics object with detailed metrics.
         """
-        return get_cache_stats()
+        return get_cache_statistics()
 
     @staticmethod
     def reset_cache_stats() -> None:
