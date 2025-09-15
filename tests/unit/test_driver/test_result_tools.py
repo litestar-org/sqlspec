@@ -216,7 +216,7 @@ def test_to_schema_mixin_with_numpy_array_multiple_records() -> None:
     import numpy as np
 
     # Create test data with multiple records containing numpy arrays
-    test_data = [
+    test_data: list[dict[str, Any]] = [
         {"name": "embedding_1", "embedding": np.array([1.0, 2.0, 3.0]), "metadata": None},
         {"name": "embedding_2", "embedding": np.array([4.0, 5.0, 6.0]), "metadata": {"source": "test"}},
     ]
