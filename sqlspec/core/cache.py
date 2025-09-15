@@ -558,7 +558,7 @@ class CachedStatement:
     """
 
     compiled_sql: str
-    parameters: tuple[Any, ...]  # Tuple instead of list for immutability
+    parameters: Optional[tuple[Any, ...]]  # None allowed for static script compilation
     expression: Optional["exp.Expression"]
 
     def get_parameters_view(self) -> "ParametersView":
@@ -567,6 +567,8 @@ class CachedStatement:
         Returns:
             View object that provides read-only access to parameters
         """
+        if self.parameters is None:
+            return ParametersView([], {})
         return ParametersView(list(self.parameters), {})
 
 
