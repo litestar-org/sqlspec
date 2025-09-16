@@ -75,7 +75,7 @@ class SqliteCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(self, *_: Any) -> None:
         """Clean up cursor resources.
 
         Args:
@@ -83,7 +83,6 @@ class SqliteCursor:
             exc_val: Exception value if an exception occurred
             exc_tb: Exception traceback if an exception occurred
         """
-        _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 self.cursor.close()

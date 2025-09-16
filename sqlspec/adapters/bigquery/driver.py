@@ -177,7 +177,7 @@ class BigQueryCursor:
     def __enter__(self) -> "BigQueryConnection":
         return self.connection
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(self, *_: Any) -> None:
         """Clean up cursor resources including active QueryJobs."""
         if self.job is not None:
             try:
