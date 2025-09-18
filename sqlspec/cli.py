@@ -1,4 +1,5 @@
 # ruff: noqa: C901
+import inspect
 import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
@@ -48,6 +49,13 @@ def get_sqlspec_group() -> "Group":
         ctx.ensure_object(dict)
         try:
             config_instance = module_loader.import_string(config)
+            if callable(config_instance):
+                if inspect.iscoroutinefunction(config_instance):
+                    import asyncio
+
+                    config_instance = asyncio.run(config_instance())
+                else:
+                    config_instance = config_instance()
             if isinstance(config_instance, Sequence):
                 ctx.obj["configs"] = config_instance
             else:
