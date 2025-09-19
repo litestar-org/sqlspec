@@ -1264,7 +1264,7 @@ def test_on_conflict_convenience_method() -> None:
 
 
 def test_legacy_on_duplicate_key_update_method() -> None:
-    """Test that the legacy on_duplicate_key_update method uses the new ON CONFLICT API."""
+    """Test that the legacy on_duplicate_key_update method generates MySQL syntax."""
     query = (
         sql.insert("users")
         .columns("id", "name")
@@ -1274,8 +1274,7 @@ def test_legacy_on_duplicate_key_update_method() -> None:
     stmt = query.build()
 
     assert "INSERT INTO" in stmt.sql
-    assert "ON CONFLICT" in stmt.sql
-    assert "DO UPDATE" in stmt.sql
+    assert "ON DUPLICATE KEY UPDATE" in stmt.sql
     assert "SET" in stmt.sql
     assert "NOW()" in stmt.sql
     assert "name_1" in stmt.parameters
