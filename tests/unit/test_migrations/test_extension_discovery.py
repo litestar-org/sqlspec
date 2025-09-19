@@ -27,12 +27,15 @@ def test_extension_migration_discovery() -> None:
         assert hasattr(commands, "runner")
         assert hasattr(commands.runner, "extension_migrations")
 
-        # Should have discovered Litestar migrations directory if it exists
+        # Should have discovered Litestar migrations
         if "litestar" in commands.runner.extension_migrations:
             litestar_path = commands.runner.extension_migrations["litestar"]
             assert litestar_path.exists()
             assert litestar_path.name == "migrations"
 
+            # Check for the session table migration
+            migration_file = litestar_path / "0001_create_session_table.py"
+            assert migration_file.exists()
 
 def test_extension_migration_context() -> None:
     """Test that migration context is created with dialect information."""
@@ -104,5 +107,10 @@ DROP TABLE users;
         # Primary migration
         assert "0002" in versions
 
-        # Extension migrations should be prefixed (if any exist)
-        # Note: Extension migrations only exist when specific extension features are available
+        # Extension migrations should be prefixed
+        extension_versions = [v for v in versions if v.startswith("ext_")]
+        assert len(extension_versions) > 0
+
+        # Check that Litestar migration is included
+        litestar_versions = [v for v in versions if "ext_litestar" in v]
+        assert len(litestar_versions) > 0
