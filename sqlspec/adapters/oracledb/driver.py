@@ -1,5 +1,6 @@
 """Oracle Driver"""
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -10,8 +11,14 @@ from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncCo
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.driver import (
+    AsyncDataDictionaryBase,
+    AsyncDriverAdapterBase,
+    SyncDataDictionaryBase,
+    SyncDriverAdapterBase,
+)
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
@@ -21,6 +28,9 @@ if TYPE_CHECKING:
     from sqlspec.driver._common import ExecutionResult
 
 logger = logging.getLogger(__name__)
+
+# Oracle-specific constants
+LARGE_STRING_THRESHOLD = 3000  # Threshold for large string parameters to avoid ORA-01704
 
 __all__ = (
     "OracleAsyncDriver",
@@ -38,7 +48,7 @@ oracledb_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK},
         default_execution_parameter_style=ParameterStyle.POSITIONAL_COLON,
         supported_execution_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
-        type_coercion_map={},
+        type_coercion_map={dict: to_json, list: to_json},
         has_native_list_expansion=False,
         needs_static_script_compilation=True,
         preserve_parameter_format=True,
@@ -84,7 +94,10 @@ class OracleAsyncCursor:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
         if self.cursor is not None:
-            self.cursor.close()  # Synchronous method - do not await
+            with contextlib.suppress(Exception):
+                # Oracle async cursors have a synchronous close method
+                # but we need to ensure proper cleanup in the event loop context
+                self.cursor.close()
 
 
 class OracleSyncExceptionHandler:
@@ -188,7 +201,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
     error handling, and transaction management.
     """
 
-    __slots__ = ()
+    __slots__ = ("_data_dictionary",)
     dialect = "oracle"
 
     def __init__(
@@ -207,6 +220,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: OracleSyncConnection) -> OracleSyncCursor:
         """Create context manager for Oracle cursor.
@@ -308,6 +322,14 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             Execution result containing data for SELECT statements or row count for others
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        # Oracle-specific: Use setinputsizes for large string parameters to avoid ORA-01704
+        if prepared_parameters:
+            for param_name, param_value in prepared_parameters.items():
+                if isinstance(param_value, str) and len(param_value) > LARGE_STRING_THRESHOLD:
+                    # Set input size for large string parameters
+                    cursor.setinputsizes(**{param_name: len(param_value)})
+
         cursor.execute(sql, prepared_parameters or {})
 
         # SELECT result processing for Oracle
@@ -358,6 +380,19 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             msg = f"Failed to commit Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
+    @property
+    def data_dictionary(self) -> "SyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.oracledb.data_dictionary import OracleSyncDataDictionary
+
+            self._data_dictionary = OracleSyncDataDictionary()
+        return self._data_dictionary
+
 
 class OracleAsyncDriver(AsyncDriverAdapterBase):
     """Asynchronous Oracle Database driver.
@@ -366,7 +401,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
     error handling, and transaction management for async operations.
     """
 
-    __slots__ = ()
+    __slots__ = ("_data_dictionary",)
     dialect = "oracle"
 
     def __init__(
@@ -385,6 +420,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: OracleAsyncConnection) -> OracleAsyncCursor:
         """Create context manager for Oracle cursor.
@@ -481,6 +517,14 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             Execution result containing data for SELECT statements or row count for others
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        # Oracle-specific: Use setinputsizes for large string parameters to avoid ORA-01704
+        if prepared_parameters:
+            for param_name, param_value in prepared_parameters.items():
+                if isinstance(param_value, str) and len(param_value) > LARGE_STRING_THRESHOLD:
+                    # Set input size for large string parameters
+                    cursor.setinputsizes(**{param_name: len(param_value)})
+
         await cursor.execute(sql, prepared_parameters or {})
 
         # SELECT result processing for Oracle
@@ -530,3 +574,16 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         except oracledb.Error as e:
             msg = f"Failed to commit Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    @property
+    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary
+
+            self._data_dictionary = OracleAsyncDataDictionary()
+        return self._data_dictionary

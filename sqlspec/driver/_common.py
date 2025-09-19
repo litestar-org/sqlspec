@@ -1,6 +1,8 @@
 """Common driver attributes and utilities."""
 
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional, Union, cast
+import re
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional, TypeVar, Union, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -25,12 +27,157 @@ __all__ = (
     "EXEC_ROWCOUNT_OVERRIDE",
     "EXEC_SPECIAL_DATA",
     "CommonDriverAttributesMixin",
+    "DataDictionaryMixin",
     "ExecutionResult",
     "ScriptExecutionResult",
+    "VersionInfo",
 )
 
 
 logger = get_logger("driver")
+
+DriverT = TypeVar("DriverT")
+VERSION_GROUPS_MIN_FOR_MINOR = 1
+VERSION_GROUPS_MIN_FOR_PATCH = 2
+
+
+class VersionInfo:
+    """Database version information."""
+
+    def __init__(self, major: int, minor: int = 0, patch: int = 0) -> None:
+        """Initialize version info.
+
+        Args:
+            major: Major version number
+            minor: Minor version number
+            patch: Patch version number
+        """
+        self.major = major
+        self.minor = minor
+        self.patch = patch
+
+    @property
+    def version_tuple(self) -> "tuple[int, int, int]":
+        """Get version as tuple for comparison."""
+        return (self.major, self.minor, self.patch)
+
+    def __str__(self) -> str:
+        """String representation of version info."""
+        return f"{self.major}.{self.minor}.{self.patch}"
+
+    def __repr__(self) -> str:
+        """Detailed string representation."""
+        return f"VersionInfo({self.major}, {self.minor}, {self.patch})"
+
+    def __eq__(self, other: object) -> bool:
+        """Check version equality."""
+        if not isinstance(other, VersionInfo):
+            return NotImplemented
+        return self.version_tuple == other.version_tuple
+
+    def __lt__(self, other: "VersionInfo") -> bool:
+        """Check if this version is less than another."""
+        return self.version_tuple < other.version_tuple
+
+    def __le__(self, other: "VersionInfo") -> bool:
+        """Check if this version is less than or equal to another."""
+        return self.version_tuple <= other.version_tuple
+
+    def __gt__(self, other: "VersionInfo") -> bool:
+        """Check if this version is greater than another."""
+        return self.version_tuple > other.version_tuple
+
+    def __ge__(self, other: "VersionInfo") -> bool:
+        """Check if this version is greater than or equal to another."""
+        return self.version_tuple >= other.version_tuple
+
+    def __hash__(self) -> int:
+        """Make VersionInfo hashable based on version tuple."""
+        return hash(self.version_tuple)
+
+
+@trait
+class DataDictionaryMixin:
+    """Mixin providing common data dictionary functionality."""
+
+    def parse_version_string(self, version_str: str) -> "Optional[VersionInfo]":
+        """Parse version string into VersionInfo.
+
+        Args:
+            version_str: Raw version string from database
+
+        Returns:
+            VersionInfo instance or None if parsing fails
+        """
+        # Try common version patterns
+        patterns = [
+            r"(\d+)\.(\d+)\.(\d+)",  # x.y.z
+            r"(\d+)\.(\d+)",  # x.y
+            r"(\d+)",  # x
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, version_str)
+            if match:
+                groups = match.groups()
+
+                major = int(groups[0])
+                minor = int(groups[1]) if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR else 0
+                patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH else 0
+                return VersionInfo(major, minor, patch)
+
+        return None
+
+    def detect_version_with_queries(self, driver: Any, queries: "list[str]") -> "Optional[VersionInfo]":
+        """Try multiple version queries to detect database version.
+
+        Args:
+            driver: Database driver instance
+            queries: List of SQL queries to try
+
+        Returns:
+            Version information or None if detection fails
+        """
+        for query in queries:
+            with suppress(Exception):
+                result = driver.execute(query)
+                if result.data:
+                    version_str = str(result.data[0])
+                    if isinstance(result.data[0], dict):
+                        version_str = str(next(iter(result.data[0].values())))
+                    elif isinstance(result.data[0], (list, tuple)):
+                        version_str = str(result.data[0][0])
+
+                    parsed_version = self.parse_version_string(version_str)
+                    if parsed_version:
+                        logger.debug("Detected database version: %s", parsed_version)
+                        return parsed_version
+
+        logger.warning("Could not detect database version")
+        return None
+
+    def get_default_type_mapping(self) -> "dict[str, str]":
+        """Get default type mappings for common categories.
+
+        Returns:
+            Dictionary mapping type categories to generic SQL types
+        """
+        return {
+            "json": "TEXT",
+            "uuid": "VARCHAR(36)",
+            "boolean": "INTEGER",
+            "timestamp": "TIMESTAMP",
+            "text": "TEXT",
+            "blob": "BLOB",
+        }
+
+    def get_default_features(self) -> "list[str]":
+        """Get default feature flags supported by most databases.
+
+        Returns:
+            List of commonly supported feature names
+        """
+        return ["supports_transactions", "supports_prepared_statements"]
 
 
 class ScriptExecutionResult(NamedTuple):

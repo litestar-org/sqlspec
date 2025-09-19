@@ -1,10 +1,10 @@
 """Synchronous driver protocol implementation."""
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Optional, TypeVar, Union, cast, overload
 
 from sqlspec.core import SQL
-from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
+from sqlspec.driver._common import CommonDriverAttributesMixin, DataDictionaryMixin, ExecutionResult, VersionInfo
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
 from sqlspec.utils.logging import get_logger
@@ -21,16 +21,27 @@ if TYPE_CHECKING:
 _LOGGER_NAME: Final[str] = "sqlspec"
 logger = get_logger(_LOGGER_NAME)
 
-__all__ = ("SyncDriverAdapterBase",)
+__all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase", "SyncDriverT")
 
 
 EMPTY_FILTERS: Final["list[StatementFilter]"] = []
+
+SyncDriverT = TypeVar("SyncDriverT", bound="SyncDriverAdapterBase")
 
 
 class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin):
     """Base class for synchronous database drivers."""
 
     __slots__ = ()
+
+    @property
+    @abstractmethod
+    def data_dictionary(self) -> "SyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
 
     def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
@@ -488,3 +499,95 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
     def _raise_cannot_extract_value_from_row_type(self, type_name: str) -> NoReturn:
         msg = f"Cannot extract value from row type {type_name}"
         raise TypeError(msg)
+
+
+class SyncDataDictionaryBase(DataDictionaryMixin):
+    """Base class for synchronous data dictionary implementations."""
+
+    @abstractmethod
+    def get_version(self, driver: "SyncDriverAdapterBase") -> "Optional[VersionInfo]":
+        """Get database version information.
+
+        Args:
+            driver: Sync database driver instance
+
+        Returns:
+            Version information or None if detection fails
+        """
+
+    @abstractmethod
+    def get_feature_flag(self, driver: "SyncDriverAdapterBase", feature: str) -> bool:
+        """Check if database supports a specific feature.
+
+        Args:
+            driver: Sync database driver instance
+            feature: Feature name to check
+
+        Returns:
+            True if feature is supported, False otherwise
+        """
+
+    @abstractmethod
+    def get_optimal_type(self, driver: "SyncDriverAdapterBase", type_category: str) -> str:
+        """Get optimal database type for a category.
+
+        Args:
+            driver: Sync database driver instance
+            type_category: Type category (e.g., 'json', 'uuid', 'boolean')
+
+        Returns:
+            Database-specific type name
+        """
+
+    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "Optional[str]" = None) -> "list[str]":
+        """Get list of tables in schema.
+
+        Args:
+            driver: Sync database driver instance
+            schema: Schema name (None for default)
+
+        Returns:
+            List of table names
+        """
+        _ = driver, schema
+        return []
+
+    def get_columns(
+        self, driver: "SyncDriverAdapterBase", table: str, schema: "Optional[str]" = None
+    ) -> "list[dict[str, Any]]":
+        """Get column information for a table.
+
+        Args:
+            driver: Sync database driver instance
+            table: Table name
+            schema: Schema name (None for default)
+
+        Returns:
+            List of column metadata dictionaries
+        """
+        _ = driver, table, schema
+        return []
+
+    def get_indexes(
+        self, driver: "SyncDriverAdapterBase", table: str, schema: "Optional[str]" = None
+    ) -> "list[dict[str, Any]]":
+        """Get index information for a table.
+
+        Args:
+            driver: Sync database driver instance
+            table: Table name
+            schema: Schema name (None for default)
+
+        Returns:
+            List of index metadata dictionaries
+        """
+        _ = driver, table, schema
+        return []
+
+    def list_available_features(self) -> "list[str]":
+        """List all features that can be checked via get_feature_flag.
+
+        Returns:
+            List of feature names this data dictionary supports
+        """
+        return self.get_default_features()

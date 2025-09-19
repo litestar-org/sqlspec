@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from sqlspec.core.result import SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._async import AsyncDataDictionaryBase
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +84,9 @@ class AsyncmyExceptionHandler:
     async def __aenter__(self) -> None:
         return None
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "Optional[bool]":
         if exc_type is None:
-            return
+            return None
 
         if issubclass(exc_type, asyncmy.errors.IntegrityError):
             e = exc_val
@@ -101,6 +102,15 @@ class AsyncmyExceptionHandler:
             raise SQLSpecError(msg) from e
         if issubclass(exc_type, asyncmy.errors.OperationalError):
             e = exc_val
+            # Handle specific MySQL errors that are expected in migrations
+            if hasattr(e, "args") and len(e.args) >= 1 and isinstance(e.args[0], int):
+                error_code = e.args[0]
+                # Error 1061: Duplicate key name (index already exists)
+                # Error 1091: Can't DROP index that doesn't exist
+                if error_code in {1061, 1091}:
+                    # These are acceptable during migrations - log and continue
+                    logger.warning("AsyncMy MySQL expected migration error (ignoring): %s", e)
+                    return True  # Suppress the exception by returning True
             msg = f"AsyncMy MySQL operational error: {e}"
             raise SQLSpecError(msg) from e
         if issubclass(exc_type, asyncmy.errors.DatabaseError):
@@ -119,6 +129,7 @@ class AsyncmyExceptionHandler:
                 raise SQLParsingError(msg) from e
             msg = f"Unexpected async database operation error: {e}"
             raise SQLSpecError(msg) from e
+        return None
 
 
 class AsyncmyDriver(AsyncDriverAdapterBase):
@@ -129,7 +140,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     and transaction management.
     """
 
-    __slots__ = ()
+    __slots__ = ("_data_dictionary",)
     dialect = "mysql"
 
     def __init__(
@@ -148,6 +159,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         """Create cursor context manager for the connection.
@@ -307,3 +319,16 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         except asyncmy.errors.MySQLError as e:
             msg = f"Failed to commit MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    @property
+    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.asyncmy.data_dictionary import MySQLAsyncDataDictionary
+
+            self._data_dictionary = MySQLAsyncDataDictionary()
+        return self._data_dictionary

@@ -1,5 +1,7 @@
 """DuckDB driver implementation."""
 
+import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import duckdb
@@ -11,6 +13,7 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -18,6 +21,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.duckdb._types import DuckDBConnection
     from sqlspec.core.result import SQLResult
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._sync import SyncDataDictionaryBase
 
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "duckdb_statement_config")
 
@@ -31,7 +35,14 @@ duckdb_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
         default_execution_parameter_style=ParameterStyle.QMARK,
         supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
-        type_coercion_map={},
+        type_coercion_map={
+            bool: int,
+            datetime.datetime: lambda v: v.isoformat(),
+            datetime.date: lambda v: v.isoformat(),
+            Decimal: str,
+            dict: to_json,
+            list: to_json,
+        },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
@@ -126,7 +137,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     the sqlspec.core modules for statement processing and caching.
     """
 
-    __slots__ = ()
+    __slots__ = ("_data_dictionary",)
     dialect = "duckdb"
 
     def __init__(
@@ -146,6 +157,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             statement_config = updated_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         """Create context manager for DuckDB cursor.
@@ -324,3 +336,16 @@ class DuckDBDriver(SyncDriverAdapterBase):
         except duckdb.Error as e:
             msg = f"Failed to commit DuckDB transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    @property
+    def data_dictionary(self) -> "SyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
+
+            self._data_dictionary = DuckDBSyncDataDictionary()
+        return self._data_dictionary

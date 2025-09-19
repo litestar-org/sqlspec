@@ -4,6 +4,7 @@ Provides async PostgreSQL connectivity with parameter processing, resource manag
 PostgreSQL COPY operation support, and transaction management.
 """
 
+import datetime
 import re
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from sqlspec.core.result import SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._async import AsyncDataDictionaryBase
 
 __all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "asyncpg_statement_config")
 
@@ -36,7 +38,7 @@ asyncpg_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={},
+        type_coercion_map={datetime.datetime: lambda x: x, datetime.date: lambda x: x, datetime.time: lambda x: x},
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
@@ -103,7 +105,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     and caching, and parameter processing with type coercion.
     """
 
-    __slots__ = ()
+    __slots__ = ("_data_dictionary",)
     dialect = "postgres"
 
     def __init__(
@@ -122,6 +124,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
         """Create context manager for AsyncPG cursor."""
@@ -310,3 +313,16 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         except asyncpg.PostgresError as e:
             msg = f"Failed to commit async transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    @property
+    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.asyncpg.data_dictionary import PostgresAsyncDataDictionary
+
+            self._data_dictionary = PostgresAsyncDataDictionary()
+        return self._data_dictionary

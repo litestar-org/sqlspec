@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from sqlspec.core.result import SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._async import AsyncDataDictionaryBase
 
 __all__ = ("AiosqliteCursor", "AiosqliteDriver", "AiosqliteExceptionHandler", "aiosqlite_statement_config")
 
@@ -119,7 +120,7 @@ class AiosqliteExceptionHandler:
 class AiosqliteDriver(AsyncDriverAdapterBase):
     """AIOSQLite driver for async SQLite database operations."""
 
-    __slots__ = ()
+    __slots__ = ("_data_dictionary",)
     dialect = "sqlite"
 
     def __init__(
@@ -133,6 +134,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             statement_config = aiosqlite_statement_config.replace(enable_caching=cache_config.compiled_cache_enabled)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         """Create async context manager for AIOSQLite cursor."""
@@ -240,3 +242,16 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         except aiosqlite.Error as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    @property
+    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteAsyncDataDictionary
+
+            self._data_dictionary = AiosqliteAsyncDataDictionary()
+        return self._data_dictionary
