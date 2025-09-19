@@ -7,7 +7,14 @@ import pytest
 
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
-from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
+from sqlspec.driver import (
+    AsyncDataDictionaryBase,
+    AsyncDriverAdapterBase,
+    ExecutionResult,
+    SyncDataDictionaryBase,
+    SyncDriverAdapterBase,
+    VersionInfo,
+)
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
@@ -193,6 +200,46 @@ class MockAsyncCursor:
         await self.close()
 
 
+class MockSyncDataDictionary(SyncDataDictionaryBase):
+    """Mock sync data dictionary for testing."""
+
+    def get_version(self, driver: SyncDriverAdapterBase) -> "Optional[VersionInfo]":
+        """Return mock version info."""
+        return VersionInfo(3, 42, 0)
+
+    def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
+        """Return mock feature flag."""
+        return feature in {"supports_transactions", "supports_prepared_statements"}
+
+    def get_optimal_type(self, driver: SyncDriverAdapterBase, type_category: str) -> str:
+        """Return mock optimal type."""
+        return {"text": "TEXT", "boolean": "INTEGER"}.get(type_category, "TEXT")
+
+    def list_available_features(self) -> "list[str]":
+        """Return mock available features."""
+        return ["supports_transactions", "supports_prepared_statements"]
+
+
+class MockAsyncDataDictionary(AsyncDataDictionaryBase):
+    """Mock async data dictionary for testing."""
+
+    async def get_version(self, driver: AsyncDriverAdapterBase) -> "Optional[VersionInfo]":
+        """Return mock version info."""
+        return VersionInfo(3, 42, 0)
+
+    async def get_feature_flag(self, driver: AsyncDriverAdapterBase, feature: str) -> bool:
+        """Return mock feature flag."""
+        return feature in {"supports_transactions", "supports_prepared_statements"}
+
+    async def get_optimal_type(self, driver: AsyncDriverAdapterBase, type_category: str) -> str:
+        """Return mock optimal type."""
+        return {"text": "TEXT", "boolean": "INTEGER"}.get(type_category, "TEXT")
+
+    def list_available_features(self) -> "list[str]":
+        """Return mock available features."""
+        return ["supports_transactions", "supports_prepared_statements"]
+
+
 class MockSyncDriver(SyncDriverAdapterBase):
     """Mock sync driver for testing."""
 
@@ -213,6 +260,14 @@ class MockSyncDriver(SyncDriverAdapterBase):
                 ),
             )
         super().__init__(connection, statement_config, driver_features)
+        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
+
+    @property
+    def data_dictionary(self) -> "SyncDataDictionaryBase":
+        """Get the data dictionary for this driver."""
+        if self._data_dictionary is None:
+            self._data_dictionary = MockSyncDataDictionary()
+        return self._data_dictionary
 
     @contextmanager
     def with_cursor(self, connection: MockSyncConnection) -> "Generator[MockSyncCursor, None, None]":
@@ -316,6 +371,14 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
                 ),
             )
         super().__init__(connection, statement_config, driver_features)
+        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
+
+    @property
+    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+        """Get the data dictionary for this driver."""
+        if self._data_dictionary is None:
+            self._data_dictionary = MockAsyncDataDictionary()
+        return self._data_dictionary
 
     @asynccontextmanager
     async def with_cursor(self, connection: MockAsyncConnection) -> "AsyncGenerator[MockAsyncCursor, None]":

@@ -7,6 +7,8 @@ from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, Versio
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.adapters.adbc.driver import AdbcDriver
 
 logger = get_logger("adapters.adbc.data_dictionary")
@@ -22,30 +24,19 @@ __all__ = ("AdbcDataDictionary",)
 class AdbcDataDictionary(SyncDataDictionaryBase):
     """ADBC multi-dialect data dictionary.
 
-    Detects the underlying database dialect and delegates to appropriate logic.
+    Delegates to appropriate dialect-specific logic based on the driver's dialect.
     """
 
-    def __init__(self) -> None:
-        """Initialize ADBC data dictionary."""
-        self._detected_dialect: Optional[str] = None
-        self._cached_version: Optional[VersionInfo] = None
-
-    def _detect_dialect(self, driver: SyncDriverAdapterBase) -> str:
-        """Detect the underlying database dialect.
+    def _get_dialect(self, driver: SyncDriverAdapterBase) -> str:
+        """Get dialect from ADBC driver.
 
         Args:
             driver: ADBC driver instance
 
         Returns:
-            Detected dialect name
+            Dialect name
         """
-        if self._detected_dialect:
-            return self._detected_dialect
-
-        self._detected_dialect = (
-            str(cast("AdbcDriver", driver).dialect) if cast("AdbcDriver", driver).dialect else "sqlite"
-        )
-        return self._detected_dialect
+        return str(cast("AdbcDriver", driver).dialect)
 
     def get_version(self, driver: SyncDriverAdapterBase) -> "Optional[VersionInfo]":
         """Get database version information based on detected dialect.
@@ -56,59 +47,51 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         Returns:
             Database version information or None if detection fails
         """
-        if self._cached_version:
-            return self._cached_version
+        dialect = self._get_dialect(driver)
+        adbc_driver = cast("AdbcDriver", driver)
 
-        dialect = self._detect_dialect(driver)
+        try:
+            if dialect == "postgres":
+                version_str = adbc_driver.select_value("SELECT version()")
+                if version_str:
+                    match = POSTGRES_VERSION_PATTERN.search(str(version_str))
+                    if match:
+                        major = int(match.group(1))
+                        minor = int(match.group(2))
+                        patch = int(match.group(3)) if match.group(3) else 0
+                        return VersionInfo(major, minor, patch)
 
-        if dialect == "postgres":
-            try:
-                version_str = cast("AdbcDriver", driver).select_value("SELECT version()")
-                version_match = POSTGRES_VERSION_PATTERN.search(str(version_str))
-                if version_match:
-                    major = int(version_match.group(1))
-                    minor = int(version_match.group(2))
-                    patch = int(version_match.group(3)) if version_match.group(3) else 0
-                    self._cached_version = VersionInfo(major, minor, patch)
-            except Exception:
-                logger.warning("Failed to get PostgreSQL version")
+            elif dialect == "sqlite":
+                version_str = adbc_driver.select_value("SELECT sqlite_version()")
+                if version_str:
+                    match = SQLITE_VERSION_PATTERN.match(str(version_str))
+                    if match:
+                        major, minor, patch = map(int, match.groups())
+                        return VersionInfo(major, minor, patch)
 
-        elif dialect == "sqlite":
-            try:
-                version_str = cast("AdbcDriver", driver).select_value("SELECT sqlite_version()")
-                version_match = SQLITE_VERSION_PATTERN.match(str(version_str))
-                if version_match:
-                    major, minor, patch = map(int, version_match.groups())
-                    self._cached_version = VersionInfo(major, minor, patch)
-            except Exception:
-                logger.warning("Failed to get SQLite version")
+            elif dialect == "duckdb":
+                version_str = adbc_driver.select_value("SELECT version()")
+                if version_str:
+                    match = DUCKDB_VERSION_PATTERN.search(str(version_str))
+                    if match:
+                        major, minor, patch = map(int, match.groups())
+                        return VersionInfo(major, minor, patch)
 
-        elif dialect == "duckdb":
-            try:
-                version_str = cast("AdbcDriver", driver).select_value("SELECT version()")
-                version_match = DUCKDB_VERSION_PATTERN.search(str(version_str))
-                if version_match:
-                    major, minor, patch = map(int, version_match.groups())
-                    self._cached_version = VersionInfo(major, minor, patch)
-            except Exception:
-                logger.warning("Failed to get DuckDB version")
+            elif dialect == "mysql":
+                version_str = adbc_driver.select_value("SELECT VERSION()")
+                if version_str:
+                    match = MYSQL_VERSION_PATTERN.search(str(version_str))
+                    if match:
+                        major, minor, patch = map(int, match.groups())
+                        return VersionInfo(major, minor, patch)
 
-        elif dialect == "mysql":
-            try:
-                version_str = cast("AdbcDriver", driver).select_value("SELECT VERSION()")
-                version_match = MYSQL_VERSION_PATTERN.search(str(version_str))
-                if version_match:
-                    major, minor, patch = map(int, version_match.groups())
-                    self._cached_version = VersionInfo(major, minor, patch)
-            except Exception:
-                logger.warning("Failed to get MySQL version")
+            elif dialect == "bigquery":
+                return VersionInfo(1, 0, 0)
 
-        elif dialect == "bigquery":
-            # BigQuery is a cloud service
-            self._cached_version = VersionInfo(1, 0, 0)
+        except Exception:
+            logger.warning("Failed to get %s version", dialect)
 
-        logger.debug("Detected %s version: %s", dialect, self._cached_version)
-        return self._cached_version
+        return None
 
     def get_feature_flag(self, driver: SyncDriverAdapterBase, feature: str) -> bool:
         """Check if database supports a specific feature based on detected dialect.
@@ -120,25 +103,35 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         Returns:
             True if feature is supported, False otherwise
         """
-        dialect = self._detect_dialect(driver)
+        dialect = self._get_dialect(driver)
         version_info = self.get_version(driver)
 
         if dialect == "postgres":
-            feature_checks = {
+            feature_checks: dict[str, Callable[..., bool]] = {
                 "supports_json": lambda v: v and v >= VersionInfo(9, 2, 0),
                 "supports_jsonb": lambda v: v and v >= VersionInfo(9, 4, 0),
                 "supports_uuid": lambda _: True,
                 "supports_arrays": lambda _: True,
                 "supports_returning": lambda v: v and v >= VersionInfo(8, 2, 0),
                 "supports_upsert": lambda v: v and v >= VersionInfo(9, 5, 0),
+                "supports_window_functions": lambda v: v and v >= VersionInfo(8, 4, 0),
+                "supports_cte": lambda v: v and v >= VersionInfo(8, 4, 0),
+                "supports_transactions": lambda _: True,
+                "supports_prepared_statements": lambda _: True,
+                "supports_schemas": lambda _: True,
             }
         elif dialect == "sqlite":
             feature_checks = {
                 "supports_json": lambda v: v and v >= VersionInfo(3, 38, 0),
                 "supports_returning": lambda v: v and v >= VersionInfo(3, 35, 0),
                 "supports_upsert": lambda v: v and v >= VersionInfo(3, 24, 0),
-                "supports_uuid": lambda _: False,
+                "supports_window_functions": lambda v: v and v >= VersionInfo(3, 25, 0),
+                "supports_cte": lambda v: v and v >= VersionInfo(3, 8, 3),
+                "supports_transactions": lambda _: True,
+                "supports_prepared_statements": lambda _: True,
+                "supports_schemas": lambda _: False,
                 "supports_arrays": lambda _: False,
+                "supports_uuid": lambda _: False,
             }
         elif dialect == "duckdb":
             feature_checks = {
@@ -147,6 +140,11 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 "supports_uuid": lambda _: True,
                 "supports_returning": lambda v: v and v >= VersionInfo(0, 8, 0),
                 "supports_upsert": lambda v: v and v >= VersionInfo(0, 8, 0),
+                "supports_window_functions": lambda _: True,
+                "supports_cte": lambda _: True,
+                "supports_transactions": lambda _: True,
+                "supports_prepared_statements": lambda _: True,
+                "supports_schemas": lambda _: True,
             }
         elif dialect == "mysql":
             feature_checks = {
@@ -154,6 +152,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 "supports_cte": lambda v: v and v >= VersionInfo(8, 0, 1),
                 "supports_returning": lambda _: False,
                 "supports_upsert": lambda _: True,
+                "supports_window_functions": lambda v: v and v >= VersionInfo(8, 0, 2),
+                "supports_transactions": lambda _: True,
+                "supports_prepared_statements": lambda _: True,
+                "supports_schemas": lambda _: True,
                 "supports_uuid": lambda _: False,
                 "supports_arrays": lambda _: False,
             }
@@ -164,23 +166,23 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 "supports_structs": lambda _: True,
                 "supports_returning": lambda _: False,
                 "supports_upsert": lambda _: True,
+                "supports_window_functions": lambda _: True,
+                "supports_cte": lambda _: True,
+                "supports_transactions": lambda _: False,
+                "supports_prepared_statements": lambda _: True,
+                "supports_schemas": lambda _: True,
                 "supports_uuid": lambda _: False,
             }
         else:
-            feature_checks = {}
-
-        # Common features
-        common_features = {
-            "supports_transactions": lambda _: True,
-            "supports_prepared_statements": lambda _: True,
-            "supports_window_functions": lambda _: True,
-            "supports_cte": lambda _: True,
-        }
-
-        feature_checks.update(common_features)
+            feature_checks = {
+                "supports_transactions": lambda _: True,
+                "supports_prepared_statements": lambda _: True,
+                "supports_window_functions": lambda _: True,
+                "supports_cte": lambda _: True,
+            }
 
         if feature in feature_checks:
-            return feature_checks[feature](version_info)
+            return bool(feature_checks[feature](version_info))
 
         return False
 
@@ -194,7 +196,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         Returns:
             Database-specific type name
         """
-        dialect = self._detect_dialect(driver)
+        dialect = self._get_dialect(driver)
         version_info = self.get_version(driver)
 
         if dialect == "postgres":
@@ -210,6 +212,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 "timestamp": "TIMESTAMP WITH TIME ZONE",
                 "text": "TEXT",
                 "blob": "BYTEA",
+                "array": "ARRAY",
             }
 
         elif dialect == "sqlite":
@@ -254,7 +257,6 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 "array": "ARRAY",
             }
         else:
-            # Generic fallback
             type_map = {
                 "json": "TEXT",
                 "uuid": "VARCHAR(36)",

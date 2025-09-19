@@ -1,7 +1,7 @@
 """DuckDB-specific data dictionary for metadata queries."""
 
 import re
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -59,7 +59,7 @@ class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_checks = {
+        feature_checks: dict[str, Callable[..., bool]] = {
             "supports_json": lambda _: True,  # DuckDB has excellent JSON support
             "supports_arrays": lambda _: True,  # LIST type
             "supports_maps": lambda _: True,  # MAP type
@@ -75,7 +75,7 @@ class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
         }
 
         if feature in feature_checks:
-            return feature_checks[feature](version_info)
+            return bool(feature_checks[feature](version_info))
 
         return False
 

@@ -1,7 +1,7 @@
 """SQLite-specific data dictionary for metadata queries via aiosqlite."""
 
 import re
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -59,7 +59,7 @@ class AiosqliteAsyncDataDictionary(AsyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_checks = {
+        feature_checks: dict[str, Callable[..., bool]] = {
             "supports_json": lambda v: v >= VersionInfo(3, 38, 0),
             "supports_returning": lambda v: v >= VersionInfo(3, 35, 0),
             "supports_upsert": lambda v: v >= VersionInfo(3, 24, 0),
@@ -73,7 +73,7 @@ class AiosqliteAsyncDataDictionary(AsyncDataDictionaryBase):
         }
 
         if feature in feature_checks:
-            return feature_checks[feature](version_info)
+            return bool(feature_checks[feature](version_info))
 
         return False
 

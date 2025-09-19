@@ -13,6 +13,8 @@ from sqlspec.driver import (
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 
 logger = get_logger("adapters.psycopg.data_dictionary")
@@ -68,7 +70,7 @@ class PostgresSyncDataDictionary(SyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_checks = {
+        feature_checks: dict[str, Callable[[VersionInfo], bool]] = {
             "supports_json": lambda v: v >= VersionInfo(9, 2, 0),
             "supports_jsonb": lambda v: v >= VersionInfo(9, 4, 0),
             "supports_uuid": lambda _: True,  # UUID extension widely available
@@ -84,7 +86,7 @@ class PostgresSyncDataDictionary(SyncDataDictionaryBase):
         }
 
         if feature in feature_checks:
-            return feature_checks[feature](version_info)
+            return bool(feature_checks[feature](version_info))
 
         return False
 
@@ -184,7 +186,7 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_checks = {
+        feature_checks: dict[str, Callable[[VersionInfo], bool]] = {
             "supports_json": lambda v: v >= VersionInfo(9, 2, 0),
             "supports_jsonb": lambda v: v >= VersionInfo(9, 4, 0),
             "supports_uuid": lambda _: True,  # UUID extension widely available
@@ -200,7 +202,7 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
         }
 
         if feature in feature_checks:
-            return feature_checks[feature](version_info)
+            return bool(feature_checks[feature](version_info))
 
         return False
 

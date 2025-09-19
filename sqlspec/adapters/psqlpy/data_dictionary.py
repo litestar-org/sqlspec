@@ -1,7 +1,7 @@
 """PostgreSQL-specific data dictionary for metadata queries via psqlpy."""
 
 import re
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -62,7 +62,7 @@ class PsqlpyAsyncDataDictionary(AsyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_checks = {
+        feature_checks: dict[str, Callable[[VersionInfo], bool]] = {
             "supports_json": lambda v: v >= VersionInfo(9, 2, 0),
             "supports_jsonb": lambda v: v >= VersionInfo(9, 4, 0),
             "supports_uuid": lambda _: True,  # UUID extension widely available
@@ -78,7 +78,7 @@ class PsqlpyAsyncDataDictionary(AsyncDataDictionaryBase):
         }
 
         if feature in feature_checks:
-            return feature_checks[feature](version_info)
+            return bool(feature_checks[feature](version_info))
 
         return False
 

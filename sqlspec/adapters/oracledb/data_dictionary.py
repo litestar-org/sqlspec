@@ -3,7 +3,7 @@
 
 import re
 from contextlib import suppress
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
@@ -240,7 +240,7 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         if not version_info:
             return False
 
-        feature_checks = {
+        feature_checks: dict[str, Callable[..., bool]] = {
             "supports_native_json": version_info.supports_native_json,
             "supports_oson_blob": version_info.supports_oson_blob,
             "supports_json_blob": version_info.supports_json_blob,
@@ -251,7 +251,7 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         }
 
         if feature in feature_checks:
-            return feature_checks[feature]()
+            return bool(feature_checks[feature]())
 
         return False
 
@@ -391,7 +391,7 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         if not version_info:
             return False
 
-        feature_checks = {
+        feature_checks: dict[str, Callable[..., bool]] = {
             "supports_native_json": version_info.supports_native_json,
             "supports_oson_blob": version_info.supports_oson_blob,
             "supports_json_blob": version_info.supports_json_blob,
@@ -402,7 +402,7 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         }
 
         if feature in feature_checks:
-            return feature_checks[feature]()
+            return bool(feature_checks[feature]())
 
         return False
 

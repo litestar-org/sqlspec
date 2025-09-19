@@ -1,7 +1,7 @@
 """MySQL-specific data dictionary for metadata queries via asyncmy."""
 
 import re
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -58,7 +58,7 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         if not version_info:
             return False
 
-        feature_checks = {
+        feature_checks: dict[str, Callable[..., bool]] = {
             "supports_json": lambda v: v >= VersionInfo(5, 7, 8),
             "supports_cte": lambda v: v >= VersionInfo(8, 0, 1),
             "supports_window_functions": lambda v: v >= VersionInfo(8, 0, 2),
@@ -72,7 +72,7 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         }
 
         if feature in feature_checks:
-            return feature_checks[feature](version_info)
+            return bool(feature_checks[feature](version_info))
 
         return False
 

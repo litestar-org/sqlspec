@@ -3,16 +3,19 @@
 from typing import Union
 
 from sqlspec.driver import mixins
-from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
-from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.driver._async import AsyncDataDictionaryBase, AsyncDriverAdapterBase
+from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult, VersionInfo
+from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 
 __all__ = (
+    "AsyncDataDictionaryBase",
     "AsyncDriverAdapterBase",
     "CommonDriverAttributesMixin",
     "DriverAdapterProtocol",
     "ExecutionResult",
+    "SyncDataDictionaryBase",
     "SyncDriverAdapterBase",
+    "VersionInfo",
     "mixins",
 )
 

@@ -7,7 +7,6 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
 
 
-
 def test_extension_migration_discovery() -> None:
     """Test that extension migrations are discovered when configured."""
     with tempfile.TemporaryDirectory() as temp_dir:
