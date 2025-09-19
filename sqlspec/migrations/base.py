@@ -15,6 +15,7 @@ from sqlspec.builder._ddl import CreateTable
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.sync_tools import await_
 
 __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker")
@@ -135,15 +136,29 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
 class BaseMigrationRunner(ABC, Generic[DriverT]):
     """Base class for migration execution."""
 
-    def __init__(self, migrations_path: Path) -> None:
+    extension_configs: "dict[str, dict[str, Any]]"
+
+    def __init__(
+        self,
+        migrations_path: Path,
+        extension_migrations: "Optional[dict[str, Path]]" = None,
+        context: "Optional[Any]" = None,
+        extension_configs: "Optional[dict[str, dict[str, Any]]]" = None,
+    ) -> None:
         """Initialize the migration runner.
 
         Args:
             migrations_path: Path to the directory containing migration files.
+            extension_migrations: Optional mapping of extension names to their migration paths.
+            context: Optional migration context for Python migrations.
+            extension_configs: Optional mapping of extension names to their configurations.
         """
         self.migrations_path = migrations_path
+        self.extension_migrations = extension_migrations or {}
         self.loader = SQLFileLoader()
         self.project_root: Optional[Path] = None
+        self.context = context
+        self.extension_configs = extension_configs or {}
 
     def _extract_version(self, filename: str) -> Optional[str]:
         """Extract version from filename.
@@ -154,6 +169,12 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         Returns:
             The extracted version string or None.
         """
+        # Handle extension-prefixed versions (e.g., "ext_litestar_0001")
+        if filename.startswith("ext_"):
+            # This is already a prefixed version, return as-is
+            return filename
+
+        # Regular version extraction
         parts = filename.split("_", 1)
         return parts[0].zfill(4) if parts and parts[0].isdigit() else None
 
@@ -175,17 +196,31 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         Returns:
             List of tuples containing (version, file_path).
         """
-        if not self.migrations_path.exists():
-            return []
-
         migrations = []
-        for pattern in ["*.sql", "*.py"]:
-            for file_path in self.migrations_path.glob(pattern):
-                if file_path.name.startswith("."):
-                    continue
-                version = self._extract_version(file_path.name)
-                if version:
-                    migrations.append((version, file_path))
+
+        # Scan primary migration path
+        if self.migrations_path.exists():
+            for pattern in ("*.sql", "*.py"):
+                for file_path in self.migrations_path.glob(pattern):
+                    if file_path.name.startswith("."):
+                        continue
+                    version = self._extract_version(file_path.name)
+                    if version:
+                        migrations.append((version, file_path))
+
+        # Scan extension migration paths
+        for ext_name, ext_path in self.extension_migrations.items():
+            if ext_path.exists():
+                for pattern in ("*.sql", "*.py"):
+                    for file_path in ext_path.glob(pattern):
+                        if file_path.name.startswith("."):
+                            continue
+                        # Prefix extension migrations to avoid version conflicts
+                        version = self._extract_version(file_path.name)
+                        if version:
+                            # Use ext_ prefix to distinguish extension migrations
+                            prefixed_version = f"ext_{ext_name}_{version}"
+                            migrations.append((prefixed_version, file_path))
 
         return sorted(migrations, key=operator.itemgetter(0))
 
@@ -199,7 +234,45 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             Migration metadata dictionary.
         """
 
-        loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
+        # Check if this is an extension migration and update context accordingly
+        context_to_use = self.context
+        if context_to_use and file_path.name.startswith("ext_"):
+            # Try to extract extension name from the version
+            version = self._extract_version(file_path.name)
+            if version and version.startswith("ext_"):
+                # Parse extension name from version like "ext_litestar_0001"
+                min_extension_version_parts = 3
+                parts = version.split("_", 2)
+                if len(parts) >= min_extension_version_parts:
+                    ext_name = parts[1]
+                    if ext_name in self.extension_configs:
+                        # Create a new context with the extension config
+                        from sqlspec.migrations.context import MigrationContext
+
+                        context_to_use = MigrationContext(
+                            dialect=self.context.dialect if self.context else None,
+                            config=self.context.config if self.context else None,
+                            driver=self.context.driver if self.context else None,
+                            metadata=self.context.metadata.copy() if self.context and self.context.metadata else {},
+                            extension_config=self.extension_configs[ext_name],
+                        )
+
+        # For extension migrations, check by path
+        for ext_name, ext_path in self.extension_migrations.items():
+            if file_path.parent == ext_path:
+                if ext_name in self.extension_configs and self.context:
+                    from sqlspec.migrations.context import MigrationContext
+
+                    context_to_use = MigrationContext(
+                        dialect=self.context.dialect,
+                        config=self.context.config,
+                        driver=self.context.driver,
+                        metadata=self.context.metadata.copy() if self.context.metadata else {},
+                        extension_config=self.extension_configs[ext_name],
+                    )
+                break
+
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)
         loader.validate_migration_file(file_path)
         content = file_path.read_text(encoding="utf-8")
         checksum = self._calculate_checksum(content)
@@ -292,6 +365,8 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
 class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
     """Base class for migration commands."""
 
+    extension_configs: "dict[str, dict[str, Any]]"
+
     def __init__(self, config: ConfigT) -> None:
         """Initialize migration commands.
 
@@ -304,6 +379,72 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
         self.version_table = migration_config.get("version_table_name", "ddl_migrations")
         self.migrations_path = Path(migration_config.get("script_location", "migrations"))
         self.project_root = Path(migration_config["project_root"]) if "project_root" in migration_config else None
+        self.include_extensions = migration_config.get("include_extensions", [])
+        self.extension_configs = self._parse_extension_configs()
+
+    def _parse_extension_configs(self) -> "dict[str, dict[str, Any]]":
+        """Parse extension configurations from include_extensions.
+
+        Supports both string format (extension name) and dict format
+        (extension name with configuration).
+
+        Returns:
+            Dictionary mapping extension names to their configurations.
+        """
+        configs = {}
+
+        for ext_config in self.include_extensions:
+            if isinstance(ext_config, str):
+                # Simple string format: just the extension name
+                ext_name = ext_config
+                ext_options = {}
+            elif isinstance(ext_config, dict):
+                # Dict format: {"name": "litestar", "session_table": "custom_sessions"}
+                ext_name_raw = ext_config.get("name")
+                if not ext_name_raw:
+                    logger.warning("Extension configuration missing 'name' field: %s", ext_config)
+                    continue
+                # Assert for type narrowing: ext_name_raw is guaranteed to be str here
+                assert isinstance(ext_name_raw, str)
+                ext_name = ext_name_raw
+                ext_options = {k: v for k, v in ext_config.items() if k != "name"}
+            else:
+                logger.warning("Invalid extension configuration format: %s", ext_config)
+                continue
+
+            # Apply default configurations for known extensions
+            if ext_name == "litestar" and "session_table" not in ext_options:
+                ext_options["session_table"] = "litestar_sessions"
+
+            configs[ext_name] = ext_options
+
+        return configs
+
+    def _discover_extension_migrations(self) -> "dict[str, Path]":
+        """Discover migration paths for configured extensions.
+
+        Returns:
+            Dictionary mapping extension names to their migration paths.
+        """
+
+        extension_migrations = {}
+
+        for ext_name in self.extension_configs:
+            module_name = "sqlspec.extensions.litestar" if ext_name == "litestar" else f"sqlspec.extensions.{ext_name}"
+
+            try:
+                module_path = module_to_os_path(module_name)
+                migrations_dir = module_path / "migrations"
+
+                if migrations_dir.exists():
+                    extension_migrations[ext_name] = migrations_dir
+                    logger.debug("Found migrations for extension %s at %s", ext_name, migrations_dir)
+                else:
+                    logger.warning("No migrations directory found for extension %s", ext_name)
+            except TypeError:
+                logger.warning("Extension %s not found", ext_name)
+
+        return extension_migrations
 
     def _get_init_readme_content(self) -> str:
         """Get README content for migration directory initialization.
