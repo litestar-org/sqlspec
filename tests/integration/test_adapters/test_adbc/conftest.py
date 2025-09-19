@@ -1,12 +1,13 @@
 """Test fixtures and configuration for ADBC integration tests."""
 
 import functools
+from collections.abc import Generator
 from typing import Any, Callable, TypeVar, cast
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -34,3 +35,16 @@ def adbc_session(postgres_service: PostgresService) -> AdbcConfig:
             "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         }
     )
+
+
+@pytest.fixture(scope="function")
+def adbc_sync_driver(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
+    """Create an ADBC driver for data dictionary testing."""
+    config = AdbcConfig(
+        connection_config={
+            "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        }
+    )
+
+    with config.provide_session() as session:
+        yield session
