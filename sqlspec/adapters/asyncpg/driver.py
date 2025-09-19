@@ -63,8 +63,7 @@ class AsyncpgCursor:
     async def __aenter__(self) -> "AsyncpgConnection":
         return self.connection
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _ = (exc_type, exc_val, exc_tb)
+    async def __aexit__(self, *_: Any) -> None: ...
 
 
 class AsyncpgExceptionHandler:

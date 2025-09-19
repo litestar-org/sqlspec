@@ -238,7 +238,7 @@ class PsqlpyCursor:
         self._in_use = True
         return self.connection
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(self, *_: Any) -> None:
         """Exit cursor context.
 
         Args:
@@ -246,7 +246,6 @@ class PsqlpyCursor:
             exc_val: Exception value
             exc_tb: Exception traceback
         """
-        _ = (exc_type, exc_val, exc_tb)
         self._in_use = False
 
     def is_in_use(self) -> bool:
