@@ -71,6 +71,11 @@ class MergeUsingClauseMixin:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
+    def _generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate unique parameter name - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
     def using(self, source: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
         """Set the source data for the MERGE operation (USING clause).
 
@@ -95,6 +100,35 @@ class MergeUsingClauseMixin:
         source_expr: exp.Expression
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
+        elif isinstance(source, dict):
+            # Handle dictionary by creating a VALUES-style subquery with parameters
+            columns = list(source.keys())
+            values = list(source.values())
+
+            # Create parameterized values
+            parameterized_values: list[exp.Expression] = []
+            for col, val in zip(columns, values):
+                column_name = col if isinstance(col, str) else str(col)
+                if "." in column_name:
+                    column_name = column_name.split(".")[-1]
+                param_name = self._generate_unique_parameter_name(column_name)
+                _, param_name = self.add_parameter(val, name=param_name)
+                parameterized_values.append(exp.Placeholder(this=param_name))
+
+            # Create SELECT statement with the values
+            select_expr = exp.Select()
+            select_expressions = []
+            for i, col in enumerate(columns):
+                select_expressions.append(exp.alias_(parameterized_values[i], col))
+            select_expr.set("expressions", select_expressions)
+
+            # Add FROM DUAL for Oracle compatibility (or equivalent for other databases)
+            from_expr = exp.From(this=exp.to_table("DUAL"))
+            select_expr.set("from", from_expr)
+
+            source_expr = exp.paren(select_expr)
+            if alias:
+                source_expr = exp.alias_(source_expr, alias, table=False)
         elif has_query_builder_parameters(source) and hasattr(source, "_expression"):
             subquery_builder_parameters = source.parameters
             if subquery_builder_parameters:
@@ -184,6 +218,42 @@ class MergeMatchedClauseMixin:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
+    def _is_column_reference(self, value: str) -> bool:
+        """Check if a string value is a column reference rather than a literal.
+
+        Uses sqlglot to parse the value and determine if it represents a column
+        reference, function call, or other SQL expression rather than a literal.
+        """
+        if not isinstance(value, str):
+            return False
+
+        # If the string contains spaces and no SQL-like syntax, treat as literal
+        if " " in value and not any(x in value for x in [".", "(", ")", "*", "="]):
+            return False
+
+        # Only consider strings with dots (table.column), functions, or SQL keywords as column references
+        # Simple identifiers are treated as literals
+        if not any(x in value for x in [".", "(", ")"]):
+            # Check if it's a SQL keyword/function that should be treated as expression
+            sql_keywords = {"NULL", "CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME", "DEFAULT"}
+            if value.upper() not in sql_keywords:
+                return False
+
+        try:
+            # Try to parse as SQL expression
+            parsed: Optional[exp.Expression] = exp.maybe_parse(value)
+            if parsed is None:
+                return False
+
+            # Check for SQL literals that should be treated as expressions
+            return isinstance(
+                parsed,
+                (exp.Dot, exp.Anonymous, exp.Func, exp.Null, exp.CurrentTimestamp, exp.CurrentDate, exp.CurrentTime),
+            )
+        except Exception:
+            # If parsing fails, treat as literal
+            return False
+
     def _add_when_clause(self, when_clause: exp.When) -> None:
         """Helper to add a WHEN clause to the MERGE statement.
 
@@ -230,7 +300,11 @@ class MergeMatchedClauseMixin:
             The current builder instance for method chaining.
         """
         # Combine set_values dict and kwargs
-        all_values = dict(set_values or {}, **kwargs)
+        all_values = {}
+        if set_values:
+            all_values.update(set_values)
+        if kwargs:
+            all_values.update(kwargs)
 
         if not all_values:
             msg = "No update values provided. Use set_values dict or kwargs."
@@ -262,12 +336,14 @@ class MergeMatchedClauseMixin:
                     value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
             elif isinstance(val, exp.Expression):
                 value_expr = val
+            elif isinstance(val, str) and self._is_column_reference(val):
+                value_expr = exp.maybe_parse(val) or exp.column(val)
             else:
                 column_name = col if isinstance(col, str) else str(col)
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
                 param_name = self._generate_unique_parameter_name(column_name)
-                param_name = self.add_parameter(val, name=param_name)[1]
+                _, param_name = self.add_parameter(val, name=param_name)
                 value_expr = exp.Placeholder(this=param_name)
 
             update_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
@@ -351,6 +427,54 @@ class MergeNotMatchedClauseMixin:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
+    def _is_column_reference(self, value: str) -> bool:
+        """Check if a string value is a column reference rather than a literal.
+
+        Uses sqlglot to parse the value and determine if it represents a column
+        reference, function call, or other SQL expression rather than a literal.
+        """
+        if not isinstance(value, str):
+            return False
+
+        # If the string contains spaces and no SQL-like syntax, treat as literal
+        if " " in value and not any(x in value for x in [".", "(", ")", "*", "="]):
+            return False
+
+        try:
+            # Try to parse as SQL expression
+            parsed: Optional[exp.Expression] = exp.maybe_parse(value)
+            if parsed is None:
+                return False
+
+            # If it parses to a Column, Dot (table.column), Identifier, or other SQL constructs
+
+        except Exception:
+            # If parsing fails, fall back to conservative approach
+            # Only treat simple identifiers as column references
+            return (
+                value.replace("_", "").replace(".", "").isalnum()
+                and (value[0].isalpha() or value[0] == "_")
+                and " " not in value
+                and "'" not in value
+                and '"' not in value
+            )
+        return bool(
+            isinstance(
+                parsed,
+                (
+                    exp.Column,
+                    exp.Dot,
+                    exp.Identifier,
+                    exp.Anonymous,
+                    exp.Func,
+                    exp.Null,
+                    exp.CurrentTimestamp,
+                    exp.CurrentDate,
+                    exp.CurrentTime,
+                ),
+            )
+        )
+
     def _add_when_clause(self, when_clause: exp.When) -> None:
         """Helper to add a WHEN clause to the MERGE statement - provided by QueryBuilder."""
         msg = "Method must be provided by QueryBuilder subclass"
@@ -388,12 +512,16 @@ class MergeNotMatchedClauseMixin:
 
             parameterized_values: list[exp.Expression] = []
             for i, val in enumerate(values):
-                column_name = columns[i] if isinstance(columns[i], str) else str(columns[i])
-                if "." in column_name:
-                    column_name = column_name.split(".")[-1]
-                param_name = self._generate_unique_parameter_name(column_name)
-                param_name = self.add_parameter(val, name=param_name)[1]
-                parameterized_values.append(exp.Placeholder())
+                if isinstance(val, str) and self._is_column_reference(val):
+                    # Handle column references (like "s.data") as column expressions, not parameters
+                    parameterized_values.append(exp.maybe_parse(val) or exp.column(val))
+                else:
+                    column_name = columns[i] if isinstance(columns[i], str) else str(columns[i])
+                    if "." in column_name:
+                        column_name = column_name.split(".")[-1]
+                    param_name = self._generate_unique_parameter_name(column_name)
+                    _, param_name = self.add_parameter(val, name=param_name)
+                    parameterized_values.append(exp.Placeholder(this=param_name))
 
             insert_args["this"] = exp.Tuple(expressions=[exp.column(c) for c in columns])
             insert_args["expression"] = exp.Tuple(expressions=parameterized_values)
@@ -458,6 +586,35 @@ class MergeNotMatchedBySourceClauseMixin:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
+    def _is_column_reference(self, value: str) -> bool:
+        """Check if a string value is a column reference rather than a literal.
+
+        Uses sqlglot to parse the value and determine if it represents a column
+        reference, function call, or other SQL expression rather than a literal.
+
+        Args:
+            value: The string value to check
+
+        Returns:
+            True if the value is a column reference, False if it's a literal
+        """
+        if not isinstance(value, str):
+            return False
+
+        try:
+            parsed: Optional[exp.Expression] = exp.maybe_parse(value)
+            if parsed is None:
+                return False
+
+        except Exception:
+            return False
+        return bool(
+            isinstance(
+                parsed,
+                (exp.Dot, exp.Anonymous, exp.Func, exp.Null, exp.CurrentTimestamp, exp.CurrentDate, exp.CurrentTime),
+            )
+        )
+
     def when_not_matched_by_source_then_update(
         self,
         set_values: Optional[dict[str, Any]] = None,
@@ -517,12 +674,14 @@ class MergeNotMatchedBySourceClauseMixin:
                     value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
             elif isinstance(val, exp.Expression):
                 value_expr = val
+            elif isinstance(val, str) and self._is_column_reference(val):
+                value_expr = exp.maybe_parse(val) or exp.column(val)
             else:
                 column_name = col if isinstance(col, str) else str(col)
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
                 param_name = self._generate_unique_parameter_name(column_name)
-                param_name = self.add_parameter(val, name=param_name)[1]
+                _, param_name = self.add_parameter(val, name=param_name)
                 value_expr = exp.Placeholder(this=param_name)
 
             update_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))

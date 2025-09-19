@@ -247,8 +247,7 @@ def test_legacy_on_duplicate_key_update() -> None:
     )
     stmt = query.build()
 
-    assert "ON CONFLICT" in stmt.sql
-    assert "DO UPDATE" in stmt.sql
+    assert "ON DUPLICATE KEY UPDATE" in stmt.sql
     assert "NOW()" in stmt.sql
 
 
