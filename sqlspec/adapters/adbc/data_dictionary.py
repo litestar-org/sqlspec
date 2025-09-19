@@ -7,8 +7,6 @@ from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, Versio
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.adbc.driver import AdbcDriver
 
 logger = get_logger("adapters.adbc.data_dictionary")
@@ -107,7 +105,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         version_info = self.get_version(driver)
 
         if dialect == "postgres":
-            feature_checks: dict[str, Callable[..., bool]] = {
+            feature_checks = {
                 "supports_json": lambda v: v and v >= VersionInfo(9, 2, 0),
                 "supports_jsonb": lambda v: v and v >= VersionInfo(9, 4, 0),
                 "supports_uuid": lambda _: True,

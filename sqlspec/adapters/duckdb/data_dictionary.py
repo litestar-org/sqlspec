@@ -79,7 +79,7 @@ class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
 
         return False
 
-    def get_optimal_type(self, driver: SyncDriverAdapterBase, type_category: str) -> str:  # pyright: ignore
+    def get_optimal_type(self, driver: SyncDriverAdapterBase, type_category: str) -> str:
         """Get optimal DuckDB type for a category.
 
         Args:
