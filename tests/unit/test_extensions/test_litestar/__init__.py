@@ -1,1 +1,1 @@
-"""Litestar extension unit tests."""
+"""Unit tests for SQLSpec Litestar extensions."""

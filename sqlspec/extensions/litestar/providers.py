@@ -170,7 +170,7 @@ def _create_statement_filters(
 
         def provide_id_filter(  # pyright: ignore[reportUnknownParameterType]
             ids: Optional[list[str]] = Parameter(query="ids", default=None, required=False),
-        ) -> InCollectionFilter:  # pyright: ignore[reportMissingTypeArgument]
+        ) -> "InCollectionFilter[Any]":
             return InCollectionFilter(field_name=config.get("id_field", "id"), values=ids)
 
         filters[dep_defaults.ID_FILTER_DEPENDENCY_KEY] = Provide(provide_id_filter, sync_to_thread=False)  # pyright: ignore[reportUnknownArgumentType]
