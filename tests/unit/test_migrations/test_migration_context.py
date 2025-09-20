@@ -1,7 +1,5 @@
 """Test migration context functionality."""
 
-from pathlib import Path
-
 from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.migrations.context import MigrationContext
@@ -36,5 +34,3 @@ def test_migration_context_manual_creation() -> None:
     assert context.config is None
     assert context.driver is None
     assert context.metadata == {"custom_key": "custom_value"}
-
-
