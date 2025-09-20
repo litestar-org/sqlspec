@@ -509,8 +509,6 @@ This naming ensures proper sorting and avoids conflicts when loading multiple fi
         readme = migrations_dir / "README.md"
         readme.write_text(self._get_init_readme_content())
 
-        (migrations_dir / ".gitkeep").touch()
-
         console.print(f"[green]Initialized migrations in {directory}[/]")
 
     @abstractmethod
