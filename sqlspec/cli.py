@@ -261,7 +261,12 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
 
         # Check if this is a multi-config operation
         configs_to_process = process_multiple_configs(
-            ctx, bind_key, include, exclude, dry_run=False, operation_name="show current revision"
+            cast("click.Context", ctx),
+            bind_key,
+            include,
+            exclude,
+            dry_run=False,
+            operation_name="show current revision",
         )
 
         if configs_to_process is not None:
@@ -280,7 +285,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         else:
             # Single config operation
             console.rule("[yellow]Listing current revision[/]", align="left")
-            sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+            sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
             migration_commands = MigrationCommands(config=sqlspec_config)
             migration_commands.current(verbose=verbose)
 
@@ -308,7 +313,12 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
 
         # Check if this is a multi-config operation
         configs_to_process = process_multiple_configs(
-            ctx, bind_key, include, exclude, dry_run=dry_run, operation_name=f"downgrade to {revision}"
+            cast("click.Context", ctx),
+            bind_key,
+            include,
+            exclude,
+            dry_run=dry_run,
+            operation_name=f"downgrade to {revision}",
         )
 
         if configs_to_process is not None:
@@ -340,7 +350,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 else Confirm.ask(f"Are you sure you want to downgrade the database to the `{revision}` revision?")
             )
             if input_confirmed:
-                sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+                sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
                 migration_commands = MigrationCommands(config=sqlspec_config)
                 migration_commands.downgrade(revision=revision)
 
@@ -368,7 +378,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
 
         # Check if this is a multi-config operation
         configs_to_process = process_multiple_configs(
-            ctx, bind_key, include, exclude, dry_run, operation_name=f"upgrade to {revision}"
+            cast("click.Context", ctx), bind_key, include, exclude, dry_run, operation_name=f"upgrade to {revision}"
         )
 
         if configs_to_process is not None:
@@ -400,7 +410,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 else Confirm.ask(f"[bold]Are you sure you want migrate the database to the `{revision}` revision?[/]")
             )
             if input_confirmed:
-                sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+                sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
                 migration_commands = MigrationCommands(config=sqlspec_config)
                 migration_commands.upgrade(revision=revision)
 
@@ -412,7 +422,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         from sqlspec.migrations.commands import MigrationCommands
 
         ctx = click.get_current_context()
-        sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+        sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
         migration_commands = MigrationCommands(config=sqlspec_config)
         migration_commands.stamp(revision=revision)
 
@@ -435,7 +445,11 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
             True if no_prompt else Confirm.ask("[bold]Are you sure you want initialize migrations for the project?[/]")
         )
         if input_confirmed:
-            configs = [get_config_by_bind_key(ctx, bind_key)] if bind_key is not None else ctx.obj["configs"]
+            configs = (
+                [get_config_by_bind_key(cast("click.Context", ctx), bind_key)]
+                if bind_key is not None
+                else cast("click.Context", ctx).obj["configs"]
+            )
             from sqlspec.extensions.litestar.config import DatabaseConfig
 
             for config in configs:
@@ -463,7 +477,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         if message is None:
             message = "new migration" if no_prompt else Prompt.ask("Please enter a message describing this revision")
 
-        sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+        sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
         migration_commands = MigrationCommands(config=sqlspec_config)
         migration_commands.revision(message=message)
 
@@ -473,7 +487,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         from rich.table import Table
 
         ctx = click.get_current_context()
-        migration_configs = get_configs_with_migrations(ctx)
+        migration_configs = get_configs_with_migrations(cast("click.Context", ctx))
 
         if not migration_configs:
             console.print("[yellow]No configurations with migrations detected.[/]")

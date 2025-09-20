@@ -19,6 +19,7 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy._types import PsqlpyConnection
     from sqlspec.core.result import SQLResult
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._async import AsyncDataDictionaryBase
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "psqlpy_statement_config")
 
@@ -214,7 +216,23 @@ def _convert_psqlpy_parameters(value: Any) -> Any:
 
         return value
 
-    if isinstance(value, (dict, list, tuple, uuid.UUID, datetime.datetime, datetime.date)):
+    if isinstance(value, bytes):
+        try:
+            return from_json(value)
+        except (UnicodeDecodeError, Exception):
+            return value
+
+    # Handle data structures for JSON/JSONB - pass dicts and lists directly
+    # psqlpy will handle the appropriate casting based on the SQL type (::json vs ::jsonb)
+    if isinstance(value, dict):
+        # Pass dicts directly - psqlpy will handle ::json vs ::jsonb casting
+        return value
+
+    if isinstance(value, (list, tuple)):
+        # Pass lists directly - psqlpy will handle ::json vs ::jsonb casting
+        return list(value)
+
+    if isinstance(value, (uuid.UUID, datetime.datetime, datetime.date)):
         return value
 
     return value
@@ -302,7 +320,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     and transaction management.
     """
 
-    __slots__ = ()
+    __slots__ = ("_data_dictionary",)
     dialect = "postgres"
 
     def __init__(
@@ -321,6 +339,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: "PsqlpyConnection") -> "PsqlpyCursor":
         """Create context manager for psqlpy cursor.
@@ -510,3 +529,16 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         except psqlpy.exceptions.DatabaseError as e:
             msg = f"Failed to commit psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    @property
+    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
+
+            self._data_dictionary = PsqlpyAsyncDataDictionary()
+        return self._data_dictionary

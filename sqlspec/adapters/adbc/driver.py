@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.adbc._types import AdbcConnection
     from sqlspec.core.result import SQLResult
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._sync import SyncDataDictionaryBase
 
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "get_adbc_statement_config")
 
@@ -393,7 +394,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     database dialects, parameter style conversion, and transaction management.
     """
 
-    __slots__ = ("_detected_dialect", "dialect")
+    __slots__ = ("_data_dictionary", "_detected_dialect", "dialect")
 
     def __init__(
         self,
@@ -412,6 +413,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self.dialect = statement_config.dialect
+        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
 
     @staticmethod
     def _ensure_pyarrow_installed() -> None:
@@ -654,3 +656,16 @@ class AdbcDriver(SyncDriverAdapterBase):
         except Exception as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    @property
+    def data_dictionary(self) -> "SyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
+
+            self._data_dictionary = AdbcDataDictionary()
+        return self._data_dictionary

@@ -37,10 +37,20 @@ def sqlite_session() -> Generator[AdbcDriver, None, None]:
 @pytest.fixture
 def duckdb_session() -> Generator[AdbcDriver, None, None]:
     """DuckDB ADBC session fixture."""
-    config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
+    try:
+        config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
 
-    with config.provide_session() as session:
-        yield session
+        with config.provide_session() as session:
+            yield session
+    except Exception as e:
+        if (
+            "cannot open shared object file" in str(e)
+            or "No module named" in str(e)
+            or "Failed to import connect function" in str(e)
+            or "Could not configure connection" in str(e)
+        ):
+            pytest.skip(f"DuckDB ADBC driver not available: {e}")
+        raise
 
 
 @pytest.mark.xdist_group("postgres")

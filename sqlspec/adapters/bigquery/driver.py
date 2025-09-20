@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
     from sqlspec.core.result import SQLResult
     from sqlspec.core.statement import SQL
+    from sqlspec.driver._sync import SyncDataDictionaryBase
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +231,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
     type coercion, error handling, and query job management.
     """
 
-    __slots__ = ("_default_query_job_config",)
+    __slots__ = ("_data_dictionary", "_default_query_job_config")
     dialect = "bigquery"
 
     def __init__(
@@ -252,6 +253,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._default_query_job_config: Optional[QueryJobConfig] = (driver_features or {}).get(
             "default_query_job_config"
         )
+        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
         """Create context manager for cursor management.
@@ -532,3 +534,16 @@ class BigQueryDriver(SyncDriverAdapterBase):
         cursor.job.result()
         affected_rows = cursor.job.num_dml_affected_rows or 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+    @property
+    def data_dictionary(self) -> "SyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.bigquery.data_dictionary import BigQuerySyncDataDictionary
+
+            self._data_dictionary = BigQuerySyncDataDictionary()
+        return self._data_dictionary

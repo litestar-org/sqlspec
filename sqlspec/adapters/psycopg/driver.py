@@ -14,6 +14,7 @@ PostgreSQL Features:
 - PostgreSQL-specific error handling
 """
 
+import datetime
 import io
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -32,7 +33,9 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
+    from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.driver._common import ExecutionResult
+    from sqlspec.driver._sync import SyncDataDictionaryBase
 
 logger = get_logger("adapters.psycopg")
 
@@ -94,7 +97,12 @@ psycopg_statement_config = StatementConfig(
             ParameterStyle.NAMED_PYFORMAT,
             ParameterStyle.NUMERIC,
         },
-        type_coercion_map={dict: to_json},
+        type_coercion_map={
+            dict: to_json,
+            datetime.datetime: lambda x: x,
+            datetime.date: lambda x: x,
+            datetime.time: lambda x: x,
+        },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
@@ -186,7 +194,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
     bulk data transfer, and PostgreSQL-specific error handling.
     """
 
-    __slots__ = ()
+    __slots__ = ("_data_dictionary",)
     dialect = "postgres"
 
     def __init__(
@@ -206,6 +214,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
             statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
         """Create context manager for PostgreSQL cursor."""
@@ -410,6 +419,19 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    @property
+    def data_dictionary(self) -> "SyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.psycopg.data_dictionary import PostgresSyncDataDictionary
+
+            self._data_dictionary = PostgresSyncDataDictionary()
+        return self._data_dictionary
+
 
 class PsycopgAsyncCursor:
     """Async context manager for PostgreSQL psycopg cursor management."""
@@ -487,7 +509,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     and async pub/sub support.
     """
 
-    __slots__ = ()
+    __slots__ = ("_data_dictionary",)
     dialect = "postgres"
 
     def __init__(
@@ -507,6 +529,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
         """Create async context manager for PostgreSQL cursor."""
@@ -713,3 +736,16 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+    @property
+    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.psycopg.data_dictionary import PostgresAsyncDataDictionary
+
+            self._data_dictionary = PostgresAsyncDataDictionary()
+        return self._data_dictionary

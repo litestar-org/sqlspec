@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from sqlspec.core.result import SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._sync import SyncDataDictionaryBase
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "sqlite_statement_config")
 
@@ -36,6 +37,7 @@ sqlite_statement_config = StatementConfig(
             datetime.datetime: lambda v: v.isoformat(),
             datetime.date: lambda v: v.isoformat(),
             Decimal: str,
+            dict: to_json,
             list: to_json,
         },
         has_native_list_expansion=False,
@@ -158,7 +160,7 @@ class SqliteDriver(SyncDriverAdapterBase):
     for SQLite databases using the standard sqlite3 module.
     """
 
-    __slots__ = ()
+    __slots__ = ("_data_dictionary",)
     dialect = "sqlite"
 
     def __init__(
@@ -184,6 +186,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         """Create context manager for SQLite cursor.
@@ -324,3 +327,16 @@ class SqliteDriver(SyncDriverAdapterBase):
         except sqlite3.Error as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    @property
+    def data_dictionary(self) -> "SyncDataDictionaryBase":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            from sqlspec.adapters.sqlite.data_dictionary import SqliteSyncDataDictionary
+
+            self._data_dictionary = SqliteSyncDataDictionary()
+        return self._data_dictionary

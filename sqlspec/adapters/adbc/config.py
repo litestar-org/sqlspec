@@ -174,7 +174,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         try:
             connect_func = import_string(driver_path)
         except ImportError as e:
-            driver_path_with_suffix = f"{driver_path}.dbapi.connect"
+            # Only add .dbapi.connect if it's not already there
+            if not driver_path.endswith(".dbapi.connect"):
+                driver_path_with_suffix = f"{driver_path}.dbapi.connect"
+            else:
+                driver_path_with_suffix = driver_path
             try:
                 connect_func = import_string(driver_path_with_suffix)
             except ImportError as e2:

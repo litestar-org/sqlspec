@@ -53,3 +53,25 @@ async def asyncpg_arrow_session(postgres_service: PostgresService) -> "AsyncGene
         # Ensure pool is closed properly to avoid threading issues during test shutdown
         if config.pool_instance:
             await config.close_pool()
+
+
+@pytest.fixture(scope="function")
+async def asyncpg_async_driver(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
+    """Create an AsyncPG driver for data dictionary testing."""
+    config = AsyncpgConfig(
+        pool_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "database": postgres_service.database,
+        }
+    )
+
+    try:
+        async with config.provide_session() as session:
+            yield session
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if config.pool_instance:
+            await config.close_pool()
