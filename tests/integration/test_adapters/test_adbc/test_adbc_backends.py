@@ -43,10 +43,12 @@ def duckdb_session() -> Generator[AdbcDriver, None, None]:
         with config.provide_session() as session:
             yield session
     except Exception as e:
-        if ("cannot open shared object file" in str(e) or
-            "No module named" in str(e) or
-            "Failed to import connect function" in str(e) or
-            "Could not configure connection" in str(e)):
+        if (
+            "cannot open shared object file" in str(e)
+            or "No module named" in str(e)
+            or "Failed to import connect function" in str(e)
+            or "Could not configure connection" in str(e)
+        ):
             pytest.skip(f"DuckDB ADBC driver not available: {e}")
         raise
 
