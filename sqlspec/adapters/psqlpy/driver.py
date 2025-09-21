@@ -16,6 +16,7 @@ import psqlpy.exceptions
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core.type_conversion import TypeDetector
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
@@ -54,25 +55,21 @@ psqlpy_statement_config = StatementConfig(
 
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
-SPECIAL_TYPE_REGEX: Final[re.Pattern[str]] = re.compile(
+# PostgreSQL-specific regex patterns for types not covered by base TypeDetector
+PG_SPECIFIC_REGEX: Final[re.Pattern[str]] = re.compile(
     r"^(?:"
-    r"(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|"
-    r"(?P<ipv4>(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:/(?:3[0-2]|[12]?[0-9]))?)|"
-    r"(?P<ipv6>(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|:(?::[0-9a-f]{1,4}){1,7}|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|::(?:ffff:)?(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))(?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?)|"
-    r"(?P<mac>(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}|[0-9a-f]{12})|"
-    r"(?P<iso_datetime>\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?)|"
-    r"(?P<iso_date>\d{4}-\d{2}-\d{2})|"
-    r"(?P<iso_time>\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?)|"
     r"(?P<interval>(?:(?:\d+\s+(?:year|month|day|hour|minute|second)s?\s*)+)|(?:P(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?))|"
-    r"(?P<json>\{[\s\S]*\}|\[[\s\S]*\])|"
     r"(?P<pg_array>\{(?:[^{}]+|\{[^{}]*\})*\})"
     r")$",
     re.IGNORECASE,
 )
 
+# Initialize centralized type detector
+_type_detector = TypeDetector()
 
-def _detect_postgresql_type(value: str) -> Optional[str]:
-    """Detect PostgreSQL data type from string value.
+
+def _detect_postgresql_specific_type(value: str) -> Optional[str]:
+    """Detect PostgreSQL-specific data types not covered by base TypeDetector.
 
     Args:
         value: String value to analyze
@@ -80,121 +77,15 @@ def _detect_postgresql_type(value: str) -> Optional[str]:
     Returns:
         Type name if detected, None otherwise.
     """
-    match = SPECIAL_TYPE_REGEX.match(value)
+    match = PG_SPECIFIC_REGEX.match(value)
     if not match:
         return None
 
-    for group_name in [
-        "uuid",
-        "ipv4",
-        "ipv6",
-        "mac",
-        "iso_datetime",
-        "iso_date",
-        "iso_time",
-        "interval",
-        "json",
-        "pg_array",
-    ]:
+    for group_name in ["interval", "pg_array"]:
         if match.group(group_name):
             return group_name
 
     return None
-
-
-def _convert_uuid(value: str) -> Any:
-    """Convert UUID string to UUID object.
-
-    Args:
-        value: UUID string to convert
-
-    Returns:
-        UUID object or original value if conversion fails
-    """
-    try:
-        clean_uuid = value.replace("-", "").lower()
-        uuid_length = 32
-        if len(clean_uuid) == uuid_length:
-            formatted = f"{clean_uuid[:8]}-{clean_uuid[8:12]}-{clean_uuid[12:16]}-{clean_uuid[16:20]}-{clean_uuid[20:]}"
-            return uuid.UUID(formatted)
-        return uuid.UUID(value)
-    except (ValueError, AttributeError):
-        return value
-
-
-def _convert_iso_datetime(value: str) -> Any:
-    """Convert ISO datetime string to datetime object.
-
-    Args:
-        value: ISO datetime string to convert
-
-    Returns:
-        datetime object or original value if conversion fails
-    """
-    try:
-        normalized = value.replace("Z", "+00:00")
-        return datetime.datetime.fromisoformat(normalized)
-    except ValueError:
-        return value
-
-
-def _convert_iso_date(value: str) -> Any:
-    """Convert ISO date string to date object.
-
-    Args:
-        value: ISO date string to convert
-
-    Returns:
-        date object or original value if conversion fails
-    """
-    try:
-        return datetime.date.fromisoformat(value)
-    except ValueError:
-        return value
-
-
-def _validate_json(value: str) -> str:
-    """Validate JSON string format.
-
-    Args:
-        value: JSON string to validate
-
-    Returns:
-        Original string value
-    """
-    from sqlspec.utils.serializers import from_json
-
-    try:
-        from_json(value)
-    except (ValueError, TypeError):
-        return value
-    return value
-
-
-def _passthrough(value: str) -> str:
-    """Pass value through unchanged.
-
-    Args:
-        value: String value to pass through
-
-    Returns:
-        Original value unchanged
-    """
-    return value
-
-
-_PSQLPY_TYPE_CONVERTERS: dict[str, Any] = {
-    "uuid": _convert_uuid,
-    "iso_datetime": _convert_iso_datetime,
-    "iso_date": _convert_iso_date,
-    "iso_time": _passthrough,
-    "json": _validate_json,
-    "pg_array": _passthrough,
-    "ipv4": _passthrough,
-    "ipv6": _passthrough,
-    "mac": _passthrough,
-    "interval": _passthrough,
-}
 
 
 def _convert_psqlpy_parameters(value: Any) -> Any:
@@ -207,19 +98,28 @@ def _convert_psqlpy_parameters(value: Any) -> Any:
         Converted value suitable for psqlpy execution
     """
     if isinstance(value, str):
-        detected_type = _detect_postgresql_type(value)
-
+        # Try centralized type detection first
+        detected_type = _type_detector.detect_type(value)
         if detected_type:
-            converter = _PSQLPY_TYPE_CONVERTERS.get(detected_type)
-            if converter:
-                return converter(value)
+            try:
+                return _type_detector.convert_value(value, detected_type)
+            except Exception:
+                # If conversion fails, return original value
+                return value
+
+        # Check PostgreSQL-specific types
+        pg_type = _detect_postgresql_specific_type(value)
+        if pg_type:
+            # For now, pass through PostgreSQL-specific types as strings
+            return value
 
         return value
 
     if isinstance(value, bytes):
         try:
+            # from_json (decode_json) already handles bytes directly
             return from_json(value)
-        except (UnicodeDecodeError, Exception):
+        except Exception:
             return value
 
     # Handle data structures for JSON/JSONB - pass dicts and lists directly
