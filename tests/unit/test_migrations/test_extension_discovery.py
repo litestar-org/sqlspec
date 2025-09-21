@@ -37,6 +37,7 @@ def test_extension_migration_discovery() -> None:
             migration_file = litestar_path / "0001_create_session_table.py"
             assert migration_file.exists()
 
+
 def test_extension_migration_context() -> None:
     """Test that migration context is created with dialect information."""
     with tempfile.TemporaryDirectory() as temp_dir:

@@ -1,7 +1,7 @@
 """ADBC multi-dialect data dictionary for metadata queries."""
 
 import re
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -105,7 +105,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         version_info = self.get_version(driver)
 
         if dialect == "postgres":
-            feature_checks = {
+            feature_checks: dict[str, Callable[..., bool]] = {
                 "supports_json": lambda v: v and v >= VersionInfo(9, 2, 0),
                 "supports_jsonb": lambda v: v and v >= VersionInfo(9, 4, 0),
                 "supports_uuid": lambda _: True,
