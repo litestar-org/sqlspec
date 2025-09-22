@@ -579,33 +579,22 @@ class AdbcDriver(SyncDriverAdapterBase):
             if not prepared_parameters:
                 cursor._rowcount = 0  # pyright: ignore[reportPrivateUsage]
                 row_count = 0
-            elif isinstance(prepared_parameters, list) and prepared_parameters:
-                if parameter_casts and self.dialect in {"postgres", "postgresql"}:
-                    total_rows = 0
-                    for param_set in prepared_parameters:
-                        postgres_compatible = self._handle_postgres_empty_parameters(param_set)
+            elif isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
+                processed_params = []
+                for param_set in prepared_parameters:
+                    postgres_compatible = self._handle_postgres_empty_parameters(param_set)
+
+                    if self.dialect in {"postgres", "postgresql"}:
                         formatted_params = self._prepare_parameters_with_casts(
                             postgres_compatible, parameter_casts, self.statement_config
                         )
-                        cursor.execute(sql, formatted_params)
-                        total_rows += cursor.rowcount if cursor.rowcount is not None else 1
-                    row_count = total_rows
-                else:
-                    processed_params = []
-                    for param_set in prepared_parameters:
-                        postgres_compatible = self._handle_postgres_empty_parameters(param_set)
+                    else:
+                        formatted_params = self.prepare_driver_parameters(
+                            postgres_compatible, self.statement_config, is_many=False
+                        )
+                    processed_params.append(formatted_params)
 
-                        if self.dialect in {"postgres", "postgresql"}:
-                            formatted_params = self._prepare_parameters_with_casts(
-                                postgres_compatible, parameter_casts, self.statement_config
-                            )
-                        else:
-                            formatted_params = self.prepare_driver_parameters(
-                                postgres_compatible, self.statement_config, is_many=False
-                            )
-                        processed_params.append(formatted_params)
-
-                    cursor.executemany(sql, processed_params)
+                cursor.executemany(sql, processed_params)
                 row_count = cursor.rowcount if cursor.rowcount is not None else -1
             else:
                 cursor.executemany(sql, prepared_parameters)
