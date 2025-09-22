@@ -232,7 +232,7 @@ def up():
             content CLOB,
             user_id NUMBER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT fk_posts_user FOREIGN KEY (user_id) REFERENCES {users_table}(id)
+            CONSTRAINT fk_{posts_table}_user FOREIGN KEY (user_id) REFERENCES {users_table}(id)
         )
     """]
 

@@ -563,7 +563,14 @@ class CommonDriverAttributesMixin:
             cache = get_cache()
             cached_result = cache.get("statement", cache_key, str(statement.dialect) if statement.dialect else None)
             if cached_result is not None and isinstance(cached_result, CachedStatement):
-                return cached_result.compiled_sql, cached_result.parameters
+                # Use cached SQL but always prepare fresh parameters from the current statement
+                # The cached parameters might be wrong due to parameter conversion issues
+                prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
+                compiled_sql, execution_parameters = prepared_statement.compile()
+                prepared_parameters = self.prepare_driver_parameters(
+                    execution_parameters, statement_config, is_many=statement.is_many
+                )
+                return cached_result.compiled_sql, prepared_parameters
 
         prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
         compiled_sql, execution_parameters = prepared_statement.compile()
