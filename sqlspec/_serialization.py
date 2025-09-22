@@ -103,7 +103,6 @@ class MsgspecSerializer(BaseJSONSerializer):
                 return self._encoder.encode(data)
             return self._encoder.encode(data).decode("utf-8")
         except (TypeError, ValueError):
-            # Fallback to orjson for complex types
             if ORJSON_INSTALLED:
                 return OrjsonSerializer().encode(data, as_bytes=as_bytes)
             return StandardLibSerializer().encode(data, as_bytes=as_bytes)
@@ -115,13 +114,11 @@ class MsgspecSerializer(BaseJSONSerializer):
                 try:
                     return self._decoder.decode(data)
                 except (TypeError, ValueError):
-                    # Fallback to orjson
                     if ORJSON_INSTALLED:
                         return OrjsonSerializer().decode(data, decode_bytes=decode_bytes)
                     return StandardLibSerializer().decode(data, decode_bytes=decode_bytes)
             return data
 
-        # String input
         try:
             return self._decoder.decode(data.encode("utf-8"))
         except (TypeError, ValueError):
@@ -179,7 +176,6 @@ class StandardLibSerializer(BaseJSONSerializer):
         return json.loads(data)
 
 
-# Singleton instances
 _default_serializer: Optional[JSONSerializer] = None
 
 
@@ -205,12 +201,10 @@ def get_default_serializer() -> JSONSerializer:
         if _default_serializer is None:
             _default_serializer = StandardLibSerializer()
 
-    # Type checker doesn't know that _default_serializer is guaranteed to be set
     assert _default_serializer is not None
     return _default_serializer
 
 
-# Backward-compatible functions using default serializer
 @overload
 def encode_json(data: Any, *, as_bytes: Literal[False] = ...) -> str: ...  # pragma: no cover
 

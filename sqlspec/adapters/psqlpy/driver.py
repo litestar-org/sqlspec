@@ -4,23 +4,20 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
-import datetime
 import decimal
 import re
-import uuid
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import psqlpy
 import psqlpy.exceptions
 
+from sqlspec.adapters.psqlpy.type_converter import PostgreSQLTypeConverter
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
-from sqlspec.core.type_conversion import TypeDetector
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -34,6 +31,8 @@ __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "psqlpy_sta
 
 logger = get_logger("adapters.psqlpy")
 
+_type_converter = PostgreSQLTypeConverter()
+
 psqlpy_statement_config = StatementConfig(
     dialect="postgres",
     parameter_config=ParameterStyleConfig(
@@ -41,7 +40,7 @@ psqlpy_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={tuple: list, decimal.Decimal: float},
+        type_coercion_map={tuple: list, decimal.Decimal: float, str: _type_converter.convert_if_detected},
         has_native_list_expansion=False,
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
@@ -54,88 +53,6 @@ psqlpy_statement_config = StatementConfig(
 )
 
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
-
-# PostgreSQL-specific regex patterns for types not covered by base TypeDetector
-PG_SPECIFIC_REGEX: Final[re.Pattern[str]] = re.compile(
-    r"^(?:"
-    r"(?P<interval>(?:(?:\d+\s+(?:year|month|day|hour|minute|second)s?\s*)+)|(?:P(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?))|"
-    r"(?P<pg_array>\{(?:[^{}]+|\{[^{}]*\})*\})"
-    r")$",
-    re.IGNORECASE,
-)
-
-# Initialize centralized type detector
-_type_detector = TypeDetector()
-
-
-def _detect_postgresql_specific_type(value: str) -> Optional[str]:
-    """Detect PostgreSQL-specific data types not covered by base TypeDetector.
-
-    Args:
-        value: String value to analyze
-
-    Returns:
-        Type name if detected, None otherwise.
-    """
-    match = PG_SPECIFIC_REGEX.match(value)
-    if not match:
-        return None
-
-    for group_name in ["interval", "pg_array"]:
-        if match.group(group_name):
-            return group_name
-
-    return None
-
-
-def _convert_psqlpy_parameters(value: Any) -> Any:
-    """Convert parameters for psqlpy compatibility.
-
-    Args:
-        value: Parameter value to convert
-
-    Returns:
-        Converted value suitable for psqlpy execution
-    """
-    if isinstance(value, str):
-        # Try centralized type detection first
-        detected_type = _type_detector.detect_type(value)
-        if detected_type:
-            try:
-                return _type_detector.convert_value(value, detected_type)
-            except Exception:
-                # If conversion fails, return original value
-                return value
-
-        # Check PostgreSQL-specific types
-        pg_type = _detect_postgresql_specific_type(value)
-        if pg_type:
-            # For now, pass through PostgreSQL-specific types as strings
-            return value
-
-        return value
-
-    if isinstance(value, bytes):
-        try:
-            # from_json (decode_json) already handles bytes directly
-            return from_json(value)
-        except Exception:
-            return value
-
-    # Handle data structures for JSON/JSONB - pass dicts and lists directly
-    # psqlpy will handle the appropriate casting based on the SQL type (::json vs ::jsonb)
-    if isinstance(value, dict):
-        # Pass dicts directly - psqlpy will handle ::json vs ::jsonb casting
-        return value
-
-    if isinstance(value, (list, tuple)):
-        # Pass lists directly - psqlpy will handle ::json vs ::jsonb casting
-        return list(value)
-
-    if isinstance(value, (uuid.UUID, datetime.datetime, datetime.date)):
-        return value
-
-    return value
 
 
 class PsqlpyCursor:
@@ -322,10 +239,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         formatted_parameters = []
         for param_set in prepared_parameters:
             if isinstance(param_set, (list, tuple)):
-                converted_params = [_convert_psqlpy_parameters(param) for param in param_set]
-                formatted_parameters.append(converted_params)
+                formatted_parameters.append(list(param_set))
             else:
-                formatted_parameters.append([_convert_psqlpy_parameters(param_set)])
+                formatted_parameters.append([param_set])
 
         await cursor.execute_many(sql, formatted_parameters)
 
@@ -344,9 +260,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             ExecutionResult with execution metadata
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        if prepared_parameters:
-            prepared_parameters = [_convert_psqlpy_parameters(param) for param in prepared_parameters]
 
         if statement.returns_rows():
             query_result = await cursor.fetch(sql, prepared_parameters or [])

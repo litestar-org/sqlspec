@@ -8,7 +8,7 @@ from typing import Any, Final, Optional
 from uuid import UUID
 
 from sqlspec._serialization import encode_json
-from sqlspec.core.type_conversion import TypeDetector, convert_uuid
+from sqlspec.core.type_conversion import BaseTypeConverter, convert_uuid
 
 try:
     from google.cloud.bigquery import ScalarQueryParameter
@@ -33,7 +33,7 @@ BQ_TYPE_MAP: Final[dict[str, str]] = {
 }
 
 
-class BigQueryTypeConverter(TypeDetector):
+class BigQueryTypeConverter(BaseTypeConverter):
     """BigQuery-specific type conversion with UUID support.
 
     Extends the base TypeDetector with BigQuery-specific functionality

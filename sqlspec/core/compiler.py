@@ -72,6 +72,7 @@ class CompiledSQL:
         "execution_parameters",
         "expression",
         "operation_type",
+        "parameter_casts",
         "parameter_style",
         "supports_many",
     )
@@ -86,6 +87,7 @@ class CompiledSQL:
         expression: Optional["exp.Expression"] = None,
         parameter_style: Optional[str] = None,
         supports_many: bool = False,
+        parameter_casts: Optional["dict[int, str]"] = None,
     ) -> None:
         """Initialize compiled result.
 
@@ -96,6 +98,7 @@ class CompiledSQL:
             expression: SQLGlot AST expression
             parameter_style: Parameter style used in compilation
             supports_many: Whether this supports execute_many operations
+            parameter_casts: Mapping of parameter positions to cast types
         """
         self.compiled_sql = compiled_sql
         self.execution_parameters = execution_parameters
@@ -103,6 +106,7 @@ class CompiledSQL:
         self.expression = expression
         self.parameter_style = parameter_style
         self.supports_many = supports_many
+        self.parameter_casts = parameter_casts or {}
         self._hash: Optional[int] = None
 
     def __hash__(self) -> int:
@@ -224,11 +228,13 @@ class SQLProcessor:
             ast_was_transformed = False
             expression = None
             operation_type: OperationType = "EXECUTE"
+            parameter_casts: dict[int, str] = {}
 
             if self._config.enable_parsing:
                 try:
                     expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
                     operation_type = self._detect_operation_type(expression)
+                    parameter_casts = self._detect_parameter_casts(expression)
 
                     ast_transformer = self._config.parameter_config.ast_transformer
                     if ast_transformer:
@@ -238,6 +244,7 @@ class SQLProcessor:
                 except ParseError:
                     expression = None
                     operation_type = "EXECUTE"
+                    parameter_casts = {}
 
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
@@ -264,6 +271,7 @@ class SQLProcessor:
                 expression=expression,
                 parameter_style=self._config.parameter_config.default_parameter_style.value,
                 supports_many=isinstance(final_params, list) and len(final_params) > 0,
+                parameter_casts=parameter_casts,
             )
 
         except SQLSpecError:
@@ -271,7 +279,9 @@ class SQLProcessor:
             raise
         except Exception as e:
             logger.warning("Compilation failed, using fallback: %s", e)
-            return CompiledSQL(compiled_sql=sql, execution_parameters=parameters, operation_type="UNKNOWN")
+            return CompiledSQL(
+                compiled_sql=sql, execution_parameters=parameters, operation_type="UNKNOWN", parameter_casts={}
+            )
 
     def _make_cache_key(self, sql: str, parameters: Any, is_many: bool = False) -> str:
         """Generate cache key.
@@ -325,6 +335,51 @@ class SQLProcessor:
             return "COPY"
 
         return "UNKNOWN"
+
+    def _detect_parameter_casts(self, expression: Optional["exp.Expression"]) -> "dict[int, str]":
+        """Detect explicit type casts on parameters in the AST.
+
+        Args:
+            expression: SQLGlot AST expression to analyze
+
+        Returns:
+            Dict mapping parameter positions (1-based) to cast type names
+        """
+        if not expression:
+            return {}
+
+        cast_positions = {}
+
+        # Walk all nodes in order to track parameter positions
+        for node in expression.walk():
+            # Check for cast nodes with parameter children
+            if isinstance(node, exp.Cast):
+                cast_target = node.this
+                position = None
+
+                if isinstance(cast_target, exp.Parameter):
+                    # Handle $1, $2 style parameters
+                    param_value = cast_target.this
+                    if isinstance(param_value, exp.Literal):
+                        position = int(param_value.this)
+                elif isinstance(cast_target, exp.Placeholder):
+                    # For ? style, we need to count position (will implement if needed)
+                    pass
+                elif isinstance(cast_target, exp.Column):
+                    # Handle cases where $1 gets parsed as a column
+                    column_name = str(cast_target.this) if cast_target.this else str(cast_target)
+                    if column_name.startswith("$") and column_name[1:].isdigit():
+                        position = int(column_name[1:])
+
+                if position is not None:
+                    # Extract cast type
+                    if isinstance(node.to, exp.DataType):
+                        cast_type = node.to.this.value if hasattr(node.to.this, "value") else str(node.to.this)
+                    else:
+                        cast_type = str(node.to)
+                    cast_positions[position] = cast_type.upper()
+
+        return cast_positions
 
     def _apply_final_transformations(
         self, expression: "Optional[exp.Expression]", sql: str, parameters: Any, dialect_str: "Optional[str]"

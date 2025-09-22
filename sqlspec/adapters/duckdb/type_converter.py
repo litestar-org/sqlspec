@@ -8,10 +8,10 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlspec.core.type_conversion import TypeDetector, convert_uuid, format_datetime_rfc3339
+from sqlspec.core.type_conversion import BaseTypeConverter, convert_uuid, format_datetime_rfc3339
 
 
-class DuckDBTypeConverter(TypeDetector):
+class DuckDBTypeConverter(BaseTypeConverter):
     """DuckDB-specific type conversion with native UUID support.
 
     Extends the base TypeDetector with DuckDB-specific functionality

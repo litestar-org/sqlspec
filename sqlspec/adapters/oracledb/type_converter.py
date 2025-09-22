@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from typing import Any, Final
 
-from sqlspec.core.type_conversion import TypeDetector
+from sqlspec.core.type_conversion import BaseTypeConverter
 from sqlspec.utils.sync_tools import ensure_async_
 
 # Oracle-specific JSON storage detection
@@ -23,7 +23,7 @@ ORACLE_JSON_STORAGE_REGEX: Final[re.Pattern[str]] = re.compile(
 )
 
 
-class OracleTypeConverter(TypeDetector):
+class OracleTypeConverter(BaseTypeConverter):
     """Oracle-specific type conversion with LOB optimization.
 
     Extends the base TypeDetector with Oracle-specific functionality

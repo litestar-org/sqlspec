@@ -177,7 +177,6 @@ except ImportError:
     MSGSPEC_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
-# Check for orjson availability
 try:
     import orjson  # noqa: F401
 

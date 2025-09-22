@@ -12,13 +12,14 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 from adbc_driver_manager.dbapi import DatabaseError, IntegrityError, OperationalError, ProgrammingError
 from sqlglot import exp
 
+from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
+from sqlspec.adapters.adbc.type_converter import ADBCTypeConverter
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import MissingDependencyError, SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -294,7 +295,7 @@ def _convert_array_for_postgres_adbc(value: Any) -> Any:
 
 
 def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
-    """Get type coercion map for Arrow type handling.
+    """Get type coercion map for Arrow type handling with dialect-aware type conversion.
 
     Args:
         dialect: Database dialect name
@@ -302,7 +303,9 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     Returns:
         Mapping of Python types to conversion functions
     """
-    type_map = {
+    tc = ADBCTypeConverter(dialect)
+
+    return {
         datetime.datetime: lambda x: x,
         datetime.date: lambda x: x,
         datetime.time: lambda x: x,
@@ -310,17 +313,12 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
         bool: lambda x: x,
         int: lambda x: x,
         float: lambda x: x,
-        str: lambda x: x,
+        str: tc.convert_if_detected,
         bytes: lambda x: x,
         tuple: _convert_array_for_postgres_adbc,
         list: _convert_array_for_postgres_adbc,
         dict: lambda x: x,
     }
-
-    if dialect in {"postgres", "postgresql"}:
-        type_map[dict] = lambda x: to_json(x) if x is not None else None
-
-    return type_map
 
 
 class AdbcCursor:
@@ -476,6 +474,61 @@ class AdbcDriver(SyncDriverAdapterBase):
             return None
         return parameters
 
+    def _get_parameter_casts(self, statement: SQL) -> "dict[int, str]":
+        """Get parameter cast metadata from compiled statement.
+
+        Args:
+            statement: SQL statement with compiled metadata
+
+        Returns:
+            Dict mapping parameter positions to cast types
+        """
+        from sqlspec.typing import Empty
+
+        processed_state = statement.get_processed_state()
+        if processed_state is not Empty:
+            return processed_state.parameter_casts or {}
+        return {}
+
+    def _prepare_parameters_with_casts(
+        self, parameters: Any, parameter_casts: "dict[int, str]", statement_config: "StatementConfig"
+    ) -> Any:
+        """Prepare parameters with cast-aware type coercion.
+
+        Only converts dicts to JSON when explicitly cast to json/jsonb types.
+
+        Args:
+            parameters: Parameter values (list, tuple, or scalar)
+            parameter_casts: Mapping of parameter positions to cast types
+            statement_config: Statement configuration for type coercion
+
+        Returns:
+            Parameters with cast-aware type coercion applied
+        """
+        from sqlspec._serialization import encode_json
+
+        if isinstance(parameters, (list, tuple)):
+            result: list[Any] = []
+            for idx, param in enumerate(parameters, start=1):
+                cast_type = parameter_casts.get(idx, "").upper()
+                if cast_type in {"JSON", "JSONB", "TYPE.JSON", "TYPE.JSONB"}:
+                    if isinstance(param, dict):
+                        result.append(encode_json(param))
+                    else:
+                        result.append(param)
+                elif isinstance(param, dict):
+                    result.append(param)
+                else:
+                    coerced = param
+                    if statement_config.parameter_config.type_coercion_map:
+                        for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
+                            if type_check is not dict and isinstance(param, type_check):
+                                coerced = converter(param)
+                                break
+                    result.append(coerced)
+            return tuple(result) if isinstance(parameters, tuple) else result
+        return parameters
+
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
         """Create context manager for cursor.
 
@@ -520,20 +573,39 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
+        parameter_casts = self._get_parameter_casts(statement)
+
         try:
             if not prepared_parameters:
                 cursor._rowcount = 0  # pyright: ignore[reportPrivateUsage]
                 row_count = 0
             elif isinstance(prepared_parameters, list) and prepared_parameters:
-                processed_params = []
-                for param_set in prepared_parameters:
-                    postgres_compatible = self._handle_postgres_empty_parameters(param_set)
-                    formatted_params = self.prepare_driver_parameters(
-                        postgres_compatible, self.statement_config, is_many=False
-                    )
-                    processed_params.append(formatted_params)
+                if parameter_casts and self.dialect in {"postgres", "postgresql"}:
+                    total_rows = 0
+                    for param_set in prepared_parameters:
+                        postgres_compatible = self._handle_postgres_empty_parameters(param_set)
+                        formatted_params = self._prepare_parameters_with_casts(
+                            postgres_compatible, parameter_casts, self.statement_config
+                        )
+                        cursor.execute(sql, formatted_params)
+                        total_rows += cursor.rowcount if cursor.rowcount is not None else 1
+                    row_count = total_rows
+                else:
+                    processed_params = []
+                    for param_set in prepared_parameters:
+                        postgres_compatible = self._handle_postgres_empty_parameters(param_set)
 
-                cursor.executemany(sql, processed_params)
+                        if self.dialect in {"postgres", "postgresql"}:
+                            formatted_params = self._prepare_parameters_with_casts(
+                                postgres_compatible, parameter_casts, self.statement_config
+                            )
+                        else:
+                            formatted_params = self.prepare_driver_parameters(
+                                postgres_compatible, self.statement_config, is_many=False
+                            )
+                        processed_params.append(formatted_params)
+
+                    cursor.executemany(sql, processed_params)
                 row_count = cursor.rowcount if cursor.rowcount is not None else -1
             else:
                 cursor.executemany(sql, prepared_parameters)
@@ -541,7 +613,6 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         except Exception:
             self._handle_postgres_rollback(cursor)
-            logger.exception("Executemany failed")
             raise
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
@@ -558,9 +629,18 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
+        parameter_casts = self._get_parameter_casts(statement)
+
         try:
             postgres_compatible_params = self._handle_postgres_empty_parameters(prepared_parameters)
-            cursor.execute(sql, parameters=postgres_compatible_params)
+
+            if self.dialect in {"postgres", "postgresql"}:
+                formatted_params = self._prepare_parameters_with_casts(
+                    postgres_compatible_params, parameter_casts, self.statement_config
+                )
+                cursor.execute(sql, parameters=formatted_params)
+            else:
+                cursor.execute(sql, parameters=postgres_compatible_params)
 
         except Exception:
             self._handle_postgres_rollback(cursor)
@@ -665,7 +745,5 @@ class AdbcDriver(SyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
-
             self._data_dictionary = AdbcDataDictionary()
         return self._data_dictionary

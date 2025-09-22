@@ -28,12 +28,12 @@ SPECIAL_TYPE_REGEX: Final[re.Pattern[str]] = re.compile(
 )
 
 
-class TypeDetector:
-    """Universal type detection for all adapters.
+class BaseTypeConverter:
+    """Universal type detection and conversion for all adapters.
 
     Provides centralized type detection and conversion functionality
     that can be used across all database adapters to ensure consistent
-    behavior.
+    behavior. Users can extend this class for custom type conversion needs.
     """
 
     __slots__ = ()
@@ -69,6 +69,34 @@ class TypeDetector:
         converter = _TYPE_CONVERTERS.get(detected_type)
         if converter:
             return converter(value)
+        return value
+
+    def convert_if_detected(self, value: Any) -> Any:
+        """Convert value only if special type detected, else return original.
+
+        This method provides performance optimization by avoiding expensive
+        regex operations on plain strings that don't contain special characters.
+
+        Args:
+            value: Value to potentially convert.
+
+        Returns:
+            Converted value if special type detected, original value otherwise.
+        """
+        if not isinstance(value, str):
+            return value
+
+        # Quick pre-check for performance - avoid regex on plain strings
+        if not any(c in value for c in ["{", "[", "-", ":", "T"]):
+            return value  # Skip regex entirely for "hello world" etc.
+
+        detected_type = self.detect_type(value)
+        if detected_type:
+            try:
+                return self.convert_value(value, detected_type)
+            except Exception:
+                # If conversion fails, return original value
+                return value
         return value
 
 
@@ -192,7 +220,7 @@ def parse_datetime_rfc3339(dt_str: str) -> datetime:
 
 
 __all__ = (
-    "TypeDetector",
+    "BaseTypeConverter",
     "convert_decimal",
     "convert_iso_date",
     "convert_iso_datetime",

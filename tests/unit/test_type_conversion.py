@@ -1,6 +1,6 @@
 """Tests for centralized type conversion functionality.
 
-Tests for the TypeDetector class and related conversion utilities,
+Tests for the BaseTypeConverter class and related conversion utilities,
 ensuring consistent type handling across all database adapters.
 """
 
@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from sqlspec.core.type_conversion import (
-    TypeDetector,
+    BaseTypeConverter,
     convert_decimal,
     convert_iso_date,
     convert_iso_datetime,
@@ -23,12 +23,12 @@ from sqlspec.core.type_conversion import (
 )
 
 
-class TestTypeDetector:
-    """Test the TypeDetector class functionality."""
+class TestBaseTypeConverter:
+    """Test the BaseTypeConverter class functionality."""
 
     def setup_method(self) -> None:
         """Set up test fixtures."""
-        self.detector = TypeDetector()
+        self.detector = BaseTypeConverter()
 
     def test_uuid_detection(self) -> None:
         """Test UUID string detection."""
@@ -265,7 +265,7 @@ class TestEdgeCases:
 
     def setup_method(self) -> None:
         """Set up test fixtures."""
-        self.detector = TypeDetector()
+        self.detector = BaseTypeConverter()
 
     def test_invalid_uuid(self) -> None:
         """Test invalid UUID handling."""

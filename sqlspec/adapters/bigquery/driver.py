@@ -15,6 +15,7 @@ from google.cloud.bigquery import ArrayQueryParameter, QueryJob, QueryJobConfig,
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
+from sqlspec.adapters.bigquery.type_converter import BigQueryTypeConverter
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
@@ -33,6 +34,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "bigquery_statement_config")
+
+_type_converter = BigQueryTypeConverter()
 
 
 _BQ_TYPE_MAP: dict[type, tuple[str, Optional[str]]] = {
@@ -135,7 +138,7 @@ bigquery_type_coercion_map = {
     bool: lambda x: x,
     int: lambda x: x,
     float: lambda x: x,
-    str: lambda x: x,
+    str: _type_converter.convert_if_detected,
     bytes: lambda x: x,
     datetime.datetime: lambda x: x,
     datetime.date: lambda x: x,
