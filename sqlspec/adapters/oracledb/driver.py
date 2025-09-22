@@ -315,34 +315,6 @@ class OracleSyncDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def _validate_parameters(self, sql: str, parameters: dict[str, Any]) -> None:
-        """Validate that provided parameters match SQL requirements.
-
-        Oracle should raise an error when extra parameters are provided.
-        Missing parameters are handled gracefully by Oracle (treated as None).
-
-        Args:
-            sql: SQL string to check for parameter placeholders
-            parameters: Parameters provided for execution
-
-        Raises:
-            ValueError: When extra parameters are provided that aren't used in SQL
-        """
-        if not parameters or not isinstance(parameters, dict):
-            return
-
-        import re
-        # Find all named parameters in SQL (:param_name format)
-        param_pattern = re.compile(r':([a-zA-Z_][a-zA-Z0-9_]*)')
-        sql_params = set(param_pattern.findall(sql))
-        provided_params = set(parameters.keys())
-
-        # Check for extra parameters only - missing parameters are OK (Oracle handles them as None)
-        extra_params = provided_params - sql_params
-        if extra_params:
-            msg = f"Extra parameters provided that are not used in SQL: {', '.join(sorted(extra_params))}"
-            raise ValueError(msg)
-
     def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
@@ -354,10 +326,6 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             Execution result containing data for SELECT statements or row count for others
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        # Validate parameters to ensure no extra parameters are provided
-        if isinstance(prepared_parameters, dict):
-            self._validate_parameters(sql, prepared_parameters)
 
         # Oracle-specific: Use setinputsizes for large string parameters to avoid ORA-01704
         if prepared_parameters and isinstance(prepared_parameters, dict):

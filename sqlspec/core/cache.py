@@ -14,7 +14,7 @@ Components:
 import threading
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
@@ -558,7 +558,7 @@ class CachedStatement:
     """
 
     compiled_sql: str
-    parameters: Optional[tuple[Any, ...]]  # None allowed for static script compilation
+    parameters: Optional[Union[tuple[Any, ...], dict[str, Any]]]  # None allowed for static script compilation
     expression: Optional["exp.Expression"]
 
     def get_parameters_view(self) -> "ParametersView":
