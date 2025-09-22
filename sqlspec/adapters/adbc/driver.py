@@ -19,6 +19,7 @@ from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import MissingDependencyError, SQLParsingError, SQLSpecError
+from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -474,6 +475,34 @@ class AdbcDriver(SyncDriverAdapterBase):
             return None
         return parameters
 
+    def prepare_driver_parameters(
+        self,
+        parameters: Any,
+        statement_config: "StatementConfig",
+        is_many: bool = False,
+        prepared_statement: Optional[Any] = None,
+    ) -> Any:
+        """Prepare parameters with cast-aware type coercion for ADBC.
+
+        For PostgreSQL, applies cast-aware parameter processing using metadata from the compiled statement.
+        This allows proper handling of JSONB casts and other type conversions.
+
+        Args:
+            parameters: Parameters in any format
+            statement_config: Statement configuration
+            is_many: Whether this is for execute_many operation
+            prepared_statement: Prepared statement containing the original SQL statement
+
+        Returns:
+            Parameters with cast-aware type coercion applied
+        """
+        if prepared_statement and self.dialect in {"postgres", "postgresql"} and not is_many:
+            parameter_casts = self._get_parameter_casts(prepared_statement)
+            postgres_compatible = self._handle_postgres_empty_parameters(parameters)
+            return self._prepare_parameters_with_casts(postgres_compatible, parameter_casts, statement_config)
+
+        return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
+
     def _get_parameter_casts(self, statement: SQL) -> "dict[int, str]":
         """Get parameter cast metadata from compiled statement.
 
@@ -483,7 +512,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Dict mapping parameter positions to cast types
         """
-        from sqlspec.typing import Empty
 
         processed_state = statement.get_processed_state()
         if processed_state is not Empty:
@@ -585,6 +613,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                     postgres_compatible = self._handle_postgres_empty_parameters(param_set)
 
                     if self.dialect in {"postgres", "postgresql"}:
+                        # For postgres, always use cast-aware parameter preparation
                         formatted_params = self._prepare_parameters_with_casts(
                             postgres_compatible, parameter_casts, self.statement_config
                         )

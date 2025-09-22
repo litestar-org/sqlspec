@@ -417,7 +417,11 @@ class CommonDriverAttributesMixin:
         ]
 
     def prepare_driver_parameters(
-        self, parameters: Any, statement_config: "StatementConfig", is_many: bool = False
+        self,
+        parameters: Any,
+        statement_config: "StatementConfig",
+        is_many: bool = False,
+        prepared_statement: Optional[Any] = None,
     ) -> Any:
         """Prepare parameters for database driver consumption.
 
@@ -428,6 +432,7 @@ class CommonDriverAttributesMixin:
             parameters: Parameters in any format (dict, list, tuple, scalar, TypedParameter)
             statement_config: Statement configuration for parameter style detection
             is_many: If True, handle as executemany parameter sequence
+            prepared_statement: Optional prepared statement containing metadata for parameter processing
 
         Returns:
             Parameters with TypedParameter objects unwrapped to primitive values
@@ -569,7 +574,7 @@ class CommonDriverAttributesMixin:
         compiled_sql, execution_parameters = prepared_statement.compile()
 
         prepared_parameters = self.prepare_driver_parameters(
-            execution_parameters, statement_config, is_many=statement.is_many
+            execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
         )
 
         if statement_config.parameter_config.output_transformer:
