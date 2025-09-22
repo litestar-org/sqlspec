@@ -47,7 +47,9 @@ class BaseTypeConverter:
         Returns:
             Type name if detected, None otherwise.
         """
-        if not isinstance(value, str):
+        if not isinstance(value, str):  # pyright: ignore
+            return None
+        if not value:
             return None
 
         match = SPECIAL_TYPE_REGEX.match(value)

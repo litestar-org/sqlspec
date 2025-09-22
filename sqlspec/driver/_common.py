@@ -421,7 +421,7 @@ class CommonDriverAttributesMixin:
         parameters: Any,
         statement_config: "StatementConfig",
         is_many: bool = False,
-        prepared_statement: Optional[Any] = None,
+        prepared_statement: Optional[Any] = None,  # pyright: ignore[reportUnusedParameter]
     ) -> Any:
         """Prepare parameters for database driver consumption.
 
