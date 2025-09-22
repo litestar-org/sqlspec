@@ -8,7 +8,7 @@ import getpass
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from sqlspec._sql import sql
-from sqlspec.builder._ddl import CreateTable
+from sqlspec.builder import CreateTable
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.utils.logging import get_logger
 
@@ -140,14 +140,8 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             driver: The database driver to use.
         """
         try:
-            # Check driver features first (preferred approach)
-            if driver.driver_features.get("autocommit", False):
-                return
-
-            # Fallback to connection-level autocommit check
-            if driver.connection and driver.connection.autocommit:
-                return
-
+            # Oracle DDL operations may require explicit commits even with autocommit
+            # Always attempt commit for Oracle to ensure table creation is persistent
             driver.commit()
         except Exception:
             logger.debug("Failed to commit transaction, likely due to autocommit being enabled")
@@ -244,14 +238,8 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             driver: The database driver to use.
         """
         try:
-            # Check driver features first (preferred approach)
-            if driver.driver_features.get("autocommit", False):
-                return
-
-            # Fallback to connection-level autocommit check
-            if driver.connection and driver.connection.autocommit:
-                return
-
+            # Oracle DDL operations may require explicit commits even with autocommit
+            # Always attempt commit for Oracle to ensure table creation is persistent
             await driver.commit()
         except Exception:
             logger.debug("Failed to commit transaction, likely due to autocommit being enabled")
