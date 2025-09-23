@@ -66,8 +66,8 @@ class SqliteConnectionPool:
             is_memory = database == ":memory:" or database.startswith("file::memory:")
 
             if not is_memory:
-                connection.execute("PRAGMA journal_mode = WAL")
-
+                # Use DELETE mode instead of WAL for better compatibility with async operations
+                connection.execute("PRAGMA journal_mode = DELETE")
                 connection.execute("PRAGMA busy_timeout = 5000")
                 connection.execute("PRAGMA optimize")
 
@@ -101,7 +101,17 @@ class SqliteConnectionPool:
         Yields:
             SqliteConnection: A thread-local connection.
         """
-        yield self._get_thread_connection()
+        connection = self._get_thread_connection()
+        try:
+            yield connection
+        finally:
+            # Ensure any pending transactions are committed
+            try:
+                if connection.in_transaction:
+                    connection.commit()
+            except Exception:  # noqa: S110
+                # Ignore cleanup errors - connection might be in inconsistent state
+                pass
 
     def close(self) -> None:
         """Close the thread-local connection if it exists."""
@@ -128,7 +138,8 @@ class SqliteConnectionPool:
             _ = self._thread_local.connection
         except AttributeError:
             return 0
-        return 1
+        else:
+            return 1
 
     def checked_out(self) -> int:
         """Get number of checked out connections (always 0)."""

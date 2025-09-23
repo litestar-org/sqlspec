@@ -11,6 +11,7 @@ import pytest
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.runner import MigrationRunner
 from sqlspec.utils.config_resolver import resolve_config_async
+from sqlspec.utils.sync_tools import run_
 
 
 class TestAsyncMigrationsIntegration:
@@ -55,17 +56,20 @@ class TestAsyncMigrationsIntegration:
         def get_test_config() -> Mock:
             return mock_config
 
-        # Mock the import_string to return our function
-        import sqlspec.utils.config_resolver
+        async def _test() -> None:
+            # Mock the import_string to return our function
+            import sqlspec.utils.config_resolver
 
-        original_import = sqlspec.utils.config_resolver.import_string
+            original_import = sqlspec.utils.config_resolver.import_string
 
-        try:
-            sqlspec.utils.config_resolver.import_string = lambda path: get_test_config
-            result = resolve_config_async("test.config.get_database_config")
-            assert result is mock_config
-        finally:
-            sqlspec.utils.config_resolver.import_string = original_import
+            try:
+                sqlspec.utils.config_resolver.import_string = lambda path: get_test_config
+                result = await resolve_config_async("test.config.get_database_config")
+                assert result is mock_config
+            finally:
+                sqlspec.utils.config_resolver.import_string = original_import
+
+        run_(_test)()
 
     def test_async_callable_config_resolution(self) -> None:
         """Test resolving asynchronous callable config."""
@@ -78,17 +82,20 @@ class TestAsyncMigrationsIntegration:
         async def get_test_config() -> Mock:
             return mock_config
 
-        # Mock the import_string to return our async function
-        import sqlspec.utils.config_resolver
+        async def _test() -> None:
+            # Mock the import_string to return our async function
+            import sqlspec.utils.config_resolver
 
-        original_import = sqlspec.utils.config_resolver.import_string
+            original_import = sqlspec.utils.config_resolver.import_string
 
-        try:
-            sqlspec.utils.config_resolver.import_string = lambda path: get_test_config
-            result = resolve_config_async("test.config.async_get_database_config")
-            assert result is mock_config
-        finally:
-            sqlspec.utils.config_resolver.import_string = original_import
+            try:
+                sqlspec.utils.config_resolver.import_string = lambda path: get_test_config
+                result = await resolve_config_async("test.config.async_get_database_config")
+                assert result is mock_config
+            finally:
+                sqlspec.utils.config_resolver.import_string = original_import
+
+        run_(_test)()
 
     def test_unified_migration_runner_sync_driver_detection(self, temp_migration_dir: Any, mock_config: Any) -> None:
         """Test unified migration runner with sync driver detection."""
@@ -249,17 +256,20 @@ def down(context):
         def get_configs() -> list[Mock]:
             return [mock_config1, mock_config2]
 
-        # Mock the import_string to return our function
-        import sqlspec.utils.config_resolver
+        async def _test() -> None:
+            # Mock the import_string to return our function
+            import sqlspec.utils.config_resolver
 
-        original_import = sqlspec.utils.config_resolver.import_string
+            original_import = sqlspec.utils.config_resolver.import_string
 
-        try:
-            sqlspec.utils.config_resolver.import_string = lambda path: get_configs
-            result = resolve_config_async("test.config.get_database_configs")
-            assert isinstance(result, list)
-            assert len(result) == 2
-            assert result[0] is mock_config1
-            assert result[1] is mock_config2
-        finally:
-            sqlspec.utils.config_resolver.import_string = original_import
+            try:
+                sqlspec.utils.config_resolver.import_string = lambda path: get_configs
+                result = await resolve_config_async("test.config.get_database_configs")
+                assert isinstance(result, list)
+                assert len(result) == 2
+                assert result[0] is mock_config1
+                assert result[1] is mock_config2
+            finally:
+                sqlspec.utils.config_resolver.import_string = original_import
+
+        run_(_test)()
