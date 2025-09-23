@@ -523,7 +523,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     ) -> Any:
         """Prepare parameters with cast-aware type coercion.
 
-        Only converts dicts to JSON when explicitly cast to json/jsonb types.
+        Uses type coercion map for non-dict types and dialect-aware dict handling.
 
         Args:
             parameters: Parameter values (list, tuple, or scalar)
@@ -545,12 +545,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                     else:
                         result.append(param)
                 elif isinstance(param, dict):
-                    # For PostgreSQL, always convert dicts to JSON strings
-                    # since ADBC cannot handle raw dicts
-                    if self.dialect in {"postgres", "postgresql"}:
-                        result.append(encode_json(param))
-                    else:
-                        result.append(param)
+                    result.append(ADBCTypeConverter(self.dialect).convert_dict(param))  # type: ignore[arg-type]
                 else:
                     if statement_config.parameter_config.type_coercion_map:
                         for type_check, converter in statement_config.parameter_config.type_coercion_map.items():

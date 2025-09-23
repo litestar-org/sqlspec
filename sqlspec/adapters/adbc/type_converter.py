@@ -8,6 +8,7 @@ MySQL, BigQuery, Snowflake).
 from typing import Any
 
 from sqlspec.core.type_conversion import BaseTypeConverter
+from sqlspec.utils.serializers import to_json
 
 
 class ADBCTypeConverter(BaseTypeConverter):
@@ -71,6 +72,24 @@ class ADBCTypeConverter(BaseTypeConverter):
 
         return value
 
+    def convert_dict(self, value: dict[str, Any]) -> Any:
+        """Convert dictionary values with dialect-specific handling.
+
+        Args:
+            value: Dictionary to convert.
+
+        Returns:
+            Converted value appropriate for the dialect.
+        """
+
+        # For dialects that cannot handle raw dicts (like ADBC PostgreSQL),
+        # convert to JSON strings
+        if self.dialect in {"postgres", "postgresql", "bigquery"}:
+            return to_json(value)
+
+        # For other dialects, pass through unchanged
+        return value
+
     def supports_native_type(self, type_name: str) -> bool:
         """Check if dialect supports native handling of a type.
 
@@ -80,7 +99,7 @@ class ADBCTypeConverter(BaseTypeConverter):
         Returns:
             True if dialect supports native handling, False otherwise.
         """
-        native_support = {
+        native_support: dict[str, list[str]] = {
             "postgres": ["uuid", "json", "interval", "pg_array"],
             "postgresql": ["uuid", "json", "interval", "pg_array"],
             "duckdb": ["uuid", "json"],
