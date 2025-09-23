@@ -13,7 +13,7 @@ from sqlspec.core.statement import SQL
 from sqlspec.migrations.base import BaseMigrationRunner
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.sync_tools import async_, await_
+from sqlspec.utils.sync_tools import await_
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -28,14 +28,6 @@ class MigrationRunner(BaseMigrationRunner["Union[SyncDriverAdapterBase, AsyncDri
 
     def get_migration_files(self) -> "list[tuple[str, Path]]":
         """Get all migration files sorted by version.
-
-        Returns:
-            List of (version, path) tuples sorted by version.
-        """
-        return self._get_migration_files_sync()
-
-    async def get_migration_files_async(self) -> "list[tuple[str, Path]]":
-        """Get all migration files sorted by version (async version).
 
         Returns:
             List of (version, path) tuples sorted by version.
@@ -154,22 +146,6 @@ class MigrationRunner(BaseMigrationRunner["Union[SyncDriverAdapterBase, AsyncDri
             )
         return self._execute_upgrade_sync(cast("SyncDriverAdapterBase", driver), migration)
 
-    async def execute_upgrade_async(
-        self, driver: "Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]", migration: "dict[str, Any]"
-    ) -> "tuple[Optional[str], int]":
-        """Execute an upgrade migration (async version).
-
-        Args:
-            driver: The database driver to use.
-            migration: Migration metadata dictionary.
-
-        Returns:
-            Tuple of (sql_content, execution_time_ms).
-        """
-        if self._is_async_driver(driver):
-            return await self._execute_upgrade_async(cast("AsyncDriverAdapterBase", driver), migration)
-        return await async_(self._execute_upgrade_sync)(cast("SyncDriverAdapterBase", driver), migration)
-
     def _execute_upgrade_sync(
         self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
@@ -235,22 +211,6 @@ class MigrationRunner(BaseMigrationRunner["Union[SyncDriverAdapterBase, AsyncDri
                 cast("AsyncDriverAdapterBase", driver), migration
             )
         return self._execute_downgrade_sync(cast("SyncDriverAdapterBase", driver), migration)
-
-    async def execute_downgrade_async(
-        self, driver: "Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]", migration: "dict[str, Any]"
-    ) -> "tuple[Optional[str], int]":
-        """Execute a downgrade migration (async version).
-
-        Args:
-            driver: The database driver to use.
-            migration: Migration metadata dictionary.
-
-        Returns:
-            Tuple of (sql_content, execution_time_ms).
-        """
-        if self._is_async_driver(driver):
-            return await self._execute_downgrade_async(cast("AsyncDriverAdapterBase", driver), migration)
-        return await async_(self._execute_downgrade_sync)(cast("SyncDriverAdapterBase", driver), migration)
 
     def _execute_downgrade_sync(
         self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]"
@@ -372,7 +332,7 @@ class MigrationRunner(BaseMigrationRunner["Union[SyncDriverAdapterBase, AsyncDri
             Dictionary mapping query names to SQL objects.
         """
         all_queries = {}
-        migrations = await self.get_migration_files_async()
+        migrations = self.get_migration_files()
 
         for version, file_path in migrations:
             if file_path.suffix == ".sql":
