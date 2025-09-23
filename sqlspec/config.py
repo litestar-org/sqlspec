@@ -244,25 +244,25 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """
         return self._ensure_migration_commands()
 
-    def migrate_up(self, revision: str = "head") -> None:
+    async def migrate_up(self, revision: str = "head") -> None:
         """Apply migrations up to the specified revision.
 
         Args:
             revision: Target revision or "head" for latest. Defaults to "head".
         """
         commands = self._ensure_migration_commands()
-        commands.upgrade(revision)
+        await commands.upgrade(revision)
 
-    def migrate_down(self, revision: str = "-1") -> None:
+    async def migrate_down(self, revision: str = "-1") -> None:
         """Apply migrations down to the specified revision.
 
         Args:
             revision: Target revision, "-1" for one step back, or "base" for all migrations. Defaults to "-1".
         """
         commands = self._ensure_migration_commands()
-        commands.downgrade(revision)
+        await commands.downgrade(revision)
 
-    def get_current_migration(self, verbose: bool = False) -> "Optional[str]":
+    async def get_current_migration(self, verbose: bool = False) -> "Optional[str]":
         """Get the current migration version.
 
         Args:
@@ -272,9 +272,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             Current migration version or None if no migrations applied.
         """
         commands = self._ensure_migration_commands()
-        return commands.current(verbose=verbose)
+        return await commands.current(verbose=verbose)
 
-    def create_migration(self, message: str, file_type: str = "sql") -> None:
+    async def create_migration(self, message: str, file_type: str = "sql") -> None:
         """Create a new migration file.
 
         Args:
@@ -282,9 +282,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             file_type: Type of migration file to create ('sql' or 'py'). Defaults to 'sql'.
         """
         commands = self._ensure_migration_commands()
-        commands.revision(message, file_type)
+        await commands.revision(message, file_type)
 
-    def init_migrations(self, directory: "Optional[str]" = None, package: bool = True) -> None:
+    async def init_migrations(self, directory: "Optional[str]" = None, package: bool = True) -> None:
         """Initialize migration directory structure.
 
         Args:
@@ -297,7 +297,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         commands = self._ensure_migration_commands()
         assert directory is not None
-        commands.init(directory, package)
+        await commands.init(directory, package)
 
 
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):

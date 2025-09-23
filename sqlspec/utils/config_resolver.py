@@ -9,24 +9,22 @@ import inspect
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Union, cast
 
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import ConfigResolverError
 from sqlspec.utils.module_loader import import_string
-from sqlspec.utils.sync_tools import await_
+from sqlspec.utils.sync_tools import async_, await_
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 
-__all__ = ("ConfigResolverError", "resolve_config")
+__all__ = ("resolve_config_async", "resolve_config_sync")
 
 
-class ConfigResolverError(SQLSpecError):
-    """Exception raised when config resolution fails."""
-
-
-def resolve_config(
+async def resolve_config_async(
     config_path: str,
 ) -> "Union[list[Union[AsyncDatabaseConfig, SyncDatabaseConfig]], Union[AsyncDatabaseConfig, SyncDatabaseConfig]]":
     """Resolve config from dotted path, handling callables and direct instances.
+
+    This is the async-first version that handles both sync and async callables efficiently.
 
     Args:
         config_path: Dotted path to config object or callable function.
@@ -48,9 +46,38 @@ def resolve_config(
 
     try:
         if inspect.iscoroutinefunction(config_obj):
-            result = await_(config_obj, raise_sync_error=False)()
+            result = await config_obj()
         else:
-            result = config_obj()
+            result = await async_(config_obj)()
+    except Exception as e:
+        msg = f"Failed to execute callable config '{config_path}': {e}"
+        raise ConfigResolverError(msg) from e
+
+    return _validate_config_result(result, config_path)
+
+
+def resolve_config_sync(
+    config_path: str,
+) -> "Union[list[Union[AsyncDatabaseConfig, SyncDatabaseConfig]], Union[AsyncDatabaseConfig, SyncDatabaseConfig]]":
+    """Synchronous wrapper for resolve_config.
+
+    Args:
+        config_path: Dotted path to config object or callable function.
+
+    Returns:
+        Resolved config instance or list of config instances.
+    """
+    try:
+        config_obj = import_string(config_path)
+    except ImportError as e:
+        msg = f"Failed to import config from path '{config_path}': {e}"
+        raise ConfigResolverError(msg) from e
+
+    if not callable(config_obj):
+        return _validate_config_result(config_obj, config_path)
+
+    try:
+        result = await_(config_obj)() if inspect.iscoroutinefunction(config_obj) else config_obj()
     except Exception as e:
         msg = f"Failed to execute callable config '{config_path}': {e}"
         raise ConfigResolverError(msg) from e

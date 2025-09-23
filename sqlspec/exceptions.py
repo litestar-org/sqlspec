@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from typing import Any, Optional, Union
 
 __all__ = (
+    "ConfigResolverError",
     "FileNotFoundInStorageError",
     "ImproperConfigurationError",
     "IntegrityError",
@@ -67,6 +68,10 @@ class BackendNotRegisteredError(SQLSpecError):
 
     def __init__(self, backend_key: str) -> None:
         super().__init__(f"Storage backend '{backend_key}' is not registered. Please register it before use.")
+
+
+class ConfigResolverError(SQLSpecError):
+    """Exception raised when config resolution fails."""
 
 
 class SQLParsingError(SQLSpecError):

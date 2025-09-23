@@ -10,7 +10,7 @@ import pytest
 
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.runner import MigrationRunner
-from sqlspec.utils.config_resolver import resolve_config
+from sqlspec.utils.config_resolver import resolve_config_async
 
 
 class TestAsyncMigrationsIntegration:
@@ -62,7 +62,7 @@ class TestAsyncMigrationsIntegration:
 
         try:
             sqlspec.utils.config_resolver.import_string = lambda path: get_test_config
-            result = resolve_config("test.config.get_database_config")
+            result = resolve_config_async("test.config.get_database_config")
             assert result is mock_config
         finally:
             sqlspec.utils.config_resolver.import_string = original_import
@@ -85,7 +85,7 @@ class TestAsyncMigrationsIntegration:
 
         try:
             sqlspec.utils.config_resolver.import_string = lambda path: get_test_config
-            result = resolve_config("test.config.async_get_database_config")
+            result = resolve_config_async("test.config.async_get_database_config")
             assert result is mock_config
         finally:
             sqlspec.utils.config_resolver.import_string = original_import
@@ -256,7 +256,7 @@ def down(context):
 
         try:
             sqlspec.utils.config_resolver.import_string = lambda path: get_configs
-            result = resolve_config("test.config.get_database_configs")
+            result = resolve_config_async("test.config.get_database_configs")
             assert isinstance(result, list)
             assert len(result) == 2
             assert result[0] is mock_config1

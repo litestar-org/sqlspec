@@ -3,6 +3,8 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
+from sqlspec.utils.sync_tools import await_
+
 if TYPE_CHECKING:
     from click import Group
 
@@ -45,12 +47,13 @@ def get_sqlspec_group() -> "Group":
         """SQLSpec CLI commands."""
         from rich import get_console
 
-        from sqlspec.utils.config_resolver import ConfigResolverError, resolve_config
+        from sqlspec.exceptions import ConfigResolverError
+        from sqlspec.utils.config_resolver import resolve_config_sync
 
         console = get_console()
         ctx.ensure_object(dict)
         try:
-            config_result = resolve_config(config)
+            config_result = resolve_config_sync(config)
             if isinstance(config_result, Sequence) and not isinstance(config_result, str):
                 ctx.obj["configs"] = list(config_result)
             else:
@@ -302,7 +305,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 console.print(f"\n[blue]Configuration: {config_name}[/]")
                 try:
                     migration_commands = MigrationCommands(config=config)
-                    migration_commands.current(verbose=verbose)
+                    await_(migration_commands.current, raise_sync_error=False)(verbose=verbose)
                 except Exception as e:
                     console.print(f"[red]✗ Failed to get current revision for {config_name}: {e}[/]")
         else:
@@ -310,7 +313,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
             console.rule("[yellow]Listing current revision[/]", align="left")
             sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
             migration_commands = MigrationCommands(config=sqlspec_config)
-            migration_commands.current(verbose=verbose)
+            await_(migration_commands.current, raise_sync_error=False)(verbose=verbose)
 
     @database_group.command(name="downgrade", help="Downgrade database to a specific revision.")
     @bind_key_option
@@ -360,7 +363,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 console.print(f"[blue]Downgrading configuration: {config_name}[/]")
                 try:
                     migration_commands = MigrationCommands(config=config)
-                    migration_commands.downgrade(revision=revision)
+                    await_(migration_commands.downgrade, raise_sync_error=False)(revision=revision)
                     console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
                 except Exception as e:
                     console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
@@ -375,7 +378,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
             if input_confirmed:
                 sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
                 migration_commands = MigrationCommands(config=sqlspec_config)
-                migration_commands.downgrade(revision=revision)
+                await_(migration_commands.downgrade, raise_sync_error=False)(revision=revision)
 
     @database_group.command(name="upgrade", help="Upgrade database to a specific revision.")
     @bind_key_option
@@ -426,7 +429,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 console.print(f"[blue]Upgrading configuration: {config_name}[/]")
                 try:
                     migration_commands = MigrationCommands(config=config)
-                    migration_commands.upgrade(revision=revision)
+                    await_(migration_commands.upgrade, raise_sync_error=False)(revision=revision)
                     console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
                 except Exception as e:
                     console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
@@ -441,7 +444,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
             if input_confirmed:
                 sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
                 migration_commands = MigrationCommands(config=sqlspec_config)
-                migration_commands.upgrade(revision=revision)
+                await_(migration_commands.upgrade, raise_sync_error=False)(revision=revision)
 
     @database_group.command(help="Stamp the revision table with the given revision")
     @click.argument("revision", type=str)
@@ -453,7 +456,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         ctx = click.get_current_context()
         sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
         migration_commands = MigrationCommands(config=sqlspec_config)
-        migration_commands.stamp(revision=revision)
+        await_(migration_commands.stamp, raise_sync_error=False)(revision=revision)
 
     @database_group.command(name="init", help="Initialize migrations for the project.")
     @bind_key_option
@@ -487,7 +490,9 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 migration_config = getattr(actual_config, "migration_config", {})
                 directory = migration_config.get("script_location", "migrations") if directory is None else directory
                 migration_commands = MigrationCommands(config=actual_config)
-                migration_commands.init(directory=cast("str", directory), package=package)
+                await_(migration_commands.init, raise_sync_error=False)(
+                    directory=cast("str", directory), package=package
+                )
 
     @database_group.command(name="make-migrations", help="Create a new migration revision.")
     @bind_key_option
@@ -508,7 +513,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
 
         sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
         migration_commands = MigrationCommands(config=sqlspec_config)
-        migration_commands.revision(message=message)
+        await_(migration_commands.revision, raise_sync_error=False)(message=message)
 
     @database_group.command(name="show-config", help="Show all configurations with migrations enabled.")
     def show_config() -> None:  # pyright: ignore[reportUnusedFunction]

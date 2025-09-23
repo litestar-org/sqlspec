@@ -40,7 +40,7 @@ class SqliteConnectionPool:
     __slots__ = ("_connection_parameters", "_enable_optimizations", "_thread_local")
 
     def __init__(
-        self, connection_parameters: "dict[str, Any]", enable_optimizations: bool = True, **kwargs: Any
+        self, connection_parameters: "dict[str, Any]", enable_optimizations: bool = True, **_kwargs: Any
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -49,6 +49,10 @@ class SqliteConnectionPool:
             enable_optimizations: Whether to apply performance PRAGMAs
             **kwargs: Ignored pool parameters for compatibility
         """
+        # Default check_same_thread to False if not specified to support async operations
+        # This is safe because we use thread-local storage to prevent actual sharing
+        if "check_same_thread" not in connection_parameters:
+            connection_parameters = {**connection_parameters, "check_same_thread": False}
         self._connection_parameters = connection_parameters
         self._thread_local = threading.local()
         self._enable_optimizations = enable_optimizations

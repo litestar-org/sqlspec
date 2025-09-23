@@ -14,7 +14,7 @@ from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.runner import MigrationRunner
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.sync_tools import await_
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncConfigT, SyncConfigT
@@ -119,12 +119,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
 
             for version, file_path in pending:
-                migration = self.runner.load_migration(file_path)
+                migration = self.runner.load_migration_sync(file_path)
 
                 console.print(f"\n[cyan]Applying {version}:[/] {migration['description']}")
 
                 try:
-                    _, execution_time = self.runner.execute_upgrade(driver, migration)
+                    _, execution_time = self.runner.execute_upgrade_sync(driver, migration)
                     self.tracker.record_migration(
                         driver, migration["version"], migration["description"], execution_time, migration["checksum"]
                     )
@@ -167,10 +167,10 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 if version not in all_files:
                     console.print(f"[red]Migration file not found for {version}[/]")
                     continue
-                migration = self.runner.load_migration(all_files[version])
+                migration = self.runner.load_migration_sync(all_files[version])
                 console.print(f"\n[cyan]Reverting {version}:[/] {migration['description']}")
                 try:
-                    _, execution_time = self.runner.execute_downgrade(driver, migration)
+                    _, execution_time = self.runner.execute_downgrade_sync(driver, migration)
                     self.tracker.remove_migration(driver, version)
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
                 except Exception as e:
@@ -295,10 +295,10 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 return
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
             for version, file_path in pending:
-                migration = await self.runner.load_migration_async(file_path)
+                migration = await self.runner.load_migration(file_path)
                 console.print(f"\n[cyan]Applying {version}:[/] {migration['description']}")
                 try:
-                    _, execution_time = self.runner.execute_upgrade(driver, migration)
+                    _, execution_time = await self.runner.execute_upgrade(driver, migration)
                     await self.tracker.record_migration(
                         driver, migration["version"], migration["description"], execution_time, migration["checksum"]
                     )
@@ -341,11 +341,11 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     console.print(f"[red]Migration file not found for {version}[/]")
                     continue
 
-                migration = await self.runner.load_migration_async(all_files[version])
+                migration = await self.runner.load_migration(all_files[version])
                 console.print(f"\n[cyan]Reverting {version}:[/] {migration['description']}")
 
                 try:
-                    _, execution_time = self.runner.execute_downgrade(driver, migration)
+                    _, execution_time = await self.runner.execute_downgrade(driver, migration)
                     await self.tracker.remove_migration(driver, version)
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
                 except Exception as e:
@@ -402,7 +402,7 @@ class MigrationCommands:
             self._impl = SyncMigrationCommands(cast("SyncConfigT", config))
         self._is_async = config.is_async
 
-    def init(self, directory: str, package: bool = True) -> None:
+    async def init(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.
 
         Args:
@@ -410,13 +410,11 @@ class MigrationCommands:
             package: Whether to create __init__.py file.
         """
         if self._is_async:
-            await_(cast("AsyncMigrationCommands[Any]", self._impl).init, raise_sync_error=False)(
-                directory, package=package
-            )
+            await cast("AsyncMigrationCommands[Any]", self._impl).init(directory, package=package)
         else:
-            cast("SyncMigrationCommands[Any]", self._impl).init(directory, package=package)
+            await async_(cast("SyncMigrationCommands[Any]", self._impl).init)(directory, package=package)
 
-    def current(self, verbose: bool = False) -> "Optional[str]":
+    async def current(self, verbose: bool = False) -> "Optional[str]":
         """Show current migration version.
 
         Args:
@@ -426,45 +424,43 @@ class MigrationCommands:
             The current migration version or None if no migrations applied.
         """
         if self._is_async:
-            return await_(cast("AsyncMigrationCommands[Any]", self._impl).current, raise_sync_error=False)(
-                verbose=verbose
-            )
-        return cast("SyncMigrationCommands[Any]", self._impl).current(verbose=verbose)
+            return await cast("AsyncMigrationCommands[Any]", self._impl).current(verbose=verbose)
+        return await async_(cast("SyncMigrationCommands[Any]", self._impl).current)(verbose=verbose)
 
-    def upgrade(self, revision: str = "head") -> None:
+    async def upgrade(self, revision: str = "head") -> None:
         """Upgrade to a target revision.
 
         Args:
             revision: Target revision or "head" for latest.
         """
         if self._is_async:
-            await_(cast("AsyncMigrationCommands[Any]", self._impl).upgrade, raise_sync_error=False)(revision=revision)
+            await cast("AsyncMigrationCommands[Any]", self._impl).upgrade(revision=revision)
         else:
-            cast("SyncMigrationCommands[Any]", self._impl).upgrade(revision=revision)
+            await async_(cast("SyncMigrationCommands[Any]", self._impl).upgrade)(revision=revision)
 
-    def downgrade(self, revision: str = "-1") -> None:
+    async def downgrade(self, revision: str = "-1") -> None:
         """Downgrade to a target revision.
 
         Args:
             revision: Target revision or "-1" for one step back.
         """
         if self._is_async:
-            await_(cast("AsyncMigrationCommands[Any]", self._impl).downgrade, raise_sync_error=False)(revision=revision)
+            await cast("AsyncMigrationCommands[Any]", self._impl).downgrade(revision=revision)
         else:
-            cast("SyncMigrationCommands[Any]", self._impl).downgrade(revision=revision)
+            await async_(cast("SyncMigrationCommands[Any]", self._impl).downgrade)(revision=revision)
 
-    def stamp(self, revision: str) -> None:
+    async def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
 
         Args:
             revision: The revision to stamp.
         """
         if self._is_async:
-            await_(cast("AsyncMigrationCommands[Any]", self._impl).stamp, raise_sync_error=False)(revision)
+            await cast("AsyncMigrationCommands[Any]", self._impl).stamp(revision)
         else:
-            cast("SyncMigrationCommands[Any]", self._impl).stamp(revision)
+            await async_(cast("SyncMigrationCommands[Any]", self._impl).stamp)(revision)
 
-    def revision(self, message: str, file_type: str = "sql") -> None:
+    async def revision(self, message: str, file_type: str = "sql") -> None:
         """Create a new migration file.
 
         Args:
@@ -472,6 +468,6 @@ class MigrationCommands:
             file_type: Type of migration file to create ('sql' or 'py').
         """
         if self._is_async:
-            await_(cast("AsyncMigrationCommands[Any]", self._impl).revision, raise_sync_error=False)(message, file_type)
+            await cast("AsyncMigrationCommands[Any]", self._impl).revision(message, file_type)
         else:
-            cast("SyncMigrationCommands[Any]", self._impl).revision(message, file_type)
+            await async_(cast("SyncMigrationCommands[Any]", self._impl).revision)(message, file_type)

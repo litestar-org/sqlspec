@@ -9,6 +9,7 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands, MigrationCommands
+from sqlspec.utils.sync_tools import await_
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -31,7 +32,7 @@ def test_psycopg_sync_migration_full_workflow(postgres_service: PostgresService)
         )
         commands = MigrationCommands(config)
 
-        commands.init(str(migration_dir), package=True)
+        await_(commands.init, raise_sync_error=False)(str(migration_dir), package=True)
 
         assert migration_dir.exists()
         assert (migration_dir / "__init__.py").exists()
@@ -60,7 +61,7 @@ def down():
         migration_file.write_text(migration_content)
 
         try:
-            commands.upgrade()
+            await_(commands.upgrade, raise_sync_error=False)()
 
             with config.provide_session() as driver:
                 result = driver.execute(
@@ -77,7 +78,7 @@ def down():
                 assert users_result.data[0]["name"] == "John Doe"
                 assert users_result.data[0]["email"] == "john@example.com"
 
-            commands.downgrade("base")
+            await_(commands.downgrade, raise_sync_error=False)("base")
 
             with config.provide_session() as driver:
                 result = driver.execute(
@@ -194,7 +195,7 @@ def test_psycopg_sync_multiple_migrations_workflow(postgres_service: PostgresSer
         )
         commands = MigrationCommands(config)
 
-        commands.init(str(migration_dir), package=True)
+        await_(commands.init, raise_sync_error=False)(str(migration_dir), package=True)
 
         migration1_content = f'''"""Create users table."""
 
@@ -240,7 +241,7 @@ def down():
         (migration_dir / "0002_create_posts.py").write_text(migration2_content)
 
         try:
-            commands.upgrade()
+            await_(commands.upgrade, raise_sync_error=False)()
 
             with config.provide_session() as driver:
                 users_result = driver.execute(
@@ -252,7 +253,7 @@ def down():
                 assert len(users_result.data) == 1
                 assert len(posts_result.data) == 1
 
-            commands.downgrade("0001")
+            await_(commands.downgrade, raise_sync_error=False)("0001")
 
             with config.provide_session() as driver:
                 users_result = driver.execute(
@@ -264,7 +265,7 @@ def down():
                 assert len(users_result.data) == 1
                 assert len(posts_result.data) == 0
 
-            commands.downgrade("base")
+            await_(commands.downgrade, raise_sync_error=False)("base")
 
             with config.provide_session() as driver:
                 users_result = driver.execute(
@@ -411,9 +412,9 @@ def test_psycopg_sync_migration_current_command(postgres_service: PostgresServic
         commands = MigrationCommands(config)
 
         try:
-            commands.init(str(migration_dir), package=True)
+            await_(commands.init, raise_sync_error=False)(str(migration_dir), package=True)
 
-            current_version = commands.current()
+            current_version = await_(commands.current, raise_sync_error=False)()
             assert current_version is None or current_version == "base"
 
             migration_content = f'''"""Initial schema migration."""
@@ -435,14 +436,14 @@ def down():
 '''
             (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            commands.upgrade()
+            await_(commands.upgrade, raise_sync_error=False)()
 
-            current_version = commands.current()
+            current_version = await_(commands.current, raise_sync_error=False)()
             assert current_version == "0001"
 
-            commands.downgrade("base")
+            await_(commands.downgrade, raise_sync_error=False)("base")
 
-            current_version = commands.current()
+            current_version = await_(commands.current, raise_sync_error=False)()
             assert current_version is None or current_version == "base"
         finally:
             if config.pool_instance:
@@ -538,7 +539,7 @@ def test_psycopg_sync_migration_error_handling(postgres_service: PostgresService
         commands = MigrationCommands(config)
 
         try:
-            commands.init(str(migration_dir), package=True)
+            await_(commands.init, raise_sync_error=False)(str(migration_dir), package=True)
 
             migration_content = '''"""Migration with invalid SQL."""
 
@@ -555,7 +556,7 @@ def down():
             (migration_dir / "0001_invalid.py").write_text(migration_content)
 
             with pytest.raises(Exception):
-                commands.upgrade()
+                await_(commands.upgrade, raise_sync_error=False)()
 
             with config.provide_session() as driver:
                 try:
@@ -651,7 +652,7 @@ def test_psycopg_sync_migration_with_transactions(postgres_service: PostgresServ
         commands = MigrationCommands(config)
 
         try:
-            commands.init(str(migration_dir), package=True)
+            await_(commands.init, raise_sync_error=False)(str(migration_dir), package=True)
 
             migration_content = f'''"""Initial schema migration."""
 
@@ -673,7 +674,7 @@ def down():
 '''
             (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            commands.upgrade()
+            await_(commands.upgrade, raise_sync_error=False)()
 
             with config.provide_session() as driver:
                 driver.begin()
