@@ -161,6 +161,13 @@ include = [
   "sqlspec/core/**/*.py", # Core module
   "sqlspec/loader.py",    # Loader module
 
+  # === ADAPTER TYPE CONVERTERS ===
+  "sqlspec/adapters/adbc/type_converter.py",      # ADBC type converter
+  "sqlspec/adapters/bigquery/type_converter.py",  # BigQuery type converter
+  "sqlspec/adapters/duckdb/type_converter.py",    # DuckDB type converter
+  "sqlspec/adapters/oracledb/type_converter.py",  # Oracle type converter
+  "sqlspec/adapters/psqlpy/type_converter.py",    # Psqlpy type converter
+
   # === UTILITY MODULES ===
   "sqlspec/utils/text.py",                # Text utilities
   "sqlspec/utils/sync_tools.py",          # Synchronous utility functions

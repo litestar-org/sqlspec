@@ -177,6 +177,14 @@ except ImportError:
     MSGSPEC_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
+try:
+    import orjson  # noqa: F401
+
+    ORJSON_INSTALLED = True  # pyright: ignore[reportConstantRedefinition]
+except ImportError:
+    ORJSON_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
+
+
 # Always define stub type for DTOData
 @runtime_checkable
 class DTODataStub(Protocol[T]):
@@ -621,6 +629,7 @@ __all__ = (
     "NUMPY_INSTALLED",
     "OBSTORE_INSTALLED",
     "OPENTELEMETRY_INSTALLED",
+    "ORJSON_INSTALLED",
     "PGVECTOR_INSTALLED",
     "PROMETHEUS_INSTALLED",
     "PYARROW_INSTALLED",

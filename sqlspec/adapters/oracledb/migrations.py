@@ -8,7 +8,7 @@ import getpass
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from sqlspec._sql import sql
-from sqlspec.builder._ddl import CreateTable
+from sqlspec.builder import CreateTable
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.utils.logging import get_logger
 
@@ -57,22 +57,33 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
 
-        Oracle doesn't support IF NOT EXISTS, so we check for table existence first.
+        Uses a PL/SQL block to make the operation atomic and prevent race conditions.
 
         Args:
             driver: The database driver to use.
         """
-
-        check_sql = (
-            sql.select(sql.count().as_("table_count"))
-            .from_("user_tables")
-            .where(sql.column("table_name") == self.version_table.upper())
-        )
-        result = driver.execute(check_sql)
-
-        if result.data[0]["TABLE_COUNT"] == 0:
-            driver.execute(self._get_create_table_sql())
-            self._safe_commit(driver)
+        create_script = f"""
+        BEGIN
+            EXECUTE IMMEDIATE '
+            CREATE TABLE {self.version_table} (
+                version_num VARCHAR2(32) PRIMARY KEY,
+                description VARCHAR2(2000),
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                execution_time_ms INTEGER,
+                checksum VARCHAR2(64),
+                applied_by VARCHAR2(255)
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE = -955 THEN
+                    NULL; -- Table already exists
+                ELSE
+                    RAISE;
+                END IF;
+        END;
+        """
+        driver.execute_script(create_script)
+        driver.commit()
 
     def get_current_version(self, driver: "SyncDriverAdapterBase") -> "Optional[str]":
         """Get the latest applied migration version.
@@ -120,7 +131,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
 
         record_sql = self._get_record_migration_sql(version, description, execution_time_ms, checksum, applied_by)
         driver.execute(record_sql)
-        self._safe_commit(driver)
+        driver.commit()
 
     def remove_migration(self, driver: "SyncDriverAdapterBase", version: str) -> None:
         """Remove a migration record.
@@ -131,26 +142,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         """
         remove_sql = self._get_remove_migration_sql(version)
         driver.execute(remove_sql)
-        self._safe_commit(driver)
-
-    def _safe_commit(self, driver: "SyncDriverAdapterBase") -> None:
-        """Safely commit a transaction only if autocommit is disabled.
-
-        Args:
-            driver: The database driver to use.
-        """
-        try:
-            # Check driver features first (preferred approach)
-            if driver.driver_features.get("autocommit", False):
-                return
-
-            # Fallback to connection-level autocommit check
-            if driver.connection and driver.connection.autocommit:
-                return
-
-            driver.commit()
-        except Exception:
-            logger.debug("Failed to commit transaction, likely due to autocommit being enabled")
+        driver.commit()
 
 
 class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["AsyncDriverAdapterBase"]):
@@ -161,22 +153,33 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
 
-        Oracle doesn't support IF NOT EXISTS, so we check for table existence first.
+        Uses a PL/SQL block to make the operation atomic and prevent race conditions.
 
         Args:
             driver: The database driver to use.
         """
-
-        check_sql = (
-            sql.select(sql.count().as_("table_count"))
-            .from_("user_tables")
-            .where(sql.column("table_name") == self.version_table.upper())
-        )
-        result = await driver.execute(check_sql)
-
-        if result.data[0]["TABLE_COUNT"] == 0:
-            await driver.execute(self._get_create_table_sql())
-            await self._safe_commit_async(driver)
+        create_script = f"""
+        BEGIN
+            EXECUTE IMMEDIATE '
+            CREATE TABLE {self.version_table} (
+                version_num VARCHAR2(32) PRIMARY KEY,
+                description VARCHAR2(2000),
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                execution_time_ms INTEGER,
+                checksum VARCHAR2(64),
+                applied_by VARCHAR2(255)
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE = -955 THEN
+                    NULL; -- Table already exists
+                ELSE
+                    RAISE;
+                END IF;
+        END;
+        """
+        await driver.execute_script(create_script)
+        await driver.commit()
 
     async def get_current_version(self, driver: "AsyncDriverAdapterBase") -> "Optional[str]":
         """Get the latest applied migration version.
@@ -224,7 +227,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
 
         record_sql = self._get_record_migration_sql(version, description, execution_time_ms, checksum, applied_by)
         await driver.execute(record_sql)
-        await self._safe_commit_async(driver)
+        await driver.commit()
 
     async def remove_migration(self, driver: "AsyncDriverAdapterBase", version: str) -> None:
         """Remove a migration record.
@@ -235,23 +238,4 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         """
         remove_sql = self._get_remove_migration_sql(version)
         await driver.execute(remove_sql)
-        await self._safe_commit_async(driver)
-
-    async def _safe_commit_async(self, driver: "AsyncDriverAdapterBase") -> None:
-        """Safely commit a transaction only if autocommit is disabled.
-
-        Args:
-            driver: The database driver to use.
-        """
-        try:
-            # Check driver features first (preferred approach)
-            if driver.driver_features.get("autocommit", False):
-                return
-
-            # Fallback to connection-level autocommit check
-            if driver.connection and driver.connection.autocommit:
-                return
-
-            await driver.commit()
-        except Exception:
-            logger.debug("Failed to commit transaction, likely due to autocommit being enabled")
+        await driver.commit()

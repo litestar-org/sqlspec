@@ -8,6 +8,8 @@ import oracledb
 from oracledb import AsyncCursor, Cursor
 
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
+from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
+from sqlspec.adapters.oracledb.type_converter import OracleTypeConverter
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
@@ -32,6 +34,8 @@ logger = logging.getLogger(__name__)
 # Oracle-specific constants
 LARGE_STRING_THRESHOLD = 3000  # Threshold for large string parameters to avoid ORA-01704
 
+_type_converter = OracleTypeConverter()
+
 __all__ = (
     "OracleAsyncDriver",
     "OracleAsyncExceptionHandler",
@@ -46,11 +50,11 @@ oracledb_statement_config = StatementConfig(
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.POSITIONAL_COLON,
         supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.POSITIONAL_COLON,
+        default_execution_parameter_style=ParameterStyle.NAMED_COLON,
         supported_execution_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
         type_coercion_map={dict: to_json, list: to_json},
         has_native_list_expansion=False,
-        needs_static_script_compilation=True,
+        needs_static_script_compilation=False,
         preserve_parameter_format=True,
     ),
     enable_parsing=True,
@@ -324,10 +328,9 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         # Oracle-specific: Use setinputsizes for large string parameters to avoid ORA-01704
-        if prepared_parameters:
+        if prepared_parameters and isinstance(prepared_parameters, dict):
             for param_name, param_value in prepared_parameters.items():
                 if isinstance(param_value, str) and len(param_value) > LARGE_STRING_THRESHOLD:
-                    # Set input size for large string parameters
                     cursor.setinputsizes(**{param_name: len(param_value)})
 
         cursor.execute(sql, prepared_parameters or {})
@@ -388,8 +391,6 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.oracledb.data_dictionary import OracleSyncDataDictionary
-
             self._data_dictionary = OracleSyncDataDictionary()
         return self._data_dictionary
 
@@ -519,10 +520,9 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         # Oracle-specific: Use setinputsizes for large string parameters to avoid ORA-01704
-        if prepared_parameters:
+        if prepared_parameters and isinstance(prepared_parameters, dict):
             for param_name, param_value in prepared_parameters.items():
                 if isinstance(param_value, str) and len(param_value) > LARGE_STRING_THRESHOLD:
-                    # Set input size for large string parameters
                     cursor.setinputsizes(**{param_name: len(param_value)})
 
         await cursor.execute(sql, prepared_parameters or {})
@@ -583,7 +583,5 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary
-
             self._data_dictionary = OracleAsyncDataDictionary()
         return self._data_dictionary

@@ -35,21 +35,17 @@ def test_sync_select(oracle_sync_session: OracleSyncDriver, parameters: Any, sty
     oracle_sync_session.execute_script(sql)
 
     if style == "positional_binds":
-        insert_sql = "INSERT INTO test_table (id, name) VALUES (:id, :name)"
-        select_sql = "SELECT name FROM test_table WHERE name = :name"
-        insert_parameters = {"id": 1, "name": parameters[0]}
-        select_parameters = {"name": parameters[0]}
+        insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :1)"
+        select_sql = "SELECT name FROM test_table WHERE name = :1"
     else:
-        insert_sql = "INSERT INTO test_table (id, name) VALUES (:id, :name)"
+        insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :name)"
         select_sql = "SELECT name FROM test_table WHERE name = :name"
-        insert_parameters = {"id": 1, **parameters}
-        select_parameters = parameters
 
-    insert_result = oracle_sync_session.execute(insert_sql, insert_parameters)
+    insert_result = oracle_sync_session.execute(insert_sql, parameters)
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
-    select_result = oracle_sync_session.execute(select_sql, select_parameters)
+    select_result = oracle_sync_session.execute(select_sql, parameters)
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -83,12 +79,11 @@ def test_sync_select_value(oracle_sync_session: OracleSyncDriver, parameters: An
     oracle_sync_session.execute_script(sql)
 
     if style == "positional_binds":
-        setup_value = parameters[0]
+        insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :1)"
     else:
-        setup_value = parameters["name"]
+        insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :name)"
 
-    insert_sql_setup = "INSERT INTO test_table (id, name) VALUES (:id, :name)"
-    insert_result = oracle_sync_session.execute(insert_sql_setup, {"id": 1, "name": setup_value})
+    insert_result = oracle_sync_session.execute(insert_sql, parameters)
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
@@ -97,7 +92,7 @@ def test_sync_select_value(oracle_sync_session: OracleSyncDriver, parameters: An
     assert isinstance(value_result, SQLResult)
     assert value_result.data is not None
     assert len(value_result.data) == 1
-    assert value_result.column_names is not None
+
     value = value_result.data[0][value_result.column_names[0]]
     assert value == "test_value"
 

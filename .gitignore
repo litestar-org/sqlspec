@@ -61,3 +61,6 @@ benchmarks/
 *.duckdb
 .crush
 CRUSH.md
+*.md
+!README.md
+!CONTRIBUTING.md

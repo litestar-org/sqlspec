@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Final, Optional
 import duckdb  # type: ignore[import-untyped]
 from sqlglot import exp
 
+from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
+from sqlspec.adapters.duckdb.type_converter import DuckDBTypeConverter
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
@@ -27,6 +29,8 @@ __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "duckdb_sta
 
 logger = get_logger("adapters.duckdb")
 
+_type_converter = DuckDBTypeConverter()
+
 
 duckdb_statement_config = StatementConfig(
     dialect="duckdb",
@@ -42,6 +46,7 @@ duckdb_statement_config = StatementConfig(
             Decimal: str,
             dict: to_json,
             list: to_json,
+            str: _type_converter.convert_if_detected,
         },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
@@ -345,7 +350,5 @@ class DuckDBDriver(SyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
-
             self._data_dictionary = DuckDBSyncDataDictionary()
         return self._data_dictionary

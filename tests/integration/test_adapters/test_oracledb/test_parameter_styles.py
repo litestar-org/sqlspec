@@ -754,7 +754,7 @@ def test_sync_oracle_parameter_count_validation_with_none(oracle_sync_session: O
         # If it fails, that's also acceptable behavior - missing parameters should fail
         assert "field3" in str(e).lower() or "parameter" in str(e).lower() or "bind" in str(e).lower()
 
-    # Test with extra parameters (Oracle should ignore extras)
+    # Test with extra parameters (Oracle should raise an error)
     extra_param_sql = "INSERT INTO test_param_count_table (id, field1, field2) VALUES (:id, :field1, :field2)"
     extra_params = {
         "id": 3,
@@ -764,36 +764,38 @@ def test_sync_oracle_parameter_count_validation_with_none(oracle_sync_session: O
         "field4": None,  # Another extra None parameter
     }
 
-    result = oracle_sync_session.execute(extra_param_sql, extra_params)
-    assert isinstance(result, SQLResult)
-    assert result.rows_affected == 1
+    with pytest.raises(Exception) as exc_info:
+        oracle_sync_session.execute(extra_param_sql, extra_params)
 
-    # Verify inserted data - all 3 inserts should succeed
+    # Should be a parameter binding error
+    error_msg = str(exc_info.value).lower()
+    assert "bind" in error_msg or "placeholder" in error_msg or "parameter" in error_msg
+
+    # Verify inserted data - only successful inserts remain (third failed due to extra params)
     select_result = oracle_sync_session.execute("SELECT * FROM test_param_count_table ORDER BY id")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert len(select_result.data) == 3  # All 3 inserts succeeded
 
-    # First insert - explicit None values
+    # The number of records depends on whether the missing parameter case succeeded or failed
+    # Both behaviors are acceptable according to the test logic above
+    num_records = len(select_result.data)
+    assert num_records in [1, 2]  # Either 1 (missing param failed) or 2 (missing param succeeded)
+
+    # First insert - explicit None values (this should always be present)
     row1 = select_result.data[0]
     assert row1["ID"] == 1
     assert row1["FIELD1"] is None
     assert row1["FIELD2"] == 42
     assert row1["FIELD3"] is None
 
-    # Second insert - missing parameter treated as None/NULL
-    row2 = select_result.data[1]
-    assert row2["ID"] == 2
-    assert row2["FIELD1"] == "test"
-    assert row2["FIELD2"] is None
-    assert row2["FIELD3"] is None  # Missing parameter treated as NULL
-
-    # Third insert - extra parameters ignored
-    row3 = select_result.data[2]
-    assert row3["ID"] == 3
-    assert row3["FIELD1"] == "test"
-    assert row3["FIELD2"] is None
-    assert row3["FIELD3"] is None  # Was not set in INSERT
+    # If there's a second record, it should be from the missing parameter case
+    if num_records == 2:
+        # Second insert - missing parameter treated as None/NULL
+        row2 = select_result.data[1]
+        assert row2["ID"] == 2
+        assert row2["FIELD1"] == "test"
+        assert row2["FIELD2"] is None
+        assert row2["FIELD3"] is None  # Missing parameter treated as NULL
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_param_count_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"

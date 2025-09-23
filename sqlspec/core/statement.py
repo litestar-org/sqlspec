@@ -59,6 +59,7 @@ PROCESSED_STATE_SLOTS: Final = (
     "execution_parameters",
     "parsed_expression",
     "operation_type",
+    "parameter_casts",
     "validation_errors",
     "is_many",
 )
@@ -81,6 +82,7 @@ class ProcessedState:
         execution_parameters: Any,
         parsed_expression: "Optional[exp.Expression]" = None,
         operation_type: "OperationType" = "UNKNOWN",
+        parameter_casts: "Optional[dict[int, str]]" = None,
         validation_errors: "Optional[list[str]]" = None,
         is_many: bool = False,
     ) -> None:
@@ -88,6 +90,7 @@ class ProcessedState:
         self.execution_parameters = execution_parameters
         self.parsed_expression = parsed_expression
         self.operation_type = operation_type
+        self.parameter_casts = parameter_casts or {}
         self.validation_errors = validation_errors or []
         self.is_many = is_many
 
@@ -447,6 +450,7 @@ class SQL:
                     execution_parameters=compiled_result.execution_parameters,
                     parsed_expression=compiled_result.expression,
                     operation_type=compiled_result.operation_type,
+                    parameter_casts=compiled_result.parameter_casts,
                     validation_errors=[],
                     is_many=self._is_many,
                 )
@@ -458,6 +462,7 @@ class SQL:
                     compiled_sql=self._raw_sql,
                     execution_parameters=self._named_parameters or self._positional_parameters,
                     operation_type="UNKNOWN",
+                    parameter_casts={},
                     is_many=self._is_many,
                 )
 
