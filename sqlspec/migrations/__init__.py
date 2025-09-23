@@ -12,21 +12,20 @@ from sqlspec.migrations.loaders import (
     SQLFileLoader,
     get_migration_loader,
 )
-from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
+from sqlspec.migrations.runner import MigrationRunner
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.utils import create_migration_file, drop_all, get_author
 
 __all__ = (
     "AsyncMigrationCommands",
-    "AsyncMigrationRunner",
     "AsyncMigrationTracker",
     "BaseMigrationLoader",
     "MigrationCommands",
     "MigrationLoadError",
+    "MigrationRunner",
     "PythonFileLoader",
     "SQLFileLoader",
     "SyncMigrationCommands",
-    "SyncMigrationRunner",
     "SyncMigrationTracker",
     "create_migration_file",
     "drop_all",

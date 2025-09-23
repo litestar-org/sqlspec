@@ -33,26 +33,43 @@ def get_sqlspec_group() -> "Group":
     @click.group(name="sqlspec")
     @click.option(
         "--config",
-        help="Dotted path to SQLSpec config(s) (e.g. 'myapp.config.sqlspec_configs')",
+        help="Dotted path to SQLSpec config(s) or callable function (e.g. 'myapp.config.get_configs')",
         required=True,
         type=str,
     )
+    @click.option(
+        "--validate-config", is_flag=True, default=False, help="Validate configuration before executing migrations"
+    )
     @click.pass_context
-    def sqlspec_group(ctx: "click.Context", config: str) -> None:
+    def sqlspec_group(ctx: "click.Context", config: str, validate_config: bool) -> None:
         """SQLSpec CLI commands."""
         from rich import get_console
 
-        from sqlspec.utils import module_loader
+        from sqlspec.utils.config_resolver import ConfigResolverError, resolve_config
 
         console = get_console()
         ctx.ensure_object(dict)
         try:
-            config_instance = module_loader.import_string(config)
-            if isinstance(config_instance, Sequence):
-                ctx.obj["configs"] = config_instance
+            config_result = resolve_config(config)
+            if isinstance(config_result, Sequence) and not isinstance(config_result, str):
+                ctx.obj["configs"] = list(config_result)
             else:
-                ctx.obj["configs"] = [config_instance]
-        except ImportError as e:
+                ctx.obj["configs"] = [config_result]
+
+            ctx.obj["validate_config"] = validate_config
+
+            if validate_config:
+                console.print(f"[green]✓[/] Successfully loaded {len(ctx.obj['configs'])} config(s)")
+                for i, cfg in enumerate(ctx.obj["configs"]):
+                    config_name = getattr(cfg, "name", None) or getattr(cfg, "bind_key", None) or f"config-{i}"
+                    config_type = type(cfg).__name__
+                    is_async = "Async" in config_type or (
+                        hasattr(cfg, "driver_type") and "Async" in getattr(cfg.driver_type, "__name__", "")
+                    )
+                    execution_hint = "[dim cyan](async-capable)[/]" if is_async else "[dim](sync)[/]"
+                    console.print(f"  [dim]•[/] {config_name}: {config_type} {execution_hint}")
+
+        except (ImportError, ConfigResolverError) as e:
             console.print(f"[red]Error loading config: {e}[/]")
             ctx.exit(1)
 
@@ -108,6 +125,12 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     )
     dry_run_option = click.option(
         "--dry-run", is_flag=True, default=False, help="Show what would be executed without making changes"
+    )
+    execution_mode_option = click.option(
+        "--execution-mode",
+        type=click.Choice(["auto", "sync", "async"]),
+        default="auto",
+        help="Force execution mode (auto-detects by default)",
     )
 
     def get_config_by_bind_key(
@@ -360,6 +383,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     @include_option
     @exclude_option
     @dry_run_option
+    @execution_mode_option
     @click.argument("revision", type=str, default="head")
     def upgrade_database(  # pyright: ignore[reportUnusedFunction]
         bind_key: Optional[str],
@@ -368,6 +392,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         include: "tuple[str, ...]",
         exclude: "tuple[str, ...]",
         dry_run: bool,
+        execution_mode: str,
     ) -> None:
         """Upgrade the database to the latest revision."""
         from rich.prompt import Confirm
@@ -375,6 +400,10 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         from sqlspec.migrations.commands import MigrationCommands
 
         ctx = click.get_current_context()
+
+        # Report execution mode when specified
+        if execution_mode != "auto":
+            console.print(f"[dim]Execution mode: {execution_mode}[/]")
 
         # Check if this is a multi-config operation
         configs_to_process = process_multiple_configs(
