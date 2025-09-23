@@ -537,7 +537,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         if isinstance(parameters, (list, tuple)):
             result: list[Any] = []
-            for idx, param in enumerate(parameters, start=1):
+            for idx, param in enumerate(parameters, start=1):  # pyright: ignore
                 cast_type = parameter_casts.get(idx, "").upper()
                 if cast_type in {"JSON", "JSONB", "TYPE.JSON", "TYPE.JSONB"}:
                     if isinstance(param, dict):
@@ -545,15 +545,19 @@ class AdbcDriver(SyncDriverAdapterBase):
                     else:
                         result.append(param)
                 elif isinstance(param, dict):
-                    result.append(param)
+                    # For PostgreSQL, always convert dicts to JSON strings
+                    # since ADBC cannot handle raw dicts
+                    if self.dialect in {"postgres", "postgresql"}:
+                        result.append(encode_json(param))
+                    else:
+                        result.append(param)
                 else:
-                    coerced = param
                     if statement_config.parameter_config.type_coercion_map:
                         for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
                             if type_check is not dict and isinstance(param, type_check):
-                                coerced = converter(param)
+                                param = converter(param)
                                 break
-                    result.append(coerced)
+                    result.append(param)
             return tuple(result) if isinstance(parameters, tuple) else result
         return parameters
 
