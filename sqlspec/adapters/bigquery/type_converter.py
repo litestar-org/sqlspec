@@ -1,13 +1,12 @@
 """BigQuery-specific type conversion with UUID support.
 
 Provides specialized type handling for BigQuery, including UUID support
-for both standard and ADBC drivers, with appropriate fallbacks for limitations.
+for the native BigQuery driver.
 """
 
 from typing import Any, Final, Optional
 from uuid import UUID
 
-from sqlspec._serialization import encode_json
 from sqlspec.core.type_conversion import BaseTypeConverter, convert_uuid
 
 try:
@@ -37,7 +36,7 @@ class BigQueryTypeConverter(BaseTypeConverter):
     """BigQuery-specific type conversion with UUID support.
 
     Extends the base TypeDetector with BigQuery-specific functionality
-    including UUID parameter handling for both standard and ADBC drivers.
+    including UUID parameter handling for the native BigQuery driver.
     """
 
     __slots__ = ()
@@ -50,7 +49,7 @@ class BigQueryTypeConverter(BaseTypeConverter):
             value: Parameter value.
 
         Returns:
-            ScalarQueryParameter for standard driver, None if not available.
+            ScalarQueryParameter for native BigQuery driver, None if not available.
         """
         if ScalarQueryParameter is None:
             return None
@@ -91,74 +90,4 @@ class BigQueryTypeConverter(BaseTypeConverter):
         return value
 
 
-class ADBCBigQueryTypeConverter(BigQueryTypeConverter):
-    """ADBC-specific BigQuery type handling.
-
-    Handles limitations of the ADBC BigQuery driver, particularly
-    around STRUCT types which must be converted to JSON strings.
-    """
-
-    __slots__ = ()
-
-    def handle_struct_as_json(self, value: dict[str, Any]) -> str:
-        """ADBC converts STRUCT to String, handle as JSON.
-
-        Args:
-            value: Dictionary to convert to JSON.
-
-        Returns:
-            JSON string representation.
-        """
-        return encode_json(value, as_bytes=False)
-
-    def create_adbc_parameter(self, name: str, value: Any) -> tuple[str, Any]:
-        """Create ADBC-compatible parameter tuple.
-
-        Args:
-            name: Parameter name.
-            value: Parameter value.
-
-        Returns:
-            Tuple of (name, converted_value) suitable for ADBC.
-        """
-        if isinstance(value, UUID):
-            return (name, str(value))
-
-        if isinstance(value, str):
-            detected_type = self.detect_type(value)
-            if detected_type == "uuid":
-                uuid_obj = convert_uuid(value)
-                return (name, str(uuid_obj))
-
-        if isinstance(value, dict):
-            # ADBC limitation: convert dict types to JSON strings
-            return (name, self.handle_struct_as_json(value))
-
-        if isinstance(value, list):
-            # ADBC limitation: convert list types to JSON strings
-            from sqlspec._serialization import encode_json
-
-            return (name, encode_json(value, as_bytes=False))
-
-        return (name, value)
-
-    def handle_adbc_result(self, value: Any, expected_type: str) -> Any:
-        """Handle ADBC result conversion with type expectations.
-
-        Args:
-            value: Result value from ADBC.
-            expected_type: Expected type from schema.
-
-        Returns:
-            Converted value based on expected type.
-        """
-        if expected_type == "STRUCT" and isinstance(value, str):
-            # ADBC returns STRUCTs as JSON strings, parse them back
-            detected = self.detect_type(value)
-            if detected == "json":
-                return self.convert_value(value, detected)
-
-        return self.convert_bigquery_value(value, expected_type)
-
-
-__all__ = ("BQ_TYPE_MAP", "ADBCBigQueryTypeConverter", "BigQueryTypeConverter")
+__all__ = ("BQ_TYPE_MAP", "BigQueryTypeConverter")
