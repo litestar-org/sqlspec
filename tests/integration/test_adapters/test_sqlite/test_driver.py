@@ -462,3 +462,70 @@ def test_asset_maintenance_alert_complex_query(sqlite_session: SqliteDriver) -> 
     count_result = sqlite_session.execute("SELECT COUNT(*) as count FROM alert_users")
     assert count_result.data is not None
     assert count_result.data[0]["count"] == 3
+
+
+def test_sqlite_for_update_generates_sql_but_may_not_work(sqlite_session: SqliteDriver) -> None:
+    """Test that FOR UPDATE generates SQL for SQLite but note it doesn't provide row-level locking."""
+    from sqlspec import sql
+
+    # Insert test data
+    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("sqlite_test", 100))
+
+    # SQLite will generate FOR UPDATE SQL but it doesn't provide row-level locking like PostgreSQL/MySQL
+    # The SQL should be generated without errors, but SQLite ignores the FOR UPDATE clause
+    query = sql.select("*").from_("test_table").where_eq("name", "sqlite_test").for_update()
+
+    # Should generate SQL without throwing an error
+    stmt = query.build()
+    # SQLite doesn't support FOR UPDATE, so SQLGlot strips it out (expected behavior)
+    assert "FOR UPDATE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
+
+    # Should execute without error (SQLite just ignores the FOR UPDATE)
+    result = sqlite_session.execute(query)
+    assert result is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "sqlite_test"
+
+
+def test_sqlite_for_share_generates_sql_but_may_not_work(sqlite_session: SqliteDriver) -> None:
+    """Test that FOR SHARE generates SQL for SQLite but note it doesn't provide row-level locking."""
+    from sqlspec import sql
+
+    # Insert test data
+    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("sqlite_share", 200))
+
+    # SQLite will generate FOR SHARE SQL but it doesn't provide row-level locking
+    query = sql.select("*").from_("test_table").where_eq("name", "sqlite_share").for_share()
+
+    # Should generate SQL without throwing an error
+    stmt = query.build()
+    # SQLite doesn't support FOR SHARE, so SQLGlot strips it out (expected behavior)
+    assert "FOR SHARE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
+
+    # Should execute without error (SQLite just ignores the FOR SHARE)
+    result = sqlite_session.execute(query)
+    assert result is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "sqlite_share"
+
+
+def test_sqlite_for_update_skip_locked_generates_sql(sqlite_session: SqliteDriver) -> None:
+    """Test that FOR UPDATE SKIP LOCKED generates SQL for SQLite."""
+    from sqlspec import sql
+
+    # Insert test data
+    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("sqlite_skip", 300))
+
+    # Should generate SQL even though SQLite doesn't support the functionality
+    query = sql.select("*").from_("test_table").where_eq("name", "sqlite_skip").for_update(skip_locked=True)
+
+    stmt = query.build()
+    # The exact SQL generated may vary based on dialect support
+    assert stmt.sql is not None
+
+    # Should execute (SQLite will ignore unsupported clauses)
+    result = sqlite_session.execute(query)
+    assert result is not None
+    assert len(result.data) == 1

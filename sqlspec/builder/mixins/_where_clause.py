@@ -16,6 +16,8 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.builder._parsing_utils import extract_column_name, parse_column_expression, parse_condition_expression
+from sqlspec.core.parameters import ParameterStyle, ParameterValidator
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
@@ -299,15 +301,11 @@ class WhereClauseMixin:
                 raise SQLBuilderError(msg)
 
             # Check if condition contains parameter placeholders
-            from sqlspec.core.parameters import ParameterStyle, ParameterValidator
-
             validator = ParameterValidator()
             param_info = validator.extract_parameters(condition)
 
             if param_info:
                 # String condition with placeholders - create SQL object with parameters
-                from sqlspec import sql as sql_factory
-
                 # Create parameter mapping based on the detected parameter info
                 param_dict = dict(kwargs)  # Start with named parameters
 
@@ -327,7 +325,7 @@ class WhereClauseMixin:
                     param_dict[f"param_{i}"] = value
 
                 # Create SQL object with parameters that will be processed correctly
-                condition = sql_factory.raw(condition, **param_dict)
+                condition = SQL(condition, param_dict)
                 # Fall through to existing SQL object handling logic
 
             elif len(values) == 1 and not kwargs:
@@ -819,15 +817,11 @@ class WhereClauseMixin:
                 raise SQLBuilderError(msg)
 
             # Check if condition contains parameter placeholders
-            from sqlspec.core.parameters import ParameterStyle, ParameterValidator
-
             validator = ParameterValidator()
             param_info = validator.extract_parameters(condition)
 
             if param_info:
                 # String condition with placeholders - create SQL object with parameters
-                from sqlspec import sql as sql_factory
-
                 # Create parameter mapping based on the detected parameter info
                 param_dict = dict(kwargs)  # Start with named parameters
 
@@ -847,7 +841,7 @@ class WhereClauseMixin:
                     param_dict[f"param_{i}"] = value
 
                 # Create SQL object with parameters that will be processed correctly
-                condition = sql_factory.raw(condition, **param_dict)
+                condition = SQL(condition, param_dict)
                 # Fall through to existing SQL object handling logic
 
             elif len(values) == 1 and not kwargs:

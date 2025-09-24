@@ -82,16 +82,12 @@ class JoinClauseMixin:
         self, table: Any, alias: Optional[str], builder: "SQLBuilderProtocol"
     ) -> exp.Expression:
         """Handle table parameters that are query builders."""
-        if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
-            table_expr_value = getattr(table, "_expression", None)
-            if table_expr_value is not None:
-                subquery_exp = exp.paren(table_expr_value)
-            else:
-                subquery_exp = exp.paren(exp.Anonymous(this=""))
+        if hasattr(table, "_expression") and table._expression is not None:
+            subquery_exp = exp.paren(table._expression)
             return exp.alias_(subquery_exp, alias) if alias else subquery_exp
         subquery = table.build()
         sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
-        subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect", None)))
+        subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=builder.dialect))
         return exp.alias_(subquery_exp, alias) if alias else subquery_exp
 
     def _parse_on_condition(
@@ -107,28 +103,20 @@ class JoinClauseMixin:
             return self._handle_sql_object_condition(on, builder)
         if isinstance(on, exp.Expression):
             return on
-        # Last resort - convert to string and parse
         return exp.condition(str(on))
 
     def _handle_sql_object_condition(self, on: Any, builder: "SQLBuilderProtocol") -> exp.Expression:
         """Handle SQL object conditions with parameter binding."""
-        expression = getattr(on, "expression", None)
-        if expression is not None and isinstance(expression, exp.Expression):
-            # Merge parameters from SQL object into builder
-            if hasattr(on, "parameters") and hasattr(builder, "add_parameter"):
-                sql_parameters = getattr(on, "parameters", {})
-                for param_name, param_value in sql_parameters.items():
+        if hasattr(on, "expression") and on.expression is not None:
+            if hasattr(on, "parameters"):
+                for param_name, param_value in on.parameters.items():
                     builder.add_parameter(param_value, name=param_name)
-            return cast("exp.Expression", expression)
-        # If expression is None, fall back to parsing the raw SQL
-        sql_text = getattr(on, "sql", "")
-        # Merge parameters even when parsing raw SQL
-        if hasattr(on, "parameters") and hasattr(builder, "add_parameter"):
-            sql_parameters = getattr(on, "parameters", {})
-            for param_name, param_value in sql_parameters.items():
+            return cast("exp.Expression", on.expression)
+        if hasattr(on, "parameters"):
+            for param_name, param_value in on.parameters.items():
                 builder.add_parameter(param_value, name=param_name)
-        parsed_expr = exp.maybe_parse(sql_text)
-        return parsed_expr if parsed_expr is not None else exp.condition(str(sql_text))
+        parsed_expr = exp.maybe_parse(on.sql)
+        return parsed_expr if parsed_expr is not None else exp.condition(str(on.sql))
 
     def _create_join_expression(
         self, table_expr: exp.Expression, on_expr: Optional[exp.Expression], join_type: str
@@ -195,17 +183,13 @@ class JoinClauseMixin:
         if isinstance(table, str):
             table_expr = parse_table_expression(table, alias)
         elif has_query_builder_parameters(table):
-            if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
-                table_expr_value = getattr(table, "_expression", None)
-                if table_expr_value is not None:
-                    subquery_exp = exp.paren(table_expr_value)
-                else:
-                    subquery_exp = exp.paren(exp.Anonymous(this=""))
+            if hasattr(table, "_expression") and table._expression is not None:
+                subquery_exp = exp.paren(table._expression)
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             else:
                 subquery = table.build()
                 sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
-                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect", None)))
+                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=builder.dialect))
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
         else:
             table_expr = table

@@ -15,6 +15,24 @@ from sqlspec.utils.type_guards import has_sql_method
 __all__ = ("Column", "ColumnExpression", "FunctionColumn")
 
 
+def _convert_value(value: Any) -> exp.Expression:
+    """Convert a Python value to a SQLGlot expression.
+
+    Special handling for datetime objects to prevent SQLGlot from
+    converting them to TIME_STR_TO_TIME function calls. Datetime
+    objects should be passed as parameters, not converted to SQL functions.
+
+    Args:
+        value: The value to convert
+
+    Returns:
+        A SQLGlot expression representing the value
+    """
+    if isinstance(value, (datetime, date)):
+        return exp.Literal(this=value, is_string=False)
+    return exp.convert(value)
+
+
 class ColumnExpression:
     """Base class for column expressions that can be combined with operators."""
 
@@ -69,24 +87,8 @@ class Column:
             self._expression = exp.Column(this=exp.Identifier(this=name))
 
     def _convert_value(self, value: Any) -> exp.Expression:
-        """Convert a Python value to a SQLGlot expression.
-
-        Special handling for datetime objects to prevent SQLGlot from
-        converting them to TIME_STR_TO_TIME function calls. Datetime
-        objects should be passed as parameters, not converted to SQL functions.
-
-        Args:
-            value: The value to convert
-
-        Returns:
-            A SQLGlot expression representing the value
-        """
-        if isinstance(value, (datetime, date)):
-            # Create a Literal with the datetime value directly
-            # This will be parameterized by the QueryBuilder's _parameterize_expression
-            # Don't use exp.convert() which would create TIME_STR_TO_TIME
-            return exp.Literal(this=value, is_string=False)
-        return exp.convert(value)
+        """Convert a Python value to a SQLGlot expression."""
+        return _convert_value(value)
 
     def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
         """Equal to (==)."""
@@ -298,24 +300,8 @@ class FunctionColumn:
         self._expression = expression
 
     def _convert_value(self, value: Any) -> exp.Expression:
-        """Convert a Python value to a SQLGlot expression.
-
-        Special handling for datetime objects to prevent SQLGlot from
-        converting them to TIME_STR_TO_TIME function calls. Datetime
-        objects should be passed as parameters, not converted to SQL functions.
-
-        Args:
-            value: The value to convert
-
-        Returns:
-            A SQLGlot expression representing the value
-        """
-        if isinstance(value, (datetime, date)):
-            # Create a Literal with the datetime value directly
-            # This will be parameterized by the QueryBuilder's _parameterize_expression
-            # Don't use exp.convert() which would create TIME_STR_TO_TIME
-            return exp.Literal(this=value, is_string=False)
-        return exp.convert(value)
+        """Convert a Python value to a SQLGlot expression."""
+        return _convert_value(value)
 
     def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
         return ColumnExpression(exp.EQ(this=self._expression, expression=self._convert_value(other)))

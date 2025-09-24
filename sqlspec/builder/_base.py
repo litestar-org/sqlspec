@@ -3,6 +3,8 @@
 Provides abstract base classes and core functionality for SQL query builders.
 """
 
+import hashlib
+import uuid
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, NoReturn, Optional, Union, cast
 
@@ -19,12 +21,14 @@ from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_expression_and_parameters, has_sql_method, has_with_method
+from sqlspec.utils.type_guards import has_expression_and_parameters, has_sql_method, has_with_method, is_expression
 
 if TYPE_CHECKING:
     from sqlspec.core.result import SQLResult
 
 __all__ = ("QueryBuilder", "SafeQuery")
+
+MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 
 logger = get_logger(__name__)
 
@@ -104,13 +108,9 @@ class QueryBuilder(ABC):
 
         Args:
             expression: SQLGlot expression to set
-
-        Raises:
-            TypeError: If expression is not a SQLGlot Expression
         """
-        if not isinstance(expression, exp.Expression):
-            msg = f"Expected Expression, got {type(expression)}"
-            raise TypeError(msg)
+        if not is_expression(expression):
+            self._raise_invalid_expression_type(expression)
         self._expression = expression
 
     def has_expression(self) -> bool:
@@ -150,6 +150,46 @@ class QueryBuilder(ABC):
             SQLBuilderError: Always raises this exception.
         """
         raise SQLBuilderError(message) from cause
+
+    @staticmethod
+    def _raise_invalid_expression_type(expression: Any) -> NoReturn:
+        """Raise error for invalid expression type.
+
+        Args:
+            expression: The invalid expression object
+
+        Raises:
+            TypeError: Always raised for type mismatch
+        """
+        msg = f"Expected Expression, got {type(expression)}"
+        raise TypeError(msg)
+
+    @staticmethod
+    def _raise_cte_query_error(alias: str, message: str) -> NoReturn:
+        """Raise error for CTE query issues.
+
+        Args:
+            alias: CTE alias name
+            message: Specific error message
+
+        Raises:
+            SQLBuilderError: Always raised for CTE errors
+        """
+        msg = f"CTE '{alias}': {message}"
+        raise SQLBuilderError(msg)
+
+    @staticmethod
+    def _raise_cte_parse_error(cause: BaseException) -> NoReturn:
+        """Raise error for CTE parsing failures.
+
+        Args:
+            cause: The original parsing exception
+
+        Raises:
+            SQLBuilderError: Always raised with chained cause
+        """
+        msg = f"Failed to parse CTE query: {cause!s}"
+        raise SQLBuilderError(msg) from cause
 
     def _add_parameter(self, value: Any, context: Optional[str] = None) -> str:
         """Adds a parameter to the query and returns its placeholder name.
@@ -229,12 +269,10 @@ class QueryBuilder(ABC):
         if base_name not in self._parameters:
             return base_name
 
-        for i in range(1, 1000):
+        for i in range(1, MAX_PARAMETER_COLLISION_ATTEMPTS):
             name = f"{base_name}_{i}"
             if name not in self._parameters:
                 return name
-
-        import uuid
 
         return f"{base_name}_{uuid.uuid4().hex[:8]}"
 
@@ -284,8 +322,6 @@ class QueryBuilder(ABC):
         Returns:
             A unique cache key representing the builder state and configuration
         """
-        import hashlib
-
         dialect_name: str = self.dialect_name or "default"
 
         if self._expression is None:
@@ -339,35 +375,29 @@ class QueryBuilder(ABC):
         if isinstance(query, QueryBuilder):
             query_expr = query.get_expression()
             if query_expr is None:
-                self._raise_sql_builder_error("CTE query builder has no expression.")
+                self._raise_cte_query_error(alias, "query builder has no expression")
             if not isinstance(query_expr, exp.Select):
-                msg = f"CTE query builder expression must be a Select, got {type(query_expr).__name__}."
-                self._raise_sql_builder_error(msg)
+                self._raise_cte_query_error(alias, f"expression must be a Select, got {type(query_expr).__name__}")
             cte_select_expression = query_expr
             param_mapping = self._merge_cte_parameters(alias, query.parameters)
-            updated_expression = self._update_placeholders_in_expression(cte_select_expression, param_mapping)
-            if not isinstance(updated_expression, exp.Select):
-                msg = f"Updated CTE expression must be a Select, got {type(updated_expression).__name__}."
-                self._raise_sql_builder_error(msg)
-            cte_select_expression = updated_expression
+            cte_select_expression = cast(
+                "exp.Select", self._update_placeholders_in_expression(cte_select_expression, param_mapping)
+            )
 
         elif isinstance(query, str):
             try:
                 parsed_expression = sqlglot.parse_one(query, read=self.dialect_name)
                 if not isinstance(parsed_expression, exp.Select):
-                    msg = f"CTE query string must parse to a SELECT statement, got {type(parsed_expression).__name__}."
-                    self._raise_sql_builder_error(msg)
+                    self._raise_cte_query_error(
+                        alias, f"query string must parse to SELECT, got {type(parsed_expression).__name__}"
+                    )
                 cte_select_expression = parsed_expression
             except SQLGlotParseError as e:
-                self._raise_sql_builder_error(f"Failed to parse CTE query string: {e!s}", e)
-            except Exception as e:
-                msg = f"An unexpected error occurred while parsing CTE query string: {e!s}"
-                self._raise_sql_builder_error(msg, e)
+                self._raise_cte_parse_error(e)
         elif isinstance(query, exp.Select):
             cte_select_expression = query
         else:
-            msg = f"Invalid query type for CTE: {type(query).__name__}"
-            self._raise_sql_builder_error(msg)
+            self._raise_cte_query_error(alias, f"invalid query type: {type(query).__name__}")
 
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
@@ -438,10 +468,9 @@ class QueryBuilder(ABC):
             optimized = optimize(
                 expression, schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
             )
-
             cache.put("optimized", cache_key, optimized)
-
         except Exception:
+            logger.debug("Expression optimization failed, using original expression")
             return expression
         else:
             return optimized
@@ -482,18 +511,7 @@ class QueryBuilder(ABC):
         """
         safe_query = self.build()
 
-        if isinstance(safe_query.parameters, dict):
-            kwargs = safe_query.parameters
-            parameters: Optional[tuple[Any, ...]] = None
-        else:
-            kwargs = None
-            parameters = (
-                safe_query.parameters
-                if isinstance(safe_query.parameters, tuple)
-                else tuple(safe_query.parameters)
-                if safe_query.parameters
-                else None
-            )
+        kwargs, parameters = self._extract_statement_parameters(safe_query.parameters)
 
         if config is None:
             config = StatementConfig(
@@ -520,6 +538,28 @@ class QueryBuilder(ABC):
         if parameters:
             return SQL(sql_string, *parameters, statement_config=config)
         return SQL(sql_string, statement_config=config)
+
+    def _extract_statement_parameters(
+        self, raw_parameters: Any
+    ) -> "tuple[Optional[dict[str, Any]], Optional[tuple[Any, ...]]]":
+        """Extract parameters for SQL statement creation.
+
+        Args:
+            raw_parameters: Raw parameter data from SafeQuery
+
+        Returns:
+            Tuple of (kwargs, parameters) for SQL statement construction
+        """
+        if isinstance(raw_parameters, dict):
+            return raw_parameters, None
+
+        if isinstance(raw_parameters, tuple):
+            return None, raw_parameters
+
+        if raw_parameters:
+            return None, tuple(raw_parameters)
+
+        return None, None
 
     def __str__(self) -> str:
         """Return the SQL string representation of the query.

@@ -419,3 +419,110 @@ async def test_postgresql_specific_features(psqlpy_session: PsqlpyDriver) -> Non
     assert isinstance(pg_result, SQLResult)
     assert pg_result.data is not None
     assert "PostgreSQL" in pg_result.data[0]["pg_version"]
+
+
+async def test_psqlpy_for_update_locking(psqlpy_session: PsqlpyDriver) -> None:
+    """Test FOR UPDATE row locking with psqlpy (async)."""
+    from sqlspec import sql
+
+    # Setup test table
+    await psqlpy_session.execute_script("DROP TABLE IF EXISTS test_table")
+    await psqlpy_session.execute_script("""
+        CREATE TABLE test_table (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(50),
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    await psqlpy_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("psqlpy_lock", 100))
+
+    try:
+        await psqlpy_session.begin()
+
+        # Test basic FOR UPDATE
+        result = await psqlpy_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "psqlpy_lock").for_update()
+        )
+        assert result is not None
+        assert result["name"] == "psqlpy_lock"
+        assert result["value"] == 100
+
+        await psqlpy_session.commit()
+    except Exception:
+        await psqlpy_session.rollback()
+        raise
+    finally:
+        await psqlpy_session.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+async def test_psqlpy_for_update_skip_locked(psqlpy_session: PsqlpyDriver) -> None:
+    """Test FOR UPDATE SKIP LOCKED with psqlpy (async)."""
+    from sqlspec import sql
+
+    # Setup test table
+    await psqlpy_session.execute_script("DROP TABLE IF EXISTS test_table")
+    await psqlpy_session.execute_script("""
+        CREATE TABLE test_table (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(50),
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    await psqlpy_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("psqlpy_skip", 200))
+
+    try:
+        await psqlpy_session.begin()
+
+        # Test FOR UPDATE SKIP LOCKED
+        result = await psqlpy_session.select_one(
+            sql.select("*").from_("test_table").where_eq("name", "psqlpy_skip").for_update(skip_locked=True)
+        )
+        assert result is not None
+        assert result["name"] == "psqlpy_skip"
+
+        await psqlpy_session.commit()
+    except Exception:
+        await psqlpy_session.rollback()
+        raise
+    finally:
+        await psqlpy_session.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+async def test_psqlpy_for_share_locking(psqlpy_session: PsqlpyDriver) -> None:
+    """Test FOR SHARE row locking with psqlpy (async)."""
+    from sqlspec import sql
+
+    # Setup test table
+    await psqlpy_session.execute_script("DROP TABLE IF EXISTS test_table")
+    await psqlpy_session.execute_script("""
+        CREATE TABLE test_table (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(50),
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    await psqlpy_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("psqlpy_share", 300))
+
+    try:
+        await psqlpy_session.begin()
+
+        # Test FOR SHARE
+        result = await psqlpy_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "psqlpy_share").for_share()
+        )
+        assert result is not None
+        assert result["name"] == "psqlpy_share"
+        assert result["value"] == 300
+
+        await psqlpy_session.commit()
+    except Exception:
+        await psqlpy_session.rollback()
+        raise
+    finally:
+        await psqlpy_session.execute_script("DROP TABLE IF EXISTS test_table")

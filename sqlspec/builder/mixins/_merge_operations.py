@@ -11,6 +11,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
+from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_query_builder_parameters
 
@@ -30,7 +31,6 @@ class MergeIntoClauseMixin:
 
     __slots__ = ()
 
-    # Type annotations for PyRight - these will be provided by the base class
     def get_expression(self) -> Optional[exp.Expression]: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -50,7 +50,6 @@ class MergeIntoClauseMixin:
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        # Type guard: current_expr is now guaranteed to be an Expression
         assert current_expr is not None
         current_expr.set("this", exp.to_table(table, alias=alias) if isinstance(table, str) else table)
         return self
@@ -62,7 +61,6 @@ class MergeUsingClauseMixin:
 
     __slots__ = ()
 
-    # Type annotations for PyRight - these will be provided by the base class
     def get_expression(self) -> Optional[exp.Expression]: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -95,17 +93,14 @@ class MergeUsingClauseMixin:
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        # Type guard: current_expr is now guaranteed to be an Expression
         assert current_expr is not None
         source_expr: exp.Expression
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
         elif isinstance(source, dict):
-            # Handle dictionary by creating a VALUES-style subquery with parameters
             columns = list(source.keys())
             values = list(source.values())
 
-            # Create parameterized values
             parameterized_values: list[exp.Expression] = []
             for col, val in zip(columns, values):
                 column_name = col if isinstance(col, str) else str(col)
@@ -115,14 +110,12 @@ class MergeUsingClauseMixin:
                 _, param_name = self.add_parameter(val, name=param_name)
                 parameterized_values.append(exp.Placeholder(this=param_name))
 
-            # Create SELECT statement with the values
             select_expr = exp.Select()
             select_expressions = []
             for i, col in enumerate(columns):
                 select_expressions.append(exp.alias_(parameterized_values[i], col))
             select_expr.set("expressions", select_expressions)
 
-            # Add FROM DUAL for Oracle compatibility (or equivalent for other databases)
             from_expr = exp.From(this=exp.to_table("DUAL"))
             select_expr.set("from", from_expr)
 
@@ -155,7 +148,6 @@ class MergeOnClauseMixin:
 
     __slots__ = ()
 
-    # Type annotations for PyRight - these will be provided by the base class
     def get_expression(self) -> Optional[exp.Expression]: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -177,7 +169,6 @@ class MergeOnClauseMixin:
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        # Type guard: current_expr is now guaranteed to be an Expression
         assert current_expr is not None
         condition_expr: exp.Expression
         if isinstance(condition, str):
@@ -204,7 +195,6 @@ class MergeMatchedClauseMixin:
 
     __slots__ = ()
 
-    # Type annotations for PyRight - these will be provided by the base class
     def get_expression(self) -> Optional[exp.Expression]: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -265,7 +255,6 @@ class MergeMatchedClauseMixin:
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        # Type guard: current_expr is now guaranteed to be an Expression
         assert current_expr is not None
         whens = current_expr.args.get("whens")
         if not whens:
@@ -313,27 +302,7 @@ class MergeMatchedClauseMixin:
         update_expressions: list[exp.EQ] = []
         for col, val in all_values.items():
             if hasattr(val, "expression") and hasattr(val, "sql"):
-                # Handle SQL objects (from sql.raw with parameters)
-                expression = getattr(val, "expression", None)
-                if expression is not None and isinstance(expression, exp.Expression):
-                    # Merge parameters from SQL object into builder
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
-                    value_expr = expression
-                else:
-                    # If expression is None, fall back to parsing the raw SQL
-                    sql_text = getattr(val, "sql", "")
-                    # Merge parameters even when parsing raw SQL
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
-                    # Check if sql_text is callable (like Expression.sql method)
-                    if callable(sql_text):
-                        sql_text = str(val)
-                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+                value_expr = extract_sql_object_expression(val, builder=self)
             elif isinstance(val, exp.Expression):
                 value_expr = val
             elif isinstance(val, str) and self._is_column_reference(val):
@@ -413,7 +382,6 @@ class MergeNotMatchedClauseMixin:
 
     __slots__ = ()
 
-    # Type annotations for PyRight - these will be provided by the base class
     def get_expression(self) -> Optional[exp.Expression]: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -567,7 +535,6 @@ class MergeNotMatchedBySourceClauseMixin:
 
     __slots__ = ()
 
-    # Type annotations for PyRight - these will be provided by the base class
     def get_expression(self) -> Optional[exp.Expression]: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -651,27 +618,7 @@ class MergeNotMatchedBySourceClauseMixin:
         update_expressions: list[exp.EQ] = []
         for col, val in all_values.items():
             if hasattr(val, "expression") and hasattr(val, "sql"):
-                # Handle SQL objects (from sql.raw with parameters)
-                expression = getattr(val, "expression", None)
-                if expression is not None and isinstance(expression, exp.Expression):
-                    # Merge parameters from SQL object into builder
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
-                    value_expr = expression
-                else:
-                    # If expression is None, fall back to parsing the raw SQL
-                    sql_text = getattr(val, "sql", "")
-                    # Merge parameters even when parsing raw SQL
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
-                    # Check if sql_text is callable (like Expression.sql method)
-                    if callable(sql_text):
-                        sql_text = str(val)
-                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+                value_expr = extract_sql_object_expression(val, builder=self)
             elif isinstance(val, exp.Expression):
                 value_expr = val
             elif isinstance(val, str) and self._is_column_reference(val):

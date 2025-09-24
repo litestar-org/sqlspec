@@ -501,3 +501,110 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
     assert delete_result.get_affected_count() == 1
 
     duckdb_session.execute_script("DROP TABLE result_methods_test")
+
+
+def test_duckdb_for_update_locking(duckdb_session: DuckDBDriver) -> None:
+    """Test FOR UPDATE row locking with DuckDB (may have limited support)."""
+    from sqlspec import sql
+
+    # Setup test table
+    duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
+    duckdb_session.execute_script("""
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR,
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    duckdb_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "duckdb_lock", 100))
+
+    try:
+        duckdb_session.begin()
+
+        # Test basic FOR UPDATE (DuckDB may have limited or no support)
+        result = duckdb_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "duckdb_lock").for_update()
+        )
+        assert result is not None
+        assert result["name"] == "duckdb_lock"
+        assert result["value"] == 100
+
+        duckdb_session.commit()
+    except Exception:
+        duckdb_session.rollback()
+        raise
+    finally:
+        duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+def test_duckdb_for_update_nowait(duckdb_session: DuckDBDriver) -> None:
+    """Test FOR UPDATE NOWAIT with DuckDB."""
+    from sqlspec import sql
+
+    # Setup test table
+    duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
+    duckdb_session.execute_script("""
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR,
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    duckdb_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "duckdb_nowait", 200))
+
+    try:
+        duckdb_session.begin()
+
+        # Test FOR UPDATE NOWAIT
+        result = duckdb_session.select_one(
+            sql.select("*").from_("test_table").where_eq("name", "duckdb_nowait").for_update(nowait=True)
+        )
+        assert result is not None
+        assert result["name"] == "duckdb_nowait"
+
+        duckdb_session.commit()
+    except Exception:
+        duckdb_session.rollback()
+        raise
+    finally:
+        duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+def test_duckdb_for_share_locking(duckdb_session: DuckDBDriver) -> None:
+    """Test FOR SHARE row locking with DuckDB."""
+    from sqlspec import sql
+
+    # Setup test table
+    duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
+    duckdb_session.execute_script("""
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR,
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    duckdb_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "duckdb_share", 300))
+
+    try:
+        duckdb_session.begin()
+
+        # Test FOR SHARE (DuckDB support may vary)
+        result = duckdb_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "duckdb_share").for_share()
+        )
+        assert result is not None
+        assert result["name"] == "duckdb_share"
+        assert result["value"] == 300
+
+        duckdb_session.commit()
+    except Exception:
+        duckdb_session.rollback()
+        raise
+    finally:
+        duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")

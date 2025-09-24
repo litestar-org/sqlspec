@@ -426,3 +426,94 @@ async def test_aiosqlite_core_result_features(aiosqlite_session: AiosqliteDriver
 
     assert len(result.data) == 3
     assert all(row["name"].startswith("core") for row in result.data)
+
+
+async def test_aiosqlite_for_update_generates_sql(aiosqlite_session: AiosqliteDriver) -> None:
+    """Test that FOR UPDATE generates SQL for aiosqlite (though SQLite doesn't support row-level locking)."""
+    from sqlspec import sql
+
+    # Create test table
+    await aiosqlite_session.execute_script("""
+        DROP TABLE IF EXISTS test_table;
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            value INTEGER
+        );
+    """)
+
+    # Insert test data
+    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("aiosqlite_test", 100))
+
+    # Should generate SQL even though SQLite doesn't support the functionality
+    query = sql.select("*").from_("test_table").where_eq("name", "aiosqlite_test").for_update()
+    stmt = query.build()
+    # SQLite doesn't support FOR UPDATE, so SQLGlot strips it out (expected behavior)
+    assert "FOR UPDATE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
+
+    # Should execute without error (SQLite just ignores the FOR UPDATE)
+    result = await aiosqlite_session.execute(query)
+    assert result is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "aiosqlite_test"
+
+
+async def test_aiosqlite_for_share_generates_sql_but_may_not_work(aiosqlite_session: AiosqliteDriver) -> None:
+    """Test that FOR SHARE generates SQL for aiosqlite but note it doesn't provide row-level locking."""
+    from sqlspec import sql
+
+    # Create test table
+    await aiosqlite_session.execute_script("""
+        DROP TABLE IF EXISTS test_table;
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            value INTEGER
+        );
+    """)
+
+    # Insert test data
+    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("aiosqlite_share", 200))
+
+    # Should generate SQL even though SQLite doesn't support the functionality
+    query = sql.select("*").from_("test_table").where_eq("name", "aiosqlite_share").for_share()
+    stmt = query.build()
+    # SQLite doesn't support FOR SHARE, so SQLGlot strips it out (expected behavior)
+    assert "FOR SHARE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
+
+    # Should execute without error (SQLite just ignores the FOR SHARE)
+    result = await aiosqlite_session.execute(query)
+    assert result is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "aiosqlite_share"
+
+
+async def test_aiosqlite_for_update_skip_locked_generates_sql(aiosqlite_session: AiosqliteDriver) -> None:
+    """Test that FOR UPDATE SKIP LOCKED generates SQL for aiosqlite."""
+    from sqlspec import sql
+
+    # Create test table
+    await aiosqlite_session.execute_script("""
+        DROP TABLE IF EXISTS test_table;
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            value INTEGER
+        );
+    """)
+
+    # Insert test data
+    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("aiosqlite_skip", 300))
+
+    # Should generate SQL even though SQLite doesn't support the functionality
+    query = sql.select("*").from_("test_table").where_eq("name", "aiosqlite_skip").for_update(skip_locked=True)
+    stmt = query.build()
+    # The exact SQL generated may vary based on dialect support
+    assert stmt.sql is not None
+
+    # Should execute (SQLite will ignore unsupported clauses)
+    result = await aiosqlite_session.execute(query)
+    assert result is not None
+    assert len(result.data) == 1

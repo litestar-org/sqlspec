@@ -40,6 +40,7 @@ from sqlspec.builder._expression_wrappers import (
     MathExpression,
     StringExpression,
 )
+from sqlspec.builder._parsing_utils import extract_expression, to_expression
 from sqlspec.builder.mixins._join_operations import JoinBuilder
 from sqlspec.builder.mixins._select_operations import Case, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.core.statement import SQL
@@ -746,7 +747,7 @@ class SQLFactory:
         if isinstance(column, str) and column == "*":
             expr = exp.Count(this=exp.Star(), distinct=distinct)
         else:
-            col_expr = self._extract_expression(column)
+            col_expr = extract_expression(column)
             expr = exp.Count(this=col_expr, distinct=distinct)
         return AggregateExpression(expr)
 
@@ -774,7 +775,7 @@ class SQLFactory:
         Returns:
             SUM expression.
         """
-        col_expr = SQLFactory._extract_expression(column)
+        col_expr = extract_expression(column)
         return AggregateExpression(exp.Sum(this=col_expr, distinct=distinct))
 
     @staticmethod
@@ -787,7 +788,7 @@ class SQLFactory:
         Returns:
             AVG expression.
         """
-        col_expr = SQLFactory._extract_expression(column)
+        col_expr = extract_expression(column)
         return AggregateExpression(exp.Avg(this=col_expr))
 
     @staticmethod
@@ -800,7 +801,7 @@ class SQLFactory:
         Returns:
             MAX expression.
         """
-        col_expr = SQLFactory._extract_expression(column)
+        col_expr = extract_expression(column)
         return AggregateExpression(exp.Max(this=col_expr))
 
     @staticmethod
@@ -813,7 +814,7 @@ class SQLFactory:
         Returns:
             MIN expression.
         """
-        col_expr = SQLFactory._extract_expression(column)
+        col_expr = extract_expression(column)
         return AggregateExpression(exp.Min(this=col_expr))
 
     @staticmethod
@@ -1035,45 +1036,6 @@ class SQLFactory:
         return FunctionExpression(exp.convert(value))
 
     @staticmethod
-    def _to_expression(value: Any) -> exp.Expression:
-        """Convert a Python value to a raw SQLGlot expression.
-
-        Args:
-            value: Python value or SQLGlot expression to convert.
-
-        Returns:
-            Raw SQLGlot expression.
-        """
-        if isinstance(value, exp.Expression):
-            return value
-        return exp.convert(value)
-
-    @staticmethod
-    def _extract_expression(value: Any) -> exp.Expression:
-        """Extract SQLGlot expression from value, handling our wrapper types.
-
-        Args:
-            value: String, SQLGlot expression, or our wrapper type.
-
-        Returns:
-            Raw SQLGlot expression.
-        """
-        from sqlspec.builder._expression_wrappers import ExpressionWrapper
-        from sqlspec.builder.mixins._select_operations import Case
-
-        if isinstance(value, str):
-            return exp.column(value)
-        if isinstance(value, Column):
-            return value.sqlglot_expression
-        if isinstance(value, ExpressionWrapper):
-            return value.expression
-        if isinstance(value, Case):
-            return exp.Case(ifs=value.conditions, default=value.default)
-        if isinstance(value, exp.Expression):
-            return value
-        return exp.convert(value)
-
-    @staticmethod
     def decode(column: Union[str, exp.Expression], *args: Union[str, exp.Expression, Any]) -> FunctionExpression:
         """Create a DECODE expression (Oracle-style conditional logic).
 
@@ -1109,14 +1071,14 @@ class SQLFactory:
 
         for i in range(0, len(args) - 1, 2):
             if i + 1 >= len(args):
-                default = SQLFactory._to_expression(args[i])
+                default = to_expression(args[i])
                 break
 
             search_val = args[i]
             result_val = args[i + 1]
 
-            search_expr = SQLFactory._to_expression(search_val)
-            result_expr = SQLFactory._to_expression(result_val)
+            search_expr = to_expression(search_val)
+            result_expr = to_expression(result_val)
 
             condition = exp.EQ(this=col_expr, expression=search_expr)
             conditions.append(exp.If(this=condition, true=result_expr))
@@ -1164,7 +1126,7 @@ class SQLFactory:
             COALESCE expression equivalent to NVL.
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
-        sub_expr = SQLFactory._to_expression(substitute_value)
+        sub_expr = to_expression(substitute_value)
         return ConversionExpression(exp.Coalesce(expressions=[col_expr, sub_expr]))
 
     @staticmethod
@@ -1192,8 +1154,8 @@ class SQLFactory:
             ```
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
-        not_null_expr = SQLFactory._to_expression(value_if_not_null)
-        null_expr = SQLFactory._to_expression(value_if_null)
+        not_null_expr = to_expression(value_if_not_null)
+        null_expr = to_expression(value_if_null)
 
         is_null = exp.Is(this=col_expr, expression=exp.Null())
         condition = exp.Not(this=is_null)

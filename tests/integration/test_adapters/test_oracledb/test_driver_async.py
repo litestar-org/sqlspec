@@ -289,3 +289,128 @@ async def test_async_delete_operation(oracle_async_session: OracleAsyncDriver) -
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
+
+
+async def test_oracle_for_update_locking(oracle_async_session: OracleAsyncDriver) -> None:
+    """Test FOR UPDATE row locking with Oracle."""
+    from sqlspec import sql
+
+    # Setup test table
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    await oracle_async_session.execute_script("""
+        CREATE TABLE test_table (
+            id NUMBER PRIMARY KEY,
+            name VARCHAR2(50),
+            value NUMBER
+        )
+    """)
+
+    # Insert test data
+    await oracle_async_session.execute(
+        "INSERT INTO test_table (id, name, value) VALUES (1, :1, :2)", ("oracle_lock", 100)
+    )
+
+    try:
+        await oracle_async_session.begin()
+
+        # Test basic FOR UPDATE
+        result = await oracle_async_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "oracle_lock").for_update()
+        )
+        assert result is not None
+        assert result["NAME"] == "oracle_lock"
+        assert result["VALUE"] == 100
+
+        await oracle_async_session.commit()
+    except Exception:
+        await oracle_async_session.rollback()
+        raise
+    finally:
+        await oracle_async_session.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        )
+
+
+async def test_oracle_for_update_nowait(oracle_async_session: OracleAsyncDriver) -> None:
+    """Test FOR UPDATE NOWAIT with Oracle."""
+    from sqlspec import sql
+
+    # Setup test table
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    await oracle_async_session.execute_script("""
+        CREATE TABLE test_table (
+            id NUMBER PRIMARY KEY,
+            name VARCHAR2(50),
+            value NUMBER
+        )
+    """)
+
+    # Insert test data
+    await oracle_async_session.execute(
+        "INSERT INTO test_table (id, name, value) VALUES (1, :1, :2)", ("oracle_nowait", 200)
+    )
+
+    try:
+        await oracle_async_session.begin()
+
+        # Test FOR UPDATE NOWAIT
+        result = await oracle_async_session.select_one(
+            sql.select("*").from_("test_table").where_eq("name", "oracle_nowait").for_update(nowait=True)
+        )
+        assert result is not None
+        assert result["NAME"] == "oracle_nowait"
+
+        await oracle_async_session.commit()
+    except Exception:
+        await oracle_async_session.rollback()
+        raise
+    finally:
+        await oracle_async_session.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        )
+
+
+async def test_oracle_for_share_locking_unsupported(oracle_async_session: OracleAsyncDriver) -> None:
+    """Test that FOR SHARE is not supported in Oracle and raises expected error."""
+    from sqlspec import sql
+    from sqlspec.exceptions import SQLSpecError
+
+    # Setup test table
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    await oracle_async_session.execute_script("""
+        CREATE TABLE test_table (
+            id NUMBER PRIMARY KEY,
+            name VARCHAR2(50),
+            value NUMBER
+        )
+    """)
+
+    # Insert test data
+    await oracle_async_session.execute(
+        "INSERT INTO test_table (id, name, value) VALUES (1, :1, :2)", ("oracle_share", 300)
+    )
+
+    try:
+        await oracle_async_session.begin()
+
+        # Test FOR SHARE - Oracle doesn't support this syntax, should raise ORA-02000
+        # Note: Oracle only supports FOR UPDATE for row-level locking
+        with pytest.raises(SQLSpecError, match=r"ORA-02000.*missing COMPRESS or UPDATE keyword"):
+            await oracle_async_session.select_one(
+                sql.select("id", "name", "value").from_("test_table").where_eq("name", "oracle_share").for_share()
+            )
+
+        await oracle_async_session.rollback()
+    except Exception:
+        await oracle_async_session.rollback()
+        raise
+    finally:
+        await oracle_async_session.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        )

@@ -11,7 +11,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec.builder._parsing_utils import parse_order_expression
+from sqlspec.builder._parsing_utils import extract_expression, parse_order_expression
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
@@ -29,7 +29,6 @@ class OrderByClauseMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
     _expression: Optional[exp.Expression]
 
     def order_by(self, *items: Union[str, exp.Ordered, "Column"], desc: bool = False) -> Self:
@@ -58,9 +57,7 @@ class OrderByClauseMixin:
                     order_item = order_item.desc()
             else:
                 # Extract expression from Column objects or use as-is for sqlglot expressions
-                from sqlspec._sql import SQLFactory
-
-                extracted_item = SQLFactory._extract_expression(item)
+                extracted_item = extract_expression(item)
                 order_item = extracted_item
                 if desc and not isinstance(item, exp.Ordered):
                     order_item = order_item.desc()
@@ -75,7 +72,6 @@ class LimitOffsetClauseMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
     _expression: Optional[exp.Expression]
 
     def limit(self, value: int) -> Self:
@@ -122,7 +118,6 @@ class ReturningClauseMixin:
     """Mixin providing RETURNING clause."""
 
     __slots__ = ()
-    # Type annotation for PyRight - this will be provided by the base class
     _expression: Optional[exp.Expression]
 
     def returning(self, *columns: Union[str, exp.Expression, "Column", "ExpressionWrapper", "Case"]) -> Self:
@@ -145,8 +140,6 @@ class ReturningClauseMixin:
             msg = "RETURNING is only supported for INSERT, UPDATE, and DELETE statements."
             raise SQLBuilderError(msg)
         # Extract expressions from various wrapper types
-        from sqlspec._sql import SQLFactory
-
-        returning_exprs = [SQLFactory._extract_expression(c) for c in columns]
+        returning_exprs = [extract_expression(c) for c in columns]
         self._expression.set("returning", exp.Returning(expressions=returning_exprs))
         return self
