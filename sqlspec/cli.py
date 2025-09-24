@@ -4,8 +4,6 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from sqlspec.utils.sync_tools import run_
-
 if TYPE_CHECKING:
     from click import Group
 
@@ -289,6 +287,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     ) -> None:
         """Show current database revision."""
         from sqlspec.migrations.commands import create_migration_commands
+        from sqlspec.utils.sync_tools import run_
 
         ctx = click.get_current_context()
 
@@ -317,7 +316,6 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                     except Exception as e:
                         console.print(f"[red]✗ Failed to get current revision for {config_name}: {e}[/]")
             else:
-                # Single config operation
                 console.rule("[yellow]Listing current revision[/]", align="left")
                 sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
                 migration_commands = create_migration_commands(config=sqlspec_config)
@@ -344,6 +342,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         from rich.prompt import Confirm
 
         from sqlspec.migrations.commands import create_migration_commands
+        from sqlspec.utils.sync_tools import run_
 
         ctx = click.get_current_context()
 
@@ -414,6 +413,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         from rich.prompt import Confirm
 
         from sqlspec.migrations.commands import create_migration_commands
+        from sqlspec.utils.sync_tools import run_
 
         ctx = click.get_current_context()
 
@@ -470,6 +470,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     def stamp(bind_key: Optional[str], revision: str) -> None:  # pyright: ignore[reportUnusedFunction]
         """Stamp the revision table with the given revision."""
         from sqlspec.migrations.commands import create_migration_commands
+        from sqlspec.utils.sync_tools import run_
 
         ctx = click.get_current_context()
 
@@ -492,6 +493,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         from rich.prompt import Confirm
 
         from sqlspec.migrations.commands import create_migration_commands
+        from sqlspec.utils.sync_tools import run_
 
         ctx = click.get_current_context()
 
@@ -533,6 +535,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         from rich.prompt import Prompt
 
         from sqlspec.migrations.commands import create_migration_commands
+        from sqlspec.utils.sync_tools import run_
 
         ctx = click.get_current_context()
 

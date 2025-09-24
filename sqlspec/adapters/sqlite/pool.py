@@ -1,5 +1,6 @@
 """SQLite database configuration with thread-local connections."""
 
+import contextlib
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -40,7 +41,7 @@ class SqliteConnectionPool:
     __slots__ = ("_connection_parameters", "_enable_optimizations", "_thread_local")
 
     def __init__(
-        self, connection_parameters: "dict[str, Any]", enable_optimizations: bool = True, **_kwargs: Any
+        self, connection_parameters: "dict[str, Any]", enable_optimizations: bool = True, **kwargs: Any
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -49,8 +50,6 @@ class SqliteConnectionPool:
             enable_optimizations: Whether to apply performance PRAGMAs
             **kwargs: Ignored pool parameters for compatibility
         """
-        # Default check_same_thread to False if not specified to support async operations
-        # This is safe because we use thread-local storage to prevent actual sharing
         if "check_same_thread" not in connection_parameters:
             connection_parameters = {**connection_parameters, "check_same_thread": False}
         self._connection_parameters = connection_parameters
@@ -66,7 +65,6 @@ class SqliteConnectionPool:
             is_memory = database == ":memory:" or database.startswith("file::memory:")
 
             if not is_memory:
-                # Use DELETE mode instead of WAL for better compatibility with async operations
                 connection.execute("PRAGMA journal_mode = DELETE")
                 connection.execute("PRAGMA busy_timeout = 5000")
                 connection.execute("PRAGMA optimize")
@@ -105,13 +103,9 @@ class SqliteConnectionPool:
         try:
             yield connection
         finally:
-            # Ensure any pending transactions are committed
-            try:
+            with contextlib.suppress(Exception):
                 if connection.in_transaction:
                     connection.commit()
-            except Exception:  # noqa: S110
-                # Ignore cleanup errors - connection might be in inconsistent state
-                pass
 
     def close(self) -> None:
         """Close the thread-local connection if it exists."""
