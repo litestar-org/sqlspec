@@ -477,7 +477,9 @@ def test_sqlite_for_update_generates_sql_but_may_not_work(sqlite_session: Sqlite
 
     # Should generate SQL without throwing an error
     stmt = query.build()
-    assert "FOR UPDATE" in stmt.sql
+    # SQLite doesn't support FOR UPDATE, so SQLGlot strips it out (expected behavior)
+    assert "FOR UPDATE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
 
     # Should execute without error (SQLite just ignores the FOR UPDATE)
     result = sqlite_session.execute(query)
@@ -498,7 +500,9 @@ def test_sqlite_for_share_generates_sql_but_may_not_work(sqlite_session: SqliteD
 
     # Should generate SQL without throwing an error
     stmt = query.build()
-    assert "FOR SHARE" in stmt.sql
+    # SQLite doesn't support FOR SHARE, so SQLGlot strips it out (expected behavior)
+    assert "FOR SHARE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
 
     # Should execute without error (SQLite just ignores the FOR SHARE)
     result = sqlite_session.execute(query)

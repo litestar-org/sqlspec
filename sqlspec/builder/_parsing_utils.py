@@ -199,4 +199,106 @@ def parse_condition_expression(
     return exp.condition(condition_input)
 
 
-__all__ = ("parse_column_expression", "parse_condition_expression", "parse_order_expression", "parse_table_expression")
+def extract_sql_object_expression(value: Any, builder: Optional[Any] = None) -> exp.Expression:
+    """Extract SQLGlot expression from SQL object value with parameter merging.
+
+    Handles the common pattern of:
+    1. Check if value has expression and SQL attributes
+    2. Try to get expression first, merge parameters if available
+    3. Fall back to parsing raw SQL text if expression is None
+    4. Merge parameters in both cases
+    5. Handle callable SQL text
+
+    This consolidates duplicated logic across builder files that process
+    SQL objects (like those from sql.raw() calls).
+
+    Args:
+        value: The SQL object value to process
+        builder: Optional builder instance for parameter merging (must have add_parameter method)
+
+    Returns:
+        SQLGlot Expression extracted from the SQL object
+
+    Raises:
+        ValueError: If the value doesn't appear to be a SQL object
+    """
+    if not has_expression_and_sql(value):
+        msg = f"Value does not have both expression and sql attributes: {type(value)}"
+        raise ValueError(msg)
+
+    # Try expression attribute first
+    expression = getattr(value, "expression", None)
+    if expression is not None and isinstance(expression, exp.Expression):
+        # Merge parameters if available and builder supports it
+        if builder and hasattr(value, "parameters") and hasattr(builder, "add_parameter"):
+            sql_parameters = getattr(value, "parameters", {})
+            for param_name, param_value in sql_parameters.items():
+                builder.add_parameter(param_value, name=param_name)
+        return cast("exp.Expression", expression)
+
+    # Fall back to parsing raw SQL text
+    sql_text = getattr(value, "sql", "")
+
+    # Merge parameters even when parsing raw SQL
+    if builder and hasattr(value, "parameters") and hasattr(builder, "add_parameter"):
+        sql_parameters = getattr(value, "parameters", {})
+        for param_name, param_value in sql_parameters.items():
+            builder.add_parameter(param_value, name=param_name)
+
+    # Handle callable SQL text
+    if callable(sql_text):
+        sql_text = str(value)
+
+    # Parse SQL text and return as expression
+    return exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+
+
+def extract_expression(value: Any) -> exp.Expression:
+    """Extract SQLGlot expression from value, handling wrapper types.
+
+    Args:
+        value: String, SQLGlot expression, or wrapper type.
+
+    Returns:
+        Raw SQLGlot expression.
+    """
+    from sqlspec.builder._column import Column
+    from sqlspec.builder._expression_wrappers import ExpressionWrapper
+    from sqlspec.builder.mixins._select_operations import Case
+
+    if isinstance(value, str):
+        return exp.column(value)
+    if isinstance(value, Column):
+        return value.sqlglot_expression
+    if isinstance(value, ExpressionWrapper):
+        return value.expression
+    if isinstance(value, Case):
+        return exp.Case(ifs=value.conditions, default=value.default)
+    if isinstance(value, exp.Expression):
+        return value
+    return exp.convert(value)
+
+
+def to_expression(value: Any) -> exp.Expression:
+    """Convert a Python value to a raw SQLGlot expression.
+
+    Args:
+        value: Python value or SQLGlot expression to convert.
+
+    Returns:
+        Raw SQLGlot expression.
+    """
+    if isinstance(value, exp.Expression):
+        return value
+    return exp.convert(value)
+
+
+__all__ = (
+    "extract_expression",
+    "extract_sql_object_expression",
+    "parse_column_expression",
+    "parse_condition_expression",
+    "parse_order_expression",
+    "parse_table_expression",
+    "to_expression",
+)

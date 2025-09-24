@@ -11,8 +11,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec._sql import SQLFactory
-from sqlspec.builder._parsing_utils import parse_order_expression
+from sqlspec.builder._parsing_utils import extract_expression, parse_order_expression
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
@@ -58,7 +57,7 @@ class OrderByClauseMixin:
                     order_item = order_item.desc()
             else:
                 # Extract expression from Column objects or use as-is for sqlglot expressions
-                extracted_item = SQLFactory._extract_expression(item)
+                extracted_item = extract_expression(item)
                 order_item = extracted_item
                 if desc and not isinstance(item, exp.Ordered):
                     order_item = order_item.desc()
@@ -141,6 +140,6 @@ class ReturningClauseMixin:
             msg = "RETURNING is only supported for INSERT, UPDATE, and DELETE statements."
             raise SQLBuilderError(msg)
         # Extract expressions from various wrapper types
-        returning_exprs = [SQLFactory._extract_expression(c) for c in columns]
+        returning_exprs = [extract_expression(c) for c in columns]
         self._expression.set("returning", exp.Returning(expressions=returning_exprs))
         return self

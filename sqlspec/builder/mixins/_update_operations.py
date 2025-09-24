@@ -6,12 +6,13 @@ table specification, SET clauses, and FROM clauses.
 """
 
 from collections.abc import Mapping
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Union
 
 from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
+from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_query_builder_parameters
 
@@ -91,20 +92,7 @@ class UpdateSetClauseMixin:
                     self.add_parameter(p_value, name=p_name)
             return value_expr
         if hasattr(val, "expression") and hasattr(val, "sql"):
-            expression = getattr(val, "expression", None)
-            if expression is not None and isinstance(expression, exp.Expression):
-                if hasattr(val, "parameters"):
-                    sql_parameters = getattr(val, "parameters", {})
-                    for param_name, param_value in sql_parameters.items():
-                        self.add_parameter(param_value, name=param_name)
-                return cast("exp.Expression", expression)
-            sql_text = getattr(val, "sql", "")
-            if hasattr(val, "parameters"):
-                sql_parameters = getattr(val, "parameters", {})
-                for param_name, param_value in sql_parameters.items():
-                    self.add_parameter(param_value, name=param_name)
-            parsed_expr = exp.maybe_parse(sql_text)
-            return parsed_expr if parsed_expr is not None else exp.convert(str(sql_text))
+            return extract_sql_object_expression(val, builder=self)
         column_name = col if isinstance(col, str) else str(col)
         if "." in column_name:
             column_name = column_name.split(".")[-1]

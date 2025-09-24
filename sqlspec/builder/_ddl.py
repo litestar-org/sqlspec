@@ -1403,8 +1403,8 @@ class AlterTable(DDLBuilder):
 
         condition_str: Optional[str] = None
         if condition is not None:
-            if hasattr(condition, "sqlglot_expression"):
-                sqlglot_expr = getattr(condition, "sqlglot_expression", None)
+            if has_sqlglot_expression(condition):
+                sqlglot_expr = condition.sqlglot_expression
                 condition_str = sqlglot_expr.sql(dialect=self.dialect) if sqlglot_expr else str(condition)
             else:
                 condition_str = str(condition)

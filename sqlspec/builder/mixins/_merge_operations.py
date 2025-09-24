@@ -11,6 +11,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
+from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_query_builder_parameters
 
@@ -301,22 +302,7 @@ class MergeMatchedClauseMixin:
         update_expressions: list[exp.EQ] = []
         for col, val in all_values.items():
             if hasattr(val, "expression") and hasattr(val, "sql"):
-                expression = getattr(val, "expression", None)
-                if expression is not None and isinstance(expression, exp.Expression):
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
-                    value_expr = expression
-                else:
-                    sql_text = getattr(val, "sql", "")
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
-                    if callable(sql_text):
-                        sql_text = str(val)
-                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+                value_expr = extract_sql_object_expression(val, builder=self)
             elif isinstance(val, exp.Expression):
                 value_expr = val
             elif isinstance(val, str) and self._is_column_reference(val):
@@ -632,22 +618,7 @@ class MergeNotMatchedBySourceClauseMixin:
         update_expressions: list[exp.EQ] = []
         for col, val in all_values.items():
             if hasattr(val, "expression") and hasattr(val, "sql"):
-                expression = getattr(val, "expression", None)
-                if expression is not None and isinstance(expression, exp.Expression):
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
-                    value_expr = expression
-                else:
-                    sql_text = getattr(val, "sql", "")
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self.add_parameter(param_value, name=param_name)
-                    if callable(sql_text):
-                        sql_text = str(val)
-                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+                value_expr = extract_sql_object_expression(val, builder=self)
             elif isinstance(val, exp.Expression):
                 value_expr = val
             elif isinstance(val, str) and self._is_column_reference(val):

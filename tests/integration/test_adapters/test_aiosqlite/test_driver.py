@@ -448,7 +448,9 @@ async def test_aiosqlite_for_update_generates_sql(aiosqlite_session: AiosqliteDr
     # Should generate SQL even though SQLite doesn't support the functionality
     query = sql.select("*").from_("test_table").where_eq("name", "aiosqlite_test").for_update()
     stmt = query.build()
-    assert "FOR UPDATE" in stmt.sql
+    # SQLite doesn't support FOR UPDATE, so SQLGlot strips it out (expected behavior)
+    assert "FOR UPDATE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
 
     # Should execute without error (SQLite just ignores the FOR UPDATE)
     result = await aiosqlite_session.execute(query)
@@ -477,7 +479,9 @@ async def test_aiosqlite_for_share_generates_sql_but_may_not_work(aiosqlite_sess
     # Should generate SQL even though SQLite doesn't support the functionality
     query = sql.select("*").from_("test_table").where_eq("name", "aiosqlite_share").for_share()
     stmt = query.build()
-    assert "FOR SHARE" in stmt.sql
+    # SQLite doesn't support FOR SHARE, so SQLGlot strips it out (expected behavior)
+    assert "FOR SHARE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
 
     # Should execute without error (SQLite just ignores the FOR SHARE)
     result = await aiosqlite_session.execute(query)

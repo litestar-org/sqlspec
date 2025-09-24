@@ -15,9 +15,9 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec import sql as sql_factory
 from sqlspec.builder._parsing_utils import extract_column_name, parse_column_expression, parse_condition_expression
 from sqlspec.core.parameters import ParameterStyle, ParameterValidator
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
@@ -325,7 +325,7 @@ class WhereClauseMixin:
                     param_dict[f"param_{i}"] = value
 
                 # Create SQL object with parameters that will be processed correctly
-                condition = sql_factory.raw(condition, **param_dict)
+                condition = SQL(condition, param_dict)
                 # Fall through to existing SQL object handling logic
 
             elif len(values) == 1 and not kwargs:
@@ -841,7 +841,7 @@ class WhereClauseMixin:
                     param_dict[f"param_{i}"] = value
 
                 # Create SQL object with parameters that will be processed correctly
-                condition = sql_factory.raw(condition, **param_dict)
+                condition = SQL(condition, param_dict)
                 # Fall through to existing SQL object handling logic
 
             elif len(values) == 1 and not kwargs:

@@ -117,8 +117,7 @@ class CommonTableExpressionMixin:
             if recursive:
                 existing_with.set("recursive", recursive)
         else:
-            # Only SELECT, INSERT, UPDATE support WITH clauses
-            if hasattr(expression, "with_") and isinstance(expression, (exp.Select, exp.Insert, exp.Update)):
+            if isinstance(expression, (exp.Select, exp.Insert, exp.Update)):
                 updated_expression = expression.with_(cte_alias_expr, as_=name, copy=False)
                 builder.set_expression(updated_expression)
                 if recursive:

@@ -5,7 +5,7 @@ parameter binding and validation.
 """
 
 import re
-from typing import Any, Callable, Final, Optional, Union
+from typing import Any, Callable, Final, Optional, Union, cast
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -170,6 +170,30 @@ class Select(
 
         return SafeQuery(sql=modified_sql, parameters=safe_query.parameters, dialect=safe_query.dialect)
 
+    def _validate_select_expression(self) -> None:
+        """Validate that current expression is a valid SELECT statement.
+
+        Raises:
+            SQLBuilderError: If expression is None or not a SELECT statement
+        """
+        if self._expression is None or not isinstance(self._expression, exp.Select):
+            msg = "Locking clauses can only be applied to SELECT statements"
+            raise SQLBuilderError(msg)
+
+    def _validate_lock_parameters(self, skip_locked: bool, nowait: bool) -> None:
+        """Validate locking parameters for conflicting options.
+
+        Args:
+            skip_locked: Whether SKIP LOCKED option is enabled
+            nowait: Whether NOWAIT option is enabled
+
+        Raises:
+            SQLBuilderError: If both skip_locked and nowait are True
+        """
+        if skip_locked and nowait:
+            msg = "Cannot use both skip_locked and nowait"
+            raise SQLBuilderError(msg)
+
     def for_update(
         self, *, skip_locked: bool = False, nowait: bool = False, of: "Optional[Union[str, list[str]]]" = None
     ) -> "Self":
@@ -182,17 +206,12 @@ class Select(
 
         Returns:
             Self for method chaining
-
-        Raises:
-            SQLBuilderError: If not applied to SELECT statement or invalid parameters
         """
-        if self._expression is None or not isinstance(self._expression, exp.Select):
-            msg = "FOR UPDATE can only be applied to SELECT statements"
-            raise SQLBuilderError(msg)
+        self._validate_select_expression()
+        self._validate_lock_parameters(skip_locked, nowait)
 
-        if skip_locked and nowait:
-            msg = "Cannot use both skip_locked and nowait"
-            raise SQLBuilderError(msg)
+        assert self._expression is not None
+        select_expr = cast("exp.Select", self._expression)
 
         lock_args = {"update": True}
 
@@ -207,9 +226,9 @@ class Select(
 
         lock = exp.Lock(**lock_args)
 
-        current_locks = self._expression.args.get("locks", [])
+        current_locks = select_expr.args.get("locks", [])
         current_locks.append(lock)
-        self._expression.set("locks", current_locks)
+        select_expr.set("locks", current_locks)
 
         return self
 
@@ -225,17 +244,12 @@ class Select(
 
         Returns:
             Self for method chaining
-
-        Raises:
-            SQLBuilderError: If not applied to SELECT statement or invalid parameters
         """
-        if self._expression is None or not isinstance(self._expression, exp.Select):
-            msg = "FOR SHARE can only be applied to SELECT statements"
-            raise SQLBuilderError(msg)
+        self._validate_select_expression()
+        self._validate_lock_parameters(skip_locked, nowait)
 
-        if skip_locked and nowait:
-            msg = "Cannot use both skip_locked and nowait"
-            raise SQLBuilderError(msg)
+        assert self._expression is not None
+        select_expr = cast("exp.Select", self._expression)
 
         lock_args = {"update": False}
 
@@ -250,9 +264,9 @@ class Select(
 
         lock = exp.Lock(**lock_args)
 
-        current_locks = self._expression.args.get("locks", [])
+        current_locks = select_expr.args.get("locks", [])
         current_locks.append(lock)
-        self._expression.set("locks", current_locks)
+        select_expr.set("locks", current_locks)
 
         return self
 
@@ -264,19 +278,17 @@ class Select(
 
         Returns:
             Self for method chaining
-
-        Raises:
-            SQLBuilderError: If not applied to SELECT statement
         """
-        if self._expression is None or not isinstance(self._expression, exp.Select):
-            msg = "FOR KEY SHARE can only be applied to SELECT statements"
-            raise SQLBuilderError(msg)
+        self._validate_select_expression()
+
+        assert self._expression is not None
+        select_expr = cast("exp.Select", self._expression)
 
         lock = exp.Lock(update=False, key=True)
 
-        current_locks = self._expression.args.get("locks", [])
+        current_locks = select_expr.args.get("locks", [])
         current_locks.append(lock)
-        self._expression.set("locks", current_locks)
+        select_expr.set("locks", current_locks)
 
         return self
 
@@ -289,18 +301,16 @@ class Select(
 
         Returns:
             Self for method chaining
-
-        Raises:
-            SQLBuilderError: If not applied to SELECT statement
         """
-        if self._expression is None or not isinstance(self._expression, exp.Select):
-            msg = "FOR NO KEY UPDATE can only be applied to SELECT statements"
-            raise SQLBuilderError(msg)
+        self._validate_select_expression()
+
+        assert self._expression is not None
+        select_expr = cast("exp.Select", self._expression)
 
         lock = exp.Lock(update=True, key=False)
 
-        current_locks = self._expression.args.get("locks", [])
+        current_locks = select_expr.args.get("locks", [])
         current_locks.append(lock)
-        self._expression.set("locks", current_locks)
+        select_expr.set("locks", current_locks)
 
         return self

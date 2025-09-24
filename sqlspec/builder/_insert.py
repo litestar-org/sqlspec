@@ -10,6 +10,7 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
+from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder.mixins import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin, ReturningClauseMixin
 from sqlspec.core.result import SQLResult
 from sqlspec.exceptions import SQLBuilderError
@@ -129,7 +130,7 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
 
         if len(values) == 1:
             values_0 = values[0]
-            if hasattr(values_0, "items") and hasattr(values_0, "keys"):
+            if isinstance(values_0, dict):
                 return self.values_from_dict(values_0)
 
         insert_expr = self.get_insert_expression()
@@ -143,17 +144,8 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
             if isinstance(value, exp.Expression):
                 value_placeholders.append(value)
             elif has_expression_and_sql(value):
-                expression = getattr(value, "expression", None)
-                if expression is not None and isinstance(expression, exp.Expression):
-                    self._merge_sql_object_parameters(value)
-                    value_placeholders.append(expression)
-                else:
-                    sql_text = getattr(value, "sql", "")
-                    self._merge_sql_object_parameters(value)
-                    if callable(sql_text):
-                        sql_text = str(value)
-                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
-                    value_placeholders.append(value_expr)
+                value_expr = extract_sql_object_expression(value, builder=self)
+                value_placeholders.append(value_expr)
             else:
                 if self._columns and i < len(self._columns):
                     column_str = str(self._columns[i])
@@ -301,30 +293,17 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         set_expressions = []
         for col, val in kwargs.items():
             if has_expression_and_sql(val):
-                expression = getattr(val, "expression", None)
-                if expression is not None and isinstance(expression, exp.Expression):
-                    self._merge_sql_object_parameters(val)
-                    value_expr = expression
-                else:
-                    sql_text = getattr(val, "sql", "")
-                    self._merge_sql_object_parameters(val)
-                    if callable(sql_text):
-                        sql_text = str(val)
-                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+                value_expr = extract_sql_object_expression(val, builder=self)
             elif isinstance(val, exp.Expression):
                 value_expr = val
             else:
-                param_name = self._generate_unique_parameter_name(col)
+                param_name = self.generate_unique_parameter_name(col)
                 _, param_name = self.add_parameter(val, name=param_name)
                 value_expr = exp.Placeholder(this=param_name)
 
             set_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
 
-        on_conflict = exp.OnConflict(
-            duplicate=True,
-            action=exp.var("UPDATE"),
-            expressions=set_expressions or None,
-        )
+        on_conflict = exp.OnConflict(duplicate=True, action=exp.var("UPDATE"), expressions=set_expressions or None)
 
         insert_expr.set("conflict", on_conflict)
 
@@ -394,22 +373,7 @@ class ConflictBuilder:
         set_expressions = []
         for col, val in kwargs.items():
             if has_expression_and_sql(val):
-                expression = getattr(val, "expression", None)
-                if expression is not None and isinstance(expression, exp.Expression):
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self._insert_builder.add_parameter(param_value, name=param_name)
-                    value_expr = expression
-                else:
-                    sql_text = getattr(val, "sql", "")
-                    if hasattr(val, "parameters"):
-                        sql_parameters = getattr(val, "parameters", {})
-                        for param_name, param_value in sql_parameters.items():
-                            self._insert_builder.add_parameter(param_value, name=param_name)
-                    if callable(sql_text):
-                        sql_text = str(val)
-                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+                value_expr = extract_sql_object_expression(val, builder=self._insert_builder)
             elif isinstance(val, exp.Expression):
                 value_expr = val
             else:

@@ -368,9 +368,10 @@ def test_oracle_sync_for_update_nowait(oracle_sync_session: OracleSyncDriver) ->
         )
 
 
-def test_oracle_sync_for_share_locking(oracle_sync_session: OracleSyncDriver) -> None:
-    """Test FOR SHARE row locking with Oracle (sync)."""
+def test_oracle_sync_for_share_locking_unsupported(oracle_sync_session: OracleSyncDriver) -> None:
+    """Test that FOR SHARE is not supported in Oracle and raises expected error (sync)."""
     from sqlspec import sql
+    from sqlspec.exceptions import SQLSpecError
 
     # Setup test table
     oracle_sync_session.execute_script(
@@ -392,15 +393,14 @@ def test_oracle_sync_for_share_locking(oracle_sync_session: OracleSyncDriver) ->
     try:
         oracle_sync_session.begin()
 
-        # Test FOR SHARE (Oracle uses FOR UPDATE for shared locks too)
-        result = oracle_sync_session.select_one(
-            sql.select("id", "name", "value").from_("test_table").where_eq("name", "oracle_sync_share").for_share()
-        )
-        assert result is not None
-        assert result["NAME"] == "oracle_sync_share"
-        assert result["VALUE"] == 300
+        # Test FOR SHARE - Oracle doesn't support this syntax, should raise ORA-02000
+        # Note: Oracle only supports FOR UPDATE for row-level locking
+        with pytest.raises(SQLSpecError, match=r"ORA-02000.*missing COMPRESS or UPDATE keyword"):
+            oracle_sync_session.select_one(
+                sql.select("id", "name", "value").from_("test_table").where_eq("name", "oracle_sync_share").for_share()
+            )
 
-        oracle_sync_session.commit()
+        oracle_sync_session.rollback()
     except Exception:
         oracle_sync_session.rollback()
         raise

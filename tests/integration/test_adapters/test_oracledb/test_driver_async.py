@@ -374,9 +374,10 @@ async def test_oracle_for_update_nowait(oracle_async_session: OracleAsyncDriver)
         )
 
 
-async def test_oracle_for_share_locking(oracle_async_session: OracleAsyncDriver) -> None:
-    """Test FOR SHARE row locking with Oracle."""
+async def test_oracle_for_share_locking_unsupported(oracle_async_session: OracleAsyncDriver) -> None:
+    """Test that FOR SHARE is not supported in Oracle and raises expected error."""
     from sqlspec import sql
+    from sqlspec.exceptions import SQLSpecError
 
     # Setup test table
     await oracle_async_session.execute_script(
@@ -398,15 +399,14 @@ async def test_oracle_for_share_locking(oracle_async_session: OracleAsyncDriver)
     try:
         await oracle_async_session.begin()
 
-        # Test FOR SHARE (Oracle uses FOR UPDATE for shared locks too)
-        result = await oracle_async_session.select_one(
-            sql.select("id", "name", "value").from_("test_table").where_eq("name", "oracle_share").for_share()
-        )
-        assert result is not None
-        assert result["NAME"] == "oracle_share"
-        assert result["VALUE"] == 300
+        # Test FOR SHARE - Oracle doesn't support this syntax, should raise ORA-02000
+        # Note: Oracle only supports FOR UPDATE for row-level locking
+        with pytest.raises(SQLSpecError, match=r"ORA-02000.*missing COMPRESS or UPDATE keyword"):
+            await oracle_async_session.select_one(
+                sql.select("id", "name", "value").from_("test_table").where_eq("name", "oracle_share").for_share()
+            )
 
-        await oracle_async_session.commit()
+        await oracle_async_session.rollback()
     except Exception:
         await oracle_async_session.rollback()
         raise
