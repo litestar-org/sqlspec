@@ -149,6 +149,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         migration_config: Optional[dict[str, Any]] = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[Union[DuckDBDriverFeatures, dict[str, Any]]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
         """Initialize DuckDB configuration."""
         if pool_config is None:
@@ -160,6 +161,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             pool_config["database"] = ":memory:shared_db"
 
         super().__init__(
+            bind_key=bind_key,
             pool_config=dict(pool_config),
             pool_instance=pool_instance,
             migration_config=migration_config,

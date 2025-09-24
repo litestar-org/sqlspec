@@ -2,6 +2,7 @@
 import inspect
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 if TYPE_CHECKING:
@@ -51,6 +52,14 @@ def get_sqlspec_group() -> "Group":
 
         console = get_console()
         ctx.ensure_object(dict)
+
+        # Add current working directory to sys.path to allow loading local config modules
+        cwd = str(Path.cwd())
+        cwd_added = False
+        if cwd not in sys.path:
+            sys.path.insert(0, cwd)
+            cwd_added = True
+
         try:
             config_result = resolve_config_sync(config)
             if isinstance(config_result, Sequence) and not isinstance(config_result, str):
@@ -63,17 +72,19 @@ def get_sqlspec_group() -> "Group":
             if validate_config:
                 console.print(f"[green]✓[/] Successfully loaded {len(ctx.obj['configs'])} config(s)")
                 for i, cfg in enumerate(ctx.obj["configs"]):
-                    config_name = getattr(cfg, "name", None) or getattr(cfg, "bind_key", None) or f"config-{i}"
+                    config_name = cfg.bind_key or f"config-{i}"
                     config_type = type(cfg).__name__
-                    is_async = "Async" in config_type or (
-                        hasattr(cfg, "driver_type") and "Async" in getattr(cfg.driver_type, "__name__", "")
-                    )
+                    is_async = cfg.is_async
                     execution_hint = "[dim cyan](async-capable)[/]" if is_async else "[dim](sync)[/]"
                     console.print(f"  [dim]•[/] {config_name}: {config_type} {execution_hint}")
 
         except (ImportError, ConfigResolverError) as e:
             console.print(f"[red]Error loading config: {e}[/]")
             ctx.exit(1)
+        finally:
+            # Clean up: remove the cwd from sys.path if we added it
+            if cwd_added and cwd in sys.path and sys.path[0] == cwd:
+                sys.path.remove(cwd)
 
     return sqlspec_group
 
@@ -153,7 +164,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         else:
             config = None
             for cfg in configs:
-                config_name = getattr(cfg, "name", None) or getattr(cfg, "bind_key", None)
+                config_name = cfg.bind_key
                 if config_name == bind_key:
                     config = cfg
                     break
@@ -189,15 +200,11 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
             # Extract the actual config from DatabaseConfig wrapper if needed
             actual_config = config.config if isinstance(config, DatabaseConfig) else config
 
-            migration_config = getattr(actual_config, "migration_config", None)
+            migration_config = actual_config.migration_config
             if migration_config:
                 enabled = migration_config.get("enabled", True)
                 if not enabled_only or enabled:
-                    config_name = (
-                        getattr(actual_config, "name", None)
-                        or getattr(actual_config, "bind_key", None)
-                        or str(type(actual_config).__name__)
-                    )
+                    config_name = actual_config.bind_key or str(type(actual_config).__name__)
                     migration_configs.append((config_name, actual_config))
 
         return migration_configs
@@ -492,6 +499,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         """Initialize the database migrations."""
         from rich.prompt import Confirm
 
+        from sqlspec.extensions.litestar.config import DatabaseConfig
         from sqlspec.migrations.commands import create_migration_commands
         from sqlspec.utils.sync_tools import run_
 
@@ -510,7 +518,6 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                     if bind_key is not None
                     else cast("click.Context", ctx).obj["configs"]
                 )
-                from sqlspec.extensions.litestar.config import DatabaseConfig
 
                 for config in configs:
                     # Extract the actual config from DatabaseConfig wrapper if needed
@@ -554,12 +561,25 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         run_(_create_revision)()
 
     @database_group.command(name="show-config", help="Show all configurations with migrations enabled.")
-    def show_config() -> None:  # pyright: ignore[reportUnusedFunction]
+    @bind_key_option
+    def show_config(bind_key: Optional[str] = None) -> None:  # pyright: ignore[reportUnusedFunction]
         """Show and display all configurations with migrations enabled."""
         from rich.table import Table
 
         ctx = click.get_current_context()
-        migration_configs = get_configs_with_migrations(cast("click.Context", ctx))
+
+        # If bind_key is provided, filter to only that config
+        if bind_key is not None:
+            get_config_by_bind_key(cast("click.Context", ctx), bind_key)
+            # Convert single config to list format for compatibility
+            all_configs = cast("click.Context", ctx).obj["configs"]
+            migration_configs = []
+            for cfg in all_configs:
+                config_name = cfg.bind_key
+                if config_name == bind_key and hasattr(cfg, "migration_config") and cfg.migration_config:
+                    migration_configs.append((config_name, cfg))
+        else:
+            migration_configs = get_configs_with_migrations(cast("click.Context", ctx))
 
         if not migration_configs:
             console.print("[yellow]No configurations with migrations detected.[/]")

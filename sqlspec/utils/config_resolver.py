@@ -77,7 +77,10 @@ def resolve_config_sync(
         return _validate_config_result(config_obj, config_path)
 
     try:
-        result = await_(config_obj)() if inspect.iscoroutinefunction(config_obj) else config_obj()
+        if inspect.iscoroutinefunction(config_obj):
+            result = await_(config_obj, raise_sync_error=False)()
+        else:
+            result = config_obj()
     except Exception as e:
         msg = f"Failed to execute callable config '{config_path}': {e}"
         raise ConfigResolverError(msg) from e
@@ -132,4 +135,19 @@ def _is_valid_config(config: Any) -> bool:
     Returns:
         True if object appears to be a valid config.
     """
-    return hasattr(config, "database_url") and hasattr(config, "bind_key") and hasattr(config, "migration_config")
+    # Check for litestar extension DatabaseConfig wrapper
+    nested_config = getattr(config, "config", None)
+    if nested_config is not None and hasattr(nested_config, "migration_config"):
+        return True
+
+    # Check for direct database config with migration support
+    migration_config = getattr(config, "migration_config", None)
+    if migration_config is not None:
+        # Modern SQLSpec config with pool_config
+        if hasattr(config, "pool_config"):
+            return True
+        # Legacy config with database_url and bind_key
+        if hasattr(config, "database_url") and hasattr(config, "bind_key"):
+            return True
+
+    return False

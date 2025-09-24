@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, Optional, TypeVar, Union, cast
 
 from typing_extensions import NotRequired, TypedDict
@@ -11,7 +12,6 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import Awaitable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
-    from pathlib import Path
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.loader import SQLFileLoader
@@ -89,6 +89,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     __slots__ = (
         "_migration_commands",
         "_migration_loader",
+        "bind_key",
         "driver_features",
         "migration_config",
         "pool_instance",
@@ -105,6 +106,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_native_arrow_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
+    bind_key: "Optional[str]"
     statement_config: "StatementConfig"
     pool_instance: "Optional[PoolT]"
     migration_config: "Union[dict[str, Any], MigrationConfig]"
@@ -225,7 +227,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         Args:
             *paths: One or more file paths or directory paths to load migration SQL files from.
         """
-        from pathlib import Path
 
         loader = self._ensure_migration_loader()
         for path in paths:
@@ -320,7 +321,9 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
+        self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
         self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
@@ -374,7 +377,9 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
+        self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
         self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
@@ -429,7 +434,9 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
+        self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
         self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
@@ -506,7 +513,9 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
+        self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
         self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}

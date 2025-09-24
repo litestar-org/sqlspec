@@ -62,6 +62,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         migration_config: "Optional[dict[str, Any]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
         """Initialize AioSQLite configuration.
 
@@ -71,6 +72,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             migration_config: Optional migration configuration.
             statement_config: Optional statement configuration.
             driver_features: Optional driver feature configuration.
+            bind_key: Optional unique identifier for this configuration.
         """
         config_dict = dict(pool_config) if pool_config else {}
 
@@ -84,6 +86,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             migration_config=migration_config,
             statement_config=statement_config or aiosqlite_statement_config,
             driver_features=driver_features or {},
+            bind_key=bind_key,
         )
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":
