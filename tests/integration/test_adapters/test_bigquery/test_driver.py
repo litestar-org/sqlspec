@@ -365,31 +365,33 @@ def test_bigquery_analytical_functions(bigquery_session: BigQueryDriver, driver_
 def test_bigquery_for_update_generates_sql_but_unsupported(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:
-    """Test that FOR UPDATE generates SQL for BigQuery but note it's not supported in BigQuery."""
+    """Test that FOR UPDATE is stripped by sqlglot for BigQuery since it's not supported."""
     from sqlspec import sql
 
-    # Create a simple test table - BigQuery doesn't support CREATE TEMP TABLE in the same way
-
-    # Note: We're not actually executing this query as BigQuery doesn't support FOR UPDATE
-    # This test documents that the SQL builder can generate the SQL even for unsupported features
+    # BigQuery doesn't support FOR UPDATE - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").for_update()
     stmt = query.build()
-    assert "FOR UPDATE" in stmt.sql
+
+    # sqlglot now strips out unsupported FOR UPDATE for BigQuery
+    assert "FOR UPDATE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
 
     # Note: BigQuery is a columnar, analytics-focused database that doesn't support row-level locking
-    # The FOR UPDATE clause would be ignored or cause an error in actual BigQuery execution
 
 
 def test_bigquery_for_share_generates_sql_but_unsupported(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:
-    """Test that FOR SHARE generates SQL for BigQuery but note it's not supported."""
+    """Test that FOR SHARE is stripped by sqlglot for BigQuery since it's not supported."""
     from sqlspec import sql
 
-    # Note: This test verifies SQL generation only - BigQuery doesn't support locking
+    # BigQuery doesn't support FOR SHARE - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").for_share()
     stmt = query.build()
-    assert "FOR SHARE" in stmt.sql
+
+    # sqlglot now strips out unsupported FOR SHARE for BigQuery
+    assert "FOR SHARE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
 
     # BigQuery is designed for analytical workloads and doesn't support transactional locking
 
@@ -397,12 +399,16 @@ def test_bigquery_for_share_generates_sql_but_unsupported(
 def test_bigquery_for_update_skip_locked_generates_sql_but_unsupported(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:
-    """Test that FOR UPDATE SKIP LOCKED generates SQL for BigQuery but note it's not supported."""
+    """Test that FOR UPDATE SKIP LOCKED is stripped by sqlglot for BigQuery since it's not supported."""
     from sqlspec import sql
 
-    # Note: This test verifies SQL generation only
+    # BigQuery doesn't support FOR UPDATE SKIP LOCKED - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").for_update(skip_locked=True)
     stmt = query.build()
-    assert stmt.sql is not None
+
+    # sqlglot now strips out unsupported FOR UPDATE for BigQuery
+    assert "FOR UPDATE" not in stmt.sql
+    assert "SKIP LOCKED" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
 
     # BigQuery doesn't support row-level locking or transaction isolation at the row level

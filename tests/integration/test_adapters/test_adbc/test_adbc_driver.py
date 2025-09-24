@@ -424,7 +424,7 @@ def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> 
 
 
 def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
-    """Test that FOR UPDATE generates SQL for ADBC (SQLite backend has limited locking)."""
+    """Test that FOR UPDATE is stripped by sqlglot for ADBC SQLite backend."""
     from sqlspec import sql
 
     # Setup test table
@@ -440,12 +440,15 @@ def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     # Insert test data
     adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("adbc_lock", 100))
 
-    # Should generate SQL even though SQLite backend has limited locking support
+    # SQLite backend doesn't support FOR UPDATE - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").where_eq("name", "adbc_lock").for_update()
     stmt = query.build()
-    assert "FOR UPDATE" in stmt.sql
 
-    # Should execute without error
+    # sqlglot now strips out unsupported FOR UPDATE for SQLite backend
+    assert "FOR UPDATE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
+
+    # Should execute without error (SQLite just ignores the FOR UPDATE)
     result = adbc_sqlite_session.execute(query)
     assert result is not None
     assert len(result.data) == 1
@@ -453,7 +456,7 @@ def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
 
 
 def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
-    """Test that FOR SHARE generates SQL for ADBC."""
+    """Test that FOR SHARE is stripped by sqlglot for ADBC SQLite backend."""
     from sqlspec import sql
 
     # Setup test table
@@ -469,12 +472,15 @@ def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     # Insert test data
     adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("adbc_share", 200))
 
-    # Should generate SQL even though backend support may vary
+    # SQLite backend doesn't support FOR SHARE - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").where_eq("name", "adbc_share").for_share()
     stmt = query.build()
-    assert "FOR SHARE" in stmt.sql
 
-    # Should execute without error
+    # sqlglot now strips out unsupported FOR SHARE for SQLite backend
+    assert "FOR SHARE" not in stmt.sql
+    assert "SELECT" in stmt.sql  # But the rest of the query works
+
+    # Should execute without error (SQLite just ignores the FOR SHARE)
     result = adbc_sqlite_session.execute(query)
     assert result is not None
     assert len(result.data) == 1
