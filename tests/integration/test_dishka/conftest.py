@@ -7,7 +7,7 @@ import pytest
 dishka = pytest.importorskip("dishka")
 
 if TYPE_CHECKING:
-    from dishka import Provider
+    from dishka import Provider  # type: ignore[import-not-found]
 
 
 @pytest.fixture
@@ -17,8 +17,8 @@ def simple_sqlite_provider() -> "Provider":
 
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
-    class DatabaseProvider(Provider):
-        @provide(scope=Scope.APP)
+    class DatabaseProvider(Provider):  # type: ignore[misc]
+        @provide(scope=Scope.APP)  # type: ignore[misc]
         def get_database_config(self) -> SqliteConfig:
             config = SqliteConfig(pool_config={"database": ":memory:"})
             config.bind_key = "dishka_sqlite"
@@ -36,8 +36,8 @@ def async_sqlite_provider() -> "Provider":
 
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
-    class AsyncDatabaseProvider(Provider):
-        @provide(scope=Scope.APP)
+    class AsyncDatabaseProvider(Provider):  # type: ignore[misc]
+        @provide(scope=Scope.APP)  # type: ignore[misc]
         async def get_database_config(self) -> SqliteConfig:
             # Simulate some async work (e.g., fetching config from remote service)
             await asyncio.sleep(0.001)
@@ -56,15 +56,15 @@ def multi_config_provider() -> "Provider":
     from sqlspec.adapters.duckdb.config import DuckDBConfig
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
-    class MultiDatabaseProvider(Provider):
-        @provide(scope=Scope.APP)
+    class MultiDatabaseProvider(Provider):  # type: ignore[misc]
+        @provide(scope=Scope.APP)  # type: ignore[misc]
         def get_sqlite_config(self) -> SqliteConfig:
             config = SqliteConfig(pool_config={"database": ":memory:"})
             config.bind_key = "dishka_multi_sqlite"
             config.migration_config = {"enabled": True, "script_location": "sqlite_migrations"}
             return config
 
-        @provide(scope=Scope.APP)
+        @provide(scope=Scope.APP)  # type: ignore[misc]
         def get_duckdb_config(self) -> DuckDBConfig:
             config = DuckDBConfig(pool_config={"database": ":memory:"})
             config.bind_key = "dishka_multi_duckdb"
@@ -85,8 +85,8 @@ def async_multi_config_provider() -> "Provider":
     from sqlspec.adapters.duckdb.config import DuckDBConfig
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
-    class AsyncMultiDatabaseProvider(Provider):
-        @provide(scope=Scope.APP)
+    class AsyncMultiDatabaseProvider(Provider):  # type: ignore[misc]
+        @provide(scope=Scope.APP)  # type: ignore[misc]
         async def get_sqlite_config(self) -> SqliteConfig:
             await asyncio.sleep(0.001)
             config = SqliteConfig(pool_config={"database": ":memory:"})
@@ -94,7 +94,7 @@ def async_multi_config_provider() -> "Provider":
             config.migration_config = {"enabled": True}
             return config
 
-        @provide(scope=Scope.APP)
+        @provide(scope=Scope.APP)  # type: ignore[misc]
         async def get_aiosqlite_config(self) -> AiosqliteConfig:
             await asyncio.sleep(0.001)
             config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -102,7 +102,7 @@ def async_multi_config_provider() -> "Provider":
             config.migration_config = {"enabled": True}
             return config
 
-        @provide(scope=Scope.APP)
+        @provide(scope=Scope.APP)  # type: ignore[misc]
         async def get_duckdb_config(self) -> DuckDBConfig:
             await asyncio.sleep(0.001)
             config = DuckDBConfig(pool_config={"database": ":memory:"})

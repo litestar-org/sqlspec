@@ -8,8 +8,8 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import asyncmy
-import asyncmy.errors
-from asyncmy.cursors import Cursor, DictCursor
+import asyncmy.errors  # pyright: ignore
+from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
