@@ -11,17 +11,18 @@ if TYPE_CHECKING:
     from sqlspec.migrations.context import MigrationContext
 
 
-def up(context: "Optional[MigrationContext]" = None) -> "list[str]":
+async def up(context: "Optional[MigrationContext]" = None) -> "list[str]":
     """Create the litestar sessions table with dialect-specific column types.
 
     This table supports session management with optimized data types:
     - PostgreSQL: Uses JSONB for efficient JSON storage and TIMESTAMP WITH TIME ZONE
     - MySQL/MariaDB: Uses native JSON type and DATETIME
+    - DuckDB: Uses native JSON type for optimal analytical performance
     - Oracle: Version-specific JSON storage:
       * Oracle 21c+ with compatible>=20: Native JSON type
       * Oracle 19c+ (Autonomous): BLOB with OSON format
       * Oracle 12c+: BLOB with JSON validation
-      * Older versions: CLOB fallback
+      * Older versions: BLOB fallback
     - SQLite/Others: Uses TEXT for JSON data
 
     The table name can be customized via the extension configuration.
@@ -67,7 +68,7 @@ def up(context: "Optional[MigrationContext]" = None) -> "list[str]":
         timestamp_type = timestamp_type or "DATETIME"
         created_at_default = "DEFAULT CURRENT_TIMESTAMP"
     elif dialect == "oracle":
-        data_type = data_type or "CLOB"
+        data_type = data_type or "BLOB"
         timestamp_type = timestamp_type or "TIMESTAMP"
         created_at_default = ""  # We'll handle default separately in Oracle
     elif dialect == "sqlite":
@@ -75,7 +76,7 @@ def up(context: "Optional[MigrationContext]" = None) -> "list[str]":
         timestamp_type = timestamp_type or "DATETIME"
         created_at_default = "DEFAULT CURRENT_TIMESTAMP"
     elif dialect == "duckdb":
-        data_type = data_type or "VARCHAR"
+        data_type = data_type or "JSON"
         timestamp_type = timestamp_type or "TIMESTAMP"
         created_at_default = "DEFAULT CURRENT_TIMESTAMP"
     else:
@@ -170,7 +171,7 @@ def up(context: "Optional[MigrationContext]" = None) -> "list[str]":
     ]
 
 
-def down(context: "Optional[MigrationContext]" = None) -> "list[str]":
+async def down(context: "Optional[MigrationContext]" = None) -> "list[str]":
     """Drop the litestar sessions table and its indexes.
 
     Args:

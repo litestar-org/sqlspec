@@ -27,8 +27,10 @@ def adbc_migration_config(
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create unique version table name using adapter and test node ID
-        table_name = f"sqlspec_migrations_adbc_{abs(hash(request.node.nodeid)) % 1000000}"
+        # Create unique version table name using adapter, worker ID, and test node ID for pytest-xdist
+        worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
+        test_id = abs(hash(request.node.nodeid)) % 100000
+        table_name = f"sqlspec_migrations_adbc_{worker_id}_{test_id}"
 
         config = AdbcConfig(
             connection_config={
@@ -38,8 +40,8 @@ def adbc_migration_config(
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
                 "include_extensions": [
-                    {"name": "litestar", "session_table": "litestar_sessions_adbc"}
-                ],  # Unique table for ADBC
+                    {"name": "litestar", "session_table": f"litestar_sessions_adbc_{worker_id}_{test_id}"}
+                ],  # Unique table for ADBC with worker ID
             },
         )
         yield config
@@ -54,8 +56,10 @@ def adbc_migration_config_with_dict(
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create unique version table name using adapter and test node ID
-        table_name = f"sqlspec_migrations_adbc_dict_{abs(hash(request.node.nodeid)) % 1000000}"
+        # Create unique version table name using adapter, worker ID, and test node ID for pytest-xdist
+        worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
+        test_id = abs(hash(request.node.nodeid)) % 100000
+        table_name = f"sqlspec_migrations_adbc_dict_{worker_id}_{test_id}"
 
         config = AdbcConfig(
             connection_config={
@@ -65,8 +69,8 @@ def adbc_migration_config_with_dict(
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
                 "include_extensions": [
-                    {"name": "litestar", "session_table": "custom_adbc_sessions"}
-                ],  # Dict format with custom table name
+                    {"name": "litestar", "session_table": f"custom_adbc_sessions_{worker_id}_{test_id}"}
+                ],  # Dict format with custom table name and worker ID
             },
         )
         yield config
@@ -81,8 +85,10 @@ def adbc_migration_config_mixed(
         migration_dir = Path(temp_dir) / "migrations"
         migration_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create unique version table name using adapter and test node ID
-        table_name = f"sqlspec_migrations_adbc_mixed_{abs(hash(request.node.nodeid)) % 1000000}"
+        # Create unique version table name using adapter, worker ID, and test node ID for pytest-xdist
+        worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
+        test_id = abs(hash(request.node.nodeid)) % 100000
+        table_name = f"sqlspec_migrations_adbc_mixed_{worker_id}_{test_id}"
 
         config = AdbcConfig(
             connection_config={
@@ -93,7 +99,10 @@ def adbc_migration_config_mixed(
                 "script_location": str(migration_dir),
                 "version_table_name": table_name,
                 "include_extensions": [
-                    {"name": "litestar", "session_table": "litestar_sessions_adbc"},  # Unique table for ADBC
+                    {
+                        "name": "litestar",
+                        "session_table": f"litestar_sessions_adbc_{worker_id}_{test_id}",
+                    },  # Unique table for ADBC with worker ID
                     {"name": "other_ext", "option": "value"},  # Dict format for hypothetical extension
                 ],
             },
@@ -109,11 +118,15 @@ def session_backend_default(adbc_migration_config: AdbcConfig) -> SQLSpecSession
     commands.init(adbc_migration_config.migration_config["script_location"], package=False)
     commands.upgrade()
 
-    # Create session store using the default migrated table
-    return SQLSpecSessionStore(
-        config=adbc_migration_config,
-        table_name="litestar_sessions_adbc",  # Unique table name for ADBC
-    )
+    # Extract the unique table name from the config
+    session_table_name = "litestar_sessions_adbc"
+    for ext in adbc_migration_config.migration_config.get("include_extensions", []):
+        if isinstance(ext, dict) and ext.get("name") == "litestar":
+            session_table_name = ext.get("session_table", "litestar_sessions_adbc")
+            break
+
+    # Create session store using the migrated table with unique name
+    return SQLSpecSessionStore(config=adbc_migration_config, table_name=session_table_name)
 
 
 @pytest.fixture
@@ -124,11 +137,15 @@ def session_backend_custom(adbc_migration_config_with_dict: AdbcConfig) -> SQLSp
     commands.init(adbc_migration_config_with_dict.migration_config["script_location"], package=False)
     commands.upgrade()
 
-    # Create session store using the custom migrated table
-    return SQLSpecSessionStore(
-        config=adbc_migration_config_with_dict,
-        table_name="custom_adbc_sessions",  # Custom table name from config
-    )
+    # Extract the unique table name from the config
+    session_table_name = "custom_adbc_sessions"
+    for ext in adbc_migration_config_with_dict.migration_config.get("include_extensions", []):
+        if isinstance(ext, dict) and ext.get("name") == "litestar":
+            session_table_name = ext.get("session_table", "custom_adbc_sessions")
+            break
+
+    # Create session store using the custom migrated table with unique name
+    return SQLSpecSessionStore(config=adbc_migration_config_with_dict, table_name=session_table_name)
 
 
 @pytest.fixture
