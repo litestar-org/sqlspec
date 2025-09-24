@@ -170,21 +170,18 @@ class OracleDataDictionaryMixin:
             Appropriate Oracle column type for JSON data
         """
         if not version_info:
-            logger.warning("No version info provided, using CLOB fallback")
-            return "CLOB"
+            logger.warning("No version info provided, using BLOB fallback")
+            return "BLOB"
 
         # Decision matrix for JSON column type
         if version_info.supports_native_json():
-            logger.info("Using native JSON type for Oracle %s", version_info)
             return "JSON"
         if version_info.supports_oson_blob():
-            logger.info("Using BLOB with OSON format for Oracle %s", version_info)
             return "BLOB CHECK (data IS JSON FORMAT OSON)"
         if version_info.supports_json_blob():
-            logger.info("Using BLOB with JSON validation for Oracle %s", version_info)
             return "BLOB CHECK (data IS JSON)"
-        logger.info("Using CLOB fallback for Oracle %s", version_info)
-        return "CLOB"
+        logger.info("Using BLOB fallback for Oracle %s", version_info)
+        return "BLOB"
 
 
 class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase):
@@ -199,7 +196,7 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         Returns:
             True if this is an Autonomous Database, False otherwise
         """
-        result = driver.select_value_or_none("SELECT COUNT(*) as cnt FROM v$pdbs WHERE cloud_identity IS NOT NULL")
+        result = driver.select_value_or_none("SELECT COUNT(1) as cnt FROM v$pdbs WHERE cloud_identity IS NOT NULL")
         return bool(result and int(result) > 0)
 
     def get_version(self, driver: SyncDriverAdapterBase) -> "Optional[OracleVersionInfo]":

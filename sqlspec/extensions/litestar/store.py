@@ -39,32 +39,34 @@ class BaseStoreHandler:
     Adapters can override specific methods to customize behavior.
     """
 
-    def serialize_data(self, data: Any) -> Any:
+    def serialize_data(self, data: Any, driver: Any = None) -> Any:
         """Serialize session data for storage.
 
         Args:
             data: Session data to serialize
+            driver: Database driver instance (optional, used by specialized handlers)
 
         Returns:
             Serialized data ready for database storage
         """
         return to_json(data)
 
-    def deserialize_data(self, data: Any) -> Any:
+    def deserialize_data(self, data: Any, driver: Any = None) -> Any:
         """Deserialize session data from storage.
 
         Args:
             data: Raw data from database
+            driver: Database driver instance (optional, used by specialized handlers)
 
         Returns:
-            Deserialized session data
+            Deserialized session data, or None if JSON is invalid
         """
         if isinstance(data, str):
             try:
                 return from_json(data)
             except Exception:
                 logger.warning("Failed to deserialize JSON data")
-                return data
+                return None  # Filter out invalid JSON
         return data
 
     def format_datetime(self, dt: datetime) -> Union[str, datetime, Any]:
@@ -234,7 +236,7 @@ class SQLSpecSessionStore(Store):
             try:
                 handler_class = import_string(f"{handler_module}.StoreHandler")
                 logger.debug("Loaded store handler for adapter: %s", adapter_name)
-                return handler_class()  # type: ignore[no-any-return]
+                return handler_class(self._table_name, self._data_column)  # type: ignore[no-any-return]
             except ImportError:
                 logger.debug("No custom store handler found for adapter: %s, using default", adapter_name)
 
@@ -311,7 +313,7 @@ class SQLSpecSessionStore(Store):
                     else:
                         data = read_result
 
-                data = self._handler.deserialize_data(data)
+                data = await ensure_async_(self._handler.deserialize_data)(data, driver)
 
                 # Handle session renewal
                 if renew_for is not None:
@@ -370,7 +372,7 @@ class SQLSpecSessionStore(Store):
     ) -> None:
         """Internal method to set session data."""
         # Prepare values using handler
-        data_value = self._handler.serialize_data(data)
+        data_value = await ensure_async_(self._handler.serialize_data)(data, driver)
         expires_at_value = self._handler.format_datetime(expires_at)
         current_time_value = self._handler.get_current_time()
 
