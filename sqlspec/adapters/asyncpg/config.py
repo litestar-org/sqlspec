@@ -84,6 +84,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         migration_config: "Optional[dict[str, Any]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[Union[AsyncpgDriverFeatures, dict[str, Any]]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
         """Initialize AsyncPG configuration.
 
@@ -93,6 +94,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             migration_config: Migration configuration
             statement_config: Statement configuration override
             driver_features: Driver features configuration (TypedDict or dict)
+            bind_key: Optional unique identifier for this configuration
         """
         features_dict: dict[str, Any] = dict(driver_features) if driver_features else {}
 
@@ -106,6 +108,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             migration_config=migration_config,
             statement_config=statement_config or asyncpg_statement_config,
             driver_features=features_dict,
+            bind_key=bind_key,
         )
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":

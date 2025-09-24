@@ -150,14 +150,16 @@ class TestConfigResolver:
 
     async def test_config_validation_attributes(self) -> None:
         """Test that config validation checks for required attributes."""
-        # Test config missing database_url
-        mock_config = Mock()
-        mock_config.bind_key = "test"
-        mock_config.migration_config = {}
-        del mock_config.database_url  # Remove the attribute
 
-        def incomplete_config() -> Mock:
-            return mock_config
+        # Test config missing both database_url and pool_config
+        class IncompleteConfig:
+            def __init__(self) -> None:
+                self.bind_key = "test"
+                self.migration_config: dict[str, Any] = {}
+                # Missing both pool_config and database_url
+
+        def incomplete_config() -> "IncompleteConfig":
+            return IncompleteConfig()
 
         with patch("sqlspec.utils.config_resolver.import_string", return_value=incomplete_config):
             with pytest.raises(ConfigResolverError, match="returned invalid type"):

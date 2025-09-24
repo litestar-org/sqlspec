@@ -94,6 +94,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         migration_config: Optional[dict[str, Any]] = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
@@ -103,6 +104,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             migration_config: Migration configuration
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
+            bind_key: Optional unique identifier for this configuration
         """
 
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -116,6 +118,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             migration_config=migration_config,
             statement_config=statement_config,
             driver_features=driver_features or {},
+            bind_key=bind_key,
         )
 
     def _create_pool(self) -> "OracleSyncConnectionPool":
@@ -220,6 +223,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         migration_config: Optional[dict[str, Any]] = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 
@@ -229,6 +233,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             migration_config: Migration configuration
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
+            bind_key: Optional unique identifier for this configuration
         """
 
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -242,6 +247,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             migration_config=migration_config,
             statement_config=statement_config or oracledb_statement_config,
             driver_features=driver_features or {},
+            bind_key=bind_key,
         )
 
     async def _create_pool(self) -> "OracleAsyncConnectionPool":

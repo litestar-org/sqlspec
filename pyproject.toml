@@ -91,6 +91,7 @@ extras = [
   "adbc_driver_postgresql",
   "adbc_driver_flightsql",
   "adbc_driver_bigquery",
+  "dishka ; python_version >= \"3.10\"",
 ]
 lint = [
   "mypy>=1.13.0",
@@ -162,11 +163,11 @@ include = [
   "sqlspec/loader.py",    # Loader module
 
   # === ADAPTER TYPE CONVERTERS ===
-  "sqlspec/adapters/adbc/type_converter.py",      # ADBC type converter
-  "sqlspec/adapters/bigquery/type_converter.py",  # BigQuery type converter
-  "sqlspec/adapters/duckdb/type_converter.py",    # DuckDB type converter
-  "sqlspec/adapters/oracledb/type_converter.py",  # Oracle type converter
-  "sqlspec/adapters/psqlpy/type_converter.py",    # Psqlpy type converter
+  "sqlspec/adapters/adbc/type_converter.py",     # ADBC type converter
+  "sqlspec/adapters/bigquery/type_converter.py", # BigQuery type converter
+  "sqlspec/adapters/duckdb/type_converter.py",   # DuckDB type converter
+  "sqlspec/adapters/oracledb/type_converter.py", # Oracle type converter
+  "sqlspec/adapters/psqlpy/type_converter.py",   # Psqlpy type converter
 
   # === UTILITY MODULES ===
   "sqlspec/utils/text.py",                # Text utilities

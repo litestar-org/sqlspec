@@ -47,6 +47,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         migration_config: "Optional[dict[str, Any]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
         """Initialize SQLite configuration.
 
@@ -56,6 +57,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             migration_config: Migration configuration
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
+            bind_key: Optional bind key for the configuration
         """
         if pool_config is None:
             pool_config = {}
@@ -64,6 +66,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             pool_config["uri"] = True
 
         super().__init__(
+            bind_key=bind_key,
             pool_instance=pool_instance,
             pool_config=cast("dict[str, Any]", pool_config),
             migration_config=migration_config,

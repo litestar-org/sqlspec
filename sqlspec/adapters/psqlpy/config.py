@@ -90,6 +90,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         migration_config: Optional[dict[str, Any]] = None,
         statement_config: Optional[StatementConfig] = None,
         driver_features: Optional[dict[str, Any]] = None,
+        bind_key: Optional[str] = None,
     ) -> None:
         """Initialize Psqlpy configuration.
 
@@ -99,6 +100,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             migration_config: Migration configuration
             statement_config: SQL statement configuration
             driver_features: Driver feature configuration
+            bind_key: Optional unique identifier for this configuration
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -110,6 +112,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             migration_config=migration_config,
             statement_config=statement_config or psqlpy_statement_config,
             driver_features=driver_features or {},
+            bind_key=bind_key,
         )
 
     def _get_pool_config_dict(self) -> dict[str, Any]:

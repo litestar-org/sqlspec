@@ -94,6 +94,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         migration_config: Optional[dict[str, Any]] = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[Union[BigQueryDriverFeatures, dict[str, Any]]]" = None,
+        bind_key: "Optional[str]" = None,
     ) -> None:
         """Initialize BigQuery configuration.
 
@@ -102,6 +103,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             migration_config: Migration configuration
             statement_config: Statement configuration override
             driver_features: BigQuery-specific driver features
+            bind_key: Optional unique identifier for this configuration
         """
 
         self.connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
@@ -124,6 +126,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             migration_config=migration_config,
             statement_config=statement_config,
             driver_features=self.driver_features,
+            bind_key=bind_key,
         )
 
     def _setup_default_job_config(self) -> None:
