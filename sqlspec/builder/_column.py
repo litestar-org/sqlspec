@@ -82,9 +82,6 @@ class Column:
             A SQLGlot expression representing the value
         """
         if isinstance(value, (datetime, date)):
-            # Create a Literal with the datetime value directly
-            # This will be parameterized by the QueryBuilder's _parameterize_expression
-            # Don't use exp.convert() which would create TIME_STR_TO_TIME
             return exp.Literal(this=value, is_string=False)
         return exp.convert(value)
 
@@ -311,9 +308,6 @@ class FunctionColumn:
             A SQLGlot expression representing the value
         """
         if isinstance(value, (datetime, date)):
-            # Create a Literal with the datetime value directly
-            # This will be parameterized by the QueryBuilder's _parameterize_expression
-            # Don't use exp.convert() which would create TIME_STR_TO_TIME
             return exp.Literal(this=value, is_string=False)
         return exp.convert(value)
 

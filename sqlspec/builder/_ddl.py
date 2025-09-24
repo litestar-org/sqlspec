@@ -11,12 +11,14 @@ from sqlglot.dialects.dialect import DialectType
 from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._select import Select
 from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import SQL
 from sqlspec.utils.type_guards import has_sqlglot_expression, has_with_method
 
 if TYPE_CHECKING:
     from sqlspec.builder._column import ColumnExpression
-    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
 __all__ = (
     "AlterOperation",
@@ -39,6 +41,37 @@ __all__ = (
     "Truncate",
 )
 
+CONSTRAINT_TYPE_PRIMARY_KEY = "PRIMARY KEY"
+CONSTRAINT_TYPE_FOREIGN_KEY = "FOREIGN KEY"
+CONSTRAINT_TYPE_UNIQUE = "UNIQUE"
+CONSTRAINT_TYPE_CHECK = "CHECK"
+
+FOREIGN_KEY_ACTION_CASCADE = "CASCADE"
+FOREIGN_KEY_ACTION_SET_NULL = "SET NULL"
+FOREIGN_KEY_ACTION_SET_DEFAULT = "SET DEFAULT"
+FOREIGN_KEY_ACTION_RESTRICT = "RESTRICT"
+FOREIGN_KEY_ACTION_NO_ACTION = "NO ACTION"
+
+VALID_FOREIGN_KEY_ACTIONS = {
+    FOREIGN_KEY_ACTION_CASCADE,
+    FOREIGN_KEY_ACTION_SET_NULL,
+    FOREIGN_KEY_ACTION_SET_DEFAULT,
+    FOREIGN_KEY_ACTION_RESTRICT,
+    FOREIGN_KEY_ACTION_NO_ACTION,
+    None,
+}
+
+VALID_CONSTRAINT_TYPES = {
+    CONSTRAINT_TYPE_PRIMARY_KEY,
+    CONSTRAINT_TYPE_FOREIGN_KEY,
+    CONSTRAINT_TYPE_UNIQUE,
+    CONSTRAINT_TYPE_CHECK,
+}
+
+CURRENT_TIMESTAMP_KEYWORD = "CURRENT_TIMESTAMP"
+CURRENT_DATE_KEYWORD = "CURRENT_DATE"
+CURRENT_TIME_KEYWORD = "CURRENT_TIME"
+
 
 def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
     """Build SQLGlot expression for a column definition."""
@@ -59,11 +92,11 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
         default_expr: Optional[exp.Expression] = None
         if isinstance(col.default, str):
             default_upper = col.default.upper()
-            if default_upper == "CURRENT_TIMESTAMP":
+            if default_upper == CURRENT_TIMESTAMP_KEYWORD:
                 default_expr = exp.CurrentTimestamp()
-            elif default_upper == "CURRENT_DATE":
+            elif default_upper == CURRENT_DATE_KEYWORD:
                 default_expr = exp.CurrentDate()
-            elif default_upper == "CURRENT_TIME":
+            elif default_upper == CURRENT_TIME_KEYWORD:
                 default_expr = exp.CurrentTime()
             elif "(" in col.default:
                 default_expr = exp.maybe_parse(col.default)
@@ -96,14 +129,14 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
 
 def build_constraint_expression(constraint: "ConstraintDefinition") -> "Optional[exp.Expression]":
     """Build SQLGlot expression for a table constraint."""
-    if constraint.constraint_type == "PRIMARY KEY":
+    if constraint.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY:
         pk_constraint = exp.PrimaryKey(expressions=[exp.to_identifier(col) for col in constraint.columns])
 
         if constraint.name:
             return exp.Constraint(this=exp.to_identifier(constraint.name), expression=pk_constraint)
         return pk_constraint
 
-    if constraint.constraint_type == "FOREIGN KEY":
+    if constraint.constraint_type == CONSTRAINT_TYPE_FOREIGN_KEY:
         fk_constraint = exp.ForeignKey(
             expressions=[exp.to_identifier(col) for col in constraint.columns],
             reference=exp.Reference(
@@ -118,14 +151,14 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "Optional
             return exp.Constraint(this=exp.to_identifier(constraint.name), expression=fk_constraint)
         return fk_constraint
 
-    if constraint.constraint_type == "UNIQUE":
+    if constraint.constraint_type == CONSTRAINT_TYPE_UNIQUE:
         unique_constraint = exp.UniqueKeyProperty(expressions=[exp.to_identifier(col) for col in constraint.columns])
 
         if constraint.name:
             return exp.Constraint(this=exp.to_identifier(constraint.name), expression=unique_constraint)
         return unique_constraint
 
-    if constraint.constraint_type == "CHECK":
+    if constraint.constraint_type == CONSTRAINT_TYPE_CHECK:
         check_expr = exp.Check(this=exp.maybe_parse(constraint.condition) if constraint.condition else None)
 
         if constraint.name:
@@ -356,7 +389,7 @@ class CreateTable(DDLBuilder):
 
         self._columns.append(column_def)
 
-        if primary_key and not any(c.constraint_type == "PRIMARY KEY" for c in self._constraints):
+        if primary_key and not self._has_primary_key_constraint():
             self.primary_key_constraint([name])
 
         return self
@@ -368,13 +401,13 @@ class CreateTable(DDLBuilder):
         if not col_list:
             self._raise_sql_builder_error("Primary key must include at least one column")
 
-        existing_pk = next((c for c in self._constraints if c.constraint_type == "PRIMARY KEY"), None)
+        existing_pk = self._find_primary_key_constraint()
         if existing_pk:
             for col in col_list:
                 if col not in existing_pk.columns:
                     existing_pk.columns.append(col)
         else:
-            constraint = ConstraintDefinition(constraint_type="PRIMARY KEY", name=name, columns=col_list)
+            constraint = ConstraintDefinition(constraint_type=CONSTRAINT_TYPE_PRIMARY_KEY, name=name, columns=col_list)
             self._constraints.append(constraint)
 
         return self
@@ -398,14 +431,11 @@ class CreateTable(DDLBuilder):
         if len(col_list) != len(ref_col_list):
             self._raise_sql_builder_error("Foreign key columns and referenced columns must have same length")
 
-        valid_actions = {"CASCADE", "SET NULL", "SET DEFAULT", "RESTRICT", "NO ACTION", None}
-        if on_delete and on_delete.upper() not in valid_actions:
-            self._raise_sql_builder_error(f"Invalid ON DELETE action: {on_delete}")
-        if on_update and on_update.upper() not in valid_actions:
-            self._raise_sql_builder_error(f"Invalid ON UPDATE action: {on_update}")
+        self._validate_foreign_key_action(on_delete, "ON DELETE")
+        self._validate_foreign_key_action(on_update, "ON UPDATE")
 
         constraint = ConstraintDefinition(
-            constraint_type="FOREIGN KEY",
+            constraint_type=CONSTRAINT_TYPE_FOREIGN_KEY,
             name=name,
             columns=col_list,
             references_table=references_table,
@@ -426,7 +456,7 @@ class CreateTable(DDLBuilder):
         if not col_list:
             self._raise_sql_builder_error("Unique constraint must include at least one column")
 
-        constraint = ConstraintDefinition(constraint_type="UNIQUE", name=name, columns=col_list)
+        constraint = ConstraintDefinition(constraint_type=CONSTRAINT_TYPE_UNIQUE, name=name, columns=col_list)
 
         self._constraints.append(constraint)
         return self
@@ -443,7 +473,7 @@ class CreateTable(DDLBuilder):
         else:
             condition_str = str(condition)
 
-        constraint = ConstraintDefinition(constraint_type="CHECK", name=name, condition=condition_str)
+        constraint = ConstraintDefinition(constraint_type=CONSTRAINT_TYPE_CHECK, name=name, condition=condition_str)
 
         self._constraints.append(constraint)
         return self
@@ -484,10 +514,8 @@ class CreateTable(DDLBuilder):
             column_defs.append(col_expr)
 
         for constraint in self._constraints:
-            if constraint.constraint_type == "PRIMARY KEY" and len(constraint.columns) == 1:
-                col_name = constraint.columns[0]
-                if any(c.name == col_name and c.primary_key for c in self._columns):
-                    continue
+            if self._is_redundant_single_column_primary_key(constraint):
+                continue
 
             constraint_expr = build_constraint_expression(constraint)
             if constraint_expr:
@@ -530,6 +558,27 @@ class CreateTable(DDLBuilder):
             properties=properties_node,
             like=like_expr,
         )
+
+    def _has_primary_key_constraint(self) -> bool:
+        """Check if table already has a primary key constraint."""
+        return any(c.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY for c in self._constraints)
+
+    def _find_primary_key_constraint(self) -> "Optional[ConstraintDefinition]":
+        """Find existing primary key constraint."""
+        return next((c for c in self._constraints if c.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY), None)
+
+    def _validate_foreign_key_action(self, action: "Optional[str]", action_type: str) -> None:
+        """Validate foreign key action (ON DELETE or ON UPDATE)."""
+        if action and action.upper() not in VALID_FOREIGN_KEY_ACTIONS:
+            self._raise_sql_builder_error(f"Invalid {action_type} action: {action}")
+
+    def _is_redundant_single_column_primary_key(self, constraint: "ConstraintDefinition") -> bool:
+        """Check if constraint is a redundant single-column primary key."""
+        if constraint.constraint_type != CONSTRAINT_TYPE_PRIMARY_KEY or len(constraint.columns) != 1:
+            return False
+
+        col_name = constraint.columns[0]
+        return any(c.name == col_name and c.primary_key for c in self._columns)
 
 
 class DropTable(DDLBuilder):
@@ -966,8 +1015,6 @@ class CreateTableAsSelect(DDLBuilder):
 
         select_expr = None
         select_parameters = None
-        from sqlspec.builder._select import Select
-        from sqlspec.core.statement import SQL
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
@@ -1093,8 +1140,6 @@ class CreateMaterializedView(DDLBuilder):
 
         select_expr = None
         select_parameters = None
-        from sqlspec.builder._select import Select
-        from sqlspec.core.statement import SQL
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
@@ -1191,8 +1236,6 @@ class CreateView(DDLBuilder):
 
         select_expr = None
         select_parameters = None
-        from sqlspec.builder._select import Select
-        from sqlspec.core.statement import SQL
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
@@ -1347,8 +1390,7 @@ class AlterTable(DDLBuilder):
             on_delete: Foreign key ON DELETE action
             on_update: Foreign key ON UPDATE action
         """
-        valid_types = {"PRIMARY KEY", "FOREIGN KEY", "UNIQUE", "CHECK"}
-        if constraint_type.upper() not in valid_types:
+        if constraint_type.upper() not in VALID_CONSTRAINT_TYPES:
             self._raise_sql_builder_error(f"Invalid constraint type: {constraint_type}")
 
         col_list = None
@@ -1474,7 +1516,7 @@ class AlterTable(DDLBuilder):
             default_val = op.column_definition.default
             default_expr: Optional[exp.Expression]
             if isinstance(default_val, str):
-                if default_val.upper() in {"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"} or "(" in default_val:
+                if self._is_sql_function_default(default_val):
                     default_expr = exp.maybe_parse(default_val)
                 else:
                     default_expr = exp.convert(default_val)
@@ -1493,6 +1535,14 @@ class AlterTable(DDLBuilder):
 
         self._raise_sql_builder_error(f"Unknown operation type: {op.operation_type}")
         raise AssertionError
+
+    def _is_sql_function_default(self, default_val: str) -> bool:
+        """Check if default value is a SQL function or expression."""
+        default_upper = default_val.upper()
+        return (
+            default_upper in {CURRENT_TIMESTAMP_KEYWORD, CURRENT_DATE_KEYWORD, CURRENT_TIME_KEYWORD}
+            or "(" in default_val
+        )
 
 
 class CommentOn(DDLBuilder):

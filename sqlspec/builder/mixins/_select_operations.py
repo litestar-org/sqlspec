@@ -11,6 +11,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
+from sqlspec._sql import SQLFactory
 from sqlspec.builder._parsing_utils import parse_column_expression, parse_table_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_query_builder_parameters, is_expression
@@ -29,7 +30,6 @@ class SelectClauseMixin:
 
     __slots__ = ()
 
-    # Type annotations for PyRight - these will be provided by the base class
     def get_expression(self) -> Optional[exp.Expression]: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -865,12 +865,9 @@ class Case:
         Returns:
             Self for method chaining.
         """
-        from sqlspec._sql import SQLFactory
-
         cond_expr = exp.maybe_parse(condition) or exp.column(condition) if isinstance(condition, str) else condition
         val_expr = SQLFactory._to_expression(value)
 
-        # SQLGlot uses exp.If for CASE WHEN clauses, not exp.When
         when_clause = exp.If(this=cond_expr, true=val_expr)
         self._conditions.append(when_clause)
         return self
@@ -884,8 +881,6 @@ class Case:
         Returns:
             Self for method chaining.
         """
-        from sqlspec._sql import SQLFactory
-
         self._default = SQLFactory._to_expression(value)
         return self
 

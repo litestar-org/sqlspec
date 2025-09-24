@@ -46,7 +46,6 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         """
         super().__init__(**kwargs)
 
-        # Initialize Insert-specific attributes
         self._table: Optional[str] = None
         self._columns: list[str] = []
         self._values_added_count: int = 0
@@ -144,18 +143,13 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
             if isinstance(value, exp.Expression):
                 value_placeholders.append(value)
             elif has_expression_and_sql(value):
-                # Handle SQL objects (from sql.raw with parameters)
                 expression = getattr(value, "expression", None)
                 if expression is not None and isinstance(expression, exp.Expression):
-                    # Merge parameters from SQL object into builder
                     self._merge_sql_object_parameters(value)
                     value_placeholders.append(expression)
                 else:
-                    # If expression is None, fall back to parsing the raw SQL
                     sql_text = getattr(value, "sql", "")
-                    # Merge parameters even when parsing raw SQL
                     self._merge_sql_object_parameters(value)
-                    # Check if sql_text is callable (like Expression.sql method)
                     if callable(sql_text):
                         sql_text = str(value)
                     value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
@@ -258,17 +252,14 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
 
         Example:
             ```python
-            # ON CONFLICT (id) DO NOTHING
             sql.insert("users").values(id=1, name="John").on_conflict(
                 "id"
             ).do_nothing()
 
-            # ON CONFLICT (email, username) DO UPDATE SET updated_at = NOW()
             sql.insert("users").values(...).on_conflict(
                 "email", "username"
             ).do_update(updated_at=sql.raw("NOW()"))
 
-            # ON CONFLICT DO NOTHING (catches all conflicts)
             sql.insert("users").values(...).on_conflict().do_nothing()
             ```
         """
@@ -307,40 +298,31 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
 
         insert_expr = self._get_insert_expression()
 
-        # Create SET expressions for MySQL ON DUPLICATE KEY UPDATE
         set_expressions = []
         for col, val in kwargs.items():
             if has_expression_and_sql(val):
-                # Handle SQL objects (from sql.raw with parameters)
                 expression = getattr(val, "expression", None)
                 if expression is not None and isinstance(expression, exp.Expression):
-                    # Merge parameters from SQL object into builder
                     self._merge_sql_object_parameters(val)
                     value_expr = expression
                 else:
-                    # If expression is None, fall back to parsing the raw SQL
                     sql_text = getattr(val, "sql", "")
-                    # Merge parameters even when parsing raw SQL
                     self._merge_sql_object_parameters(val)
-                    # Check if sql_text is callable (like Expression.sql method)
                     if callable(sql_text):
                         sql_text = str(val)
                     value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
             elif isinstance(val, exp.Expression):
                 value_expr = val
             else:
-                # Create parameter for regular values
                 param_name = self._generate_unique_parameter_name(col)
                 _, param_name = self.add_parameter(val, name=param_name)
                 value_expr = exp.Placeholder(this=param_name)
 
             set_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
 
-        # For MySQL, create ON CONFLICT with duplicate=True flag
-        # This tells SQLGlot to generate ON DUPLICATE KEY UPDATE
         on_conflict = exp.OnConflict(
-            duplicate=True,  # This flag makes it MySQL-specific
-            action=exp.var("UPDATE"),  # MySQL requires UPDATE action
+            duplicate=True,
+            action=exp.var("UPDATE"),
             expressions=set_expressions or None,
         )
 
@@ -383,7 +365,6 @@ class ConflictBuilder:
         """
         insert_expr = self._insert_builder.get_insert_expression()
 
-        # Create ON CONFLICT with proper structure
         conflict_keys = [exp.to_identifier(col) for col in self._columns] if self._columns else None
         on_conflict = exp.OnConflict(conflict_keys=conflict_keys, action=exp.var("DO NOTHING"))
 
@@ -410,42 +391,34 @@ class ConflictBuilder:
         """
         insert_expr = self._insert_builder.get_insert_expression()
 
-        # Create SET expressions for the UPDATE
         set_expressions = []
         for col, val in kwargs.items():
             if has_expression_and_sql(val):
-                # Handle SQL objects (from sql.raw with parameters)
                 expression = getattr(val, "expression", None)
                 if expression is not None and isinstance(expression, exp.Expression):
-                    # Merge parameters from SQL object into builder
                     if hasattr(val, "parameters"):
                         sql_parameters = getattr(val, "parameters", {})
                         for param_name, param_value in sql_parameters.items():
                             self._insert_builder.add_parameter(param_value, name=param_name)
                     value_expr = expression
                 else:
-                    # If expression is None, fall back to parsing the raw SQL
                     sql_text = getattr(val, "sql", "")
-                    # Merge parameters even when parsing raw SQL
                     if hasattr(val, "parameters"):
                         sql_parameters = getattr(val, "parameters", {})
                         for param_name, param_value in sql_parameters.items():
                             self._insert_builder.add_parameter(param_value, name=param_name)
-                    # Check if sql_text is callable (like Expression.sql method)
                     if callable(sql_text):
                         sql_text = str(val)
                     value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
             elif isinstance(val, exp.Expression):
                 value_expr = val
             else:
-                # Create parameter for regular values
                 param_name = self._insert_builder.generate_unique_parameter_name(col)
                 _, param_name = self._insert_builder.add_parameter(val, name=param_name)
                 value_expr = exp.Placeholder(this=param_name)
 
             set_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
 
-        # Create ON CONFLICT with proper structure
         conflict_keys = [exp.to_identifier(col) for col in self._columns] if self._columns else None
         on_conflict = exp.OnConflict(
             conflict_keys=conflict_keys, action=exp.var("DO UPDATE"), expressions=set_expressions or None

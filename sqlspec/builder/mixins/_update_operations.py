@@ -26,7 +26,6 @@ class UpdateTableClauseMixin:
 
     __slots__ = ()
 
-    # Type annotations for PyRight - these will be provided by the base class
     def get_expression(self) -> Optional[exp.Expression]: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -58,7 +57,6 @@ class UpdateSetClauseMixin:
 
     __slots__ = ()
 
-    # Type annotations for PyRight - these will be provided by the base class
     def get_expression(self) -> Optional[exp.Expression]: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -93,18 +91,14 @@ class UpdateSetClauseMixin:
                     self.add_parameter(p_value, name=p_name)
             return value_expr
         if hasattr(val, "expression") and hasattr(val, "sql"):
-            # Handle SQL objects (from sql.raw with parameters)
             expression = getattr(val, "expression", None)
             if expression is not None and isinstance(expression, exp.Expression):
-                # Merge parameters from SQL object into builder
                 if hasattr(val, "parameters"):
                     sql_parameters = getattr(val, "parameters", {})
                     for param_name, param_value in sql_parameters.items():
                         self.add_parameter(param_value, name=param_name)
                 return cast("exp.Expression", expression)
-            # If expression is None, fall back to parsing the raw SQL
             sql_text = getattr(val, "sql", "")
-            # Merge parameters even when parsing raw SQL
             if hasattr(val, "parameters"):
                 sql_parameters = getattr(val, "parameters", {})
                 for param_name, param_value in sql_parameters.items():
@@ -170,7 +164,6 @@ class UpdateFromClauseMixin:
 
     __slots__ = ()
 
-    # Type annotations for PyRight - these will be provided by the base class
     def get_expression(self) -> Optional[exp.Expression]: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 

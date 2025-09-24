@@ -9,7 +9,7 @@ from typing import Any, Final, Optional, Union, cast
 
 from sqlglot import exp, maybe_parse, parse_one
 
-from sqlspec.core.parameters import ParameterStyle
+from sqlspec.core.parameters import ParameterStyle, ParameterValidator
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
     has_expression_and_sql,
@@ -63,9 +63,7 @@ def parse_column_expression(
     if isinstance(column_input, exp.Expression):
         return column_input
 
-    # Handle SQL objects (from sql.raw with parameters)
     if has_expression_and_sql(column_input):
-        # This is likely a SQL object
         expression = getattr(column_input, "expression", None)
         if expression is not None and isinstance(expression, exp.Expression):
             # Merge parameters from SQL object into builder if available
@@ -74,9 +72,7 @@ def parse_column_expression(
                 for param_name, param_value in sql_parameters.items():
                     builder.add_parameter(param_value, name=param_name)
             return cast("exp.Expression", expression)
-        # If expression is None, fall back to parsing the raw SQL
         sql_text = getattr(column_input, "sql", "")
-        # Merge parameters even when parsing raw SQL
         if builder and has_expression_and_parameters(column_input) and hasattr(builder, "add_parameter"):
             sql_parameters = getattr(column_input, "parameters", {})
             for param_name, param_value in sql_parameters.items():
@@ -175,8 +171,6 @@ def parse_condition_expression(
 
     # Convert database-specific parameter styles to SQLGlot-compatible format
     # This ensures that placeholders like $1, %s, :1 are properly recognized as parameters
-    from sqlspec.core.parameters import ParameterValidator
-
     validator = ParameterValidator()
     param_info = validator.extract_parameters(condition_input)
 

@@ -3,6 +3,8 @@
 Provides abstract base classes and core functionality for SQL query builders.
 """
 
+import hashlib
+import uuid
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, NoReturn, Optional, Union, cast
 
@@ -234,8 +236,6 @@ class QueryBuilder(ABC):
             if name not in self._parameters:
                 return name
 
-        import uuid
-
         return f"{base_name}_{uuid.uuid4().hex[:8]}"
 
     def _merge_cte_parameters(self, cte_name: str, parameters: dict[str, Any]) -> dict[str, str]:
@@ -284,8 +284,6 @@ class QueryBuilder(ABC):
         Returns:
             A unique cache key representing the builder state and configuration
         """
-        import hashlib
-
         dialect_name: str = self.dialect_name or "default"
 
         if self._expression is None:

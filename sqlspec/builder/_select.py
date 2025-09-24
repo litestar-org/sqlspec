@@ -24,6 +24,7 @@ from sqlspec.builder.mixins import (
     WhereClauseMixin,
 )
 from sqlspec.core.result import SQLResult
+from sqlspec.exceptions import SQLBuilderError
 
 __all__ = ("Select",)
 
@@ -73,7 +74,6 @@ class Select(
         """
         super().__init__(**kwargs)
 
-        # Initialize Select-specific attributes
         self._with_parts: dict[str, Union[exp.CTE, Select]] = {}
         self._hints: list[dict[str, object]] = []
 
@@ -186,8 +186,6 @@ class Select(
         Raises:
             SQLBuilderError: If not applied to SELECT statement or invalid parameters
         """
-        from sqlspec.exceptions import SQLBuilderError
-
         if self._expression is None or not isinstance(self._expression, exp.Select):
             msg = "FOR UPDATE can only be applied to SELECT statements"
             raise SQLBuilderError(msg)
@@ -199,9 +197,9 @@ class Select(
         lock_args = {"update": True}
 
         if skip_locked:
-            lock_args["wait"] = False  # SKIP LOCKED
+            lock_args["wait"] = False
         elif nowait:
-            lock_args["wait"] = True  # NOWAIT
+            lock_args["wait"] = True
 
         if of:
             tables = [of] if isinstance(of, str) else of
@@ -231,8 +229,6 @@ class Select(
         Raises:
             SQLBuilderError: If not applied to SELECT statement or invalid parameters
         """
-        from sqlspec.exceptions import SQLBuilderError
-
         if self._expression is None or not isinstance(self._expression, exp.Select):
             msg = "FOR SHARE can only be applied to SELECT statements"
             raise SQLBuilderError(msg)
@@ -241,12 +237,12 @@ class Select(
             msg = "Cannot use both skip_locked and nowait"
             raise SQLBuilderError(msg)
 
-        lock_args = {"update": False}  # FOR SHARE uses update=False
+        lock_args = {"update": False}
 
         if skip_locked:
-            lock_args["wait"] = False  # SKIP LOCKED
+            lock_args["wait"] = False
         elif nowait:
-            lock_args["wait"] = True  # NOWAIT
+            lock_args["wait"] = True
 
         if of:
             tables = [of] if isinstance(of, str) else of
@@ -272,13 +268,10 @@ class Select(
         Raises:
             SQLBuilderError: If not applied to SELECT statement
         """
-        from sqlspec.exceptions import SQLBuilderError
-
         if self._expression is None or not isinstance(self._expression, exp.Select):
             msg = "FOR KEY SHARE can only be applied to SELECT statements"
             raise SQLBuilderError(msg)
 
-        # FOR KEY SHARE is represented as a Lock with key=True, update=False
         lock = exp.Lock(update=False, key=True)
 
         current_locks = self._expression.args.get("locks", [])
@@ -300,13 +293,10 @@ class Select(
         Raises:
             SQLBuilderError: If not applied to SELECT statement
         """
-        from sqlspec.exceptions import SQLBuilderError
-
         if self._expression is None or not isinstance(self._expression, exp.Select):
             msg = "FOR NO KEY UPDATE can only be applied to SELECT statements"
             raise SQLBuilderError(msg)
 
-        # FOR NO KEY UPDATE is represented as a Lock with key=False, update=True
         lock = exp.Lock(update=True, key=False)
 
         current_locks = self._expression.args.get("locks", [])
