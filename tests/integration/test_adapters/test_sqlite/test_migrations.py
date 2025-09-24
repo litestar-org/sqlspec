@@ -6,8 +6,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.migrations.commands import MigrationCommands
-from sqlspec.utils.sync_tools import await_
+from sqlspec.migrations.commands import create_migration_commands
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -22,9 +21,9 @@ def test_sqlite_migration_full_workflow() -> None:
             pool_config={"database": temp_db},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
-        await_(commands.init, raise_sync_error=False)(str(migration_dir), package=True)
+        commands.init(str(migration_dir), package=True)
 
         assert migration_dir.exists()
         assert (migration_dir / "__init__.py").exists()
@@ -52,7 +51,7 @@ def down():
         migration_file = migration_dir / "001_create_users.py"
         migration_file.write_text(migration_content)
 
-        await_(commands.upgrade, raise_sync_error=False)()
+        commands.upgrade()
 
         with config.provide_session() as driver:
             result = driver.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
@@ -65,7 +64,7 @@ def down():
             assert users_result.data[0]["name"] == "John Doe"
             assert users_result.data[0]["email"] == "john@example.com"
 
-        await_(commands.downgrade, raise_sync_error=False)("base")
+        commands.downgrade("base")
 
         with config.provide_session() as driver:
             result = driver.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
@@ -82,9 +81,9 @@ def test_sqlite_multiple_migrations_workflow() -> None:
             pool_config={"database": temp_db},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
-        await_(commands.init, raise_sync_error=False)(str(migration_dir), package=True)
+        commands.init(str(migration_dir), package=True)
 
         migration1_content = '''"""Create users table."""
 
@@ -129,7 +128,7 @@ def down():
         (migration_dir / "0001_create_users.py").write_text(migration1_content)
         (migration_dir / "0002_create_posts.py").write_text(migration2_content)
 
-        await_(commands.upgrade, raise_sync_error=False)()
+        commands.upgrade()
 
         with config.provide_session() as driver:
             tables_result = driver.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -146,7 +145,7 @@ def down():
             assert len(posts_result.data) == 1
             assert posts_result.data[0]["title"] == "My Post"
 
-        await_(commands.downgrade, raise_sync_error=False)("0001")
+        commands.downgrade("0001")
 
         with config.provide_session() as driver:
             tables_result = driver.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -154,7 +153,7 @@ def down():
             assert "users" in table_names
             assert "posts" not in table_names
 
-        await_(commands.downgrade, raise_sync_error=False)("base")
+        commands.downgrade("base")
 
         with config.provide_session() as driver:
             tables_result = driver.execute(
@@ -175,11 +174,11 @@ def test_sqlite_migration_current_command() -> None:
             pool_config={"database": temp_db},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
-        await_(commands.init, raise_sync_error=False)(str(migration_dir), package=True)
+        commands.init(str(migration_dir), package=True)
 
-        await_(commands.current, raise_sync_error=False)(verbose=False)
+        commands.current(verbose=False)
 
         migration_content = '''"""Test migration."""
 
@@ -196,9 +195,9 @@ def down():
 
         (migration_dir / "001_test.py").write_text(migration_content)
 
-        await_(commands.upgrade, raise_sync_error=False)()
+        commands.upgrade()
 
-        await_(commands.current, raise_sync_error=False)(verbose=True)
+        commands.current(verbose=True)
 
 
 def test_sqlite_migration_error_handling() -> None:
@@ -211,9 +210,9 @@ def test_sqlite_migration_error_handling() -> None:
             pool_config={"database": temp_db},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
-        await_(commands.init, raise_sync_error=False)(str(migration_dir), package=True)
+        commands.init(str(migration_dir), package=True)
 
         migration_content = '''"""Bad migration."""
 
@@ -231,7 +230,7 @@ def down():
         (migration_dir / "001_bad.py").write_text(migration_content)
 
         with pytest.raises(Exception):
-            await_(commands.upgrade, raise_sync_error=False)()
+            commands.upgrade()
 
 
 def test_sqlite_migration_with_transactions() -> None:
@@ -244,9 +243,9 @@ def test_sqlite_migration_with_transactions() -> None:
             pool_config={"database": temp_db},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
-        await_(commands.init, raise_sync_error=False)(str(migration_dir), package=True)
+        commands.init(str(migration_dir), package=True)
 
         migration_content = '''"""Migration with multiple operations."""
 
@@ -270,7 +269,7 @@ def down():
 
         (migration_dir / "0001_transaction_test.py").write_text(migration_content)
 
-        await_(commands.upgrade, raise_sync_error=False)()
+        commands.upgrade()
 
         with config.provide_session() as driver:
             customers_result = driver.execute("SELECT * FROM customers ORDER BY name")
@@ -278,7 +277,7 @@ def down():
             assert customers_result.data[0]["name"] == "Customer 1"
             assert customers_result.data[1]["name"] == "Customer 2"
 
-        await_(commands.downgrade, raise_sync_error=False)("base")
+        commands.downgrade("base")
 
         with config.provide_session() as driver:
             result = driver.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='customers'")

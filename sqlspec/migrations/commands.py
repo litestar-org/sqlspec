@@ -11,15 +11,14 @@ from rich.table import Table
 from sqlspec._sql import sql
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.context import MigrationContext
-from sqlspec.migrations.runner import MigrationRunner
+from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncConfigT, SyncConfigT
 
-__all__ = ("AsyncMigrationCommands", "MigrationCommands", "SyncMigrationCommands")
+__all__ = ("AsyncMigrationCommands", "SyncMigrationCommands", "create_migration_commands")
 
 logger = get_logger("migrations.commands")
 console = Console()
@@ -41,7 +40,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         context = MigrationContext.from_config(config)
         context.extension_config = self.extension_configs
 
-        self.runner = MigrationRunner(
+        self.runner = SyncMigrationRunner(
             self.migrations_path, self._discover_extension_migrations(), context, self.extension_configs
         )
 
@@ -119,12 +118,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
 
             for version, file_path in pending:
-                migration = self.runner.load_migration_sync(file_path)
+                migration = self.runner.load_migration(file_path)
 
                 console.print(f"\n[cyan]Applying {version}:[/] {migration['description']}")
 
                 try:
-                    _, execution_time = self.runner.execute_upgrade_sync(driver, migration)
+                    _, execution_time = self.runner.execute_upgrade(driver, migration)
                     self.tracker.record_migration(
                         driver, migration["version"], migration["description"], execution_time, migration["checksum"]
                     )
@@ -167,10 +166,10 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 if version not in all_files:
                     console.print(f"[red]Migration file not found for {version}[/]")
                     continue
-                migration = self.runner.load_migration_sync(all_files[version])
+                migration = self.runner.load_migration(all_files[version])
                 console.print(f"\n[cyan]Reverting {version}:[/] {migration['description']}")
                 try:
-                    _, execution_time = self.runner.execute_downgrade_sync(driver, migration)
+                    _, execution_time = self.runner.execute_downgrade(driver, migration)
                     self.tracker.remove_migration(driver, version)
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
                 except Exception as e:
@@ -224,7 +223,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         context = MigrationContext.from_config(config)
         context.extension_config = self.extension_configs
 
-        self.runner = MigrationRunner(
+        self.runner = AsyncMigrationRunner(
             self.migrations_path, self._discover_extension_migrations(), context, self.extension_configs
         )
 
@@ -385,89 +384,17 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         console.print(f"[green]Created migration:[/] {file_path}")
 
 
-class MigrationCommands:
-    """Unified migration commands that adapt to sync/async configs."""
+def create_migration_commands(
+    config: "Union[SyncConfigT, AsyncConfigT]",
+) -> "Union[SyncMigrationCommands[Any], AsyncMigrationCommands[Any]]":
+    """Factory function to create the appropriate migration commands.
 
-    def __init__(self, config: "Union[SyncConfigT, AsyncConfigT]") -> None:
-        """Initialize migration commands with sync/async implementation.
+    Args:
+        config: The SQLSpec configuration.
 
-        Args:
-            config: The SQLSpec configuration.
-        """
-        if config.is_async:
-            self._impl: Union[AsyncMigrationCommands[Any], SyncMigrationCommands[Any]] = AsyncMigrationCommands(
-                cast("AsyncConfigT", config)
-            )
-        else:
-            self._impl = SyncMigrationCommands(cast("SyncConfigT", config))
-        self._is_async = config.is_async
-
-    async def init(self, directory: str, package: bool = True) -> None:
-        """Initialize migration directory structure.
-
-        Args:
-            directory: Directory to initialize migrations in.
-            package: Whether to create __init__.py file.
-        """
-        if self._is_async:
-            await cast("AsyncMigrationCommands[Any]", self._impl).init(directory, package=package)
-        else:
-            await async_(cast("SyncMigrationCommands[Any]", self._impl).init)(directory, package=package)
-
-    async def current(self, verbose: bool = False) -> "Optional[str]":
-        """Show current migration version.
-
-        Args:
-            verbose: Whether to show detailed migration history.
-
-        Returns:
-            The current migration version or None if no migrations applied.
-        """
-        if self._is_async:
-            return await cast("AsyncMigrationCommands[Any]", self._impl).current(verbose=verbose)
-        return await async_(cast("SyncMigrationCommands[Any]", self._impl).current)(verbose=verbose)
-
-    async def upgrade(self, revision: str = "head") -> None:
-        """Upgrade to a target revision.
-
-        Args:
-            revision: Target revision or "head" for latest.
-        """
-        if self._is_async:
-            await cast("AsyncMigrationCommands[Any]", self._impl).upgrade(revision=revision)
-        else:
-            await async_(cast("SyncMigrationCommands[Any]", self._impl).upgrade)(revision=revision)
-
-    async def downgrade(self, revision: str = "-1") -> None:
-        """Downgrade to a target revision.
-
-        Args:
-            revision: Target revision or "-1" for one step back.
-        """
-        if self._is_async:
-            await cast("AsyncMigrationCommands[Any]", self._impl).downgrade(revision=revision)
-        else:
-            await async_(cast("SyncMigrationCommands[Any]", self._impl).downgrade)(revision=revision)
-
-    async def stamp(self, revision: str) -> None:
-        """Mark database as being at a specific revision without running migrations.
-
-        Args:
-            revision: The revision to stamp.
-        """
-        if self._is_async:
-            await cast("AsyncMigrationCommands[Any]", self._impl).stamp(revision)
-        else:
-            await async_(cast("SyncMigrationCommands[Any]", self._impl).stamp)(revision)
-
-    async def revision(self, message: str, file_type: str = "sql") -> None:
-        """Create a new migration file.
-
-        Args:
-            message: Description for the migration.
-            file_type: Type of migration file to create ('sql' or 'py').
-        """
-        if self._is_async:
-            await cast("AsyncMigrationCommands[Any]", self._impl).revision(message, file_type)
-        else:
-            await async_(cast("SyncMigrationCommands[Any]", self._impl).revision)(message, file_type)
+    Returns:
+        Appropriate migration commands instance.
+    """
+    if config.is_async:
+        return AsyncMigrationCommands(cast("AsyncConfigT", config))
+    return SyncMigrationCommands(cast("SyncConfigT", config))

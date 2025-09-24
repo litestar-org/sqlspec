@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from sqlspec.migrations.context import MigrationContext
-from sqlspec.migrations.runner import MigrationRunner
+from sqlspec.migrations.runner import create_migration_runner
 from sqlspec.utils.config_resolver import resolve_config_async
 from sqlspec.utils.sync_tools import run_
 
@@ -97,31 +97,35 @@ class TestAsyncMigrationsIntegration:
 
         run_(_test)()
 
-    def test_unified_migration_runner_sync_driver_detection(self, temp_migration_dir: Any, mock_config: Any) -> None:
-        """Test unified migration runner with sync driver detection."""
+    def test_sync_migration_runner_instantiation(self, temp_migration_dir: Any, mock_config: Any) -> None:
+        """Test sync migration runner instantiation."""
+        from sqlspec.migrations.runner import SyncMigrationRunner
+
         context = MigrationContext.from_config(mock_config)
-        runner = MigrationRunner(temp_migration_dir, {}, context, {})
+        runner = SyncMigrationRunner(temp_migration_dir, {}, context, {})
 
-        # Mock sync driver
-        sync_driver = Mock()
-        sync_driver.execute_script = Mock()  # Regular function
+        # Verify it's a sync runner
+        assert isinstance(runner, SyncMigrationRunner)
+        assert hasattr(runner, "load_migration")
+        assert hasattr(runner, "execute_upgrade")
 
-        assert not runner._is_async_driver(sync_driver)  # type: ignore[reportPrivateUsage]
+    def test_async_migration_runner_instantiation(self, temp_migration_dir: Any, mock_config: Any) -> None:
+        """Test async migration runner instantiation."""
+        from sqlspec.migrations.runner import AsyncMigrationRunner
 
-    def test_unified_migration_runner_async_driver_detection(self, temp_migration_dir: Any, mock_config: Any) -> None:
-        """Test unified migration runner with async driver detection."""
         context = MigrationContext.from_config(mock_config)
-        runner = MigrationRunner(temp_migration_dir, {}, context, {})
+        runner = AsyncMigrationRunner(temp_migration_dir, {}, context, {})
 
-        # Mock async driver
-        async_driver = Mock()
+        # Verify it's an async runner
+        assert isinstance(runner, AsyncMigrationRunner)
+        assert hasattr(runner, "load_migration")
+        assert hasattr(runner, "execute_upgrade")
 
-        async def mock_execute() -> None:
-            pass
+        # Verify methods are async
+        import inspect
 
-        async_driver.execute_script = mock_execute
-
-        assert runner._is_async_driver(async_driver)  # type: ignore[reportPrivateUsage]
+        assert inspect.iscoroutinefunction(runner.load_migration)
+        assert inspect.iscoroutinefunction(runner.execute_upgrade)
 
     def test_async_python_migration_execution(self, temp_migration_dir: Any) -> None:
         """Test execution of async Python migration."""
@@ -188,7 +192,7 @@ async def down(context):
 """)
 
         context = MigrationContext(dialect="postgres")
-        runner = MigrationRunner(temp_migration_dir, {}, context, {})
+        runner = create_migration_runner(temp_migration_dir, {}, context, {}, is_async=False)
 
         # Get migration files
         migrations = runner.get_migration_files()

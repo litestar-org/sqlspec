@@ -1,4 +1,5 @@
 # ruff: noqa: C901
+import inspect
 import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
@@ -223,6 +224,12 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
             filtered = [(name, config) for name, config in filtered if name not in exclude]
         return filtered
 
+    async def maybe_await(result: Any) -> Any:
+        """Await result if it's a coroutine, otherwise return it directly."""
+        if inspect.iscoroutine(result):
+            return await result
+        return result
+
     def process_multiple_configs(
         ctx: "click.Context",
         bind_key: Optional[str],
@@ -281,7 +288,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         bind_key: Optional[str], verbose: bool, include: "tuple[str, ...]", exclude: "tuple[str, ...]"
     ) -> None:
         """Show current database revision."""
-        from sqlspec.migrations.commands import MigrationCommands
+        from sqlspec.migrations.commands import create_migration_commands
 
         ctx = click.get_current_context()
 
@@ -305,16 +312,16 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 for config_name, config in configs_to_process:
                     console.print(f"\n[blue]Configuration: {config_name}[/]")
                     try:
-                        migration_commands = MigrationCommands(config=config)
-                        await migration_commands.current(verbose=verbose)
+                        migration_commands = create_migration_commands(config=config)
+                        await maybe_await(migration_commands.current(verbose=verbose))
                     except Exception as e:
                         console.print(f"[red]✗ Failed to get current revision for {config_name}: {e}[/]")
             else:
                 # Single config operation
                 console.rule("[yellow]Listing current revision[/]", align="left")
                 sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
-                migration_commands = MigrationCommands(config=sqlspec_config)
-                await migration_commands.current(verbose=verbose)
+                migration_commands = create_migration_commands(config=sqlspec_config)
+                await maybe_await(migration_commands.current(verbose=verbose))
 
         run_(_show_current_revision)()
 
@@ -336,7 +343,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         """Downgrade the database to the latest revision."""
         from rich.prompt import Confirm
 
-        from sqlspec.migrations.commands import MigrationCommands
+        from sqlspec.migrations.commands import create_migration_commands
 
         ctx = click.get_current_context()
 
@@ -366,8 +373,8 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 for config_name, config in configs_to_process:
                     console.print(f"[blue]Downgrading configuration: {config_name}[/]")
                     try:
-                        migration_commands = MigrationCommands(config=config)
-                        await migration_commands.downgrade(revision=revision)
+                        migration_commands = create_migration_commands(config=config)
+                        await maybe_await(migration_commands.downgrade(revision=revision))
                         console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
                     except Exception as e:
                         console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
@@ -381,8 +388,8 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 )
                 if input_confirmed:
                     sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
-                    migration_commands = MigrationCommands(config=sqlspec_config)
-                    await migration_commands.downgrade(revision=revision)
+                    migration_commands = create_migration_commands(config=sqlspec_config)
+                    await maybe_await(migration_commands.downgrade(revision=revision))
 
         run_(_downgrade_database)()
 
@@ -406,7 +413,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         """Upgrade the database to the latest revision."""
         from rich.prompt import Confirm
 
-        from sqlspec.migrations.commands import MigrationCommands
+        from sqlspec.migrations.commands import create_migration_commands
 
         ctx = click.get_current_context()
 
@@ -435,8 +442,8 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 for config_name, config in configs_to_process:
                     console.print(f"[blue]Upgrading configuration: {config_name}[/]")
                     try:
-                        migration_commands = MigrationCommands(config=config)
-                        await migration_commands.upgrade(revision=revision)
+                        migration_commands = create_migration_commands(config=config)
+                        await maybe_await(migration_commands.upgrade(revision=revision))
                         console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
                     except Exception as e:
                         console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
@@ -452,8 +459,8 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 )
                 if input_confirmed:
                     sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
-                    migration_commands = MigrationCommands(config=sqlspec_config)
-                    await migration_commands.upgrade(revision=revision)
+                    migration_commands = create_migration_commands(config=sqlspec_config)
+                    await maybe_await(migration_commands.upgrade(revision=revision))
 
         run_(_upgrade_database)()
 
@@ -462,14 +469,14 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     @bind_key_option
     def stamp(bind_key: Optional[str], revision: str) -> None:  # pyright: ignore[reportUnusedFunction]
         """Stamp the revision table with the given revision."""
-        from sqlspec.migrations.commands import MigrationCommands
+        from sqlspec.migrations.commands import create_migration_commands
 
         ctx = click.get_current_context()
 
         async def _stamp() -> None:
             sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
-            migration_commands = MigrationCommands(config=sqlspec_config)
-            await migration_commands.stamp(revision=revision)
+            migration_commands = create_migration_commands(config=sqlspec_config)
+            await maybe_await(migration_commands.stamp(revision=revision))
 
         run_(_stamp)()
 
@@ -484,7 +491,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         """Initialize the database migrations."""
         from rich.prompt import Confirm
 
-        from sqlspec.migrations.commands import MigrationCommands
+        from sqlspec.migrations.commands import create_migration_commands
 
         ctx = click.get_current_context()
 
@@ -510,8 +517,8 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                     target_directory = (
                         migration_config.get("script_location", "migrations") if directory is None else directory
                     )
-                    migration_commands = MigrationCommands(config=actual_config)
-                    await migration_commands.init(directory=cast("str", target_directory), package=package)
+                    migration_commands = create_migration_commands(config=actual_config)
+                    await maybe_await(migration_commands.init(directory=cast("str", target_directory), package=package))
 
         run_(_init_sqlspec)()
 
@@ -525,7 +532,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         """Create a new database revision."""
         from rich.prompt import Prompt
 
-        from sqlspec.migrations.commands import MigrationCommands
+        from sqlspec.migrations.commands import create_migration_commands
 
         ctx = click.get_current_context()
 
@@ -538,8 +545,8 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 )
 
             sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
-            migration_commands = MigrationCommands(config=sqlspec_config)
-            await migration_commands.revision(message=message_text)
+            migration_commands = create_migration_commands(config=sqlspec_config)
+            await maybe_await(migration_commands.revision(message=message_text))
 
         run_(_create_revision)()
 
