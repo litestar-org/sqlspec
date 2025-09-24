@@ -284,7 +284,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             await self.tracker.ensure_tracking_table(driver)
 
             current = await self.tracker.get_current_version(driver)
-            all_migrations = self.runner.get_migration_files()
+            all_migrations = await self.runner.get_migration_files()
             pending = []
             for version, file_path in all_migrations:
                 if (current is None or version > current) and (revision == "head" or version <= revision):
@@ -333,7 +333,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 return
 
             console.print(f"[yellow]Reverting {len(to_revert)} migrations[/]")
-            all_files = dict(self.runner.get_migration_files())
+            all_files = dict(await self.runner.get_migration_files())
             for migration_record in to_revert:
                 version = migration_record["version_num"]
                 if version not in all_files:
@@ -360,7 +360,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
 
-            all_migrations = dict(self.runner.get_migration_files())
+            all_migrations = dict(await self.runner.get_migration_files())
             if revision not in all_migrations:
                 console.print(f"[red]Unknown revision: {revision}[/]")
                 return
@@ -377,7 +377,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
         """
-        existing = self.runner.get_migration_files()
+        existing = await self.runner.get_migration_files()
         next_num = int(existing[-1][0]) + 1 if existing else 1
         next_version = str(next_num).zfill(4)
         file_path = create_migration_file(self.migrations_path, next_version, message, file_type)

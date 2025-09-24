@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from sqlspec.migrations.context import MigrationContext
-from sqlspec.migrations.runner import create_migration_runner
+from sqlspec.migrations.runner import SyncMigrationRunner, create_migration_runner
 from sqlspec.utils.config_resolver import resolve_config_async
 from sqlspec.utils.sync_tools import run_
 
@@ -99,7 +99,6 @@ class TestAsyncMigrationsIntegration:
 
     def test_sync_migration_runner_instantiation(self, temp_migration_dir: Any, mock_config: Any) -> None:
         """Test sync migration runner instantiation."""
-        from sqlspec.migrations.runner import SyncMigrationRunner
 
         context = MigrationContext.from_config(mock_config)
         runner = SyncMigrationRunner(temp_migration_dir, {}, context, {})

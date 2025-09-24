@@ -4,10 +4,11 @@ This module provides separate sync and async migration runners with clean separa
 of concerns and proper type safety.
 """
 
+import operator
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast, overload
 
 from sqlspec.core.statement import SQL
 from sqlspec.migrations.context import MigrationContext
@@ -101,7 +102,6 @@ class BaseMigrationRunner(ABC):
         Returns:
             List of tuples containing (version, file_path).
         """
-        import operator
 
         migrations = []
 
@@ -365,6 +365,14 @@ class SyncMigrationRunner(BaseMigrationRunner):
 class AsyncMigrationRunner(BaseMigrationRunner):
     """Asynchronous migration runner with pure async methods."""
 
+    async def get_migration_files(self) -> "list[tuple[str, Path]]":  # type: ignore[override]
+        """Get all migration files sorted by version.
+
+        Returns:
+            List of (version, path) tuples sorted by version.
+        """
+        return self._get_migration_files_sync()
+
     async def load_migration(self, file_path: Path) -> "dict[str, Any]":
         """Load a migration file and extract its components.
 
@@ -491,7 +499,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             Dictionary mapping query names to SQL objects.
         """
         all_queries = {}
-        migrations = self.get_migration_files()
+        migrations = await self.get_migration_files()
 
         for version, file_path in migrations:
             if file_path.suffix == ".sql":
@@ -514,6 +522,26 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                     logger.debug("Failed to load Python migration %s: %s", file_path, e)
 
         return all_queries
+
+
+@overload
+def create_migration_runner(
+    migrations_path: Path,
+    extension_migrations: "dict[str, Path]",
+    context: "Optional[MigrationContext]",
+    extension_configs: "dict[str, Any]",
+    is_async: "Literal[False]" = False,
+) -> SyncMigrationRunner: ...
+
+
+@overload
+def create_migration_runner(
+    migrations_path: Path,
+    extension_migrations: "dict[str, Path]",
+    context: "Optional[MigrationContext]",
+    extension_configs: "dict[str, Any]",
+    is_async: "Literal[True]",
+) -> AsyncMigrationRunner: ...
 
 
 def create_migration_runner(
