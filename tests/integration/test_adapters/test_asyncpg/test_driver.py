@@ -625,3 +625,173 @@ async def test_asyncpg_pgvector_integration(asyncpg_session: AsyncpgDriver) -> N
     result = await asyncpg_session.execute("SELECT 1 as test_value")
     assert result.data is not None
     assert result.data[0]["test_value"] == 1
+
+
+@pytest.mark.asyncpg
+async def test_for_update_locking(asyncpg_session: AsyncpgDriver) -> None:
+    """Test FOR UPDATE row locking."""
+    from sqlspec import sql
+
+    # Insert test data
+    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_lock", 100))
+
+    try:
+        await asyncpg_session.begin()
+
+        # Test basic FOR UPDATE
+        result = await asyncpg_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "test_lock").for_update()
+        )
+        assert result is not None
+        assert result["name"] == "test_lock"
+        assert result["value"] == 100
+
+        await asyncpg_session.commit()
+    except Exception:
+        await asyncpg_session.rollback()
+        raise
+
+
+@pytest.mark.asyncpg
+async def test_for_update_skip_locked(postgres_service: PostgresService) -> None:
+    """Test SKIP LOCKED functionality with two sessions."""
+    from sqlspec import sql
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+    config = AsyncpgConfig(
+        pool_config={
+            "dsn": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "min_size": 1,
+            "max_size": 5,
+        }
+    )
+
+    try:
+        # Get two separate sessions from the same config
+        async with config.provide_session() as session1:
+            async with config.provide_session() as session2:
+                # Setup test data in session1
+                await session1.execute_script("""
+                    CREATE TABLE IF NOT EXISTS test_lock_table (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        status TEXT DEFAULT 'pending'
+                    )
+                """)
+                await session1.execute("INSERT INTO test_lock_table (name) VALUES ($1)", ("lock_test",))
+
+                try:
+                    # Start transaction in first session and lock row
+                    await session1.begin()
+                    locked = await session1.select_one(
+                        sql.select("*").from_("test_lock_table").where_eq("name", "lock_test").for_update()
+                    )
+                    assert locked is not None
+
+                    # Try to lock same row in second session with SKIP LOCKED
+                    await session2.begin()
+                    result = await session2.select_one_or_none(
+                        sql.select("*")
+                        .from_("test_lock_table")
+                        .where_eq("name", "lock_test")
+                        .for_update(skip_locked=True)
+                    )
+                    assert result is None  # Row should be skipped because it's locked
+
+                    # Cleanup
+                    await session1.rollback()
+                    await session2.rollback()
+                except Exception:
+                    await session1.rollback()
+                    await session2.rollback()
+                    raise
+                finally:
+                    await session1.execute_script("DROP TABLE IF EXISTS test_lock_table")
+    finally:
+        await config.close_pool()
+
+
+@pytest.mark.asyncpg
+async def test_for_update_nowait(asyncpg_session: AsyncpgDriver) -> None:
+    """Test FOR UPDATE NOWAIT."""
+    from sqlspec import sql
+
+    # Insert test data
+    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_nowait", 200))
+
+    try:
+        await asyncpg_session.begin()
+
+        # Test FOR UPDATE NOWAIT
+        result = await asyncpg_session.select_one(
+            sql.select("*").from_("test_table").where_eq("name", "test_nowait").for_update(nowait=True)
+        )
+        assert result is not None
+        assert result["name"] == "test_nowait"
+
+        await asyncpg_session.commit()
+    except Exception:
+        await asyncpg_session.rollback()
+        raise
+
+
+@pytest.mark.asyncpg
+async def test_for_share_locking(asyncpg_session: AsyncpgDriver) -> None:
+    """Test FOR SHARE row locking."""
+    from sqlspec import sql
+
+    # Insert test data
+    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_share", 300))
+
+    try:
+        await asyncpg_session.begin()
+
+        # Test basic FOR SHARE
+        result = await asyncpg_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "test_share").for_share()
+        )
+        assert result is not None
+        assert result["name"] == "test_share"
+        assert result["value"] == 300
+
+        await asyncpg_session.commit()
+    except Exception:
+        await asyncpg_session.rollback()
+        raise
+
+
+@pytest.mark.asyncpg
+async def test_for_update_of_tables(asyncpg_session: AsyncpgDriver) -> None:
+    """Test FOR UPDATE OF specific tables with joins."""
+    from sqlspec import sql
+
+    # Create additional table for join
+    await asyncpg_session.execute_script("""
+        CREATE TABLE IF NOT EXISTS test_users (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL
+        )
+    """)
+
+    await asyncpg_session.execute("INSERT INTO test_users (name) VALUES ($1)", ("user1",))
+    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("join_test", 400))
+
+    try:
+        await asyncpg_session.begin()
+
+        # Test FOR UPDATE OF specific table in join
+        result = await asyncpg_session.select_one(
+            sql.select("t.id", "t.name", "u.name")
+            .from_("test_table t")
+            .join("test_users u ON t.id = u.id")
+            .where_eq("t.name", "join_test")
+            .for_update(of=["t"])  # Only lock test_table, not test_users
+        )
+        assert result is not None
+
+        await asyncpg_session.commit()
+    except Exception:
+        await asyncpg_session.rollback()
+        raise
+    finally:
+        await asyncpg_session.execute_script("DROP TABLE IF EXISTS test_users")

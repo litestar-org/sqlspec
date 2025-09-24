@@ -283,3 +283,128 @@ def test_sync_delete_operation(oracle_sync_session: OracleSyncDriver) -> None:
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
+
+
+def test_oracle_sync_for_update_locking(oracle_sync_session: OracleSyncDriver) -> None:
+    """Test FOR UPDATE row locking with Oracle (sync)."""
+    from sqlspec import sql
+
+    # Setup test table
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    oracle_sync_session.execute_script("""
+        CREATE TABLE test_table (
+            id NUMBER PRIMARY KEY,
+            name VARCHAR2(50),
+            value NUMBER
+        )
+    """)
+
+    # Insert test data
+    oracle_sync_session.execute(
+        "INSERT INTO test_table (id, name, value) VALUES (1, :1, :2)", ("oracle_sync_lock", 100)
+    )
+
+    try:
+        oracle_sync_session.begin()
+
+        # Test basic FOR UPDATE
+        result = oracle_sync_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "oracle_sync_lock").for_update()
+        )
+        assert result is not None
+        assert result["NAME"] == "oracle_sync_lock"
+        assert result["VALUE"] == 100
+
+        oracle_sync_session.commit()
+    except Exception:
+        oracle_sync_session.rollback()
+        raise
+    finally:
+        oracle_sync_session.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        )
+
+
+def test_oracle_sync_for_update_nowait(oracle_sync_session: OracleSyncDriver) -> None:
+    """Test FOR UPDATE NOWAIT with Oracle (sync)."""
+    from sqlspec import sql
+
+    # Setup test table
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    oracle_sync_session.execute_script("""
+        CREATE TABLE test_table (
+            id NUMBER PRIMARY KEY,
+            name VARCHAR2(50),
+            value NUMBER
+        )
+    """)
+
+    # Insert test data
+    oracle_sync_session.execute(
+        "INSERT INTO test_table (id, name, value) VALUES (1, :1, :2)", ("oracle_sync_nowait", 200)
+    )
+
+    try:
+        oracle_sync_session.begin()
+
+        # Test FOR UPDATE NOWAIT
+        result = oracle_sync_session.select_one(
+            sql.select("*").from_("test_table").where_eq("name", "oracle_sync_nowait").for_update(nowait=True)
+        )
+        assert result is not None
+        assert result["NAME"] == "oracle_sync_nowait"
+
+        oracle_sync_session.commit()
+    except Exception:
+        oracle_sync_session.rollback()
+        raise
+    finally:
+        oracle_sync_session.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        )
+
+
+def test_oracle_sync_for_share_locking(oracle_sync_session: OracleSyncDriver) -> None:
+    """Test FOR SHARE row locking with Oracle (sync)."""
+    from sqlspec import sql
+
+    # Setup test table
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    oracle_sync_session.execute_script("""
+        CREATE TABLE test_table (
+            id NUMBER PRIMARY KEY,
+            name VARCHAR2(50),
+            value NUMBER
+        )
+    """)
+
+    # Insert test data
+    oracle_sync_session.execute(
+        "INSERT INTO test_table (id, name, value) VALUES (1, :1, :2)", ("oracle_sync_share", 300)
+    )
+
+    try:
+        oracle_sync_session.begin()
+
+        # Test FOR SHARE (Oracle uses FOR UPDATE for shared locks too)
+        result = oracle_sync_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "oracle_sync_share").for_share()
+        )
+        assert result is not None
+        assert result["NAME"] == "oracle_sync_share"
+        assert result["VALUE"] == 300
+
+        oracle_sync_session.commit()
+    except Exception:
+        oracle_sync_session.rollback()
+        raise
+    finally:
+        oracle_sync_session.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        )

@@ -421,3 +421,89 @@ def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> 
     assert agg_result.data is not None
     assert agg_result.data[0]["count"] == 2
     assert agg_result.data[0]["total"] == 300
+
+
+def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
+    """Test that FOR UPDATE generates SQL for ADBC (SQLite backend has limited locking)."""
+    from sqlspec import sql
+
+    # Setup test table
+    adbc_sqlite_session.execute_script("DROP TABLE IF EXISTS test_table")
+    adbc_sqlite_session.execute_script("""
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("adbc_lock", 100))
+
+    # Should generate SQL even though SQLite backend has limited locking support
+    query = sql.select("*").from_("test_table").where_eq("name", "adbc_lock").for_update()
+    stmt = query.build()
+    assert "FOR UPDATE" in stmt.sql
+
+    # Should execute without error
+    result = adbc_sqlite_session.execute(query)
+    assert result is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "adbc_lock"
+
+
+def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
+    """Test that FOR SHARE generates SQL for ADBC."""
+    from sqlspec import sql
+
+    # Setup test table
+    adbc_sqlite_session.execute_script("DROP TABLE IF EXISTS test_table")
+    adbc_sqlite_session.execute_script("""
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("adbc_share", 200))
+
+    # Should generate SQL even though backend support may vary
+    query = sql.select("*").from_("test_table").where_eq("name", "adbc_share").for_share()
+    stmt = query.build()
+    assert "FOR SHARE" in stmt.sql
+
+    # Should execute without error
+    result = adbc_sqlite_session.execute(query)
+    assert result is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "adbc_share"
+
+
+def test_adbc_for_update_skip_locked_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
+    """Test that FOR UPDATE SKIP LOCKED generates SQL for ADBC."""
+    from sqlspec import sql
+
+    # Setup test table
+    adbc_sqlite_session.execute_script("DROP TABLE IF EXISTS test_table")
+    adbc_sqlite_session.execute_script("""
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("adbc_skip", 300))
+
+    # Should generate SQL
+    query = sql.select("*").from_("test_table").where_eq("name", "adbc_skip").for_update(skip_locked=True)
+    stmt = query.build()
+    assert stmt.sql is not None
+
+    # Should execute (backend will handle locking support)
+    result = adbc_sqlite_session.execute(query)
+    assert result is not None
+    assert len(result.data) == 1

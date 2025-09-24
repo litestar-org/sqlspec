@@ -1737,3 +1737,54 @@ def test_with_statements_still_work_with_sql_call() -> None:
 
     assert isinstance(query, Select)
     assert not isinstance(query, SQL)
+
+
+def test_for_update_with_sql_factory() -> None:
+    """Test sql.select().for_update() combinations."""
+    query = sql.select("id", "status", dialect="postgres").from_("job").for_update()
+    stmt = query.build()
+
+    assert "FOR UPDATE" in stmt.sql
+    assert "SELECT" in stmt.sql
+    assert "job" in stmt.sql
+
+
+def test_for_update_chaining_with_where() -> None:
+    """Test for_update chaining with other operations."""
+    query = (
+        sql.select("id", "status", dialect="postgres")
+        .from_("job")
+        .where_eq("user_id", 123)
+        .for_update(skip_locked=True)
+    )
+    stmt = query.build()
+
+    assert "FOR UPDATE SKIP LOCKED" in stmt.sql
+    # PostgreSQL uses %(param)s format, not :param format
+    assert "%(user_id)s" in stmt.sql or ":user_id" in stmt.sql
+    assert stmt.parameters["user_id"] == 123
+
+
+def test_for_share_with_sql_factory() -> None:
+    """Test sql.select().for_share() functionality."""
+    query = sql.select("*", dialect="postgres").from_("job").for_share(nowait=True)
+    stmt = query.build()
+
+    assert "FOR SHARE NOWAIT" in stmt.sql
+
+
+def test_for_update_of_with_parameters() -> None:
+    """Test FOR UPDATE OF with parameter binding."""
+    query = (
+        sql.select("j.id", "u.name", dialect="postgres")
+        .from_("job j")
+        .join("users u ON j.user_id = u.id")
+        .where_eq("j.status", "pending")
+        .for_update(of=["j"])
+    )
+    stmt = query.build()
+
+    assert "FOR UPDATE OF j" in stmt.sql
+    # PostgreSQL uses %(param)s format, not :param format
+    assert "%(status)s" in stmt.sql or ":status" in stmt.sql
+    assert stmt.parameters["status"] == "pending"

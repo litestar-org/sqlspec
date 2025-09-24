@@ -546,3 +546,110 @@ def test_psycopg_sync_pgvector_integration(psycopg_session: PsycopgSyncDriver) -
     result = psycopg_session.execute("SELECT 1 as test_value")
     assert result.data is not None
     assert result.data[0]["test_value"] == 1
+
+
+def test_psycopg_sync_for_update_locking(psycopg_session: PsycopgSyncDriver) -> None:
+    """Test FOR UPDATE row locking with psycopg (sync)."""
+    from sqlspec import sql
+
+    # Setup test table
+    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+    psycopg_session.execute_script("""
+        CREATE TABLE test_table (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(50),
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("psycopg_lock", 100))
+
+    try:
+        psycopg_session.begin()
+
+        # Test basic FOR UPDATE
+        result = psycopg_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "psycopg_lock").for_update()
+        )
+        assert result is not None
+        assert result["name"] == "psycopg_lock"
+        assert result["value"] == 100
+
+        psycopg_session.commit()
+    except Exception:
+        psycopg_session.rollback()
+        raise
+    finally:
+        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+def test_psycopg_sync_for_update_skip_locked(psycopg_session: PsycopgSyncDriver) -> None:
+    """Test FOR UPDATE SKIP LOCKED with psycopg (sync)."""
+    from sqlspec import sql
+
+    # Setup test table
+    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+    psycopg_session.execute_script("""
+        CREATE TABLE test_table (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(50),
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("psycopg_skip", 200))
+
+    try:
+        psycopg_session.begin()
+
+        # Test FOR UPDATE SKIP LOCKED
+        result = psycopg_session.select_one(
+            sql.select("*").from_("test_table").where_eq("name", "psycopg_skip").for_update(skip_locked=True)
+        )
+        assert result is not None
+        assert result["name"] == "psycopg_skip"
+
+        psycopg_session.commit()
+    except Exception:
+        psycopg_session.rollback()
+        raise
+    finally:
+        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+def test_psycopg_sync_for_share_locking(psycopg_session: PsycopgSyncDriver) -> None:
+    """Test FOR SHARE row locking with psycopg (sync)."""
+    from sqlspec import sql
+
+    # Setup test table
+    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")
+    psycopg_session.execute_script("""
+        CREATE TABLE test_table (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(50),
+            value INTEGER
+        )
+    """)
+
+    # Insert test data
+    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("psycopg_share", 300))
+
+    try:
+        psycopg_session.begin()
+
+        # Test FOR SHARE
+        result = psycopg_session.select_one(
+            sql.select("id", "name", "value").from_("test_table").where_eq("name", "psycopg_share").for_share()
+        )
+        assert result is not None
+        assert result["name"] == "psycopg_share"
+        assert result["value"] == 300
+
+        psycopg_session.commit()
+    except Exception:
+        psycopg_session.rollback()
+        raise
+    finally:
+        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table")

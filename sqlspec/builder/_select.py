@@ -169,3 +169,148 @@ class Select(
                 )
 
         return SafeQuery(sql=modified_sql, parameters=safe_query.parameters, dialect=safe_query.dialect)
+
+    def for_update(
+        self, *, skip_locked: bool = False, nowait: bool = False, of: "Optional[Union[str, list[str]]]" = None
+    ) -> "Self":
+        """Add FOR UPDATE clause to SELECT statement for row-level locking.
+
+        Args:
+            skip_locked: Skip rows that are already locked (SKIP LOCKED)
+            nowait: Return immediately if row is locked (NOWAIT)
+            of: Table names/aliases to lock (FOR UPDATE OF table)
+
+        Returns:
+            Self for method chaining
+
+        Raises:
+            SQLBuilderError: If not applied to SELECT statement or invalid parameters
+        """
+        from sqlspec.exceptions import SQLBuilderError
+
+        if self._expression is None or not isinstance(self._expression, exp.Select):
+            msg = "FOR UPDATE can only be applied to SELECT statements"
+            raise SQLBuilderError(msg)
+
+        if skip_locked and nowait:
+            msg = "Cannot use both skip_locked and nowait"
+            raise SQLBuilderError(msg)
+
+        lock_args = {"update": True}
+
+        if skip_locked:
+            lock_args["wait"] = False  # SKIP LOCKED
+        elif nowait:
+            lock_args["wait"] = True  # NOWAIT
+
+        if of:
+            tables = [of] if isinstance(of, str) else of
+            lock_args["expressions"] = [exp.table_(t) for t in tables]  # type: ignore[assignment]
+
+        lock = exp.Lock(**lock_args)
+
+        current_locks = self._expression.args.get("locks", [])
+        current_locks.append(lock)
+        self._expression.set("locks", current_locks)
+
+        return self
+
+    def for_share(
+        self, *, skip_locked: bool = False, nowait: bool = False, of: "Optional[Union[str, list[str]]]" = None
+    ) -> "Self":
+        """Add FOR SHARE clause for shared row-level locking.
+
+        Args:
+            skip_locked: Skip rows that are already locked (SKIP LOCKED)
+            nowait: Return immediately if row is locked (NOWAIT)
+            of: Table names/aliases to lock (FOR SHARE OF table)
+
+        Returns:
+            Self for method chaining
+
+        Raises:
+            SQLBuilderError: If not applied to SELECT statement or invalid parameters
+        """
+        from sqlspec.exceptions import SQLBuilderError
+
+        if self._expression is None or not isinstance(self._expression, exp.Select):
+            msg = "FOR SHARE can only be applied to SELECT statements"
+            raise SQLBuilderError(msg)
+
+        if skip_locked and nowait:
+            msg = "Cannot use both skip_locked and nowait"
+            raise SQLBuilderError(msg)
+
+        lock_args = {"update": False}  # FOR SHARE uses update=False
+
+        if skip_locked:
+            lock_args["wait"] = False  # SKIP LOCKED
+        elif nowait:
+            lock_args["wait"] = True  # NOWAIT
+
+        if of:
+            tables = [of] if isinstance(of, str) else of
+            lock_args["expressions"] = [exp.table_(t) for t in tables]  # type: ignore[assignment]
+
+        lock = exp.Lock(**lock_args)
+
+        current_locks = self._expression.args.get("locks", [])
+        current_locks.append(lock)
+        self._expression.set("locks", current_locks)
+
+        return self
+
+    def for_key_share(self) -> "Self":
+        """Add FOR KEY SHARE clause (PostgreSQL-specific).
+
+        FOR KEY SHARE is like FOR SHARE, but the lock is weaker:
+        SELECT FOR UPDATE is blocked, but not SELECT FOR NO KEY UPDATE.
+
+        Returns:
+            Self for method chaining
+
+        Raises:
+            SQLBuilderError: If not applied to SELECT statement
+        """
+        from sqlspec.exceptions import SQLBuilderError
+
+        if self._expression is None or not isinstance(self._expression, exp.Select):
+            msg = "FOR KEY SHARE can only be applied to SELECT statements"
+            raise SQLBuilderError(msg)
+
+        # FOR KEY SHARE is represented as a Lock with key=True, update=False
+        lock = exp.Lock(update=False, key=True)
+
+        current_locks = self._expression.args.get("locks", [])
+        current_locks.append(lock)
+        self._expression.set("locks", current_locks)
+
+        return self
+
+    def for_no_key_update(self) -> "Self":
+        """Add FOR NO KEY UPDATE clause (PostgreSQL-specific).
+
+        FOR NO KEY UPDATE is like FOR UPDATE, but the lock is weaker:
+        it does not block SELECT FOR KEY SHARE commands that attempt to
+        acquire a share lock on the same rows.
+
+        Returns:
+            Self for method chaining
+
+        Raises:
+            SQLBuilderError: If not applied to SELECT statement
+        """
+        from sqlspec.exceptions import SQLBuilderError
+
+        if self._expression is None or not isinstance(self._expression, exp.Select):
+            msg = "FOR NO KEY UPDATE can only be applied to SELECT statements"
+            raise SQLBuilderError(msg)
+
+        # FOR NO KEY UPDATE is represented as a Lock with key=False, update=True
+        lock = exp.Lock(update=True, key=False)
+
+        current_locks = self._expression.args.get("locks", [])
+        current_locks.append(lock)
+        self._expression.set("locks", current_locks)
+
+        return self
