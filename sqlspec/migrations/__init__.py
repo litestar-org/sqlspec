@@ -4,7 +4,7 @@ A native migration system for SQLSpec that leverages the SQLFileLoader
 and driver system for database versioning.
 """
 
-from sqlspec.migrations.commands import AsyncMigrationCommands, MigrationCommands, SyncMigrationCommands
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
 from sqlspec.migrations.loaders import (
     BaseMigrationLoader,
     MigrationLoadError,
@@ -12,7 +12,7 @@ from sqlspec.migrations.loaders import (
     SQLFileLoader,
     get_migration_loader,
 )
-from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
+from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner, create_migration_runner
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.utils import create_migration_file, drop_all, get_author
 
@@ -21,14 +21,15 @@ __all__ = (
     "AsyncMigrationRunner",
     "AsyncMigrationTracker",
     "BaseMigrationLoader",
-    "MigrationCommands",
     "MigrationLoadError",
     "PythonFileLoader",
     "SQLFileLoader",
     "SyncMigrationCommands",
     "SyncMigrationRunner",
     "SyncMigrationTracker",
+    "create_migration_commands",
     "create_migration_file",
+    "create_migration_runner",
     "drop_all",
     "get_author",
     "get_migration_loader",

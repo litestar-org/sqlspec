@@ -8,7 +8,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
-from sqlspec.migrations.commands import AsyncMigrationCommands, MigrationCommands
+from sqlspec.migrations.commands import AsyncMigrationCommands, create_migration_commands
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -29,7 +29,7 @@ def test_psycopg_sync_migration_full_workflow(postgres_service: PostgresService)
             },
             migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -192,7 +192,7 @@ def test_psycopg_sync_multiple_migrations_workflow(postgres_service: PostgresSer
             },
             migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -408,7 +408,7 @@ def test_psycopg_sync_migration_current_command(postgres_service: PostgresServic
             },
             migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
         try:
             commands.init(str(migration_dir), package=True)
@@ -535,7 +535,7 @@ def test_psycopg_sync_migration_error_handling(postgres_service: PostgresService
                 "version_table_name": "sqlspec_migrations_psycopg_sync_error",
             },
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
         try:
             commands.init(str(migration_dir), package=True)
@@ -648,7 +648,7 @@ def test_psycopg_sync_migration_with_transactions(postgres_service: PostgresServ
             },
             migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
         try:
             commands.init(str(migration_dir), package=True)

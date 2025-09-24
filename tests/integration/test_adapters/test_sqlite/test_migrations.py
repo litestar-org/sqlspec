@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.migrations.commands import MigrationCommands
+from sqlspec.migrations.commands import create_migration_commands
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -16,11 +16,12 @@ def test_sqlite_migration_full_workflow() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
 
+        temp_db = str(Path(temp_dir) / "test.db")
         config = SqliteConfig(
-            pool_config={"database": ":memory:"},
+            pool_config={"database": temp_db},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -75,11 +76,12 @@ def test_sqlite_multiple_migrations_workflow() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
 
+        temp_db = str(Path(temp_dir) / "test.db")
         config = SqliteConfig(
-            pool_config={"database": ":memory:"},
+            pool_config={"database": temp_db},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -167,11 +169,12 @@ def test_sqlite_migration_current_command() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
 
+        temp_db = str(Path(temp_dir) / "test.db")
         config = SqliteConfig(
-            pool_config={"database": ":memory:"},
+            pool_config={"database": temp_db},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -202,11 +205,12 @@ def test_sqlite_migration_error_handling() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
 
+        temp_db = str(Path(temp_dir) / "test.db")
         config = SqliteConfig(
-            pool_config={"database": ":memory:"},
+            pool_config={"database": temp_db},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -234,11 +238,12 @@ def test_sqlite_migration_with_transactions() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
 
+        temp_db = str(Path(temp_dir) / "test.db")
         config = SqliteConfig(
-            pool_config={"database": ":memory:"},
+            pool_config={"database": temp_db},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = MigrationCommands(config)
+        commands = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 

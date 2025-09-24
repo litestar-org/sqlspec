@@ -1,6 +1,8 @@
 """Migration context for passing runtime information to migrations."""
 
-from dataclasses import dataclass
+import asyncio
+import inspect
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlspec.utils.logging import get_logger
@@ -33,6 +35,9 @@ class MigrationContext:
     driver: "Optional[Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]]" = None
     """Database driver instance (available during execution)."""
 
+    _execution_metadata: "dict[str, Any]" = field(default_factory=dict)
+    """Internal execution metadata for tracking async operations."""
+
     def __post_init__(self) -> None:
         """Initialize metadata and extension config if not provided."""
         if not self.metadata:
@@ -61,3 +66,80 @@ class MigrationContext:
             logger.debug("Unable to extract dialect from config")
 
         return cls(dialect=dialect, config=config)
+
+    @property
+    def is_async_execution(self) -> bool:
+        """Check if migrations are running in an async execution context.
+
+        Returns:
+            True if executing in an async context.
+        """
+        try:
+            asyncio.current_task()
+        except RuntimeError:
+            return False
+        else:
+            return True
+
+    @property
+    def is_async_driver(self) -> bool:
+        """Check if the current driver is async.
+
+        Returns:
+            True if driver supports async operations.
+        """
+        if self.driver is None:
+            return False
+
+        execute_method = getattr(self.driver, "execute_script", None)
+        return execute_method is not None and inspect.iscoroutinefunction(execute_method)
+
+    @property
+    def execution_mode(self) -> str:
+        """Get the current execution mode.
+
+        Returns:
+            'async' if in async context, 'sync' otherwise.
+        """
+        return "async" if self.is_async_execution else "sync"
+
+    def set_execution_metadata(self, key: str, value: Any) -> None:
+        """Set execution metadata for tracking migration state.
+
+        Args:
+            key: Metadata key.
+            value: Metadata value.
+        """
+        self._execution_metadata[key] = value
+
+    def get_execution_metadata(self, key: str, default: Any = None) -> Any:
+        """Get execution metadata.
+
+        Args:
+            key: Metadata key.
+            default: Default value if key not found.
+
+        Returns:
+            Metadata value or default.
+        """
+        return self._execution_metadata.get(key, default)
+
+    def validate_async_usage(self, migration_func: Any) -> None:
+        """Validate proper usage of async functions in migration context.
+
+        Args:
+            migration_func: The migration function to validate.
+
+        Raises:
+            RuntimeError: If async function is used inappropriately.
+        """
+        if inspect.iscoroutinefunction(migration_func) and not self.is_async_execution and not self.is_async_driver:
+            msg = (
+                "Async migration function detected but execution context is sync. "
+                "Consider using async database configuration or sync migration functions."
+            )
+            logger.warning(msg)
+
+        if not inspect.iscoroutinefunction(migration_func) and self.is_async_driver:
+            self.set_execution_metadata("mixed_execution", value=True)
+            logger.debug("Sync migration function in async driver context - using compatibility mode")

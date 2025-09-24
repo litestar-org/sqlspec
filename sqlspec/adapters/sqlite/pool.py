@@ -1,5 +1,6 @@
 """SQLite database configuration with thread-local connections."""
 
+import contextlib
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -49,6 +50,8 @@ class SqliteConnectionPool:
             enable_optimizations: Whether to apply performance PRAGMAs
             **kwargs: Ignored pool parameters for compatibility
         """
+        if "check_same_thread" not in connection_parameters:
+            connection_parameters = {**connection_parameters, "check_same_thread": False}
         self._connection_parameters = connection_parameters
         self._thread_local = threading.local()
         self._enable_optimizations = enable_optimizations
@@ -62,8 +65,7 @@ class SqliteConnectionPool:
             is_memory = database == ":memory:" or database.startswith("file::memory:")
 
             if not is_memory:
-                connection.execute("PRAGMA journal_mode = WAL")
-
+                connection.execute("PRAGMA journal_mode = DELETE")
                 connection.execute("PRAGMA busy_timeout = 5000")
                 connection.execute("PRAGMA optimize")
 
@@ -97,7 +99,13 @@ class SqliteConnectionPool:
         Yields:
             SqliteConnection: A thread-local connection.
         """
-        yield self._get_thread_connection()
+        connection = self._get_thread_connection()
+        try:
+            yield connection
+        finally:
+            with contextlib.suppress(Exception):
+                if connection.in_transaction:
+                    connection.commit()
 
     def close(self) -> None:
         """Close the thread-local connection if it exists."""
@@ -124,7 +132,8 @@ class SqliteConnectionPool:
             _ = self._thread_local.connection
         except AttributeError:
             return 0
-        return 1
+        else:
+            return 1
 
     def checked_out(self) -> int:
         """Get number of checked out connections (always 0)."""

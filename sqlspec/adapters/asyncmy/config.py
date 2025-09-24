@@ -6,8 +6,8 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
 import asyncmy
-from asyncmy.cursors import Cursor, DictCursor
-from asyncmy.pool import Pool as AsyncmyPool
+from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
+from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncmy._types import AsyncmyConnection
@@ -15,8 +15,8 @@ from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, asyncm
 from sqlspec.config import AsyncDatabaseConfig
 
 if TYPE_CHECKING:
-    from asyncmy.cursors import Cursor, DictCursor
-    from asyncmy.pool import Pool
+    from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
+    from asyncmy.pool import Pool  # pyright: ignore
 
     from sqlspec.core.statement import StatementConfig
 
@@ -57,7 +57,7 @@ class AsyncmyPoolParams(AsyncmyConnectionParams, total=False):
     pool_recycle: NotRequired[int]
 
 
-class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver]):  # pyright: ignore
+class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):  # pyright: ignore
     """Configuration for Asyncmy database connections."""
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
@@ -67,7 +67,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         self,
         *,
         pool_config: "Optional[Union[AsyncmyPoolParams, dict[str, Any]]]" = None,
-        pool_instance: "Optional[Pool]" = None,
+        pool_instance: "Optional[AsyncmyPool]" = None,
         migration_config: Optional[dict[str, Any]] = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
@@ -102,9 +102,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             driver_features=driver_features or {},
         )
 
-    async def _create_pool(self) -> "Pool":  # pyright: ignore
+    async def _create_pool(self) -> "AsyncmyPool":  # pyright: ignore
         """Create the actual async connection pool."""
-        return await asyncmy.create_pool(**dict(self.pool_config))
+        return await asyncmy.create_pool(**dict(self.pool_config))  # pyright: ignore
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

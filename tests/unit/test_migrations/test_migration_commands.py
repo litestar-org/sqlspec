@@ -12,13 +12,13 @@ Tests focused on MigrationCommands class behavior including:
 
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.migrations.commands import AsyncMigrationCommands, MigrationCommands, SyncMigrationCommands
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
 
 pytestmark = pytest.mark.xdist_group("migrations")
 
@@ -62,31 +62,20 @@ def test_migration_commands_sync_init_delegation(sync_config: SqliteConfig) -> N
             mock_init.assert_called_once_with(migration_dir, package=False)
 
 
-def test_migration_commands_async_init_delegation(async_config: AiosqliteConfig) -> None:
-    """Test that async config init uses await_ wrapper."""
-    with (
-        patch.object(AsyncMigrationCommands, "init", new_callable=AsyncMock) as mock_init,
-        patch("sqlspec.migrations.commands.await_") as mock_await,
-    ):
-        # Set up await_ to return a function that calls the async method
-        mock_func = Mock(return_value=None)
-        mock_await.return_value = mock_func
+async def test_migration_commands_async_init_delegation(async_config: AiosqliteConfig) -> None:
+    """Test that async config init calls async method directly."""
+    from typing import cast
 
-        commands = MigrationCommands(async_config)
+    with patch.object(AsyncMigrationCommands, "init", new_callable=AsyncMock) as mock_init:
+        commands = cast(AsyncMigrationCommands, create_migration_commands(async_config))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             migration_dir = str(Path(temp_dir) / "migrations")
 
-            commands.init(migration_dir, package=True)
+            await commands.init(migration_dir, package=True)
 
-            # Verify await_ was called with the async method
-            mock_await.assert_called_once()
-            # Check the first argument is the async method
-            assert mock_await.call_args[0][0] == mock_init
-            # Check raise_sync_error is False
-            assert mock_await.call_args[1]["raise_sync_error"] is False
-            # Verify the returned function was called with the correct args
-            mock_func.assert_called_once_with(migration_dir, package=True)
+            # Verify the async method was called directly
+            mock_init.assert_called_once_with(migration_dir, package=True)
 
 
 def test_migration_commands_sync_current_delegation(sync_config: SqliteConfig) -> None:
@@ -99,27 +88,20 @@ def test_migration_commands_sync_current_delegation(sync_config: SqliteConfig) -
         mock_current.assert_called_once_with(verbose=True)
 
 
-def test_migration_commands_async_current_delegation(async_config: AiosqliteConfig) -> None:
-    """Test that async config current uses await_ wrapper."""
-    with (
-        patch.object(AsyncMigrationCommands, "current", new_callable=AsyncMock) as mock_current,
-        patch("sqlspec.migrations.commands.await_") as mock_await,
-    ):
-        # Set up await_ to return a callable that returns the expected value
-        mock_func = Mock(return_value="test_version")
-        mock_await.return_value = mock_func
+async def test_migration_commands_async_current_delegation(async_config: AiosqliteConfig) -> None:
+    """Test that async config current calls async method directly."""
+    from typing import cast
 
-        commands = MigrationCommands(async_config)
+    with patch.object(AsyncMigrationCommands, "current", new_callable=AsyncMock) as mock_current:
+        mock_current.return_value = "test_version"
 
-        result = commands.current(verbose=False)
+        commands = cast(AsyncMigrationCommands, create_migration_commands(async_config))
 
-        # Verify await_ was called with the async method
-        mock_await.assert_called_once()
-        assert mock_await.call_args[0][0] == mock_current
-        assert mock_await.call_args[1]["raise_sync_error"] is False
+        result = await commands.current(verbose=False)
+
+        # Verify the async method was called directly
+        mock_current.assert_called_once_with(verbose=False)
         assert result == "test_version"
-        # Verify the returned function was called with the correct args
-        mock_func.assert_called_once_with(verbose=False)
 
 
 def test_migration_commands_sync_upgrade_delegation(sync_config: SqliteConfig) -> None:
@@ -132,26 +114,17 @@ def test_migration_commands_sync_upgrade_delegation(sync_config: SqliteConfig) -
         mock_upgrade.assert_called_once_with(revision="001")
 
 
-def test_migration_commands_async_upgrade_delegation(async_config: AiosqliteConfig) -> None:
-    """Test that async config upgrade uses await_ wrapper."""
-    with (
-        patch.object(AsyncMigrationCommands, "upgrade", new_callable=AsyncMock) as mock_upgrade,
-        patch("sqlspec.migrations.commands.await_") as mock_await,
-    ):
-        # Set up await_ to return a callable that returns None
-        mock_func = Mock(return_value=None)
-        mock_await.return_value = mock_func
+async def test_migration_commands_async_upgrade_delegation(async_config: AiosqliteConfig) -> None:
+    """Test that async config upgrade calls async method directly."""
+    from typing import cast
 
-        commands = MigrationCommands(async_config)
+    with patch.object(AsyncMigrationCommands, "upgrade", new_callable=AsyncMock) as mock_upgrade:
+        commands = cast(AsyncMigrationCommands, create_migration_commands(async_config))
 
-        commands.upgrade(revision="002")
+        await commands.upgrade(revision="002")
 
-        # Verify await_ was called with the async method
-        mock_await.assert_called_once()
-        assert mock_await.call_args[0][0] == mock_upgrade
-        assert mock_await.call_args[1]["raise_sync_error"] is False
-        # Verify the returned function was called with the correct args
-        mock_func.assert_called_once_with(revision="002")
+        # Verify the async method was called directly
+        mock_upgrade.assert_called_once_with(revision="002")
 
 
 def test_migration_commands_sync_downgrade_delegation(sync_config: SqliteConfig) -> None:
@@ -164,26 +137,17 @@ def test_migration_commands_sync_downgrade_delegation(sync_config: SqliteConfig)
         mock_downgrade.assert_called_once_with(revision="base")
 
 
-def test_migration_commands_async_downgrade_delegation(async_config: AiosqliteConfig) -> None:
-    """Test that async config downgrade uses await_ wrapper."""
-    with (
-        patch.object(AsyncMigrationCommands, "downgrade", new_callable=AsyncMock) as mock_downgrade,
-        patch("sqlspec.migrations.commands.await_") as mock_await,
-    ):
-        # Set up await_ to return a callable that returns None
-        mock_func = Mock(return_value=None)
-        mock_await.return_value = mock_func
+async def test_migration_commands_async_downgrade_delegation(async_config: AiosqliteConfig) -> None:
+    """Test that async config downgrade calls async method directly."""
+    from typing import cast
 
-        commands = MigrationCommands(async_config)
+    with patch.object(AsyncMigrationCommands, "downgrade", new_callable=AsyncMock) as mock_downgrade:
+        commands = cast(AsyncMigrationCommands, create_migration_commands(async_config))
 
-        commands.downgrade(revision="001")
+        await commands.downgrade(revision="001")
 
-        # Verify await_ was called with the async method
-        mock_await.assert_called_once()
-        assert mock_await.call_args[0][0] == mock_downgrade
-        assert mock_await.call_args[1]["raise_sync_error"] is False
-        # Verify the returned function was called with the correct args
-        mock_func.assert_called_once_with(revision="001")
+        # Verify the async method was called directly
+        mock_downgrade.assert_called_once_with(revision="001")
 
 
 def test_migration_commands_sync_stamp_delegation(sync_config: SqliteConfig) -> None:
@@ -196,26 +160,17 @@ def test_migration_commands_sync_stamp_delegation(sync_config: SqliteConfig) -> 
         mock_stamp.assert_called_once_with("001")
 
 
-def test_migration_commands_async_stamp_delegation(async_config: AiosqliteConfig) -> None:
-    """Test that async config stamp uses await_ wrapper."""
-    with (
-        patch.object(AsyncMigrationCommands, "stamp", new_callable=AsyncMock) as mock_stamp,
-        patch("sqlspec.migrations.commands.await_") as mock_await,
-    ):
-        # Set up await_ to return a callable that returns None
-        mock_func = Mock(return_value=None)
-        mock_await.return_value = mock_func
+async def test_migration_commands_async_stamp_delegation(async_config: AiosqliteConfig) -> None:
+    """Test that async config stamp calls async method directly."""
+    from typing import cast
 
-        commands = MigrationCommands(async_config)
+    with patch.object(AsyncMigrationCommands, "stamp", new_callable=AsyncMock) as mock_stamp:
+        commands = cast(AsyncMigrationCommands, create_migration_commands(async_config))
 
-        commands.stamp("002")
+        await commands.stamp("002")
 
-        # Verify await_ was called with the async method
-        mock_await.assert_called_once()
-        assert mock_await.call_args[0][0] == mock_stamp
-        assert mock_await.call_args[1]["raise_sync_error"] is False
-        # Verify the returned function was called with the correct args
-        mock_func.assert_called_once_with("002")
+        # Verify the async method was called directly
+        mock_stamp.assert_called_once_with("002")
 
 
 def test_migration_commands_sync_revision_delegation(sync_config: SqliteConfig) -> None:
@@ -228,26 +183,33 @@ def test_migration_commands_sync_revision_delegation(sync_config: SqliteConfig) 
         mock_revision.assert_called_once_with("Test revision", "sql")
 
 
-def test_migration_commands_async_revision_delegation(async_config: AiosqliteConfig) -> None:
-    """Test that async config revision uses await_ wrapper."""
-    with (
-        patch.object(AsyncMigrationCommands, "revision", new_callable=AsyncMock) as mock_revision,
-        patch("sqlspec.migrations.commands.await_") as mock_await,
-    ):
-        # Set up await_ to return a callable that returns None
-        mock_func = Mock(return_value=None)
-        mock_await.return_value = mock_func
+async def test_migration_commands_async_revision_delegation(async_config: AiosqliteConfig) -> None:
+    """Test that async config revision calls async method directly."""
+    from typing import cast
 
-        commands = MigrationCommands(async_config)
+    with patch.object(AsyncMigrationCommands, "revision", new_callable=AsyncMock) as mock_revision:
+        commands = cast(AsyncMigrationCommands, create_migration_commands(async_config))
 
-        commands.revision("Test async revision", "python")
+        await commands.revision("Test async revision", "python")
 
-        # Verify await_ was called with the async method
-        mock_await.assert_called_once()
-        assert mock_await.call_args[0][0] == mock_revision
-        assert mock_await.call_args[1]["raise_sync_error"] is False
-        # Verify the returned function was called with the correct args
-        mock_func.assert_called_once_with("Test async revision", "python")
+        # Verify the async method was called directly
+        mock_revision.assert_called_once_with("Test async revision", "python")
+
+
+def test_migration_commands_factory_returns_sync_for_sync_config(sync_config: SqliteConfig) -> None:
+    """Test that sync config returns SyncMigrationCommands from factory."""
+    commands = create_migration_commands(sync_config)
+
+    # Should return a SyncMigrationCommands instance
+    assert isinstance(commands, SyncMigrationCommands)
+    assert commands.config == sync_config
+
+    # Methods should be synchronous, not async
+    import inspect
+
+    assert not inspect.iscoroutinefunction(commands.init)
+    assert not inspect.iscoroutinefunction(commands.upgrade)
+    assert not inspect.iscoroutinefunction(commands.downgrade)
 
 
 def test_sync_migration_commands_initialization(sync_config: SqliteConfig) -> None:
@@ -294,33 +256,28 @@ def test_sync_migration_commands_init_without_package(sync_config: SqliteConfig)
         assert not (migration_dir / "__init__.py").exists()
 
 
-def test_migration_commands_error_propagation(async_config: AiosqliteConfig) -> None:
+async def test_migration_commands_error_propagation(async_config: AiosqliteConfig) -> None:
     """Test that errors from underlying implementations are properly propagated."""
-    with (
-        patch.object(AsyncMigrationCommands, "upgrade", side_effect=ValueError("Test error")),
-        patch("sqlspec.migrations.commands.await_") as mock_await,
-    ):
-        # Set up await_ to return a function that raises the error
-        mock_func = Mock(side_effect=ValueError("Test error"))
-        mock_await.return_value = mock_func
+    from typing import cast
 
-        commands = MigrationCommands(async_config)
+    with patch.object(AsyncMigrationCommands, "upgrade", side_effect=ValueError("Test error")):
+        commands = cast(AsyncMigrationCommands, create_migration_commands(async_config))
 
         with pytest.raises(ValueError, match="Test error"):
-            commands.upgrade()
+            await commands.upgrade()
 
 
-def test_migration_commands_parameter_forwarding(sync_config: SqliteConfig) -> None:
-    """Test that all parameters are properly forwarded to underlying implementations."""
+def test_migration_commands_sync_parameter_forwarding(sync_config: SqliteConfig) -> None:
+    """Test that all parameters are properly forwarded to sync implementations."""
     with patch.object(SyncMigrationCommands, "upgrade") as mock_upgrade:
-        commands = MigrationCommands(sync_config)
+        commands = create_migration_commands(sync_config)
 
         # Test with various parameter combinations
         commands.upgrade()
-        mock_upgrade.assert_called_with(revision="head")
+        mock_upgrade.assert_called_with()  # Called with no arguments, uses default
 
         commands.upgrade("specific_revision")
-        mock_upgrade.assert_called_with(revision="specific_revision")
+        mock_upgrade.assert_called_with("specific_revision")
 
 
 def test_migration_commands_config_type_detection(sync_config: SqliteConfig, async_config: AiosqliteConfig) -> None:
