@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 @pytest.fixture
 def simple_sqlite_provider() -> "Provider":
     """Create a simple Dishka provider that provides an SQLite config."""
-    from dishka import Provider, Scope, provide
+    from dishka import Provider, Scope, provide  # pyright: ignore[reportMissingImports]
 
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
@@ -32,7 +32,7 @@ def async_sqlite_provider() -> "Provider":
     """Create an async Dishka provider that provides an SQLite config."""
     import asyncio
 
-    from dishka import Provider, Scope, provide
+    from dishka import Provider, Scope, provide  # pyright: ignore[reportMissingImports]
 
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
@@ -51,7 +51,7 @@ def async_sqlite_provider() -> "Provider":
 @pytest.fixture
 def multi_config_provider() -> "Provider":
     """Create a Dishka provider that provides multiple database configs."""
-    from dishka import Provider, Scope, provide
+    from dishka import Provider, Scope, provide  # pyright: ignore[reportMissingImports]
 
     from sqlspec.adapters.duckdb.config import DuckDBConfig
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -79,7 +79,7 @@ def async_multi_config_provider() -> "Provider":
     """Create an async Dishka provider that provides multiple database configs."""
     import asyncio
 
-    from dishka import Provider, Scope, provide
+    from dishka import Provider, Scope, provide  # pyright: ignore[reportMissingImports]
 
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
     from sqlspec.adapters.duckdb.config import DuckDBConfig
