@@ -9,6 +9,8 @@ from collections.abc import Set as AbstractSet
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
+from typing_extensions import is_typeddict
+
 from sqlspec.typing import (
     ATTRS_INSTALLED,
     LITESTAR_INSTALLED,
@@ -117,6 +119,7 @@ __all__ = (
     "is_select_builder",
     "is_statement_filter",
     "is_string_literal",
+    "is_typed_dict",
     "is_typed_parameter",
     "schema_dump",
     "supports_limit",
@@ -124,6 +127,18 @@ __all__ = (
     "supports_order_by",
     "supports_where",
 )
+
+
+def is_typed_dict(obj: Any) -> "TypeGuard[type]":
+    """Check if an object is a TypedDict class.
+
+    Args:
+        obj: The object to check
+
+    Returns:
+        True if the object is a TypedDict class, False otherwise
+    """
+    return is_typeddict(obj)
 
 
 def is_statement_filter(obj: Any) -> "TypeGuard[StatementFilter]":

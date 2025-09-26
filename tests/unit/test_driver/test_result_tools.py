@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import msgspec
 import pytest
+from typing_extensions import TypedDict
 
 from sqlspec.driver.mixins._result_tools import (
     _DEFAULT_TYPE_DECODERS,
@@ -37,6 +38,14 @@ class SampleMsgspecStructWithIntList(msgspec.Struct):
 
     name: str
     values: "list[int]"
+
+
+class SampleTypedDict(TypedDict):
+    """Sample TypedDict for testing."""
+
+    name: str
+    age: int
+    optional_field: "Optional[str]"
 
 
 # Test _is_list_type_target function
@@ -287,6 +296,57 @@ def test_to_schema_mixin_without_schema_type() -> None:
     test_data = {"name": "test", "values": [1, 2, 3]}
 
     result = ToSchemaMixin.to_schema(test_data)
+    assert result == test_data
+
+
+def test_to_schema_mixin_with_typeddict_single_record() -> None:
+    """Test ToSchemaMixin.to_schema with TypedDict for single record."""
+    test_data = {"name": "test_user", "age": 30, "optional_field": "value"}
+
+    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleTypedDict)
+
+    assert result == test_data
+    assert isinstance(result, dict)
+
+
+def test_to_schema_mixin_with_typeddict_multiple_records() -> None:
+    """Test ToSchemaMixin.to_schema with TypedDict for multiple records."""
+    test_data = [
+        {"name": "user1", "age": 25, "optional_field": "value1"},
+        {"name": "user2", "age": 30, "optional_field": "value2"},
+    ]
+
+    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleTypedDict)
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    for item in result:
+        assert isinstance(item, dict)
+    assert result == test_data
+
+
+def test_to_schema_mixin_with_typeddict_mixed_data() -> None:
+    """Test ToSchemaMixin.to_schema with TypedDict filters non-dict items."""
+    test_data = [
+        {"name": "user1", "age": 25, "optional_field": "value1"},
+        "not_a_dict",  # This should be filtered out
+        {"name": "user2", "age": 30, "optional_field": "value2"},
+    ]
+
+    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleTypedDict)
+
+    assert isinstance(result, list)
+    assert len(result) == 2  # Only dict items should be included
+    for item in result:
+        assert isinstance(item, dict)
+
+
+def test_to_schema_mixin_with_typeddict_non_dict_data() -> None:
+    """Test ToSchemaMixin.to_schema with TypedDict returns non-dict data unchanged."""
+    test_data = "not_a_dict"
+
+    result = ToSchemaMixin.to_schema(test_data, schema_type=SampleTypedDict)
+
     assert result == test_data
 
 
