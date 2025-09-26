@@ -10,6 +10,7 @@ from typing import Any, Optional, cast
 import msgspec
 import pytest
 from sqlglot import exp
+from typing_extensions import TypedDict
 
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
@@ -57,6 +58,7 @@ from sqlspec.utils.type_guards import (
     is_schema_with_field,
     is_schema_without_field,
     is_string_literal,
+    is_typed_dict,
     schema_dump,
 )
 
@@ -72,6 +74,14 @@ class SampleDataclass:
     name: str
     age: int
     optional_field: "Optional[str]" = None
+
+
+class SampleTypedDict(TypedDict):
+    """Sample TypedDict for testing."""
+
+    name: str
+    age: int
+    optional_field: "Optional[str]"
 
 
 class MockSQLGlotExpression:
@@ -930,6 +940,31 @@ def test_get_msgspec_rename_config_with_pascal_rename() -> None:
     schema_type = MockMsgspecStructWithPascalRename
     result = get_msgspec_rename_config(schema_type)
     assert result == "pascal"
+
+
+def test_is_typed_dict_with_typeddict_class() -> None:
+    """Test is_typed_dict returns True for TypedDict classes."""
+    assert is_typed_dict(SampleTypedDict) is True
+
+
+def test_is_typed_dict_with_typeddict_instance() -> None:
+    """Test is_typed_dict returns False for TypedDict instances (they are dicts)."""
+    sample_data: SampleTypedDict = {"name": "test", "age": 25, "optional_field": "value"}
+    assert is_typed_dict(sample_data) is False
+
+
+def test_is_typed_dict_with_non_typeddict() -> None:
+    """Test is_typed_dict returns False for non-TypedDict types."""
+    assert is_typed_dict(dict) is False
+    assert is_typed_dict(SampleDataclass) is False
+    assert is_typed_dict(str) is False
+    assert is_typed_dict(42) is False
+    assert is_typed_dict({}) is False
+
+
+def test_is_typed_dict_with_regular_dict() -> None:
+    """Test is_typed_dict returns False for regular dict instances."""
+    assert is_typed_dict({"key": "value"}) is False
 
 
 def test_get_msgspec_rename_config_without_rename() -> None:

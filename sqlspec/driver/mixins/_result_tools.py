@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from enum import Enum
 from functools import partial
 from pathlib import Path, PurePath
-from typing import Any, Callable, Final, Optional, overload
+from typing import Any, Callable, Final, Optional, TypeVar, Union, cast, overload
 from uuid import UUID
 
 from mypy_extensions import trait
@@ -33,6 +33,7 @@ from sqlspec.utils.type_guards import (
     is_dict,
     is_msgspec_struct,
     is_pydantic_model,
+    is_typed_dict,
 )
 
 __all__ = ("_DEFAULT_TYPE_DECODERS", "_default_msgspec_deserializer")
@@ -40,6 +41,8 @@ __all__ = ("_DEFAULT_TYPE_DECODERS", "_default_msgspec_deserializer")
 
 logger = logging.getLogger(__name__)
 
+# TypeVar for TypedDict support - not bound since TypedDict classes aren't dict subclasses
+TypedDictT = TypeVar("TypedDictT")
 
 _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.time}
 
@@ -165,10 +168,20 @@ class ToSchemaMixin:
     def to_schema(data: "ModelT") -> "ModelT": ...
     @overload
     @staticmethod
+    def to_schema(data: "dict[str, Any]", *, schema_type: "type[TypedDictT]") -> "TypedDictT": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[TypedDictT]") -> "list[TypedDictT]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: "type[TypedDictT]") -> Any: ...
+
+    @overload
+    @staticmethod
     def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
 
-    @staticmethod
-    def to_schema(data: Any, *, schema_type: "Optional[type[ModelDTOT]]" = None) -> Any:
+    @staticmethod  # type: ignore[misc,unused-ignore]
+    def to_schema(data: Any, *, schema_type: "Optional[type[Union[ModelDTOT, TypedDictT]]]" = None) -> Any:  # type: ignore[misc,unused-ignore]
         """Convert data to a specified schema type.
 
         Args:
@@ -183,6 +196,10 @@ class ToSchemaMixin:
         """
         if schema_type is None:
             return data
+        if is_typed_dict(schema_type):
+            if isinstance(data, list):
+                return cast("list[ModelDTOT]", [item for item in data if is_dict(item)])
+            return cast("ModelDTOT", data)
         if is_dataclass(schema_type):
             if isinstance(data, list):
                 result: list[Any] = []
@@ -273,5 +290,5 @@ class ToSchemaMixin:
             if isinstance(data, dict):
                 return schema_type(**data)
             return data
-        msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, or Attrs class"
+        msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, Attrs class, or TypedDict"
         raise SQLSpecError(msg)
