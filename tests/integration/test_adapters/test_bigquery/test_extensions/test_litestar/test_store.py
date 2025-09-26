@@ -11,7 +11,7 @@ from google.api_core.client_options import ClientOptions
 from google.auth.credentials import AnonymousCredentials
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ def bigquery_config(
 
 
 @pytest.fixture
-def store(bigquery_config: BigQueryConfig) -> SQLSpecSessionStore:
+def store(bigquery_config: BigQueryConfig) -> SQLSpecSyncSessionStore:
     """Create a session store instance with migrations applied."""
     # Apply migrations to create the session table
     commands = SyncMigrationCommands(bigquery_config)
@@ -54,7 +54,7 @@ def store(bigquery_config: BigQueryConfig) -> SQLSpecSessionStore:
     commands.upgrade()
 
     # Use the migrated table structure
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         config=bigquery_config,
         table_name="litestar_sessions",
         session_id_column="session_id",
@@ -65,7 +65,7 @@ def store(bigquery_config: BigQueryConfig) -> SQLSpecSessionStore:
 
 
 async def test_bigquery_store_table_creation(
-    store: SQLSpecSessionStore, bigquery_config: BigQueryConfig, table_schema_prefix: str
+    store: SQLSpecSyncSessionStore, bigquery_config: BigQueryConfig, table_schema_prefix: str
 ) -> None:
     """Test that store table is created via migrations."""
     with bigquery_config.provide_session() as driver:
@@ -97,7 +97,7 @@ async def test_bigquery_store_table_creation(
         assert columns["created_at"] == "TIMESTAMP"
 
 
-async def test_bigquery_store_crud_operations(store: SQLSpecSessionStore) -> None:
+async def test_bigquery_store_crud_operations(store: SQLSpecSyncSessionStore) -> None:
     """Test complete CRUD operations on the store."""
     key = "test-key"
     value = {
@@ -127,7 +127,7 @@ async def test_bigquery_store_crud_operations(store: SQLSpecSessionStore) -> Non
     assert result is None
 
 
-async def test_bigquery_store_expiration(store: SQLSpecSessionStore) -> None:
+async def test_bigquery_store_expiration(store: SQLSpecSyncSessionStore) -> None:
     """Test that expired entries are not returned."""
     key = "expiring-key"
     value = {"data": "will expire", "bigquery_info": {"serverless": True}}
@@ -147,7 +147,7 @@ async def test_bigquery_store_expiration(store: SQLSpecSessionStore) -> None:
     assert result is None
 
 
-async def test_bigquery_store_complex_json_data(store: SQLSpecSessionStore) -> None:
+async def test_bigquery_store_complex_json_data(store: SQLSpecSyncSessionStore) -> None:
     """Test BigQuery's JSON handling capabilities with complex data structures."""
     key = "complex-json-key"
     complex_value = {
@@ -226,7 +226,7 @@ async def test_bigquery_store_complex_json_data(store: SQLSpecSessionStore) -> N
     assert retrieved["streaming_config"]["dataflow_jobs"][0]["window_size"] == "1 minute"
 
 
-async def test_bigquery_store_multiple_sessions(store: SQLSpecSessionStore) -> None:
+async def test_bigquery_store_multiple_sessions(store: SQLSpecSyncSessionStore) -> None:
     """Test handling multiple sessions simultaneously."""
     sessions = {}
 
@@ -258,7 +258,7 @@ async def test_bigquery_store_multiple_sessions(store: SQLSpecSessionStore) -> N
         assert await store.get(key) is None
 
 
-async def test_bigquery_store_cleanup_expired_sessions(store: SQLSpecSessionStore) -> None:
+async def test_bigquery_store_cleanup_expired_sessions(store: SQLSpecSyncSessionStore) -> None:
     """Test cleanup of expired sessions."""
     # Create sessions with different expiration times
     short_lived_keys = []
@@ -299,7 +299,7 @@ async def test_bigquery_store_cleanup_expired_sessions(store: SQLSpecSessionStor
         await store.delete(key)
 
 
-async def test_bigquery_store_large_session_data(store: SQLSpecSessionStore) -> None:
+async def test_bigquery_store_large_session_data(store: SQLSpecSyncSessionStore) -> None:
     """Test BigQuery's ability to handle reasonably large session data."""
     key = "large-session"
 

@@ -15,14 +15,15 @@ from litestar.stores.registry import StoreRegistry
 from litestar.testing import AsyncTestClient
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-from sqlspec.extensions.litestar import SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
+from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
 pytestmark = [pytest.mark.psqlpy, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
 
 @pytest.fixture
-async def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> Litestar:
+async def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore) -> Litestar:
     """Create a Litestar app with session middleware for testing."""
 
     @get("/session/set/{key:str}")
@@ -109,7 +110,7 @@ async def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLS
     )
 
 
-async def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
+async def test_session_store_creation(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test that SessionStore can be created with PsqlPy configuration."""
     assert session_store is not None
     assert session_store.table_name == "litestar_sessions_psqlpy"
@@ -120,7 +121,7 @@ async def test_session_store_creation(session_store: SQLSpecSessionStore) -> Non
 
 
 async def test_session_store_postgres_table_structure(
-    session_store: SQLSpecSessionStore, migrated_config: PsqlpyConfig
+    session_store: SQLSpecAsyncSessionStore, migrated_config: PsqlpyConfig
 ) -> None:
     """Test that session table is created with proper PostgreSQL structure."""
     async with migrated_config.provide_session() as driver:
@@ -247,7 +248,7 @@ async def test_session_persistence_across_requests(litestar_app: Litestar) -> No
 async def test_session_expiration(migrated_config: PsqlpyConfig) -> None:
     """Test session expiration handling."""
     # Create store with very short lifetime (migrations already applied by fixture)
-    session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions_psqlpy")
+    session_store = SQLSpecAsyncSessionStore(config=migrated_config, table_name="litestar_sessions_psqlpy")
 
     session_config = SQLSpecSessionConfig(
         table_name="litestar_sessions_psqlpy",
@@ -364,7 +365,7 @@ async def test_complex_user_workflow(litestar_app: Litestar) -> None:
 
 
 async def test_concurrent_sessions_with_psqlpy(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test handling of concurrent sessions with different clients."""
 
@@ -452,7 +453,7 @@ async def test_concurrent_sessions_with_psqlpy(
         assert "profile" not in data3
 
 
-async def test_large_data_handling_jsonb(session_store: SQLSpecSessionStore) -> None:
+async def test_large_data_handling_jsonb(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of large session data leveraging PostgreSQL JSONB."""
     session_id = "test-large-jsonb-data"
 
@@ -484,7 +485,9 @@ async def test_large_data_handling_jsonb(session_store: SQLSpecSessionStore) -> 
     assert retrieved_data["metadata"]["adapter"] == "psqlpy"
 
 
-async def test_postgresql_jsonb_operations(session_store: SQLSpecSessionStore, migrated_config: PsqlpyConfig) -> None:
+async def test_postgresql_jsonb_operations(
+    session_store: SQLSpecAsyncSessionStore, migrated_config: PsqlpyConfig
+) -> None:
     """Test PostgreSQL-specific JSONB operations available through PsqlPy."""
     session_id = "postgres-jsonb-ops-test"
 
@@ -535,7 +538,7 @@ async def test_postgresql_jsonb_operations(session_store: SQLSpecSessionStore, m
     assert updated_data["config"]["notifications"]["email"] is True
 
 
-async def test_session_with_complex_postgres_data_types(session_store: SQLSpecSessionStore) -> None:
+async def test_session_with_complex_postgres_data_types(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test various data types that benefit from PostgreSQL's type system in PsqlPy."""
     session_id = "test-postgres-data-types"
 
@@ -570,7 +573,7 @@ async def test_session_with_complex_postgres_data_types(session_store: SQLSpecSe
     assert retrieved_data["postgres_metadata"]["adapter"] == "psqlpy"
 
 
-async def test_high_performance_concurrent_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_high_performance_concurrent_operations(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test high-performance concurrent session operations that showcase PsqlPy's capabilities."""
     session_prefix = "perf-test-psqlpy"
     num_sessions = 25  # Reasonable number for CI
@@ -629,7 +632,7 @@ async def test_high_performance_concurrent_operations(session_store: SQLSpecSess
 async def test_migration_with_default_table_name(migrated_config: PsqlpyConfig) -> None:
     """Test that migration creates the default table name."""
     # Create store using the migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=migrated_config,
         table_name="litestar_sessions_psqlpy",  # Unique table name for psqlpy
     )
@@ -653,7 +656,7 @@ async def test_migration_with_custom_table_name(psqlpy_migration_config_with_dic
     await commands.upgrade()
 
     # Create store using the custom migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=psqlpy_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )
@@ -696,7 +699,7 @@ async def test_migration_with_mixed_extensions(psqlpy_migration_config_mixed: Ps
     await commands.upgrade()
 
     # The litestar extension should use default table name
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=psqlpy_migration_config_mixed,
         table_name="litestar_sessions_psqlpy",  # Unique table for psqlpy
     )

@@ -6,12 +6,12 @@ import math
 import pytest
 
 from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 
 pytestmark = [pytest.mark.duckdb, pytest.mark.integration, pytest.mark.xdist_group("duckdb")]
 
 
-def test_duckdb_store_table_creation(session_store: SQLSpecSessionStore, migrated_config: DuckDBConfig) -> None:
+def test_duckdb_store_table_creation(session_store: SQLSpecSyncSessionStore, migrated_config: DuckDBConfig) -> None:
     """Test that store table is created automatically with proper DuckDB structure."""
     with migrated_config.provide_session() as driver:
         # Verify table exists
@@ -45,7 +45,7 @@ def test_duckdb_store_table_creation(session_store: SQLSpecSessionStore, migrate
         assert isinstance(result, list)
 
 
-async def test_duckdb_store_crud_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_crud_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test complete CRUD operations on the DuckDB store."""
     key = "duckdb-test-key"
     value = {
@@ -81,7 +81,7 @@ async def test_duckdb_store_crud_operations(session_store: SQLSpecSessionStore) 
     assert result is None
 
 
-async def test_duckdb_store_expiration(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_expiration(session_store: SQLSpecSyncSessionStore) -> None:
     """Test that expired entries are not returned from DuckDB."""
     key = "duckdb-expiring-key"
     value = {"test": "analytical_data", "source": "duckdb"}
@@ -101,7 +101,7 @@ async def test_duckdb_store_expiration(session_store: SQLSpecSessionStore) -> No
     assert result is None
 
 
-async def test_duckdb_store_default_values(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_default_values(session_store: SQLSpecSyncSessionStore) -> None:
     """Test default value handling."""
     # Non-existent key should return None
     result = await session_store.get("non-existent-duckdb-key")
@@ -114,7 +114,7 @@ async def test_duckdb_store_default_values(session_store: SQLSpecSessionStore) -
     assert result == {"default": True, "engine": "duckdb"}
 
 
-async def test_duckdb_store_bulk_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_bulk_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test bulk operations on the DuckDB store."""
     # Create multiple entries representing analytical results
     entries = {}
@@ -143,7 +143,7 @@ async def test_duckdb_store_bulk_operations(session_store: SQLSpecSessionStore) 
         assert result is None
 
 
-async def test_duckdb_store_analytical_data(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_analytical_data(session_store: SQLSpecSyncSessionStore) -> None:
     """Test storing analytical data structures typical for DuckDB."""
     # Create analytical data structure
     analytical_data = {
@@ -185,7 +185,7 @@ async def test_duckdb_store_analytical_data(session_store: SQLSpecSessionStore) 
     await session_store.delete(key)
 
 
-async def test_duckdb_store_concurrent_access(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_concurrent_access(session_store: SQLSpecSyncSessionStore) -> None:
     """Test concurrent access patterns to the DuckDB store."""
     # Simulate multiple analytical sessions
     sessions = {}
@@ -212,7 +212,7 @@ async def test_duckdb_store_concurrent_access(session_store: SQLSpecSessionStore
         await session_store.delete(session_id)
 
 
-async def test_duckdb_store_get_all(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_get_all(session_store: SQLSpecSyncSessionStore) -> None:
     """Test getting all entries from the store."""
     # Create test entries
     test_entries = {}
@@ -241,7 +241,7 @@ async def test_duckdb_store_get_all(session_store: SQLSpecSessionStore) -> None:
         await session_store.delete(key)
 
 
-async def test_duckdb_store_delete_expired(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_delete_expired(session_store: SQLSpecSyncSessionStore) -> None:
     """Test deleting expired entries."""
     # Create entries with different expiration times
     short_lived_keys = []
@@ -276,7 +276,7 @@ async def test_duckdb_store_delete_expired(session_store: SQLSpecSessionStore) -
         await session_store.delete(key)
 
 
-async def test_duckdb_store_special_characters(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_special_characters(session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of special characters in keys and values with DuckDB."""
     # Test special characters in keys
     special_keys = [
@@ -297,7 +297,7 @@ async def test_duckdb_store_special_characters(session_store: SQLSpecSessionStor
         await session_store.delete(key)
 
 
-async def test_duckdb_store_crud_operations_enhanced(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_crud_operations_enhanced(session_store: SQLSpecSyncSessionStore) -> None:
     """Test enhanced CRUD operations on the DuckDB store."""
     key = "duckdb-enhanced-test-key"
     value = {
@@ -333,7 +333,7 @@ async def test_duckdb_store_crud_operations_enhanced(session_store: SQLSpecSessi
     assert result is None
 
 
-async def test_duckdb_store_expiration_enhanced(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_expiration_enhanced(session_store: SQLSpecSyncSessionStore) -> None:
     """Test enhanced expiration handling with DuckDB."""
     key = "duckdb-expiring-enhanced-key"
     value = {"test": "duckdb_analytical_data", "expires": True}
@@ -353,7 +353,7 @@ async def test_duckdb_store_expiration_enhanced(session_store: SQLSpecSessionSto
     assert result is None
 
 
-async def test_duckdb_store_exists_and_expires_in(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_exists_and_expires_in(session_store: SQLSpecSyncSessionStore) -> None:
     """Test exists and expires_in functionality."""
     key = "duckdb-exists-test"
     value = {"test": "analytical_data"}
@@ -377,7 +377,7 @@ async def test_duckdb_store_exists_and_expires_in(session_store: SQLSpecSessionS
 
 
 async def test_duckdb_store_transaction_behavior(
-    session_store: SQLSpecSessionStore, migrated_config: DuckDBConfig
+    session_store: SQLSpecSyncSessionStore, migrated_config: DuckDBConfig
 ) -> None:
     """Test transaction-like behavior in DuckDB store operations."""
     key = "duckdb-transaction-test"
@@ -424,7 +424,7 @@ async def test_duckdb_store_transaction_behavior(
     await session_store.delete(key)
 
 
-async def test_duckdb_worker_isolation(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_worker_isolation(session_store: SQLSpecSyncSessionStore) -> None:
     """Test that DuckDB sessions are properly isolated between pytest workers."""
     # This test verifies the table naming isolation mechanism
     session_id = f"isolation-test-{abs(hash('test')) % 10000}"
@@ -454,7 +454,7 @@ async def test_duckdb_worker_isolation(session_store: SQLSpecSessionStore) -> No
 
 
 async def test_duckdb_extension_compatibility(
-    session_store: SQLSpecSessionStore, migrated_config: DuckDBConfig
+    session_store: SQLSpecSyncSessionStore, migrated_config: DuckDBConfig
 ) -> None:
     """Test DuckDB extension compatibility with session storage."""
     # Test that session data works with potential DuckDB extensions
@@ -491,7 +491,7 @@ async def test_duckdb_extension_compatibility(
     await session_store.delete(session_id)
 
 
-async def test_duckdb_analytics_workload_simulation(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_analytics_workload_simulation(session_store: SQLSpecSyncSessionStore) -> None:
     """Test DuckDB session store with typical analytics workload patterns."""
     # Simulate an analytics dashboard session
     dashboard_sessions = []

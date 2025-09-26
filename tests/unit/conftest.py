@@ -28,6 +28,13 @@ from sqlspec.exceptions import SQLSpecError
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
+
+@pytest.fixture(scope="session")
+def anyio_backend() -> str:
+    """Configure anyio backend for unit tests - only use asyncio, no trio."""
+    return "asyncio"
+
+
 __all__ = (
     "MockAsyncConnection",
     "MockAsyncCursor",

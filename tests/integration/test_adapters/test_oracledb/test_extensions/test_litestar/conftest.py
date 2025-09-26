@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar.store import SQLSpecAsyncSessionStore, SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 
@@ -171,7 +171,9 @@ def oracle_sync_migration_config_mixed(oracle_sync_config: OracleSyncConfig) -> 
 
 
 @pytest.fixture
-async def oracle_async_session_store_default(oracle_async_migration_config: OracleAsyncConfig) -> SQLSpecSessionStore:
+async def oracle_async_session_store_default(
+    oracle_async_migration_config: OracleAsyncConfig,
+) -> SQLSpecAsyncSessionStore:
     """Create an async session store with default table name."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(oracle_async_migration_config)
@@ -179,7 +181,7 @@ async def oracle_async_session_store_default(oracle_async_migration_config: Orac
     await commands.upgrade()
 
     # Create store using the default migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         oracle_async_migration_config,
         table_name="litestar_sessions_oracle_async",  # Unique table name for Oracle async
     )
@@ -200,7 +202,7 @@ def oracle_async_session_backend_default(
 
 
 @pytest.fixture
-def oracle_sync_session_store_default(oracle_sync_migration_config: OracleSyncConfig) -> SQLSpecSessionStore:
+def oracle_sync_session_store_default(oracle_sync_migration_config: OracleSyncConfig) -> SQLSpecSyncSessionStore:
     """Create a sync session store with default table name."""
     # Apply migrations to create the session table
     commands = SyncMigrationCommands(oracle_sync_migration_config)
@@ -208,7 +210,7 @@ def oracle_sync_session_store_default(oracle_sync_migration_config: OracleSyncCo
     commands.upgrade()
 
     # Create store using the default migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         oracle_sync_migration_config,
         table_name="litestar_sessions_oracle_sync",  # Unique table name for Oracle sync
     )
@@ -231,7 +233,7 @@ def oracle_sync_session_backend_default(
 @pytest.fixture
 async def oracle_async_session_store_custom(
     oracle_async_migration_config_with_dict: OracleAsyncConfig,
-) -> SQLSpecSessionStore:
+) -> SQLSpecAsyncSessionStore:
     """Create an async session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = AsyncMigrationCommands(oracle_async_migration_config_with_dict)
@@ -239,7 +241,7 @@ async def oracle_async_session_store_custom(
     await commands.upgrade()
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         oracle_async_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )
@@ -260,7 +262,9 @@ def oracle_async_session_backend_custom(
 
 
 @pytest.fixture
-def oracle_sync_session_store_custom(oracle_sync_migration_config_with_dict: OracleSyncConfig) -> SQLSpecSessionStore:
+def oracle_sync_session_store_custom(
+    oracle_sync_migration_config_with_dict: OracleSyncConfig,
+) -> SQLSpecSyncSessionStore:
     """Create a sync session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = SyncMigrationCommands(oracle_sync_migration_config_with_dict)
@@ -268,7 +272,7 @@ def oracle_sync_session_store_custom(oracle_sync_migration_config_with_dict: Ora
     commands.upgrade()
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         oracle_sync_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )

@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.sync_tools import async_
 
@@ -69,9 +69,9 @@ def down():
 
 
 @pytest.fixture
-def store(sqlite_config: SqliteConfig) -> SQLSpecSessionStore:
+def store(sqlite_config: SqliteConfig) -> SQLSpecSyncSessionStore:
     """Create a session store instance."""
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         config=sqlite_config,
         table_name="litestar_session",
         session_id_column="session_id",
@@ -81,7 +81,7 @@ def store(sqlite_config: SqliteConfig) -> SQLSpecSessionStore:
     )
 
 
-async def test_sqlite_store_table_creation(store: SQLSpecSessionStore, sqlite_config: SqliteConfig) -> None:
+async def test_sqlite_store_table_creation(store: SQLSpecSyncSessionStore, sqlite_config: SqliteConfig) -> None:
     """Test that store table is created automatically."""
     with sqlite_config.provide_session() as driver:
         # Verify table exists
@@ -98,7 +98,7 @@ async def test_sqlite_store_table_creation(store: SQLSpecSessionStore, sqlite_co
         assert "created_at" in columns
 
 
-async def test_sqlite_store_crud_operations(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_crud_operations(store: SQLSpecSyncSessionStore) -> None:
     """Test complete CRUD operations on the store."""
     key = "test-key"
     value = {"user_id": 123, "data": ["item1", "item2"], "nested": {"key": "value"}}
@@ -123,7 +123,7 @@ async def test_sqlite_store_crud_operations(store: SQLSpecSessionStore) -> None:
     assert result is None
 
 
-async def test_sqlite_store_expiration(store: SQLSpecSessionStore, sqlite_config: SqliteConfig) -> None:
+async def test_sqlite_store_expiration(store: SQLSpecSyncSessionStore, sqlite_config: SqliteConfig) -> None:
     """Test that expired entries are not returned."""
 
     key = "expiring-key"
@@ -156,7 +156,7 @@ async def test_sqlite_store_expiration(store: SQLSpecSessionStore, sqlite_config
     assert result is None
 
 
-async def test_sqlite_store_default_values(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_default_values(store: SQLSpecSyncSessionStore) -> None:
     """Test default value handling."""
     # Non-existent key should return None
     result = await store.get("non-existent")
@@ -169,7 +169,7 @@ async def test_sqlite_store_default_values(store: SQLSpecSessionStore) -> None:
     assert result == {"default": True}
 
 
-async def test_sqlite_store_bulk_operations(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_bulk_operations(store: SQLSpecSyncSessionStore) -> None:
     """Test bulk operations on the SQLite store."""
     # Create multiple entries efficiently
     entries = {}
@@ -200,7 +200,7 @@ async def test_sqlite_store_bulk_operations(store: SQLSpecSessionStore) -> None:
     assert all(result is None for result in results)
 
 
-async def test_sqlite_store_large_data(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_large_data(store: SQLSpecSyncSessionStore) -> None:
     """Test storing large data structures in SQLite."""
     # Create a large data structure that tests SQLite's JSON capabilities
     large_data = {
@@ -234,7 +234,7 @@ async def test_sqlite_store_large_data(store: SQLSpecSessionStore) -> None:
     assert len(retrieved["analytics"]["events"]) == 50
 
 
-async def test_sqlite_store_concurrent_access(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_concurrent_access(store: SQLSpecSyncSessionStore) -> None:
     """Test concurrent access to the SQLite store."""
 
     async def update_value(key: str, value: int) -> None:
@@ -242,7 +242,7 @@ async def test_sqlite_store_concurrent_access(store: SQLSpecSessionStore) -> Non
         await store.set(key, {"value": value, "operation": f"update_{value}"}, expires_in=3600)
 
     # Create many concurrent updates to test SQLite's concurrency handling
-    key = "sqlite-concurrent-key"
+    key = "sqlite-concurrent-test-key"
     tasks = [update_value(key, i) for i in range(50)]
     await asyncio.gather(*tasks)
 
@@ -254,7 +254,7 @@ async def test_sqlite_store_concurrent_access(store: SQLSpecSessionStore) -> Non
     assert "operation" in result
 
 
-async def test_sqlite_store_get_all(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_get_all(store: SQLSpecSyncSessionStore) -> None:
     """Test retrieving all entries from the store."""
     import asyncio
 
@@ -286,7 +286,7 @@ async def test_sqlite_store_get_all(store: SQLSpecSessionStore) -> None:
     assert "key3" not in all_entries  # Should be expired
 
 
-async def test_sqlite_store_delete_expired(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_delete_expired(store: SQLSpecSyncSessionStore) -> None:
     """Test deletion of expired entries."""
     # Create entries with different expiration times
     await store.set("short1", {"data": 1}, expires_in=1)
@@ -307,7 +307,7 @@ async def test_sqlite_store_delete_expired(store: SQLSpecSessionStore) -> None:
     assert await store.get("long2") == {"data": 4}
 
 
-async def test_sqlite_store_special_characters(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_special_characters(store: SQLSpecSyncSessionStore) -> None:
     """Test handling of special characters in keys and values with SQLite."""
     # Test special characters in keys (SQLite specific)
     special_keys = [
@@ -357,7 +357,7 @@ async def test_sqlite_store_special_characters(store: SQLSpecSessionStore) -> No
     assert retrieved["numeric_types"]["pi"] == math.pi
 
 
-async def test_sqlite_store_crud_operations_enhanced(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_crud_operations_enhanced(store: SQLSpecSyncSessionStore) -> None:
     """Test enhanced CRUD operations on the SQLite store."""
     key = "sqlite-test-key"
     value = {
@@ -393,7 +393,7 @@ async def test_sqlite_store_crud_operations_enhanced(store: SQLSpecSessionStore)
     assert result is None
 
 
-async def test_sqlite_store_expiration_enhanced(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_expiration_enhanced(store: SQLSpecSyncSessionStore) -> None:
     """Test enhanced expiration handling with SQLite."""
     key = "sqlite-expiring-key"
     value = {"test": "sqlite_data", "expires": True}
@@ -413,7 +413,7 @@ async def test_sqlite_store_expiration_enhanced(store: SQLSpecSessionStore) -> N
     assert result is None
 
 
-async def test_sqlite_store_exists_and_expires_in(store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_exists_and_expires_in(store: SQLSpecSyncSessionStore) -> None:
     """Test exists and expires_in functionality."""
     key = "sqlite-exists-test"
     value = {"test": "data"}
@@ -465,7 +465,7 @@ async def test_sqlite_store_transaction_behavior() -> None:
 
         # Create fresh store
         store_config = SqliteConfig(pool_config={"database": str(db_path)})
-        store = SQLSpecSessionStore(store_config, table_name="litestar_sessions")
+        store = SQLSpecSyncSessionStore(store_config, table_name="litestar_sessions")
 
         key = "sqlite-transaction-test"
 

@@ -15,7 +15,7 @@ from litestar.stores.registry import StoreRegistry
 from litestar.testing import AsyncTestClient
 
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore, SQLSpecSyncSessionStore
 from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
@@ -41,9 +41,9 @@ def oracle_sync_migrated_config(oracle_sync_migration_config: OracleSyncConfig) 
 
 
 @pytest.fixture
-async def oracle_async_session_store(oracle_async_migrated_config: OracleAsyncConfig) -> SQLSpecSessionStore:
+async def oracle_async_session_store(oracle_async_migrated_config: OracleAsyncConfig) -> SQLSpecAsyncSessionStore:
     """Create an async session store instance using the migrated database."""
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         config=oracle_async_migrated_config,
         table_name="litestar_sessions_oracle_async",  # Use the default table created by migration
         session_id_column="session_id",
@@ -54,9 +54,9 @@ async def oracle_async_session_store(oracle_async_migrated_config: OracleAsyncCo
 
 
 @pytest.fixture
-def oracle_sync_session_store(oracle_sync_migrated_config: OracleSyncConfig) -> SQLSpecSessionStore:
+def oracle_sync_session_store(oracle_sync_migrated_config: OracleSyncConfig) -> SQLSpecSyncSessionStore:
     """Create a sync session store instance using the migrated database."""
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         config=oracle_sync_migrated_config,
         table_name="litestar_sessions_oracle_sync",  # Use the default table created by migration
         session_id_column="session_id",
@@ -86,7 +86,7 @@ def oracle_sync_session_config(oracle_sync_migrated_config: OracleSyncConfig) ->
     )
 
 
-async def test_oracle_async_session_store_creation(oracle_async_session_store: SQLSpecSessionStore) -> None:
+async def test_oracle_async_session_store_creation(oracle_async_session_store: SQLSpecAsyncSessionStore) -> None:
     """Test that SessionStore can be created with Oracle async configuration."""
     assert oracle_async_session_store is not None
     assert oracle_async_session_store._table_name == "litestar_sessions_oracle_async"
@@ -96,7 +96,7 @@ async def test_oracle_async_session_store_creation(oracle_async_session_store: S
     assert oracle_async_session_store._created_at_column == "created_at"
 
 
-def test_oracle_sync_session_store_creation(oracle_sync_session_store: SQLSpecSessionStore) -> None:
+def test_oracle_sync_session_store_creation(oracle_sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test that SessionStore can be created with Oracle sync configuration."""
     assert oracle_sync_session_store is not None
     assert oracle_sync_session_store._table_name == "litestar_sessions_oracle_sync"
@@ -106,7 +106,9 @@ def test_oracle_sync_session_store_creation(oracle_sync_session_store: SQLSpecSe
     assert oracle_sync_session_store._created_at_column == "created_at"
 
 
-async def test_oracle_async_session_store_basic_operations(oracle_async_session_store: SQLSpecSessionStore) -> None:
+async def test_oracle_async_session_store_basic_operations(
+    oracle_async_session_store: SQLSpecAsyncSessionStore,
+) -> None:
     """Test basic session store operations with Oracle async driver."""
     session_id = f"oracle-async-test-{uuid4()}"
     session_data = {
@@ -145,11 +147,11 @@ async def test_oracle_async_session_store_basic_operations(oracle_async_session_
     assert result is None
 
 
-def test_oracle_sync_session_store_basic_operations(oracle_sync_session_store: SQLSpecSessionStore) -> None:
+def test_oracle_sync_session_store_basic_operations(oracle_sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test basic session store operations with Oracle sync driver."""
     import asyncio
 
-    async def run_sync_test():
+    async def run_sync_test() -> None:
         session_id = f"oracle-sync-test-{uuid4()}"
         session_data = {
             "user_id": 54321,
@@ -176,7 +178,7 @@ def test_oracle_sync_session_store_basic_operations(oracle_sync_session_store: S
 
 
 async def test_oracle_async_session_store_oracle_table_structure(
-    oracle_async_session_store: SQLSpecSessionStore, oracle_async_migration_config: OracleAsyncConfig
+    oracle_async_session_store: SQLSpecAsyncSessionStore, oracle_async_migration_config: OracleAsyncConfig
 ) -> None:
     """Test that session table is created with proper Oracle structure."""
     async with oracle_async_migration_config.provide_session() as driver:
@@ -216,7 +218,7 @@ async def test_oracle_async_session_store_oracle_table_structure(
 
 
 async def test_oracle_json_data_support(
-    oracle_async_session_store: SQLSpecSessionStore, oracle_async_migration_config: OracleAsyncConfig
+    oracle_async_session_store: SQLSpecAsyncSessionStore, oracle_async_migration_config: OracleAsyncConfig
 ) -> None:
     """Test Oracle JSON data type support for complex session data."""
     session_id = f"oracle-json-test-{uuid4()}"
@@ -262,7 +264,7 @@ async def test_oracle_json_data_support(
 
 
 async def test_basic_session_operations(
-    oracle_async_session_config: SQLSpecSessionConfig, oracle_async_session_store: SQLSpecSessionStore
+    oracle_async_session_config: SQLSpecSessionConfig, oracle_async_session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test basic session operations through Litestar application using Oracle async."""
 
@@ -336,7 +338,7 @@ async def test_basic_session_operations(
 
 
 async def test_session_persistence_across_requests(
-    oracle_async_session_config: SQLSpecSessionConfig, oracle_async_session_store: SQLSpecSessionStore
+    oracle_async_session_config: SQLSpecSessionConfig, oracle_async_session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test that sessions persist across multiple requests with Oracle."""
 
@@ -437,7 +439,7 @@ async def test_oracle_session_expiration(oracle_async_migration_config: OracleAs
     await commands.upgrade()
 
     # Create store and config with very short lifetime
-    session_store = SQLSpecSessionStore(
+    session_store = SQLSpecSyncSessionStore(
         config=oracle_async_migration_config,
         table_name="litestar_sessions_oracle_async",  # Use the migrated table
     )
@@ -499,7 +501,7 @@ async def test_oracle_session_expiration(oracle_async_migration_config: OracleAs
         }
 
 
-async def test_oracle_concurrent_session_operations(oracle_async_session_store: SQLSpecSessionStore) -> None:
+async def test_oracle_concurrent_session_operations(oracle_async_session_store: SQLSpecAsyncSessionStore) -> None:
     """Test concurrent session operations with Oracle async driver."""
 
     async def create_oracle_session(session_num: int) -> None:
@@ -541,7 +543,7 @@ async def test_oracle_concurrent_session_operations(oracle_async_session_store: 
         assert result["features"]["json_enabled"] is True
 
 
-async def test_oracle_large_session_data_with_clob(oracle_async_session_store: SQLSpecSessionStore) -> None:
+async def test_oracle_large_session_data_with_clob(oracle_async_session_store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of large session data with Oracle CLOB support."""
     session_id = f"oracle-large-data-{uuid4()}"
 
@@ -589,7 +591,7 @@ async def test_oracle_large_session_data_with_clob(oracle_async_session_store: S
     assert len(retrieved_data["vector_embeddings"]["embedding_0"]) == 10
 
 
-async def test_oracle_session_cleanup_operations(oracle_async_session_store: SQLSpecSessionStore) -> None:
+async def test_oracle_session_cleanup_operations(oracle_async_session_store: SQLSpecAsyncSessionStore) -> None:
     """Test session cleanup and maintenance operations with Oracle."""
 
     # Create sessions with different expiration times and Oracle-specific data
@@ -642,7 +644,7 @@ async def test_migration_with_default_table_name(oracle_async_migration_config: 
     await commands.upgrade()
 
     # Create store using the migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=oracle_async_migration_config,
         table_name="litestar_sessions_oracle_async",  # Default table name
     )
@@ -665,7 +667,7 @@ async def test_migration_with_custom_table_name(oracle_async_migration_config_wi
     await commands.upgrade()
 
     # Create store using the custom migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=oracle_async_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )
@@ -695,7 +697,7 @@ async def test_migration_with_mixed_extensions(oracle_async_migration_config_mix
     await commands.upgrade()
 
     # The litestar extension should use default table name
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=oracle_async_migration_config_mixed,
         table_name="litestar_sessions_oracle_async",  # Default since string format was used
     )
@@ -711,7 +713,7 @@ async def test_migration_with_mixed_extensions(oracle_async_migration_config_mix
 
 
 async def test_oracle_concurrent_webapp_simulation(
-    oracle_async_session_config: SQLSpecSessionConfig, oracle_async_session_store: SQLSpecSessionStore
+    oracle_async_session_config: SQLSpecSessionConfig, oracle_async_session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test concurrent web application behavior with Oracle session handling."""
 
@@ -835,7 +837,7 @@ async def test_session_cleanup_and_maintenance(oracle_async_migration_config: Or
     await commands.init(oracle_async_migration_config.migration_config["script_location"], package=False)
     await commands.upgrade()
 
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=oracle_async_migration_config,
         table_name="litestar_sessions_oracle_async",  # Use the migrated table
     )
@@ -902,12 +904,12 @@ async def test_multiple_oracle_apps_with_separate_backends(oracle_async_migratio
     """Test multiple Litestar applications with separate Oracle session backends."""
 
     # Create separate Oracle stores for different applications
-    oracle_store1 = SQLSpecSessionStore(
+    oracle_store1 = SQLSpecAsyncSessionStore(
         config=oracle_async_migration_config,
         table_name="litestar_sessions_oracle_async",  # Use migrated table
     )
 
-    oracle_store2 = SQLSpecSessionStore(
+    oracle_store2 = SQLSpecAsyncSessionStore(
         config=oracle_async_migration_config,
         table_name="litestar_sessions_oracle_async",  # Use migrated table
     )
@@ -990,7 +992,7 @@ async def test_multiple_oracle_apps_with_separate_backends(oracle_async_migratio
         assert response2_second.json()["oracle_instance"] == "ORCL_APP2"
 
 
-async def test_oracle_enterprise_features_in_sessions(oracle_async_session_store: SQLSpecSessionStore) -> None:
+async def test_oracle_enterprise_features_in_sessions(oracle_async_session_store: SQLSpecAsyncSessionStore) -> None:
     """Test Oracle enterprise features integration in session data."""
     session_id = f"oracle-enterprise-{uuid4()}"
 
@@ -1075,7 +1077,7 @@ async def test_oracle_enterprise_features_in_sessions(oracle_async_session_store
 
 
 async def test_oracle_atomic_transactions_pattern(
-    oracle_async_session_config: SQLSpecSessionConfig, oracle_async_session_store: SQLSpecSessionStore
+    oracle_async_session_config: SQLSpecSessionConfig, oracle_async_session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test atomic transaction patterns typical for Oracle applications."""
 

@@ -1,41 +1,85 @@
-"""AsyncPG-specific session store handler."""
+"""AsyncPG-specific session store handler.
 
-from typing import Any
+Standalone handler with no inheritance - clean break implementation.
+"""
+
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Union
+
+if TYPE_CHECKING:
+    from sqlspec.driver._async import AsyncDriverAdapterBase
+    from sqlspec.driver._sync import SyncDriverAdapterBase
 
 from sqlspec import sql
-from sqlspec.extensions.litestar.store import BaseStoreHandler
 
-__all__ = ("StoreHandler",)
+__all__ = ("AsyncStoreHandler",)
 
 
-class StoreHandler(BaseStoreHandler):
+class AsyncStoreHandler:
     """AsyncPG-specific session store handler.
 
     AsyncPG handles JSONB columns natively with Python dictionaries,
     so no JSON serialization/deserialization is needed.
     """
 
-    def serialize_data(self, data: Any) -> Any:
+    def __init__(
+        self, table_name: str = "litestar_sessions", data_column: str = "data", *args: Any, **kwargs: Any
+    ) -> None:
+        """Initialize AsyncPG store handler.
+
+        Args:
+            table_name: Name of the session table
+            data_column: Name of the data column
+            *args: Additional positional arguments (ignored)
+            **kwargs: Additional keyword arguments (ignored)
+        """
+
+    def serialize_data(
+        self, data: Any, driver: Union["SyncDriverAdapterBase", "AsyncDriverAdapterBase", None] = None
+    ) -> Any:
         """Serialize session data for AsyncPG JSONB storage.
 
         Args:
             data: Session data to serialize
+            driver: Database driver instance (unused, AsyncPG handles JSONB natively)
 
         Returns:
             Raw Python data (AsyncPG handles JSONB natively)
         """
         return data
 
-    def deserialize_data(self, data: Any) -> Any:
+    def deserialize_data(
+        self, data: Any, driver: Union["SyncDriverAdapterBase", "AsyncDriverAdapterBase", None] = None
+    ) -> Any:
         """Deserialize session data from AsyncPG JSONB storage.
 
         Args:
             data: Raw data from database
+            driver: Database driver instance (unused, AsyncPG returns JSONB as Python objects)
 
         Returns:
             Raw Python data (AsyncPG returns JSONB as Python objects)
         """
         return data
+
+    def format_datetime(self, dt: datetime) -> Union[str, datetime, Any]:
+        """Format datetime for database storage.
+
+        Args:
+            dt: Datetime to format
+
+        Returns:
+            Formatted datetime value
+        """
+        return dt
+
+    def get_current_time(self) -> Union[str, datetime, Any]:
+        """Get current time in database-appropriate format.
+
+        Returns:
+            Current timestamp for database queries
+        """
+        return datetime.now(timezone.utc)
 
     def build_upsert_sql(
         self,
@@ -48,6 +92,7 @@ class StoreHandler(BaseStoreHandler):
         data_value: Any,
         expires_at_value: Any,
         current_time_value: Any,
+        driver: Union["SyncDriverAdapterBase", "AsyncDriverAdapterBase", None] = None,
     ) -> "list[Any]":
         """Build PostgreSQL UPSERT SQL using ON CONFLICT.
 
@@ -61,6 +106,7 @@ class StoreHandler(BaseStoreHandler):
             data_value: Session data (Python object for JSONB)
             expires_at_value: Formatted expiration time
             current_time_value: Formatted current time
+            driver: Database driver instance (unused)
 
         Returns:
             Single UPSERT statement using PostgreSQL ON CONFLICT
@@ -72,10 +118,29 @@ class StoreHandler(BaseStoreHandler):
             .on_conflict(session_id_column)
             .do_update(
                 **{
-                    data_column: sql.raw("EXCLUDED." + data_column),
-                    expires_at_column: sql.raw("EXCLUDED." + expires_at_column),
+                    data_column: sql.raw(f"EXCLUDED.{data_column}"),
+                    expires_at_column: sql.raw(f"EXCLUDED.{expires_at_column}"),
                 }
             )
         )
 
         return [upsert_sql]
+
+    def handle_column_casing(self, row: "dict[str, Any]", column: str) -> Any:
+        """Handle database-specific column name casing.
+
+        Args:
+            row: Result row from database
+            column: Column name to look up
+
+        Returns:
+            Column value handling different name casing
+        """
+        if column in row:
+            return row[column]
+        if column.upper() in row:
+            return row[column.upper()]
+        if column.lower() in row:
+            return row[column.lower()]
+        msg = f"Column {column} not found in result row"
+        raise KeyError(msg)

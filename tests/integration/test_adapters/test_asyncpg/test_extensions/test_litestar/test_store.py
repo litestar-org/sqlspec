@@ -7,7 +7,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
 
 pytestmark = [pytest.mark.asyncpg, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
@@ -29,7 +29,7 @@ async def asyncpg_config(postgres_service: PostgresService) -> AsyncpgConfig:
 
 
 @pytest.fixture
-async def store(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionStore:
+async def store(asyncpg_config: AsyncpgConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store instance."""
     # Create the table manually since we're not using migrations here
     async with asyncpg_config.provide_session() as driver:
@@ -43,7 +43,7 @@ async def store(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionStore:
             "CREATE INDEX IF NOT EXISTS idx_test_store_asyncpg_expires ON test_store_asyncpg(expires)"
         )
 
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         config=asyncpg_config,
         table_name="test_store_asyncpg",
         session_id_column="key",
@@ -53,7 +53,7 @@ async def store(asyncpg_config: AsyncpgConfig) -> SQLSpecSessionStore:
     )
 
 
-async def test_asyncpg_store_table_creation(store: SQLSpecSessionStore, asyncpg_config: AsyncpgConfig) -> None:
+async def test_asyncpg_store_table_creation(store: SQLSpecAsyncSessionStore, asyncpg_config: AsyncpgConfig) -> None:
     """Test that store table is created automatically with proper structure."""
     async with asyncpg_config.provide_session() as driver:
         # Verify table exists
@@ -90,7 +90,7 @@ async def test_asyncpg_store_table_creation(store: SQLSpecSessionStore, asyncpg_
         assert len(result.data) > 0  # Should have unique index on key
 
 
-async def test_asyncpg_store_crud_operations(store: SQLSpecSessionStore) -> None:
+async def test_asyncpg_store_crud_operations(store: SQLSpecAsyncSessionStore) -> None:
     """Test complete CRUD operations on the AsyncPG store."""
     key = "asyncpg-test-key"
     value = {
@@ -126,7 +126,7 @@ async def test_asyncpg_store_crud_operations(store: SQLSpecSessionStore) -> None
     assert result is None
 
 
-async def test_asyncpg_store_expiration(store: SQLSpecSessionStore) -> None:
+async def test_asyncpg_store_expiration(store: SQLSpecAsyncSessionStore) -> None:
     """Test that expired entries are not returned from AsyncPG."""
     key = "asyncpg-expiring-key"
     value = {"test": "postgres_data", "expires": True}
@@ -146,7 +146,7 @@ async def test_asyncpg_store_expiration(store: SQLSpecSessionStore) -> None:
     assert result is None
 
 
-async def test_asyncpg_store_bulk_operations(store: SQLSpecSessionStore) -> None:
+async def test_asyncpg_store_bulk_operations(store: SQLSpecAsyncSessionStore) -> None:
     """Test bulk operations on the AsyncPG store."""
     # Create multiple entries efficiently
     entries = {}
@@ -177,7 +177,7 @@ async def test_asyncpg_store_bulk_operations(store: SQLSpecSessionStore) -> None
     assert all(result is None for result in results)
 
 
-async def test_asyncpg_store_large_data(store: SQLSpecSessionStore) -> None:
+async def test_asyncpg_store_large_data(store: SQLSpecAsyncSessionStore) -> None:
     """Test storing large data structures in AsyncPG."""
     # Create a large data structure that tests PostgreSQL's JSONB capabilities
     large_data = {
@@ -211,12 +211,16 @@ async def test_asyncpg_store_large_data(store: SQLSpecSessionStore) -> None:
     assert len(retrieved["analytics"]["events"]) == 100
 
 
-async def test_asyncpg_store_concurrent_access(store: SQLSpecSessionStore) -> None:
+async def test_asyncpg_store_concurrent_access(store: SQLSpecAsyncSessionStore) -> None:
     """Test concurrent access to the AsyncPG store."""
 
     async def update_value(key: str, value: int) -> None:
         """Update a value in the store."""
-        await store.set(key, {"value": value, "thread": asyncio.current_task().get_name()}, expires_in=3600)  # pyright: ignore
+        await store.set(
+            key,
+            {"value": value, "thread": asyncio.current_task().get_name() if asyncio.current_task() else "unknown"},
+            expires_in=3600,
+        )
 
     # Create many concurrent updates to test PostgreSQL's concurrency handling
     key = "asyncpg-concurrent-key"
@@ -231,7 +235,7 @@ async def test_asyncpg_store_concurrent_access(store: SQLSpecSessionStore) -> No
     assert "thread" in result
 
 
-async def test_asyncpg_store_get_all(store: SQLSpecSessionStore) -> None:
+async def test_asyncpg_store_get_all(store: SQLSpecAsyncSessionStore) -> None:
     """Test retrieving all entries from the AsyncPG store."""
     # Create multiple entries with different expiration times
     test_entries = {
@@ -268,7 +272,7 @@ async def test_asyncpg_store_get_all(store: SQLSpecSessionStore) -> None:
     assert "asyncpg-all-4" in all_entries
 
 
-async def test_asyncpg_store_delete_expired(store: SQLSpecSessionStore) -> None:
+async def test_asyncpg_store_delete_expired(store: SQLSpecAsyncSessionStore) -> None:
     """Test deletion of expired entries in AsyncPG."""
     # Create entries with different expiration times
     short_lived = ["asyncpg-short-1", "asyncpg-short-2", "asyncpg-short-3"]
@@ -296,7 +300,7 @@ async def test_asyncpg_store_delete_expired(store: SQLSpecSessionStore) -> None:
         assert result["ttl"] == "long"
 
 
-async def test_asyncpg_store_special_characters(store: SQLSpecSessionStore) -> None:
+async def test_asyncpg_store_special_characters(store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of special characters in keys and values with AsyncPG."""
     # Test special characters in keys (PostgreSQL specific)
     special_keys = [
@@ -342,7 +346,9 @@ async def test_asyncpg_store_special_characters(store: SQLSpecSessionStore) -> N
     assert retrieved["postgres_arrays"][3] == [4, 5, [6, 7]]
 
 
-async def test_asyncpg_store_transaction_isolation(store: SQLSpecSessionStore, asyncpg_config: AsyncpgConfig) -> None:
+async def test_asyncpg_store_transaction_isolation(
+    store: SQLSpecAsyncSessionStore, asyncpg_config: AsyncpgConfig
+) -> None:
     """Test transaction isolation in AsyncPG store operations."""
     key = "asyncpg-transaction-test"
 

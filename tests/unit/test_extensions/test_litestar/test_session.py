@@ -1,5 +1,6 @@
 """Unit tests for SQLSpec session backend."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -90,7 +91,6 @@ def test_session_backend_init(session_config: SQLSpecSessionConfig) -> None:
     assert isinstance(backend.config, SQLSpecSessionConfig)
 
 
-@pytest.mark.asyncio
 async def test_get_session_data_found(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test getting session data when session exists and data is dict/list."""
     session_id = "test_session_123"
@@ -108,7 +108,6 @@ async def test_get_session_data_found(session_backend: SQLSpecSessionBackend, mo
     mock_store.get.assert_called_once_with(session_id, renew_for=None)
 
 
-@pytest.mark.asyncio
 async def test_get_session_data_already_bytes(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test getting session data when store returns bytes directly."""
     session_id = "test_session_123"
@@ -125,7 +124,6 @@ async def test_get_session_data_already_bytes(session_backend: SQLSpecSessionBac
     mock_store.get.assert_called_once_with(session_id, renew_for=None)
 
 
-@pytest.mark.asyncio
 async def test_get_session_not_found(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test getting session data when session doesn't exist."""
     session_id = "nonexistent_session"
@@ -139,7 +137,6 @@ async def test_get_session_not_found(session_backend: SQLSpecSessionBackend, moc
     mock_store.get.assert_called_once_with(session_id, renew_for=None)
 
 
-@pytest.mark.asyncio
 async def test_get_session_with_renew_enabled() -> None:
     """Test getting session data when renew_on_access is enabled."""
     config = SQLSpecSessionConfig(renew_on_access=True)
@@ -156,7 +153,6 @@ async def test_get_session_with_renew_enabled() -> None:
     mock_store.get.assert_called_once_with(session_id, renew_for=expected_max_age)
 
 
-@pytest.mark.asyncio
 async def test_get_session_with_no_max_age() -> None:
     """Test getting session data when max_age is None."""
     config = SQLSpecSessionConfig()
@@ -174,7 +170,6 @@ async def test_get_session_with_no_max_age() -> None:
     mock_store.get.assert_called_once_with(session_id, renew_for=None)
 
 
-@pytest.mark.asyncio
 async def test_set_session_data(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test setting session data."""
     session_id = "test_session_123"
@@ -190,7 +185,6 @@ async def test_set_session_data(session_backend: SQLSpecSessionBackend, mock_sto
     mock_store.set.assert_called_once_with(session_id, expected_data, expires_in=expected_expires_in)
 
 
-@pytest.mark.asyncio
 async def test_set_session_data_with_no_max_age() -> None:
     """Test setting session data when max_age is None."""
     config = SQLSpecSessionConfig()
@@ -210,7 +204,6 @@ async def test_set_session_data_with_no_max_age() -> None:
     mock_store.set.assert_called_once_with(session_id, expected_data, expires_in=None)
 
 
-@pytest.mark.asyncio
 async def test_set_session_data_complex_types(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test setting session data with complex data types."""
     session_id = "test_session_complex"
@@ -230,7 +223,6 @@ async def test_set_session_data_complex_types(session_backend: SQLSpecSessionBac
     mock_store.set.assert_called_once_with(session_id, expected_data, expires_in=expected_expires_in)
 
 
-@pytest.mark.asyncio
 async def test_delete_session(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test deleting a session."""
     session_id = "test_session_to_delete"
@@ -240,7 +232,6 @@ async def test_delete_session(session_backend: SQLSpecSessionBackend, mock_store
     mock_store.delete.assert_called_once_with(session_id)
 
 
-@pytest.mark.asyncio
 async def test_get_store_exception(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test that store exceptions propagate correctly on get."""
     session_id = "test_session_123"
@@ -250,7 +241,6 @@ async def test_get_store_exception(session_backend: SQLSpecSessionBackend, mock_
         await session_backend.get(session_id, mock_store)
 
 
-@pytest.mark.asyncio
 async def test_set_store_exception(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test that store exceptions propagate correctly on set."""
     session_id = "test_session_123"
@@ -261,7 +251,6 @@ async def test_set_store_exception(session_backend: SQLSpecSessionBackend, mock_
         await session_backend.set(session_id, session_data_bytes, mock_store)
 
 
-@pytest.mark.asyncio
 async def test_delete_store_exception(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test that store exceptions propagate correctly on delete."""
     session_id = "test_session_123"
@@ -271,7 +260,6 @@ async def test_delete_store_exception(session_backend: SQLSpecSessionBackend, mo
         await session_backend.delete(session_id, mock_store)
 
 
-@pytest.mark.asyncio
 async def test_set_invalid_json_bytes(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test setting session data with invalid JSON bytes."""
     session_id = "test_session_123"
@@ -300,7 +288,6 @@ def test_inheritance() -> None:
     assert isinstance(backend, ServerSideSessionBackend)
 
 
-@pytest.mark.asyncio
 async def test_serialization_roundtrip(session_backend: SQLSpecSessionBackend, mock_store: MagicMock) -> None:
     """Test that data can roundtrip through set/get operations."""
     session_id = "roundtrip_test"
@@ -309,11 +296,11 @@ async def test_serialization_roundtrip(session_backend: SQLSpecSessionBackend, m
     # Mock store to return the data that was set
     stored_data = None
 
-    async def mock_set(_sid: str, data, expires_in=None) -> None:
+    async def mock_set(_sid: str, data: Any, expires_in: Any = None) -> None:
         nonlocal stored_data
         stored_data = data
 
-    async def mock_get(_sid: str, renew_for=None):
+    async def mock_get(_sid: str, renew_for: Any = None) -> Any:
         return stored_data
 
     mock_store.set.side_effect = mock_set

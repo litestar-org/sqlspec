@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar.store import SQLSpecAsyncSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
 pytestmark = [pytest.mark.psqlpy, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
@@ -48,7 +48,7 @@ async def psqlpy_config(postgres_service, request: pytest.FixtureRequest) -> Psq
 
 
 @pytest.fixture
-async def session_store(psqlpy_config: PsqlpyConfig) -> SQLSpecSessionStore:
+async def session_store(psqlpy_config: PsqlpyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with migrations applied using unique table names."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(psqlpy_config)
@@ -62,7 +62,7 @@ async def session_store(psqlpy_config: PsqlpyConfig) -> SQLSpecSessionStore:
             session_table_name = ext.get("session_table", "litestar_sessions_psqlpy")
             break
 
-    return SQLSpecSessionStore(psqlpy_config, table_name=session_table_name)
+    return SQLSpecAsyncSessionStore(psqlpy_config, table_name=session_table_name)
 
 
 async def test_psqlpy_migration_creates_correct_table(psqlpy_config: PsqlpyConfig) -> None:
@@ -113,7 +113,7 @@ async def test_psqlpy_migration_creates_correct_table(psqlpy_config: PsqlpyConfi
         assert "created_at" in columns
 
 
-async def test_psqlpy_session_basic_operations_simple(session_store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_session_basic_operations_simple(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test basic session operations with PsqlPy backend."""
 
     # Test only direct store operations which should work
@@ -128,7 +128,7 @@ async def test_psqlpy_session_basic_operations_simple(session_store: SQLSpecSess
     assert result is None
 
 
-async def test_psqlpy_session_persistence(session_store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_session_persistence(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test that sessions persist across operations with PsqlPy."""
 
     # Test multiple set/get operations persist data
@@ -145,7 +145,7 @@ async def test_psqlpy_session_persistence(session_store: SQLSpecSessionStore) ->
     assert result == {"count": 2}
 
 
-async def test_psqlpy_session_expiration(session_store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_session_expiration(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test session expiration handling with PsqlPy."""
 
     # Test direct store expiration
@@ -166,7 +166,7 @@ async def test_psqlpy_session_expiration(session_store: SQLSpecSessionStore) -> 
     assert result is None
 
 
-async def test_psqlpy_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_concurrent_sessions(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of concurrent sessions with PsqlPy."""
 
     # Test multiple concurrent session operations
@@ -188,7 +188,7 @@ async def test_psqlpy_concurrent_sessions(session_store: SQLSpecSessionStore) ->
     assert result3 == {"user_id": 303}
 
 
-async def test_psqlpy_session_cleanup(session_store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_session_cleanup(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test expired session cleanup with PsqlPy."""
     # Create multiple sessions with short expiration
     session_ids = []
@@ -221,7 +221,7 @@ async def test_psqlpy_session_cleanup(session_store: SQLSpecSessionStore) -> Non
         assert result is not None
 
 
-async def test_psqlpy_store_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_operations(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test PsqlPy store operations directly."""
     # Test basic store operations
     session_id = "test-session-psqlpy"

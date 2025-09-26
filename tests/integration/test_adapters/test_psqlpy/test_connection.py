@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-@pytest.mark.asyncio
 async def test_connect_via_pool(psqlpy_config: PsqlpyConfig) -> None:
     """Test establishing a connection via the pool."""
     pool = await psqlpy_config.create_pool()
@@ -29,7 +28,6 @@ async def test_connect_via_pool(psqlpy_config: PsqlpyConfig) -> None:
         assert rows[0]["?column?"] == 1
 
 
-@pytest.mark.asyncio
 async def test_connect_direct(psqlpy_config: PsqlpyConfig) -> None:
     """Test establishing a connection via the provide_connection context manager."""
 
@@ -42,7 +40,6 @@ async def test_connect_direct(psqlpy_config: PsqlpyConfig) -> None:
         assert rows[0]["?column?"] == 1
 
 
-@pytest.mark.asyncio
 async def test_provide_session_context_manager(psqlpy_config: PsqlpyConfig) -> None:
     """Test the provide_session context manager."""
     async with psqlpy_config.provide_session() as driver:
@@ -58,7 +55,6 @@ async def test_provide_session_context_manager(psqlpy_config: PsqlpyConfig) -> N
         assert val == "test"
 
 
-@pytest.mark.asyncio
 async def test_connection_error_handling(psqlpy_config: PsqlpyConfig) -> None:
     """Test connection error handling."""
     async with psqlpy_config.provide_session() as driver:
@@ -71,7 +67,6 @@ async def test_connection_error_handling(psqlpy_config: PsqlpyConfig) -> None:
         assert result.data[0]["status"] == "still_working"
 
 
-@pytest.mark.asyncio
 async def test_connection_with_core_round_3(psqlpy_config: PsqlpyConfig) -> None:
     """Test connection integration."""
     from sqlspec.core.statement import SQL
@@ -86,7 +81,6 @@ async def test_connection_with_core_round_3(psqlpy_config: PsqlpyConfig) -> None
         assert result.data[0]["test_value"] == "core_test"
 
 
-@pytest.mark.asyncio
 async def test_multiple_connections_sequential(psqlpy_config: PsqlpyConfig) -> None:
     """Test multiple sequential connections."""
 
@@ -103,7 +97,6 @@ async def test_multiple_connections_sequential(psqlpy_config: PsqlpyConfig) -> N
         assert result2.data[0]["conn_id"] == "connection2"
 
 
-@pytest.mark.asyncio
 async def test_connection_concurrent_access(psqlpy_config: PsqlpyConfig) -> None:
     """Test concurrent connection access."""
     import asyncio

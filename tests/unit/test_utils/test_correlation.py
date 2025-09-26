@@ -314,7 +314,6 @@ def test_nested_operation_contexts() -> None:
     assert results[2]["correlation_id"] == "request-123"
 
 
-@pytest.mark.asyncio
 async def test_async_context_preservation() -> None:
     """Test that correlation context is preserved across async operations."""
 

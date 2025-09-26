@@ -9,7 +9,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore, SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 pytestmark = [pytest.mark.psycopg, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
@@ -89,7 +89,7 @@ async def psycopg_async_config(
 
 
 @pytest.fixture
-def sync_session_store(psycopg_sync_config: PsycopgSyncConfig) -> SQLSpecSessionStore:
+def sync_session_store(psycopg_sync_config: PsycopgSyncConfig) -> SQLSpecSyncSessionStore:
     """Create a sync session store with migrations applied using unique table names."""
     # Apply migrations to create the session table
     commands = SyncMigrationCommands(psycopg_sync_config)
@@ -99,16 +99,16 @@ def sync_session_store(psycopg_sync_config: PsycopgSyncConfig) -> SQLSpecSession
     # Extract the unique session table name from extensions config
     extensions = psycopg_sync_config.migration_config.get("include_extensions", [])
     session_table_name = "litestar_sessions_psycopg_sync"  # unique for psycopg sync
-    for ext in extensions:
+    for ext in extensions if isinstance(extensions, list) else []:
         if isinstance(ext, dict) and ext.get("name") == "litestar":
             session_table_name = ext.get("session_table", "litestar_sessions_psycopg_sync")
             break
 
-    return SQLSpecSessionStore(psycopg_sync_config, table_name=session_table_name)
+    return SQLSpecSyncSessionStore(psycopg_sync_config, table_name=session_table_name)
 
 
 @pytest.fixture
-async def async_session_store(psycopg_async_config: PsycopgAsyncConfig) -> SQLSpecSessionStore:
+async def async_session_store(psycopg_async_config: PsycopgAsyncConfig) -> SQLSpecAsyncSessionStore:
     """Create an async session store with migrations applied using unique table names."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(psycopg_async_config)
@@ -118,12 +118,12 @@ async def async_session_store(psycopg_async_config: PsycopgAsyncConfig) -> SQLSp
     # Extract the unique session table name from extensions config
     extensions = psycopg_async_config.migration_config.get("include_extensions", [])
     session_table_name = "litestar_sessions_psycopg_async"  # unique for psycopg async
-    for ext in extensions:
+    for ext in extensions if isinstance(extensions, list) else []:
         if isinstance(ext, dict) and ext.get("name") == "litestar":
             session_table_name = ext.get("session_table", "litestar_sessions_psycopg_async")
             break
 
-    return SQLSpecSessionStore(psycopg_async_config, table_name=session_table_name)
+    return SQLSpecAsyncSessionStore(psycopg_async_config, table_name=session_table_name)
 
 
 def test_psycopg_sync_migration_creates_correct_table(psycopg_sync_config: PsycopgSyncConfig) -> None:
@@ -138,7 +138,7 @@ def test_psycopg_sync_migration_creates_correct_table(psycopg_sync_config: Psyco
         # Get the actual table name from the migration context or extensions config
         extensions = psycopg_sync_config.migration_config.get("include_extensions", [])
         table_name = "litestar_sessions_psycopg_sync"  # unique for psycopg sync
-        for ext in extensions:
+        for ext in extensions if isinstance(extensions, list) else []:
             if isinstance(ext, dict) and ext.get("name") == "litestar":
                 table_name = ext.get("session_table", "litestar_sessions_psycopg_sync")
                 break
@@ -187,7 +187,7 @@ async def test_psycopg_async_migration_creates_correct_table(psycopg_async_confi
         # Get the actual table name from the migration context or extensions config
         extensions = psycopg_async_config.migration_config.get("include_extensions", [])
         table_name = "litestar_sessions_psycopg_async"  # unique for psycopg async
-        for ext in extensions:  # type: ignore[union-attr]
+        for ext in extensions if isinstance(extensions, list) else []:  # type: ignore[union-attr]
             if isinstance(ext, dict) and ext.get("name") == "litestar":
                 table_name = ext.get("session_table", "litestar_sessions_psycopg_async")
                 break
@@ -224,7 +224,7 @@ async def test_psycopg_async_migration_creates_correct_table(psycopg_async_confi
         assert "created_at" in columns
 
 
-async def test_psycopg_sync_session_basic_operations(sync_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_session_basic_operations(sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test basic session operations with Psycopg sync backend."""
 
     # Test only direct store operations which should work
@@ -239,7 +239,7 @@ async def test_psycopg_sync_session_basic_operations(sync_session_store: SQLSpec
     assert result is None
 
 
-async def test_psycopg_async_session_basic_operations(async_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_session_basic_operations(async_session_store: SQLSpecSyncSessionStore) -> None:
     """Test basic session operations with Psycopg async backend."""
 
     # Test only direct store operations which should work
@@ -254,7 +254,7 @@ async def test_psycopg_async_session_basic_operations(async_session_store: SQLSp
     assert result is None
 
 
-async def test_psycopg_sync_session_persistence(sync_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_session_persistence(sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test that sessions persist across operations with Psycopg sync driver."""
 
     # Test multiple set/get operations persist data
@@ -271,7 +271,7 @@ async def test_psycopg_sync_session_persistence(sync_session_store: SQLSpecSessi
     assert result == {"count": 2}
 
 
-async def test_psycopg_async_session_persistence(async_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_session_persistence(async_session_store: SQLSpecSyncSessionStore) -> None:
     """Test that sessions persist across operations with Psycopg async driver."""
 
     # Test multiple set/get operations persist data
@@ -288,7 +288,7 @@ async def test_psycopg_async_session_persistence(async_session_store: SQLSpecSes
     assert result == {"count": 2}
 
 
-async def test_psycopg_sync_session_expiration(sync_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_session_expiration(sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test session expiration handling with Psycopg sync driver."""
 
     # Test direct store expiration
@@ -310,7 +310,7 @@ async def test_psycopg_sync_session_expiration(sync_session_store: SQLSpecSessio
     assert result is None
 
 
-async def test_psycopg_async_session_expiration(async_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_session_expiration(async_session_store: SQLSpecSyncSessionStore) -> None:
     """Test session expiration handling with Psycopg async driver."""
 
     # Test direct store expiration
@@ -331,7 +331,7 @@ async def test_psycopg_async_session_expiration(async_session_store: SQLSpecSess
     assert result is None
 
 
-async def test_psycopg_sync_concurrent_sessions(sync_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_concurrent_sessions(sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of concurrent sessions with Psycopg sync driver."""
 
     # Test multiple concurrent session operations
@@ -353,7 +353,7 @@ async def test_psycopg_sync_concurrent_sessions(sync_session_store: SQLSpecSessi
     assert result3 == {"user_id": 303}
 
 
-async def test_psycopg_async_concurrent_sessions(async_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_concurrent_sessions(async_session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of concurrent sessions with Psycopg async driver."""
 
     # Test multiple concurrent session operations
@@ -375,7 +375,7 @@ async def test_psycopg_async_concurrent_sessions(async_session_store: SQLSpecSes
     assert result3 == {"user_id": 303}
 
 
-async def test_psycopg_sync_session_cleanup(sync_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_session_cleanup(sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test expired session cleanup with Psycopg sync driver."""
     # Create multiple sessions with short expiration
     session_ids = []
@@ -408,7 +408,7 @@ async def test_psycopg_sync_session_cleanup(sync_session_store: SQLSpecSessionSt
         assert result is not None
 
 
-async def test_psycopg_async_session_cleanup(async_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_session_cleanup(async_session_store: SQLSpecSyncSessionStore) -> None:
     """Test expired session cleanup with Psycopg async driver."""
     # Create multiple sessions with short expiration
     session_ids = []
@@ -441,7 +441,7 @@ async def test_psycopg_async_session_cleanup(async_session_store: SQLSpecSession
         assert result is not None
 
 
-async def test_psycopg_sync_store_operations(sync_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_store_operations(sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test Psycopg sync store operations directly."""
     # Test basic store operations
     session_id = "test-session-psycopg-sync"
@@ -474,7 +474,7 @@ async def test_psycopg_sync_store_operations(sync_session_store: SQLSpecSessionS
     assert await sync_session_store.exists(session_id) is False
 
 
-async def test_psycopg_async_store_operations(async_session_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_store_operations(async_session_store: SQLSpecSyncSessionStore) -> None:
     """Test Psycopg async store operations directly."""
     # Test basic store operations
     session_id = "test-session-psycopg-async"

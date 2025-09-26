@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
+from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
 if TYPE_CHECKING:
@@ -101,7 +102,7 @@ async def psqlpy_migration_config_mixed(
 
 
 @pytest.fixture
-async def session_store_default(psqlpy_migration_config: PsqlpyConfig) -> SQLSpecSessionStore:
+async def session_store_default(psqlpy_migration_config: PsqlpyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with default table name."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(psqlpy_migration_config)
@@ -109,7 +110,7 @@ async def session_store_default(psqlpy_migration_config: PsqlpyConfig) -> SQLSpe
     await commands.upgrade()
 
     # Create store using the default migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         psqlpy_migration_config,
         table_name="litestar_sessions_psqlpy",  # Unique table name for psqlpy
     )
@@ -128,7 +129,7 @@ def session_backend_default(session_backend_config_default: SQLSpecSessionConfig
 
 
 @pytest.fixture
-async def session_store_custom(psqlpy_migration_config_with_dict: PsqlpyConfig) -> SQLSpecSessionStore:
+async def session_store_custom(psqlpy_migration_config_with_dict: PsqlpyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = AsyncMigrationCommands(psqlpy_migration_config_with_dict)
@@ -136,7 +137,7 @@ async def session_store_custom(psqlpy_migration_config_with_dict: PsqlpyConfig) 
     await commands.upgrade()
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         psqlpy_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )
@@ -164,9 +165,9 @@ async def migrated_config(psqlpy_migration_config: PsqlpyConfig) -> PsqlpyConfig
 
 
 @pytest.fixture
-async def session_store(migrated_config: PsqlpyConfig) -> SQLSpecSessionStore:
+async def session_store(migrated_config: PsqlpyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store using migrated config."""
-    return SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions_psqlpy")
+    return SQLSpecAsyncSessionStore(config=migrated_config, table_name="litestar_sessions_psqlpy")
 
 
 @pytest.fixture

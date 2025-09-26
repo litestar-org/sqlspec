@@ -13,7 +13,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc.config import AdbcConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
 
@@ -111,7 +111,7 @@ def adbc_migration_config_mixed(
 
 
 @pytest.fixture
-def session_backend_default(adbc_migration_config: AdbcConfig) -> SQLSpecSessionStore:
+def session_backend_default(adbc_migration_config: AdbcConfig) -> SQLSpecSyncSessionStore:
     """Create a session backend with default table name for ADBC (sync)."""
     # Apply migrations to create the session table
     commands = SyncMigrationCommands(adbc_migration_config)
@@ -126,11 +126,11 @@ def session_backend_default(adbc_migration_config: AdbcConfig) -> SQLSpecSession
             break
 
     # Create session store using the migrated table with unique name
-    return SQLSpecSessionStore(config=adbc_migration_config, table_name=session_table_name)
+    return SQLSpecSyncSessionStore(config=adbc_migration_config, table_name=session_table_name)
 
 
 @pytest.fixture
-def session_backend_custom(adbc_migration_config_with_dict: AdbcConfig) -> SQLSpecSessionStore:
+def session_backend_custom(adbc_migration_config_with_dict: AdbcConfig) -> SQLSpecSyncSessionStore:
     """Create a session backend with custom table name for ADBC (sync)."""
     # Apply migrations to create the session table with custom name
     commands = SyncMigrationCommands(adbc_migration_config_with_dict)
@@ -145,7 +145,7 @@ def session_backend_custom(adbc_migration_config_with_dict: AdbcConfig) -> SQLSp
             break
 
     # Create session store using the custom migrated table with unique name
-    return SQLSpecSessionStore(config=adbc_migration_config_with_dict, table_name=session_table_name)
+    return SQLSpecSyncSessionStore(config=adbc_migration_config_with_dict, table_name=session_table_name)
 
 
 @pytest.fixture

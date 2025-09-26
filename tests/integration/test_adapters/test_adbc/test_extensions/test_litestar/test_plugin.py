@@ -19,7 +19,7 @@ from litestar.stores.registry import StoreRegistry
 from litestar.testing import TestClient
 
 from sqlspec.adapters.adbc.config import AdbcConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -37,11 +37,18 @@ def migrated_config(adbc_migration_config: AdbcConfig) -> AdbcConfig:
 
 
 @pytest.fixture
-def session_store(migrated_config: AdbcConfig) -> SQLSpecSessionStore:
+def session_store(migrated_config: AdbcConfig) -> SQLSpecSyncSessionStore:
     """Create a session store instance using the migrated database for ADBC."""
-    return SQLSpecSessionStore(
+    # Extract the actual table name from the config
+    session_table_name = "litestar_sessions_adbc"
+    for ext in migrated_config.migration_config.get("include_extensions", []):
+        if isinstance(ext, dict) and ext.get("name") == "litestar":
+            session_table_name = ext.get("session_table", "litestar_sessions_adbc")
+            break
+
+    return SQLSpecSyncSessionStore(
         config=migrated_config,
-        table_name="litestar_sessions_adbc",  # Use the unique table for ADBC
+        table_name=session_table_name,  # Use the actual unique table name
         session_id_column="session_id",
         data_column="data",
         expires_at_column="expires_at",
@@ -59,10 +66,10 @@ def session_config() -> SQLSpecSessionConfig:
 
 
 @xfail_if_driver_missing
-def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
+def test_session_store_creation(session_store: SQLSpecSyncSessionStore) -> None:
     """Test that SessionStore can be created with ADBC configuration."""
     assert session_store is not None
-    assert session_store._table_name == "litestar_sessions_adbc"
+    assert session_store._table_name.startswith("litestar_sessions_adbc")  # Allow for worker/test ID suffix
     assert session_store._session_id_column == "session_id"
     assert session_store._data_column == "data"
     assert session_store._expires_at_column == "expires_at"
@@ -70,26 +77,31 @@ def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
 
 
 @xfail_if_driver_missing
-def test_session_store_adbc_table_structure(session_store: SQLSpecSessionStore, migrated_config: AdbcConfig) -> None:
+def test_session_store_adbc_table_structure(
+    session_store: SQLSpecSyncSessionStore, migrated_config: AdbcConfig
+) -> None:
     """Test that session table is created with proper ADBC-compatible structure."""
+    # Extract the actual table name from the session store
+    actual_table_name = session_store._table_name
+
     with migrated_config.provide_session() as driver:
         # Verify table exists with proper name
-        result = driver.execute("""
+        result = driver.execute(f"""
             SELECT table_name, table_type
             FROM information_schema.tables
-            WHERE table_name = 'litestar_sessions_adbc'
+            WHERE table_name = '{actual_table_name}'
             AND table_schema = 'public'
         """)
         assert len(result.data) == 1
         table_info = result.data[0]
-        assert table_info["table_name"] == "litestar_sessions_adbc"
+        assert table_info["table_name"] == actual_table_name
         assert table_info["table_type"] == "BASE TABLE"
 
         # Verify column structure
-        result = driver.execute("""
+        result = driver.execute(f"""
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
-            WHERE table_name = 'litestar_sessions_adbc'
+            WHERE table_name = '{actual_table_name}'
             AND table_schema = 'public'
             ORDER BY ordinal_position
         """)
@@ -107,10 +119,10 @@ def test_session_store_adbc_table_structure(session_store: SQLSpecSessionStore, 
         assert columns["created_at"]["data_type"] in ("timestamp with time zone", "timestamptz")
 
         # Verify index exists for expires_at
-        result = driver.execute("""
+        result = driver.execute(f"""
             SELECT indexname
             FROM pg_indexes
-            WHERE tablename = 'litestar_sessions_adbc'
+            WHERE tablename = '{actual_table_name}'
             AND schemaname = 'public'
         """)
         index_names = [row["indexname"] for row in result.data]
@@ -118,7 +130,7 @@ def test_session_store_adbc_table_structure(session_store: SQLSpecSessionStore, 
 
 
 @xfail_if_driver_missing
-def test_basic_session_operations(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
+def test_basic_session_operations(session_config: SQLSpecSessionConfig, session_store: SQLSpecSyncSessionStore) -> None:
     """Test basic session operations through Litestar application with ADBC."""
 
     @get("/set-session")
@@ -188,7 +200,7 @@ def test_basic_session_operations(session_config: SQLSpecSessionConfig, session_
 
 @xfail_if_driver_missing
 def test_session_persistence_across_requests(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSyncSessionStore
 ) -> None:
     """Test that sessions persist across multiple requests with ADBC."""
 
@@ -285,7 +297,7 @@ def test_session_persistence_across_requests(
 def test_session_expiration(migrated_config: AdbcConfig) -> None:
     """Test session expiration handling with ADBC."""
     # Create store and config with very short lifetime (migrations already applied by fixture)
-    session_store = SQLSpecSessionStore(
+    session_store = SQLSpecSyncSessionStore(
         config=migrated_config,
         table_name="litestar_sessions_adbc",  # Use the migrated table
     )
@@ -348,7 +360,7 @@ def test_session_expiration(migrated_config: AdbcConfig) -> None:
 
 
 @xfail_if_driver_missing
-def test_large_data_handling_adbc(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
+def test_large_data_handling_adbc(session_config: SQLSpecSessionConfig, session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of large data structures with ADBC Arrow format optimization."""
 
     @post("/save-large-adbc-dataset")
@@ -485,7 +497,7 @@ def test_session_cleanup_and_maintenance(adbc_migration_config: AdbcConfig) -> N
     commands.init(adbc_migration_config.migration_config["script_location"], package=False)
     commands.upgrade()
 
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=adbc_migration_config,
         table_name="litestar_sessions_adbc",  # Use the migrated table
     )
@@ -562,7 +574,7 @@ def test_migration_with_default_table_name(adbc_migration_config: AdbcConfig) ->
     commands.upgrade()
 
     # Create store using the migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=adbc_migration_config,
         table_name="litestar_sessions_adbc",  # Default table name
     )
@@ -589,7 +601,7 @@ def test_migration_with_custom_table_name(adbc_migration_config_with_dict: AdbcC
     commands.upgrade()
 
     # Create store using the custom migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=adbc_migration_config_with_dict,
         table_name="custom_adbc_sessions",  # Custom table name from config
     )
@@ -627,7 +639,7 @@ def test_migration_with_mixed_extensions(adbc_migration_config_mixed: AdbcConfig
     commands.upgrade()
 
     # The litestar extension should use default table name
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=adbc_migration_config_mixed,
         table_name="litestar_sessions_adbc",  # Default since string format was used
     )

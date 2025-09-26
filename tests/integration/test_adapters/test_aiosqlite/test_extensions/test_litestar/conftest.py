@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
+from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
 
@@ -85,7 +86,7 @@ async def aiosqlite_migration_config_mixed(request: pytest.FixtureRequest) -> As
 
 
 @pytest.fixture
-async def session_store_default(aiosqlite_migration_config: AiosqliteConfig) -> SQLSpecSessionStore:
+async def session_store_default(aiosqlite_migration_config: AiosqliteConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with default table name."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(aiosqlite_migration_config)
@@ -93,7 +94,7 @@ async def session_store_default(aiosqlite_migration_config: AiosqliteConfig) -> 
     await commands.upgrade()
 
     # Create store using the default migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         aiosqlite_migration_config,
         table_name="litestar_sessions",  # Default table name
     )
@@ -112,7 +113,7 @@ def session_backend_default(session_backend_config_default: SQLSpecSessionConfig
 
 
 @pytest.fixture
-async def session_store_custom(aiosqlite_migration_config_with_dict: AiosqliteConfig) -> SQLSpecSessionStore:
+async def session_store_custom(aiosqlite_migration_config_with_dict: AiosqliteConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = AsyncMigrationCommands(aiosqlite_migration_config_with_dict)
@@ -120,7 +121,7 @@ async def session_store_custom(aiosqlite_migration_config_with_dict: AiosqliteCo
     await commands.upgrade()
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         aiosqlite_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )

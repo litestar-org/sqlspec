@@ -45,7 +45,6 @@ async def asyncpg_batch_session(postgres_service: PostgresService) -> "AsyncGene
             await config.close_pool()
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_execute_many_basic(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test basic execute_many with AsyncPG."""
     parameters = [
@@ -68,7 +67,6 @@ async def test_asyncpg_execute_many_basic(asyncpg_batch_session: AsyncpgDriver) 
     assert count_result[0]["count"] == 5
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_execute_many_update(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many for UPDATE operations with AsyncPG."""
 
@@ -90,7 +88,6 @@ async def test_asyncpg_execute_many_update(asyncpg_batch_session: AsyncpgDriver)
     assert all(row["value"] in (100, 200, 300) for row in check_result)
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_execute_many_empty(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with empty parameter list on AsyncPG."""
     result = await asyncpg_batch_session.execute_many(
@@ -104,7 +101,6 @@ async def test_asyncpg_execute_many_empty(asyncpg_batch_session: AsyncpgDriver) 
     assert count_result[0]["count"] == 0
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_execute_many_mixed_types(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with mixed parameter types on AsyncPG."""
     parameters = [
@@ -129,7 +125,6 @@ async def test_asyncpg_execute_many_mixed_types(asyncpg_batch_session: AsyncpgDr
     assert negative_result[0]["value"] == -50
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_execute_many_delete(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many for DELETE operations with AsyncPG."""
 
@@ -158,7 +153,6 @@ async def test_asyncpg_execute_many_delete(asyncpg_batch_session: AsyncpgDriver)
     assert remaining_names == ["Delete 3", "Keep 1"]
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with large batch size on AsyncPG."""
 
@@ -182,7 +176,6 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
     assert sample_result[2]["value"] == 9990
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with SQL object on AsyncPG."""
     from sqlspec.core.statement import SQL
@@ -201,7 +194,6 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
     assert check_result[0]["count"] == 3
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with RETURNING clause on AsyncPG."""
     parameters = [("Return 1", 111, "RET"), ("Return 2", 222, "RET"), ("Return 3", 333, "RET")]
@@ -227,7 +219,6 @@ async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: Asyncp
         assert check_result[0]["count"] == 3
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with PostgreSQL array types on AsyncPG."""
 
@@ -262,7 +253,6 @@ async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDr
     assert check_result[2]["tag_count"] == 3
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with JSON data on AsyncPG."""
     await asyncpg_batch_session.execute_script("""

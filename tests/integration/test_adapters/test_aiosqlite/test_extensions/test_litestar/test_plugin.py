@@ -14,7 +14,7 @@ from litestar.stores.registry import StoreRegistry
 from litestar.testing import AsyncTestClient
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
 from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
@@ -31,9 +31,9 @@ async def migrated_config(aiosqlite_migration_config: AiosqliteConfig) -> Aiosql
 
 
 @pytest.fixture
-async def session_store(migrated_config: AiosqliteConfig) -> SQLSpecSessionStore:
+async def session_store(migrated_config: AiosqliteConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store instance using the migrated database."""
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         config=migrated_config,
         table_name="litestar_sessions",  # Use the default table created by migration
         session_id_column="session_id",
@@ -54,9 +54,9 @@ async def session_config(migrated_config: AiosqliteConfig) -> SQLSpecSessionConf
 
 
 @pytest.fixture
-async def session_store_file(migrated_config: AiosqliteConfig) -> SQLSpecSessionStore:
+async def session_store_file(migrated_config: AiosqliteConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store instance using file-based SQLite for concurrent testing."""
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         config=migrated_config,
         table_name="litestar_sessions",  # Use the default table created by migration
         session_id_column="session_id",
@@ -66,7 +66,7 @@ async def session_store_file(migrated_config: AiosqliteConfig) -> SQLSpecSession
     )
 
 
-async def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
+async def test_session_store_creation(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test that SessionStore can be created with Aiosqlite configuration."""
     assert session_store is not None
     assert session_store._table_name == "litestar_sessions"
@@ -77,7 +77,7 @@ async def test_session_store_creation(session_store: SQLSpecSessionStore) -> Non
 
 
 async def test_session_store_sqlite_table_structure(
-    session_store: SQLSpecSessionStore, aiosqlite_migration_config: AiosqliteConfig
+    session_store: SQLSpecAsyncSessionStore, aiosqlite_migration_config: AiosqliteConfig
 ) -> None:
     """Test that session table is created with proper SQLite structure."""
     async with aiosqlite_migration_config.provide_session() as driver:
@@ -116,7 +116,7 @@ async def test_session_store_sqlite_table_structure(
 
 
 async def test_basic_session_operations(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test basic session operations through Litestar application."""
 
@@ -188,7 +188,7 @@ async def test_basic_session_operations(
 
 
 async def test_session_persistence_across_requests(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test that sessions persist across multiple requests with SQLite."""
 
@@ -284,7 +284,7 @@ async def test_session_persistence_across_requests(
 async def test_session_expiration(migrated_config: AiosqliteConfig) -> None:
     """Test session expiration handling with SQLite."""
     # Create store and config with very short lifetime (migrations already applied by fixture)
-    session_store = SQLSpecSessionStore(
+    session_store = SQLSpecAsyncSessionStore(
         config=migrated_config,
         table_name="litestar_sessions",  # Use the migrated table
     )
@@ -346,7 +346,7 @@ async def test_session_expiration(migrated_config: AiosqliteConfig) -> None:
         }
 
 
-async def test_concurrent_sessions_with_file_backend(session_store_file: SQLSpecSessionStore) -> None:
+async def test_concurrent_sessions_with_file_backend(session_store_file: SQLSpecAsyncSessionStore) -> None:
     """Test concurrent session access with file-based SQLite."""
 
     async def session_worker(worker_id: int, iterations: int) -> list[dict]:
@@ -417,7 +417,9 @@ async def test_concurrent_sessions_with_file_backend(session_store_file: SQLSpec
         assert result["file_based"] is True
 
 
-async def test_large_data_handling(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
+async def test_large_data_handling(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
+) -> None:
     """Test handling of large data structures with SQLite backend."""
 
     @post("/save-large-sqlite-dataset")
@@ -544,7 +546,7 @@ async def test_large_data_handling(session_config: SQLSpecSessionConfig, session
 
 
 async def test_sqlite_concurrent_webapp_simulation(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test concurrent web application behavior with SQLite session handling."""
 
@@ -666,7 +668,7 @@ async def test_session_cleanup_and_maintenance(aiosqlite_migration_config: Aiosq
     await commands.init(aiosqlite_migration_config.migration_config["script_location"], package=False)
     await commands.upgrade()
 
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=aiosqlite_migration_config,
         table_name="litestar_sessions",  # Use the migrated table
     )
@@ -737,7 +739,7 @@ async def test_migration_with_default_table_name(aiosqlite_migration_config: Aio
     await commands.upgrade()
 
     # Create store using the migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=aiosqlite_migration_config,
         table_name="litestar_sessions",  # Default table name
     )
@@ -760,7 +762,7 @@ async def test_migration_with_custom_table_name(aiosqlite_migration_config_with_
     await commands.upgrade()
 
     # Create store using the custom migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=aiosqlite_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )
@@ -788,7 +790,7 @@ async def test_migration_with_single_extension(aiosqlite_migration_config_mixed:
     await commands.upgrade()
 
     # The litestar extension should use default table name
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=aiosqlite_migration_config_mixed,
         table_name="litestar_sessions",  # Default since string format was used
     )
@@ -804,7 +806,7 @@ async def test_migration_with_single_extension(aiosqlite_migration_config_mixed:
 
 
 async def test_sqlite_atomic_transactions_pattern(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test atomic transaction patterns typical for SQLite applications."""
 

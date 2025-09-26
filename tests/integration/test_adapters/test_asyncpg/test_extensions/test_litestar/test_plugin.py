@@ -13,13 +13,14 @@ import pytest
 from litestar import Litestar, get, post, put
 from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
 from litestar.stores.registry import StoreRegistry
-from litestar.testing import AsyncTestClient
+from litestar.testing import TestClient
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.extensions.litestar import SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
+from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
-pytestmark = [pytest.mark.asyncpg, pytest.mark.postgres, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncpg, pytest.mark.postgres, pytest.mark.integration, pytest.mark.anyio]
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ async def migrated_config(asyncpg_migration_config: AsyncpgConfig) -> AsyncpgCon
 
 
 @pytest.fixture
-async def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> Litestar:
+async def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore) -> Litestar:
     """Create a Litestar app with session middleware for testing."""
 
     @get("/session/set/{key:str}")
@@ -119,7 +120,7 @@ async def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLS
     )
 
 
-async def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
+async def test_session_store_creation(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test that SessionStore can be created with AsyncPG configuration."""
     assert session_store is not None
     assert session_store.table_name == "litestar_sessions_asyncpg"
@@ -130,7 +131,7 @@ async def test_session_store_creation(session_store: SQLSpecSessionStore) -> Non
 
 
 async def test_session_store_postgres_table_structure(
-    session_store: SQLSpecSessionStore, asyncpg_migration_config: AsyncpgConfig
+    session_store: SQLSpecAsyncSessionStore, asyncpg_migration_config: AsyncpgConfig
 ) -> None:
     """Test that session table is created with proper PostgreSQL structure."""
     async with asyncpg_migration_config.provide_session() as driver:
@@ -181,47 +182,47 @@ async def test_session_store_postgres_table_structure(
 
 async def test_basic_session_operations(litestar_app: Litestar) -> None:
     """Test basic session get/set/delete operations."""
-    async with AsyncTestClient(app=litestar_app) as client:
+    with TestClient(app=litestar_app) as client:
         # Set a simple value
-        response = await client.get("/session/set/username?value=testuser")
+        response = client.get("/session/set/username?value=testuser")
         assert response.status_code == HTTP_200_OK
         assert response.json() == {"status": "set", "key": "username", "value": "testuser"}
 
         # Get the value back
-        response = await client.get("/session/get/username")
+        response = client.get("/session/get/username")
         assert response.status_code == HTTP_200_OK
         assert response.json() == {"key": "username", "value": "testuser"}
 
         # Set another value
-        response = await client.get("/session/set/user_id?value=12345")
+        response = client.get("/session/set/user_id?value=12345")
         assert response.status_code == HTTP_200_OK
 
         # Get all session data
-        response = await client.get("/session/all")
+        response = client.get("/session/all")
         assert response.status_code == HTTP_200_OK
         data = response.json()
         assert data["username"] == "testuser"
         assert data["user_id"] == "12345"
 
         # Delete a specific key
-        response = await client.post("/session/key/username/delete")
+        response = client.post("/session/key/username/delete")
         assert response.status_code == HTTP_201_CREATED
         assert response.json() == {"status": "deleted", "key": "username"}
 
         # Verify it's gone
-        response = await client.get("/session/get/username")
+        response = client.get("/session/get/username")
         assert response.status_code == HTTP_200_OK
         assert response.json() == {"key": "username", "value": None}
 
         # user_id should still exist
-        response = await client.get("/session/get/user_id")
+        response = client.get("/session/get/user_id")
         assert response.status_code == HTTP_200_OK
         assert response.json() == {"key": "user_id", "value": "12345"}
 
 
 async def test_bulk_session_operations(litestar_app: Litestar) -> None:
     """Test bulk session operations."""
-    async with AsyncTestClient(app=litestar_app) as client:
+    with TestClient(app=litestar_app) as client:
         # Set multiple values at once
         bulk_data = {
             "user_id": 42,
@@ -232,12 +233,12 @@ async def test_bulk_session_operations(litestar_app: Litestar) -> None:
             "last_login": "2024-01-15T10:30:00Z",
         }
 
-        response = await client.post("/session/bulk", json=bulk_data)
+        response = client.post("/session/bulk", json=bulk_data)
         assert response.status_code == HTTP_201_CREATED
         assert response.json() == {"status": "bulk set", "count": 6}
 
         # Verify all data was set
-        response = await client.get("/session/all")
+        response = client.get("/session/all")
         assert response.status_code == HTTP_200_OK
         data = response.json()
 
@@ -247,20 +248,20 @@ async def test_bulk_session_operations(litestar_app: Litestar) -> None:
 
 async def test_session_persistence_across_requests(litestar_app: Litestar) -> None:
     """Test that sessions persist across multiple requests."""
-    async with AsyncTestClient(app=litestar_app) as client:
+    with TestClient(app=litestar_app) as client:
         # Test counter functionality across multiple requests
         expected_counts = [1, 2, 3, 4, 5]
 
         for expected_count in expected_counts:
-            response = await client.get("/counter")
+            response = client.get("/counter")
             assert response.status_code == HTTP_200_OK
             assert response.json() == {"count": expected_count}
 
         # Verify count persists after setting other data
-        response = await client.get("/session/set/other_data?value=some_value")
+        response = client.get("/session/set/other_data?value=some_value")
         assert response.status_code == HTTP_200_OK
 
-        response = await client.get("/counter")
+        response = client.get("/counter")
         assert response.status_code == HTTP_200_OK
         assert response.json() == {"count": 6}
 
@@ -268,7 +269,7 @@ async def test_session_persistence_across_requests(litestar_app: Litestar) -> No
 async def test_session_expiration(migrated_config: AsyncpgConfig) -> None:
     """Test session expiration handling."""
     # Create store with very short lifetime
-    session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions_asyncpg")
+    session_store = SQLSpecAsyncSessionStore(config=migrated_config, table_name="litestar_sessions_asyncpg")
 
     session_config = SQLSpecSessionConfig(
         table_name="litestar_sessions_asyncpg",
@@ -291,24 +292,24 @@ async def test_session_expiration(migrated_config: AsyncpgConfig) -> None:
 
     app = Litestar(route_handlers=[set_temp_data, get_temp_data], middleware=[session_config.middleware], stores=stores)
 
-    async with AsyncTestClient(app=app) as client:
+    with TestClient(app=app) as client:
         # Set temporary data
-        response = await client.get("/set-temp")
+        response = client.get("/set-temp")
         assert response.json() == {"status": "set"}
 
         # Data should be available immediately
-        response = await client.get("/get-temp")
+        response = client.get("/get-temp")
         assert response.json() == {"temp_data": "will_expire"}
 
         # Wait for expiration
         await asyncio.sleep(2)
 
         # Data should be expired (new session created)
-        response = await client.get("/get-temp")
+        response = client.get("/get-temp")
         assert response.json() == {"temp_data": None}
 
 
-async def test_jsonb_support(session_store: SQLSpecSessionStore, asyncpg_migration_config: AsyncpgConfig) -> None:
+async def test_jsonb_support(session_store: SQLSpecAsyncSessionStore, asyncpg_migration_config: AsyncpgConfig) -> None:
     """Test PostgreSQL JSONB support for complex data types."""
     session_id = f"jsonb-test-{uuid4()}"
 
@@ -348,7 +349,7 @@ async def test_jsonb_support(session_store: SQLSpecSessionStore, asyncpg_migrati
         assert isinstance(stored_json, dict)  # Should be parsed as dict, not string
 
 
-async def test_concurrent_session_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_concurrent_session_operations(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test concurrent session operations with AsyncPG."""
 
     async def create_session(session_num: int) -> None:
@@ -382,7 +383,7 @@ async def test_concurrent_session_operations(session_store: SQLSpecSessionStore)
         assert result["data"] == f"session_{i}_data"
 
 
-async def test_large_session_data(session_store: SQLSpecSessionStore) -> None:
+async def test_large_session_data(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of large session data with AsyncPG."""
     session_id = f"large-data-{uuid4()}"
 
@@ -405,7 +406,7 @@ async def test_large_session_data(session_store: SQLSpecSessionStore) -> None:
     assert len(retrieved_data["nested_structure"]) == 100
 
 
-async def test_session_cleanup_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_session_cleanup_operations(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test session cleanup and maintenance operations."""
 
     # Create sessions with different expiration times
@@ -441,7 +442,7 @@ async def test_session_cleanup_operations(session_store: SQLSpecSessionStore) ->
             assert result == expected_data
 
 
-async def test_store_crud_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_store_crud_operations(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test direct store CRUD operations."""
     session_id = "test-session-crud"
 
@@ -485,7 +486,7 @@ async def test_store_crud_operations(session_store: SQLSpecSessionStore) -> None
     assert await session_store.exists(session_id) is False
 
 
-async def test_special_characters_handling(session_store: SQLSpecSessionStore) -> None:
+async def test_special_characters_handling(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of special characters in keys and values."""
 
     # Test data with various special characters
@@ -510,7 +511,7 @@ async def test_special_characters_handling(session_store: SQLSpecSessionStore) -
         await session_store.delete(session_id)
 
 
-async def test_session_renewal(session_store: SQLSpecSessionStore) -> None:
+async def test_session_renewal(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test session renewal functionality."""
     session_id = "renewal_test"
     test_data = {"user_id": 123, "activity": "browsing"}
@@ -534,7 +535,7 @@ async def test_session_renewal(session_store: SQLSpecSessionStore) -> None:
     await session_store.delete(session_id)
 
 
-async def test_error_handling_and_edge_cases(session_store: SQLSpecSessionStore) -> None:
+async def test_error_handling_and_edge_cases(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test error handling and edge cases."""
 
     # Test getting non-existent session

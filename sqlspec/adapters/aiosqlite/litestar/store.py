@@ -1,20 +1,72 @@
-"""AIOSQLite-specific session store handler."""
+"""AIOSQLite-specific session store handler.
+
+Standalone handler with no inheritance - clean break implementation.
+"""
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any, Union
+
+if TYPE_CHECKING:
+    from sqlspec.driver._async import AsyncDriverAdapterBase
+    from sqlspec.driver._sync import SyncDriverAdapterBase
 
 from sqlspec import sql
-from sqlspec.extensions.litestar.store import BaseStoreHandler
+from sqlspec.utils.serializers import from_json, to_json
 
-__all__ = ("StoreHandler",)
+__all__ = ("AsyncStoreHandler",)
 
 
-class StoreHandler(BaseStoreHandler):
+class AsyncStoreHandler:
     """AIOSQLite-specific session store handler.
 
     SQLite stores JSON data as TEXT, so we need to serialize/deserialize JSON strings.
     Datetime values need to be stored as ISO format strings.
     """
+
+    def __init__(
+        self, table_name: str = "litestar_sessions", data_column: str = "data", *args: Any, **kwargs: Any
+    ) -> None:
+        """Initialize AIOSQLite store handler.
+
+        Args:
+            table_name: Name of the session table
+            data_column: Name of the data column
+            *args: Additional positional arguments (ignored)
+            **kwargs: Additional keyword arguments (ignored)
+        """
+
+    def serialize_data(
+        self, data: Any, driver: Union["SyncDriverAdapterBase", "AsyncDriverAdapterBase", None] = None
+    ) -> Any:
+        """Serialize session data for SQLite storage.
+
+        Args:
+            data: Session data to serialize
+            driver: Database driver instance (optional)
+
+        Returns:
+            JSON string for database storage
+        """
+        return to_json(data)
+
+    def deserialize_data(
+        self, data: Any, driver: Union["SyncDriverAdapterBase", "AsyncDriverAdapterBase", None] = None
+    ) -> Any:
+        """Deserialize session data from SQLite storage.
+
+        Args:
+            data: Raw data from database (JSON string)
+            driver: Database driver instance (optional)
+
+        Returns:
+            Deserialized Python object
+        """
+        if isinstance(data, str):
+            try:
+                return from_json(data)
+            except (ValueError, TypeError):
+                return data
+        return data
 
     def format_datetime(self, dt: datetime) -> str:
         """Format datetime for SQLite storage as ISO string.
@@ -46,6 +98,7 @@ class StoreHandler(BaseStoreHandler):
         data_value: Any,
         expires_at_value: Any,
         current_time_value: Any,
+        driver: Union["SyncDriverAdapterBase", "AsyncDriverAdapterBase", None] = None,
     ) -> "list[Any]":
         """Build SQLite UPSERT SQL using ON CONFLICT.
 
@@ -59,6 +112,7 @@ class StoreHandler(BaseStoreHandler):
             data_value: Serialized JSON string
             expires_at_value: ISO datetime string
             current_time_value: ISO datetime string
+            driver: Database driver instance (unused)
 
         Returns:
             Single UPSERT statement using SQLite ON CONFLICT
@@ -77,3 +131,22 @@ class StoreHandler(BaseStoreHandler):
         )
 
         return [upsert_sql]
+
+    def handle_column_casing(self, row: "dict[str, Any]", column: str) -> Any:
+        """Handle database-specific column name casing.
+
+        Args:
+            row: Result row from database
+            column: Column name to look up
+
+        Returns:
+            Column value handling different name casing
+        """
+        if column in row:
+            return row[column]
+        if column.upper() in row:
+            return row[column.upper()]
+        if column.lower() in row:
+            return row[column.lower()]
+        msg = f"Column {column} not found in result row"
+        raise KeyError(msg)

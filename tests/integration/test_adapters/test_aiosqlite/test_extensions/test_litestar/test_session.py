@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar.store import SQLSpecAsyncSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
-pytestmark = [pytest.mark.aiosqlite, pytest.mark.integration, pytest.mark.asyncio, pytest.mark.xdist_group("aiosqlite")]
+pytestmark = [pytest.mark.anyio, pytest.mark.aiosqlite, pytest.mark.integration, pytest.mark.xdist_group("aiosqlite")]
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ async def aiosqlite_config(request: pytest.FixtureRequest) -> AsyncGenerator[Aio
 
 
 @pytest.fixture
-async def session_store(aiosqlite_config: AiosqliteConfig) -> SQLSpecSessionStore:
+async def session_store(aiosqlite_config: AiosqliteConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with migrations applied using unique table names."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(aiosqlite_config)
@@ -60,7 +60,7 @@ async def session_store(aiosqlite_config: AiosqliteConfig) -> SQLSpecSessionStor
             session_table_name = ext.get("session_table", "litestar_sessions_aiosqlite")
             break
 
-    return SQLSpecSessionStore(aiosqlite_config, table_name=session_table_name)
+    return SQLSpecAsyncSessionStore(aiosqlite_config, table_name=session_table_name)
 
 
 async def test_aiosqlite_migration_creates_correct_table(aiosqlite_config: AiosqliteConfig) -> None:
@@ -97,7 +97,7 @@ async def test_aiosqlite_migration_creates_correct_table(aiosqlite_config: Aiosq
         assert "created_at" in columns
 
 
-async def test_aiosqlite_session_basic_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_session_basic_operations(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test basic session operations with AioSQLite backend."""
 
     # Test only direct store operations which should work
@@ -112,7 +112,7 @@ async def test_aiosqlite_session_basic_operations(session_store: SQLSpecSessionS
     assert result is None
 
 
-async def test_aiosqlite_session_persistence(session_store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_session_persistence(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test that sessions persist across operations with AioSQLite."""
 
     # Test multiple set/get operations persist data
@@ -129,7 +129,7 @@ async def test_aiosqlite_session_persistence(session_store: SQLSpecSessionStore)
     assert result == {"count": 2}
 
 
-async def test_aiosqlite_session_expiration(session_store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_session_expiration(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test session expiration handling with AioSQLite."""
 
     # Test direct store expiration
@@ -150,7 +150,7 @@ async def test_aiosqlite_session_expiration(session_store: SQLSpecSessionStore) 
     assert result is None
 
 
-async def test_aiosqlite_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_concurrent_sessions(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of concurrent sessions with AioSQLite."""
 
     # Test multiple concurrent session operations
@@ -172,7 +172,7 @@ async def test_aiosqlite_concurrent_sessions(session_store: SQLSpecSessionStore)
     assert result3 == {"user_id": 303}
 
 
-async def test_aiosqlite_session_cleanup(session_store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_session_cleanup(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test expired session cleanup with AioSQLite."""
     # Create multiple sessions with short expiration
     session_ids = []
@@ -205,7 +205,7 @@ async def test_aiosqlite_session_cleanup(session_store: SQLSpecSessionStore) -> 
         assert result is not None
 
 
-async def test_aiosqlite_store_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_store_operations(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test AioSQLite store operations directly."""
     # Test basic store operations
     session_id = "test-session-aiosqlite"

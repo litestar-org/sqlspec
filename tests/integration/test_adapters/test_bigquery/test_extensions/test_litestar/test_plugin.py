@@ -13,7 +13,7 @@ from litestar.stores.registry import StoreRegistry
 from litestar.testing import TestClient
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
 
@@ -30,9 +30,9 @@ def migrated_config(bigquery_migration_config: BigQueryConfig) -> BigQueryConfig
 
 
 @pytest.fixture
-def session_store(migrated_config: BigQueryConfig) -> SQLSpecSessionStore:
+def session_store(migrated_config: BigQueryConfig) -> SQLSpecSyncSessionStore:
     """Create a session store instance using the migrated database."""
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         config=migrated_config,
         table_name="litestar_sessions",  # Use the default table created by migration
         session_id_column="session_id",
@@ -52,7 +52,7 @@ def session_config(migrated_config: BigQueryConfig) -> SQLSpecSessionConfig:
     )
 
 
-def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
+def test_session_store_creation(session_store: SQLSpecSyncSessionStore) -> None:
     """Test that SessionStore can be created with BigQuery configuration."""
     assert session_store is not None
     assert session_store.table_name == "litestar_sessions"
@@ -63,7 +63,7 @@ def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
 
 
 def test_session_store_bigquery_table_structure(
-    session_store: SQLSpecSessionStore, bigquery_migration_config: BigQueryConfig, table_schema_prefix: str
+    session_store: SQLSpecSyncSessionStore, bigquery_migration_config: BigQueryConfig, table_schema_prefix: str
 ) -> None:
     """Test that session table is created with proper BigQuery structure."""
     with bigquery_migration_config.provide_session() as driver:
@@ -92,7 +92,7 @@ def test_session_store_bigquery_table_structure(
 
 
 async def test_basic_session_operations(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSyncSessionStore
 ) -> None:
     """Test basic session operations through Litestar application."""
 
@@ -162,7 +162,7 @@ async def test_basic_session_operations(
 
 
 def test_session_persistence_across_requests(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSyncSessionStore
 ) -> None:
     """Test that sessions persist across multiple requests with BigQuery."""
 
@@ -255,7 +255,9 @@ def test_session_persistence_across_requests(
         assert len(data["documents"]) == 0
 
 
-async def test_large_data_handling(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
+async def test_large_data_handling(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecSyncSessionStore
+) -> None:
     """Test handling of large data structures with BigQuery backend."""
 
     @post("/save-large-bigquery-dataset")
@@ -387,7 +389,7 @@ async def test_migration_with_default_table_name(bigquery_migration_config: BigQ
     commands.upgrade()
 
     # Create store using the migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=bigquery_migration_config,
         table_name="litestar_sessions",  # Default table name
     )
@@ -412,7 +414,7 @@ async def test_migration_with_custom_table_name(
     commands.upgrade()
 
     # Create store using the custom migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=bigquery_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )
@@ -445,7 +447,7 @@ async def test_migration_with_mixed_extensions(bigquery_migration_config_mixed: 
     commands.upgrade()
 
     # The litestar extension should use default table name
-    store = SQLSpecSessionStore(
+    store = SQLSpecSyncSessionStore(
         config=bigquery_migration_config_mixed,
         table_name="litestar_sessions",  # Default since string format was used
     )

@@ -10,8 +10,8 @@ from google.api_core.client_options import ClientOptions
 from google.auth.credentials import AnonymousCredentials
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 
 if TYPE_CHECKING:
@@ -108,7 +108,7 @@ def bigquery_migration_config_mixed(
 
 
 @pytest.fixture
-def session_store_default(bigquery_migration_config: BigQueryConfig) -> SQLSpecSessionStore:
+def session_store_default(bigquery_migration_config: BigQueryConfig) -> SQLSpecSyncSessionStore:
     """Create a session store with default table name."""
     # Apply migrations to create the session table
     commands = SyncMigrationCommands(bigquery_migration_config)
@@ -116,7 +116,7 @@ def session_store_default(bigquery_migration_config: BigQueryConfig) -> SQLSpecS
     commands.upgrade()
 
     # Create store using the default migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         bigquery_migration_config,
         table_name="litestar_sessions",  # Default table name
     )
@@ -135,7 +135,7 @@ def session_backend_default(session_backend_config_default: SQLSpecSessionConfig
 
 
 @pytest.fixture
-def session_store_custom(bigquery_migration_config_with_dict: BigQueryConfig) -> SQLSpecSessionStore:
+def session_store_custom(bigquery_migration_config_with_dict: BigQueryConfig) -> SQLSpecSyncSessionStore:
     """Create a session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = SyncMigrationCommands(bigquery_migration_config_with_dict)
@@ -143,7 +143,7 @@ def session_store_custom(bigquery_migration_config_with_dict: BigQueryConfig) ->
     commands.upgrade()
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         bigquery_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )

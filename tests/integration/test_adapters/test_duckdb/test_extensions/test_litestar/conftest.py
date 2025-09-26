@@ -10,7 +10,7 @@ from litestar import Litestar, get, post, put
 from litestar.stores.registry import StoreRegistry
 
 from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionConfig, SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 
 
@@ -135,7 +135,7 @@ def migrated_config(request: pytest.FixtureRequest) -> DuckDBConfig:
 
 
 @pytest.fixture
-def session_store_default(duckdb_migration_config: DuckDBConfig) -> SQLSpecSessionStore:
+def session_store_default(duckdb_migration_config: DuckDBConfig) -> SQLSpecSyncSessionStore:
     """Create a session store with default table name."""
     # Apply migrations to create the session table
     commands = SyncMigrationCommands(duckdb_migration_config)
@@ -143,7 +143,7 @@ def session_store_default(duckdb_migration_config: DuckDBConfig) -> SQLSpecSessi
     commands.upgrade()
 
     # Create store using the default migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         duckdb_migration_config,
         table_name="litestar_sessions",  # Default table name
     )
@@ -162,7 +162,7 @@ def session_backend_default(session_backend_config_default: SQLSpecSessionConfig
 
 
 @pytest.fixture
-def session_store_custom(duckdb_migration_config_with_dict: DuckDBConfig) -> SQLSpecSessionStore:
+def session_store_custom(duckdb_migration_config_with_dict: DuckDBConfig) -> SQLSpecSyncSessionStore:
     """Create a session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = SyncMigrationCommands(duckdb_migration_config_with_dict)
@@ -179,7 +179,7 @@ def session_store_custom(duckdb_migration_config_with_dict: DuckDBConfig) -> SQL
     table_name = litestar_ext["session_table"] if litestar_ext else "litestar_sessions"
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         duckdb_migration_config_with_dict,
         table_name=table_name,  # Custom table name from config
     )
@@ -206,14 +206,14 @@ def session_backend_custom(session_backend_config_custom: SQLSpecSessionConfig) 
 
 
 @pytest.fixture
-def session_store(duckdb_migration_config: DuckDBConfig) -> SQLSpecSessionStore:
+def session_store(duckdb_migration_config: DuckDBConfig) -> SQLSpecSyncSessionStore:
     """Create a session store using migrated config."""
     # Apply migrations to create the session table
     commands = SyncMigrationCommands(duckdb_migration_config)
     commands.init(duckdb_migration_config.migration_config["script_location"], package=False)
     commands.upgrade()
 
-    return SQLSpecSessionStore(config=duckdb_migration_config, table_name="litestar_sessions")
+    return SQLSpecSyncSessionStore(config=duckdb_migration_config, table_name="litestar_sessions")
 
 
 @pytest.fixture
@@ -223,7 +223,7 @@ def session_config() -> SQLSpecSessionConfig:
 
 
 @pytest.fixture
-def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> Litestar:
+def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecSyncSessionStore) -> Litestar:
     """Create a Litestar app with session middleware for testing."""
 
     @get("/session/set/{key:str}")

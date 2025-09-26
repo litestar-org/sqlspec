@@ -26,7 +26,6 @@ pytestmark = pytest.mark.xdist_group("postgres")
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
-@pytest.mark.asyncio
 async def test_insert_returning_param_styles(psqlpy_session: PsqlpyDriver, parameters: Any, style: ParamStyle) -> None:
     """Test insert returning with different parameter styles."""
     if style == "tuple_binds":
