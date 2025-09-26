@@ -36,6 +36,19 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         """
         return str(cast("AdbcDriver", driver).dialect)
 
+    def get_dialect(self, driver: SyncDriverAdapterBase) -> str:
+        """Get database dialect name.
+
+        Overrides the mixin method to use ADBC's native dialect detection.
+
+        Args:
+            driver: ADBC driver instance
+
+        Returns:
+            Dialect name (e.g., 'postgres', 'sqlite', 'mysql')
+        """
+        return self._get_dialect(driver)
+
     def get_version(self, driver: SyncDriverAdapterBase) -> "Optional[VersionInfo]":
         """Get database version information based on detected dialect.
 
@@ -50,9 +63,9 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
 
         try:
             if dialect == "postgres":
-                version_str = adbc_driver.select_value("SELECT version()")
+                version_str = cast("str", adbc_driver.select_value("SELECT version()"))
                 if version_str:
-                    match = POSTGRES_VERSION_PATTERN.search(str(version_str))
+                    match = POSTGRES_VERSION_PATTERN.search(version_str)
                     if match:
                         major = int(match.group(1))
                         minor = int(match.group(2))
@@ -60,25 +73,25 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                         return VersionInfo(major, minor, patch)
 
             elif dialect == "sqlite":
-                version_str = adbc_driver.select_value("SELECT sqlite_version()")
+                version_str = cast("str", adbc_driver.select_value("SELECT sqlite_version()"))
                 if version_str:
-                    match = SQLITE_VERSION_PATTERN.match(str(version_str))
+                    match = SQLITE_VERSION_PATTERN.match(version_str)
                     if match:
                         major, minor, patch = map(int, match.groups())
                         return VersionInfo(major, minor, patch)
 
             elif dialect == "duckdb":
-                version_str = adbc_driver.select_value("SELECT version()")
+                version_str = cast("str", adbc_driver.select_value("SELECT version()"))
                 if version_str:
-                    match = DUCKDB_VERSION_PATTERN.search(str(version_str))
+                    match = DUCKDB_VERSION_PATTERN.search(version_str)
                     if match:
                         major, minor, patch = map(int, match.groups())
                         return VersionInfo(major, minor, patch)
 
             elif dialect == "mysql":
-                version_str = adbc_driver.select_value("SELECT VERSION()")
+                version_str = cast("str", adbc_driver.select_value("SELECT VERSION()"))
                 if version_str:
-                    match = MYSQL_VERSION_PATTERN.search(str(version_str))
+                    match = MYSQL_VERSION_PATTERN.search(version_str)
                     if match:
                         major, minor, patch = map(int, match.groups())
                         return VersionInfo(major, minor, patch)

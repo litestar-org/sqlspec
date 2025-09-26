@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.sync_tools import async_
 
@@ -39,7 +39,7 @@ def duckdb_config(request: pytest.FixtureRequest) -> DuckDBConfig:
 
 
 @pytest.fixture
-async def session_store(duckdb_config: DuckDBConfig) -> SQLSpecSessionStore:
+async def session_store(duckdb_config: DuckDBConfig) -> SQLSpecSyncSessionStore:
     """Create a session store with migrations applied using unique table names."""
 
     # Apply migrations synchronously (DuckDB uses sync commands like SQLite)
@@ -58,7 +58,7 @@ async def session_store(duckdb_config: DuckDBConfig) -> SQLSpecSessionStore:
             session_table_name = ext.get("session_table", "litestar_sessions_duckdb")
             break
 
-    return SQLSpecSessionStore(duckdb_config, table_name=session_table_name)
+    return SQLSpecSyncSessionStore(duckdb_config, table_name=session_table_name)
 
 
 async def test_duckdb_migration_creates_correct_table(duckdb_config: DuckDBConfig) -> None:
@@ -94,7 +94,7 @@ async def test_duckdb_migration_creates_correct_table(duckdb_config: DuckDBConfi
         assert columns["data"] in ["JSON", "VARCHAR", "TEXT"]
 
 
-async def test_duckdb_session_basic_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_session_basic_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test basic session operations with DuckDB backend."""
 
     # Test only direct store operations
@@ -109,7 +109,7 @@ async def test_duckdb_session_basic_operations(session_store: SQLSpecSessionStor
     assert result is None
 
 
-async def test_duckdb_session_persistence(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_session_persistence(session_store: SQLSpecSyncSessionStore) -> None:
     """Test that sessions persist across operations with DuckDB."""
 
     # Test multiple set/get operations persist data
@@ -126,7 +126,7 @@ async def test_duckdb_session_persistence(session_store: SQLSpecSessionStore) ->
     assert result == {"count": 2}
 
 
-async def test_duckdb_session_expiration(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_session_expiration(session_store: SQLSpecSyncSessionStore) -> None:
     """Test session expiration handling with DuckDB."""
 
     # Test direct store expiration
@@ -147,7 +147,7 @@ async def test_duckdb_session_expiration(session_store: SQLSpecSessionStore) -> 
     assert result is None
 
 
-async def test_duckdb_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_concurrent_sessions(session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of concurrent sessions with DuckDB."""
 
     # Test multiple concurrent session operations
@@ -169,7 +169,7 @@ async def test_duckdb_concurrent_sessions(session_store: SQLSpecSessionStore) ->
     assert result3 == {"user_id": 303}
 
 
-async def test_duckdb_session_cleanup(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_session_cleanup(session_store: SQLSpecSyncSessionStore) -> None:
     """Test expired session cleanup with DuckDB."""
     # Create multiple sessions with short expiration
     session_ids = []
@@ -202,7 +202,7 @@ async def test_duckdb_session_cleanup(session_store: SQLSpecSessionStore) -> Non
         assert result is not None
 
 
-async def test_duckdb_store_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_duckdb_store_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test DuckDB store operations directly."""
     # Test basic store operations
     session_id = "test-session-duckdb"

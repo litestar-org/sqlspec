@@ -27,9 +27,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
+# anyio_backend fixture is defined in integration/conftest.py with session scope
 
 
 @pytest.fixture(autouse=True)

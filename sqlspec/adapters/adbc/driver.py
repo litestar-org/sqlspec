@@ -255,25 +255,19 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
     )
 
-    type_map = get_type_coercion_map(detected_dialect)
-
-    sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
-
-    parameter_config = ParameterStyleConfig(
-        default_parameter_style=default_style,
-        supported_parameter_styles=set(supported_styles),
-        default_execution_parameter_style=default_style,
-        supported_execution_parameter_styles=set(supported_styles),
-        type_coercion_map=type_map,
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-        ast_transformer=_adbc_ast_transformer if detected_dialect in {"postgres", "postgresql"} else None,
-    )
-
     return StatementConfig(
-        dialect=sqlglot_dialect,
-        parameter_config=parameter_config,
+        dialect="postgres" if detected_dialect == "postgresql" else detected_dialect,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=default_style,
+            supported_parameter_styles=set(supported_styles),
+            default_execution_parameter_style=default_style,
+            supported_execution_parameter_styles=set(supported_styles),
+            type_coercion_map=get_type_coercion_map(detected_dialect),
+            has_native_list_expansion=True,
+            needs_static_script_compilation=False,
+            preserve_parameter_format=True,
+            ast_transformer=_adbc_ast_transformer if detected_dialect in {"postgres", "postgresql"} else None,
+        ),
         enable_parsing=True,
         enable_validation=True,
         enable_caching=True,
@@ -304,6 +298,7 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     Returns:
         Mapping of Python types to conversion functions
     """
+    # Create TypeConverter instance for this dialect
     tc = ADBCTypeConverter(dialect)
 
     return {
@@ -314,11 +309,11 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
         bool: lambda x: x,
         int: lambda x: x,
         float: lambda x: x,
-        str: tc.convert_if_detected,
         bytes: lambda x: x,
         tuple: _convert_array_for_postgres_adbc,
         list: _convert_array_for_postgres_adbc,
-        dict: lambda x: x,
+        dict: tc.convert_dict,  # Use TypeConverter's dialect-aware dict conversion
+        str: tc.convert_if_detected,  # Add string type detection like other adapters
     }
 
 
@@ -496,12 +491,8 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Parameters with cast-aware type coercion applied
         """
-        if prepared_statement and self.dialect in {"postgres", "postgresql"} and not is_many:
-            parameter_casts = self._get_parameter_casts(prepared_statement)
-            postgres_compatible = self._handle_postgres_empty_parameters(parameters)
-            return self._prepare_parameters_with_casts(postgres_compatible, parameter_casts, statement_config)
-
-        return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
+        postgres_compatible = self._handle_postgres_empty_parameters(parameters)
+        return super().prepare_driver_parameters(postgres_compatible, statement_config, is_many, prepared_statement)
 
     def _get_parameter_casts(self, statement: SQL) -> "dict[int, str]":
         """Get parameter cast metadata from compiled statement.
@@ -512,49 +503,34 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Dict mapping parameter positions to cast types
         """
-
         processed_state = statement.get_processed_state()
         if processed_state is not Empty:
             return processed_state.parameter_casts or {}
         return {}
 
-    def _prepare_parameters_with_casts(
-        self, parameters: Any, parameter_casts: "dict[int, str]", statement_config: "StatementConfig"
-    ) -> Any:
-        """Prepare parameters with cast-aware type coercion.
-
-        Uses type coercion map for non-dict types and dialect-aware dict handling.
+    def _apply_parameter_casts(self, parameters: Any, parameter_casts: "dict[int, str]") -> Any:
+        """Apply parameter casts for PostgreSQL JSONB handling.
 
         Args:
-            parameters: Parameter values (list, tuple, or scalar)
-            parameter_casts: Mapping of parameter positions to cast types
-            statement_config: Statement configuration for type coercion
+            parameters: Formatted parameters
+            parameter_casts: Dict mapping parameter positions to cast types
 
         Returns:
-            Parameters with cast-aware type coercion applied
+            Parameters with casts applied
         """
-        from sqlspec._serialization import encode_json
+        if not isinstance(parameters, (list, tuple)) or not parameter_casts:
+            return parameters
 
-        if isinstance(parameters, (list, tuple)):
-            result: list[Any] = []
-            for idx, param in enumerate(parameters, start=1):  # pyright: ignore
-                cast_type = parameter_casts.get(idx, "").upper()
-                if cast_type in {"JSON", "JSONB", "TYPE.JSON", "TYPE.JSONB"}:
-                    if isinstance(param, dict):
-                        result.append(encode_json(param))
-                    else:
-                        result.append(param)
-                elif isinstance(param, dict):
-                    result.append(ADBCTypeConverter(self.dialect).convert_dict(param))  # type: ignore[arg-type]
-                else:
-                    if statement_config.parameter_config.type_coercion_map:
-                        for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
-                            if type_check is not dict and isinstance(param, type_check):
-                                param = converter(param)
-                                break
-                    result.append(param)
-            return tuple(result) if isinstance(parameters, tuple) else result
-        return parameters
+        # For PostgreSQL JSONB, ensure dict parameters are JSON strings when cast is present
+        from sqlspec.utils.serializers import to_json
+        result = list(parameters)
+        for position, cast_type in parameter_casts.items():
+            if cast_type.upper() in {"JSONB", "JSON"} and 1 <= position <= len(result):
+                param = result[position - 1]  # positions are 1-based
+                if isinstance(param, dict):
+                    result[position - 1] = to_json(param)
+
+        return tuple(result) if isinstance(parameters, tuple) else result
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
         """Create context manager for cursor.
@@ -600,6 +576,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
+        # Get parameter cast information to handle PostgreSQL JSONB
         parameter_casts = self._get_parameter_casts(statement)
 
         try:
@@ -611,15 +588,14 @@ class AdbcDriver(SyncDriverAdapterBase):
                 for param_set in prepared_parameters:
                     postgres_compatible = self._handle_postgres_empty_parameters(param_set)
 
-                    if self.dialect in {"postgres", "postgresql"}:
-                        # For postgres, always use cast-aware parameter preparation
-                        formatted_params = self._prepare_parameters_with_casts(
-                            postgres_compatible, parameter_casts, self.statement_config
-                        )
-                    else:
-                        formatted_params = self.prepare_driver_parameters(
-                            postgres_compatible, self.statement_config, is_many=False
-                        )
+                    formatted_params = self.prepare_driver_parameters(
+                        postgres_compatible, self.statement_config, is_many=False
+                    )
+
+                    # For PostgreSQL with JSONB casts, ensure parameters are properly formatted
+                    if self.dialect in {"postgres", "postgresql"} and parameter_casts:
+                        formatted_params = self._apply_parameter_casts(formatted_params, parameter_casts)
+
                     processed_params.append(formatted_params)
 
                 cursor.executemany(sql, processed_params)
@@ -646,18 +622,21 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
+        # Get parameter cast information to handle PostgreSQL JSONB
         parameter_casts = self._get_parameter_casts(statement)
 
         try:
             postgres_compatible_params = self._handle_postgres_empty_parameters(prepared_parameters)
 
-            if self.dialect in {"postgres", "postgresql"}:
-                formatted_params = self._prepare_parameters_with_casts(
-                    postgres_compatible_params, parameter_casts, self.statement_config
-                )
-                cursor.execute(sql, parameters=formatted_params)
-            else:
-                cursor.execute(sql, parameters=postgres_compatible_params)
+            formatted_params = self.prepare_driver_parameters(
+                postgres_compatible_params, self.statement_config, is_many=False
+            )
+
+            # For PostgreSQL with JSONB casts, ensure parameters are properly formatted
+            if self.dialect in {"postgres", "postgresql"} and parameter_casts:
+                formatted_params = self._apply_parameter_casts(formatted_params, parameter_casts)
+
+            cursor.execute(sql, parameters=formatted_params)
 
         except Exception:
             self._handle_postgres_rollback(cursor)

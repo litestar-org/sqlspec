@@ -14,7 +14,7 @@ from litestar.stores.registry import StoreRegistry
 from litestar.testing import TestClient
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.extensions.litestar import SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSessionConfig, SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 
 pytestmark = [pytest.mark.sqlite, pytest.mark.integration, pytest.mark.xdist_group("sqlite")]
@@ -57,9 +57,9 @@ def migrated_config() -> SqliteConfig:
 
 
 @pytest.fixture
-def session_store(migrated_config: SqliteConfig) -> SQLSpecSessionStore:
+def session_store(migrated_config: SqliteConfig) -> SQLSpecSyncSessionStore:
     """Create a session store using the migrated config."""
-    return SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+    return SQLSpecSyncSessionStore(config=migrated_config, table_name="litestar_sessions")
 
 
 @pytest.fixture
@@ -69,7 +69,7 @@ def session_config() -> SQLSpecSessionConfig:
 
 
 @pytest.fixture
-def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> Litestar:
+def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecSyncSessionStore) -> Litestar:
     """Create a Litestar app with session middleware for testing."""
 
     @get("/session/set/{key:str}")
@@ -156,14 +156,14 @@ def litestar_app(session_config: SQLSpecSessionConfig, session_store: SQLSpecSes
     )
 
 
-def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
+def test_session_store_creation(session_store: SQLSpecSyncSessionStore) -> None:
     """Test that session store is created properly."""
     assert session_store is not None
     assert session_store.table_name == "litestar_sessions"
 
 
 def test_session_store_sqlite_table_structure(
-    session_store: SQLSpecSessionStore, migrated_config: SqliteConfig
+    session_store: SQLSpecSyncSessionStore, migrated_config: SqliteConfig
 ) -> None:
     """Test that session store table has correct SQLite-specific structure."""
     with migrated_config.provide_session() as driver:
@@ -279,7 +279,7 @@ def test_session_persistence_across_requests(litestar_app: Litestar) -> None:
         assert response.json() == {"count": 6}
 
 
-async def test_sqlite_json_support(session_store: SQLSpecSessionStore, migrated_config: SqliteConfig) -> None:
+async def test_sqlite_json_support(session_store: SQLSpecSyncSessionStore, migrated_config: SqliteConfig) -> None:
     """Test SQLite JSON support for session data."""
     complex_json_data = {
         "user_profile": {
@@ -337,7 +337,7 @@ async def test_sqlite_json_support(session_store: SQLSpecSessionStore, migrated_
     await session_store.delete(session_id)
 
 
-async def test_concurrent_session_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_concurrent_session_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test concurrent operations on sessions with SQLite."""
     import asyncio
 
@@ -384,7 +384,7 @@ async def test_concurrent_session_operations(session_store: SQLSpecSessionStore)
 async def test_session_expiration(migrated_config: SqliteConfig) -> None:
     """Test session expiration handling."""
     # Create store with very short lifetime
-    session_store = SQLSpecSessionStore(config=migrated_config, table_name="litestar_sessions")
+    session_store = SQLSpecSyncSessionStore(config=migrated_config, table_name="litestar_sessions")
 
     session_config = SQLSpecSessionConfig(
         table_name="litestar_sessions",
@@ -424,7 +424,7 @@ async def test_session_expiration(migrated_config: SqliteConfig) -> None:
         assert response.json() == {"temp_data": None}
 
 
-async def test_transaction_handling(session_store: SQLSpecSessionStore, migrated_config: SqliteConfig) -> None:
+async def test_transaction_handling(session_store: SQLSpecSyncSessionStore, migrated_config: SqliteConfig) -> None:
     """Test transaction handling in SQLite store operations."""
     session_id = "transaction-test-session"
 
@@ -482,7 +482,7 @@ async def test_transaction_handling(session_store: SQLSpecSessionStore, migrated
     await session_store.delete(session_id)
 
 
-def test_concurrent_sessions(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
+def test_concurrent_sessions(session_config: SQLSpecSessionConfig, session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of concurrent sessions with different clients."""
 
     @get("/user/login/{user_id:int}")
@@ -562,7 +562,7 @@ def test_concurrent_sessions(session_config: SQLSpecSessionConfig, session_store
         assert "profile" not in data3
 
 
-async def test_store_crud_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_store_crud_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test direct store CRUD operations."""
     session_id = "test-session-crud"
 
@@ -606,7 +606,7 @@ async def test_store_crud_operations(session_store: SQLSpecSessionStore) -> None
     assert await session_store.exists(session_id) is False
 
 
-async def test_large_data_handling(session_store: SQLSpecSessionStore) -> None:
+async def test_large_data_handling(session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of large session data."""
     session_id = "test-large-data"
 
@@ -635,7 +635,7 @@ async def test_large_data_handling(session_store: SQLSpecSessionStore) -> None:
     await session_store.delete(session_id)
 
 
-async def test_special_characters_handling(session_store: SQLSpecSessionStore) -> None:
+async def test_special_characters_handling(session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of special characters in keys and values."""
 
     # Test data with various special characters
@@ -660,7 +660,7 @@ async def test_special_characters_handling(session_store: SQLSpecSessionStore) -
         await session_store.delete(session_id)
 
 
-async def test_session_cleanup_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_session_cleanup_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test session cleanup and maintenance operations."""
 
     # Create multiple sessions with different expiration times
@@ -714,7 +714,7 @@ async def test_session_cleanup_operations(session_store: SQLSpecSessionStore) ->
         assert await session_store.exists(session_id) is False
 
 
-async def test_session_renewal(session_store: SQLSpecSessionStore) -> None:
+async def test_session_renewal(session_store: SQLSpecSyncSessionStore) -> None:
     """Test session renewal functionality."""
     session_id = "renewal_test"
     test_data = {"user_id": 123, "activity": "browsing"}
@@ -739,7 +739,7 @@ async def test_session_renewal(session_store: SQLSpecSessionStore) -> None:
     await session_store.delete(session_id)
 
 
-async def test_error_handling_and_edge_cases(session_store: SQLSpecSessionStore) -> None:
+async def test_error_handling_and_edge_cases(session_store: SQLSpecSyncSessionStore) -> None:
     """Test error handling and edge cases."""
 
     # Test getting non-existent session

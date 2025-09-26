@@ -16,15 +16,15 @@ from litestar.stores.registry import StoreRegistry
 from litestar.testing import AsyncTestClient, TestClient
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
-from sqlspec.extensions.litestar import SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore, SQLSpecSessionConfig, SQLSpecSyncSessionStore
 
 pytestmark = [pytest.mark.psycopg, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
 
 @pytest.fixture
-def sync_session_store(psycopg_sync_migrated_config: PsycopgSyncConfig) -> SQLSpecSessionStore:
+def sync_session_store(psycopg_sync_migrated_config: PsycopgSyncConfig) -> SQLSpecSyncSessionStore:
     """Create a session store using the migrated sync config."""
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         config=psycopg_sync_migrated_config,
         table_name="litestar_sessions_psycopg_sync",
         session_id_column="session_id",
@@ -35,9 +35,9 @@ def sync_session_store(psycopg_sync_migrated_config: PsycopgSyncConfig) -> SQLSp
 
 
 @pytest.fixture
-async def async_session_store(psycopg_async_migrated_config: PsycopgAsyncConfig) -> SQLSpecSessionStore:
+async def async_session_store(psycopg_async_migrated_config: PsycopgAsyncConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store using the migrated async config."""
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         config=psycopg_async_migrated_config,
         table_name="litestar_sessions_psycopg_async",
         session_id_column="session_id",
@@ -60,7 +60,9 @@ async def async_session_config() -> SQLSpecSessionConfig:
 
 
 @pytest.fixture
-def sync_litestar_app(sync_session_config: SQLSpecSessionConfig, sync_session_store: SQLSpecSessionStore) -> Litestar:
+def sync_litestar_app(
+    sync_session_config: SQLSpecSessionConfig, sync_session_store: SQLSpecSyncSessionStore
+) -> Litestar:
     """Create a Litestar app with session middleware for sync testing."""
 
     @get("/session/set/{key:str}")
@@ -149,7 +151,7 @@ def sync_litestar_app(sync_session_config: SQLSpecSessionConfig, sync_session_st
 
 @pytest.fixture
 async def async_litestar_app(
-    async_session_config: SQLSpecSessionConfig, async_session_store: SQLSpecSessionStore
+    async_session_config: SQLSpecSessionConfig, async_session_store: SQLSpecAsyncSessionStore
 ) -> Litestar:
     """Create a Litestar app with session middleware for async testing."""
 
@@ -237,7 +239,7 @@ async def async_litestar_app(
     )
 
 
-def test_sync_store_creation(sync_session_store: SQLSpecSessionStore) -> None:
+def test_sync_store_creation(sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test that sync session store can be created."""
     assert sync_session_store is not None
     assert sync_session_store.table_name == "litestar_sessions_psycopg_sync"
@@ -247,7 +249,7 @@ def test_sync_store_creation(sync_session_store: SQLSpecSessionStore) -> None:
     assert sync_session_store.created_at_column == "created_at"
 
 
-async def test_async_store_creation(async_session_store: SQLSpecSessionStore) -> None:
+async def test_async_store_creation(async_session_store: SQLSpecAsyncSessionStore) -> None:
     """Test that async session store can be created."""
     assert async_session_store is not None
     assert async_session_store.table_name == "litestar_sessions_psycopg_async"
@@ -258,7 +260,7 @@ async def test_async_store_creation(async_session_store: SQLSpecSessionStore) ->
 
 
 def test_sync_table_verification(
-    sync_session_store: SQLSpecSessionStore, psycopg_sync_migrated_config: PsycopgSyncConfig
+    sync_session_store: SQLSpecSyncSessionStore, psycopg_sync_migrated_config: PsycopgSyncConfig
 ) -> None:
     """Test that session table exists with proper schema for sync driver."""
     with psycopg_sync_migrated_config.provide_session() as driver:
@@ -279,7 +281,7 @@ def test_sync_table_verification(
 
 
 async def test_async_table_verification(
-    async_session_store: SQLSpecSessionStore, psycopg_async_migrated_config: PsycopgAsyncConfig
+    async_session_store: SQLSpecAsyncSessionStore, psycopg_async_migrated_config: PsycopgAsyncConfig
 ) -> None:
     """Test that session table exists with proper schema for async driver."""
     async with psycopg_async_migrated_config.provide_session() as driver:
@@ -476,7 +478,7 @@ async def test_async_session_persistence(async_litestar_app: Litestar) -> None:
 def test_sync_session_expiration(psycopg_sync_migrated_config: PsycopgSyncConfig) -> None:
     """Test session expiration handling with sync driver."""
     # Create store with very short lifetime
-    session_store = SQLSpecSessionStore(
+    session_store = SQLSpecSyncSessionStore(
         config=psycopg_sync_migrated_config, table_name="litestar_sessions_psycopg_sync"
     )
 
@@ -522,7 +524,7 @@ def test_sync_session_expiration(psycopg_sync_migrated_config: PsycopgSyncConfig
 async def test_async_session_expiration(psycopg_async_migrated_config: PsycopgAsyncConfig) -> None:
     """Test session expiration handling with async driver."""
     # Create store with very short lifetime
-    session_store = SQLSpecSessionStore(
+    session_store = SQLSpecAsyncSessionStore(
         config=psycopg_async_migrated_config, table_name="litestar_sessions_psycopg_async"
     )
 
@@ -566,7 +568,7 @@ async def test_async_session_expiration(psycopg_async_migrated_config: PsycopgAs
 
 
 async def test_postgresql_jsonb_features(
-    async_session_store: SQLSpecSessionStore, psycopg_async_migrated_config: PsycopgAsyncConfig
+    async_session_store: SQLSpecAsyncSessionStore, psycopg_async_migrated_config: PsycopgAsyncConfig
 ) -> None:
     """Test PostgreSQL-specific JSONB features."""
     session_id = "test-jsonb-session"
@@ -616,7 +618,7 @@ async def test_postgresql_jsonb_features(
 
 
 async def test_postgresql_concurrent_sessions(
-    async_session_config: SQLSpecSessionConfig, async_session_store: SQLSpecSessionStore
+    async_session_config: SQLSpecSessionConfig, async_session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test concurrent session handling with PostgreSQL backend."""
 
@@ -714,7 +716,7 @@ async def test_postgresql_concurrent_sessions(
             assert "activity logged" in response.json()["status"]
 
 
-async def test_sync_store_crud_operations(sync_session_store: SQLSpecSessionStore) -> None:
+async def test_sync_store_crud_operations(sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test direct store CRUD operations with sync driver."""
     session_id = "test-sync-session-crud"
 
@@ -769,7 +771,7 @@ async def test_sync_store_crud_operations(sync_session_store: SQLSpecSessionStor
     assert await sync_session_store.exists(session_id) is False
 
 
-async def test_async_store_crud_operations(async_session_store: SQLSpecSessionStore) -> None:
+async def test_async_store_crud_operations(async_session_store: SQLSpecAsyncSessionStore) -> None:
     """Test direct store CRUD operations with async driver."""
     session_id = "test-async-session-crud"
 
@@ -824,7 +826,7 @@ async def test_async_store_crud_operations(async_session_store: SQLSpecSessionSt
     assert await async_session_store.exists(session_id) is False
 
 
-async def test_sync_large_data_handling(sync_session_store: SQLSpecSessionStore) -> None:
+async def test_sync_large_data_handling(sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of large session data with sync driver."""
     session_id = "test-sync-large-data"
 
@@ -871,7 +873,7 @@ async def test_sync_large_data_handling(sync_session_store: SQLSpecSessionStore)
     await sync_session_store.delete(session_id)
 
 
-async def test_async_large_data_handling(async_session_store: SQLSpecSessionStore) -> None:
+async def test_async_large_data_handling(async_session_store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of large session data with async driver."""
     session_id = "test-async-large-data"
 

@@ -8,7 +8,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
 
 pytestmark = [pytest.mark.psqlpy, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
@@ -24,7 +24,7 @@ async def psqlpy_config(postgres_service: PostgresService) -> AsyncGenerator[Psq
 
 
 @pytest.fixture
-async def store(psqlpy_config: PsqlpyConfig) -> SQLSpecSessionStore:
+async def store(psqlpy_config: PsqlpyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store instance."""
     # Create the table manually since we're not using migrations here
     async with psqlpy_config.provide_session() as driver:
@@ -38,7 +38,7 @@ async def store(psqlpy_config: PsqlpyConfig) -> SQLSpecSessionStore:
             "CREATE INDEX IF NOT EXISTS idx_test_store_psqlpy_expires ON test_store_psqlpy(expires)"
         )
 
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         config=psqlpy_config,
         table_name="test_store_psqlpy",
         session_id_column="key",
@@ -48,7 +48,7 @@ async def store(psqlpy_config: PsqlpyConfig) -> SQLSpecSessionStore:
     )
 
 
-async def test_psqlpy_store_table_creation(store: SQLSpecSessionStore, psqlpy_config: PsqlpyConfig) -> None:
+async def test_psqlpy_store_table_creation(store: SQLSpecAsyncSessionStore, psqlpy_config: PsqlpyConfig) -> None:
     """Test that store table is created automatically with proper structure."""
     async with psqlpy_config.provide_session() as driver:
         # Verify table exists
@@ -85,7 +85,7 @@ async def test_psqlpy_store_table_creation(store: SQLSpecSessionStore, psqlpy_co
         assert len(result.data) > 0  # Should have unique index on key
 
 
-async def test_psqlpy_store_crud_operations(store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_crud_operations(store: SQLSpecAsyncSessionStore) -> None:
     """Test complete CRUD operations on the PsqlPy store."""
     key = "psqlpy-test-key"
     value = {
@@ -121,7 +121,7 @@ async def test_psqlpy_store_crud_operations(store: SQLSpecSessionStore) -> None:
     assert result is None
 
 
-async def test_psqlpy_store_expiration(store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_expiration(store: SQLSpecAsyncSessionStore) -> None:
     """Test that expired entries are not returned from PsqlPy."""
     key = "psqlpy-expiring-key"
     value = {"test": "psqlpy_data", "expires": True}
@@ -141,7 +141,7 @@ async def test_psqlpy_store_expiration(store: SQLSpecSessionStore) -> None:
     assert result is None
 
 
-async def test_psqlpy_store_bulk_operations(store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_bulk_operations(store: SQLSpecAsyncSessionStore) -> None:
     """Test bulk operations on the PsqlPy store."""
     # Create multiple entries efficiently
     entries = {}
@@ -177,7 +177,7 @@ async def test_psqlpy_store_bulk_operations(store: SQLSpecSessionStore) -> None:
     assert all(result is None for result in results)
 
 
-async def test_psqlpy_store_large_data(store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_large_data(store: SQLSpecAsyncSessionStore) -> None:
     """Test storing large data structures in PsqlPy."""
     # Create a large data structure that tests PostgreSQL's JSONB capabilities with PsqlPy
     large_data = {
@@ -213,14 +213,19 @@ async def test_psqlpy_store_large_data(store: SQLSpecSessionStore) -> None:
     assert retrieved["metadata"]["adapter"] == "psqlpy"
 
 
-async def test_psqlpy_store_concurrent_access(store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_concurrent_access(store: SQLSpecAsyncSessionStore) -> None:
     """Test concurrent access to the PsqlPy store."""
 
     async def update_value(key: str, value: int) -> None:
         """Update a value in the store."""
         await store.set(
             key,
-            {"value": value, "task": asyncio.current_task().get_name(), "adapter": "psqlpy", "protocol": "binary"},
+            {
+                "value": value,
+                "task": asyncio.current_task().get_name() if asyncio.current_task() else "unknown",
+                "adapter": "psqlpy",
+                "protocol": "binary",
+            },
             expires_in=3600,
         )
 
@@ -239,7 +244,7 @@ async def test_psqlpy_store_concurrent_access(store: SQLSpecSessionStore) -> Non
     assert result["protocol"] == "binary"
 
 
-async def test_psqlpy_store_get_all(store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_get_all(store: SQLSpecAsyncSessionStore) -> None:
     """Test retrieving all entries from the PsqlPy store."""
     # Create multiple entries with different expiration times
     test_entries = {
@@ -276,7 +281,7 @@ async def test_psqlpy_store_get_all(store: SQLSpecSessionStore) -> None:
     assert "psqlpy-all-4" in all_entries
 
 
-async def test_psqlpy_store_delete_expired(store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_delete_expired(store: SQLSpecAsyncSessionStore) -> None:
     """Test deletion of expired entries in PsqlPy."""
     # Create entries with different expiration times
     short_lived = ["psqlpy-short-1", "psqlpy-short-2", "psqlpy-short-3"]
@@ -305,7 +310,7 @@ async def test_psqlpy_store_delete_expired(store: SQLSpecSessionStore) -> None:
         assert result["adapter"] == "psqlpy"
 
 
-async def test_psqlpy_store_special_characters(store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_special_characters(store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of special characters in keys and values with PsqlPy."""
     # Test special characters in keys (PostgreSQL specific)
     special_keys = [
@@ -354,7 +359,7 @@ async def test_psqlpy_store_special_characters(store: SQLSpecSessionStore) -> No
     assert retrieved["adapter"] == "psqlpy"
 
 
-async def test_psqlpy_store_transaction_isolation(store: SQLSpecSessionStore, psqlpy_config: PsqlpyConfig) -> None:
+async def test_psqlpy_store_transaction_isolation(store: SQLSpecAsyncSessionStore, psqlpy_config: PsqlpyConfig) -> None:
     """Test transaction isolation in PsqlPy store operations."""
     key = "psqlpy-transaction-test"
 
@@ -381,7 +386,7 @@ async def test_psqlpy_store_transaction_isolation(store: SQLSpecSessionStore, ps
     assert result["adapter"] == "psqlpy"
 
 
-async def test_psqlpy_store_jsonb_operations(store: SQLSpecSessionStore, psqlpy_config: PsqlpyConfig) -> None:
+async def test_psqlpy_store_jsonb_operations(store: SQLSpecAsyncSessionStore, psqlpy_config: PsqlpyConfig) -> None:
     """Test PostgreSQL JSONB operations specific to PsqlPy."""
     key = "psqlpy-jsonb-test"
 
@@ -453,7 +458,7 @@ async def test_psqlpy_store_jsonb_operations(store: SQLSpecSessionStore, psqlpy_
         assert "jsonb_support" in features
 
 
-async def test_psqlpy_store_performance_features(store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_performance_features(store: SQLSpecAsyncSessionStore) -> None:
     """Test performance features specific to PsqlPy."""
     # Test high-volume operations that showcase PsqlPy's binary protocol benefits
     performance_data = {
@@ -499,7 +504,7 @@ async def test_psqlpy_store_performance_features(store: SQLSpecSessionStore) -> 
     assert get_time < 5.0  # Should be fast to retrieve
 
 
-async def test_psqlpy_binary_protocol_advantages(store: SQLSpecSessionStore, psqlpy_config: PsqlpyConfig) -> None:
+async def test_psqlpy_binary_protocol_advantages(store: SQLSpecAsyncSessionStore, psqlpy_config: PsqlpyConfig) -> None:
     """Test PSQLPy's binary protocol advantages for type preservation."""
     # Test data that showcases binary protocol benefits
     test_data = {
@@ -557,7 +562,7 @@ async def test_psqlpy_binary_protocol_advantages(store: SQLSpecSessionStore, psq
         assert row["tag_count"] == 3
 
 
-async def test_psqlpy_store_concurrent_high_throughput(store: SQLSpecSessionStore) -> None:
+async def test_psqlpy_store_concurrent_high_throughput(store: SQLSpecAsyncSessionStore) -> None:
     """Test high-throughput concurrent operations with PsqlPy."""
 
     # Test concurrent operations that benefit from PsqlPy's connection pooling

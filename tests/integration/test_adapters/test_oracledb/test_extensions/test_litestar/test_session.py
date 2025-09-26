@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore, SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 pytestmark = [pytest.mark.oracledb, pytest.mark.oracle, pytest.mark.integration, pytest.mark.xdist_group("oracle")]
@@ -80,7 +80,7 @@ def oracle_sync_config(oracle_sync_config: OracleSyncConfig, request: pytest.Fix
 
 
 @pytest.fixture
-async def oracle_async_session_store(oracle_async_config: OracleAsyncConfig) -> SQLSpecSessionStore:
+async def oracle_async_session_store(oracle_async_config: OracleAsyncConfig) -> SQLSpecAsyncSessionStore:
     """Create an async session store with migrations applied using unique table names."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(oracle_async_config)
@@ -92,11 +92,11 @@ async def oracle_async_session_store(oracle_async_config: OracleAsyncConfig) -> 
     litestar_ext = next((ext for ext in extensions if ext.get("name") == "litestar"), {})
     table_name = litestar_ext.get("session_table", "litestar_sessions")
 
-    return SQLSpecSessionStore(oracle_async_config, table_name=table_name)
+    return SQLSpecAsyncSessionStore(oracle_async_config, table_name=table_name)
 
 
 @pytest.fixture
-def oracle_sync_session_store(oracle_sync_config: OracleSyncConfig) -> SQLSpecSessionStore:
+def oracle_sync_session_store(oracle_sync_config: OracleSyncConfig) -> SQLSpecSyncSessionStore:
     """Create a sync session store with migrations applied using unique table names."""
     # Apply migrations to create the session table
     commands = SyncMigrationCommands(oracle_sync_config)
@@ -108,7 +108,7 @@ def oracle_sync_session_store(oracle_sync_config: OracleSyncConfig) -> SQLSpecSe
     litestar_ext = next((ext for ext in extensions if ext.get("name") == "litestar"), {})
     table_name = litestar_ext.get("session_table", "litestar_sessions")
 
-    return SQLSpecSessionStore(oracle_sync_config, table_name=table_name)
+    return SQLSpecSyncSessionStore(oracle_sync_config, table_name=table_name)
 
 
 async def test_oracle_async_migration_creates_correct_table(oracle_async_config: OracleAsyncConfig) -> None:
@@ -173,7 +173,7 @@ def test_oracle_sync_migration_creates_correct_table(oracle_sync_config: OracleS
         assert "CREATED_AT" in columns
 
 
-async def test_oracle_async_store_operations(oracle_async_session_store: SQLSpecSessionStore) -> None:
+async def test_oracle_async_store_operations(oracle_async_session_store: SQLSpecSyncSessionStore) -> None:
     """Test basic Oracle async store operations directly."""
     session_id = "test-session-oracle-async"
     test_data = {"user_id": 123, "name": "test"}
@@ -205,7 +205,7 @@ async def test_oracle_async_store_operations(oracle_async_session_store: SQLSpec
     assert await oracle_async_session_store.exists(session_id) is False
 
 
-def test_oracle_sync_store_operations(oracle_sync_session_store: SQLSpecSessionStore) -> None:
+def test_oracle_sync_store_operations(oracle_sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test basic Oracle sync store operations directly."""
 
     async def run_sync_test() -> None:
@@ -243,7 +243,7 @@ def test_oracle_sync_store_operations(oracle_sync_session_store: SQLSpecSessionS
     asyncio.run(run_sync_test())
 
 
-async def test_oracle_async_session_cleanup(oracle_async_session_store: SQLSpecSessionStore) -> None:
+async def test_oracle_async_session_cleanup(oracle_async_session_store: SQLSpecSyncSessionStore) -> None:
     """Test expired session cleanup with Oracle async."""
     # Create sessions with short expiration
     session_ids = []
@@ -280,7 +280,7 @@ async def test_oracle_async_session_cleanup(oracle_async_session_store: SQLSpecS
         assert result["data"] == f"keep-{i}"
 
 
-def test_oracle_sync_session_cleanup(oracle_sync_session_store: SQLSpecSessionStore) -> None:
+def test_oracle_sync_session_cleanup(oracle_sync_session_store: SQLSpecSyncSessionStore) -> None:
     """Test expired session cleanup with Oracle sync."""
 
     async def run_sync_test() -> None:

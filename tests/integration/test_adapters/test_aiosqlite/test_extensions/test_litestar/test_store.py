@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
-pytestmark = [pytest.mark.aiosqlite, pytest.mark.integration, pytest.mark.asyncio, pytest.mark.xdist_group("aiosqlite")]
+pytestmark = [pytest.mark.anyio, pytest.mark.aiosqlite, pytest.mark.integration, pytest.mark.xdist_group("aiosqlite")]
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ async def aiosqlite_config() -> "AsyncGenerator[AiosqliteConfig, None]":
 
 
 @pytest.fixture
-async def store(aiosqlite_config: AiosqliteConfig) -> SQLSpecSessionStore:
+async def store(aiosqlite_config: AiosqliteConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store instance with migrations applied."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(aiosqlite_config)
@@ -44,7 +44,7 @@ async def store(aiosqlite_config: AiosqliteConfig) -> SQLSpecSessionStore:
     await commands.upgrade()
 
     # Use the migrated table structure
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         config=aiosqlite_config,
         table_name="litestar_sessions",
         session_id_column="session_id",
@@ -54,7 +54,9 @@ async def store(aiosqlite_config: AiosqliteConfig) -> SQLSpecSessionStore:
     )
 
 
-async def test_aiosqlite_store_table_creation(store: SQLSpecSessionStore, aiosqlite_config: AiosqliteConfig) -> None:
+async def test_aiosqlite_store_table_creation(
+    store: SQLSpecAsyncSessionStore, aiosqlite_config: AiosqliteConfig
+) -> None:
     """Test that store table is created via migrations."""
     async with aiosqlite_config.provide_session() as driver:
         # Verify table exists (created by migrations)
@@ -71,7 +73,7 @@ async def test_aiosqlite_store_table_creation(store: SQLSpecSessionStore, aiosql
         assert "created_at" in columns
 
 
-async def test_aiosqlite_store_crud_operations(store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_store_crud_operations(store: SQLSpecAsyncSessionStore) -> None:
     """Test complete CRUD operations on the store."""
     key = "test-key"
     value = {"user_id": 123, "data": ["item1", "item2"], "nested": {"key": "value"}}
@@ -96,7 +98,7 @@ async def test_aiosqlite_store_crud_operations(store: SQLSpecSessionStore) -> No
     assert result is None
 
 
-async def test_aiosqlite_store_expiration(store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_store_expiration(store: SQLSpecAsyncSessionStore) -> None:
     """Test that expired entries are not returned."""
     key = "expiring-key"
     value = {"test": "data"}
@@ -116,7 +118,7 @@ async def test_aiosqlite_store_expiration(store: SQLSpecSessionStore) -> None:
     assert result is None
 
 
-async def test_aiosqlite_store_default_values(store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_store_default_values(store: SQLSpecAsyncSessionStore) -> None:
     """Test default value handling."""
     # Non-existent key should return None
     result = await store.get("non-existent")
@@ -129,7 +131,7 @@ async def test_aiosqlite_store_default_values(store: SQLSpecSessionStore) -> Non
     assert result == {"default": True}
 
 
-async def test_aiosqlite_store_bulk_operations(store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_store_bulk_operations(store: SQLSpecAsyncSessionStore) -> None:
     """Test bulk operations on the store."""
     # Create multiple entries
     entries = {}
@@ -154,7 +156,7 @@ async def test_aiosqlite_store_bulk_operations(store: SQLSpecSessionStore) -> No
         assert result is None
 
 
-async def test_aiosqlite_store_large_data(store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_store_large_data(store: SQLSpecAsyncSessionStore) -> None:
     """Test storing large data structures."""
     # Create a large data structure
     large_data = {
@@ -174,7 +176,7 @@ async def test_aiosqlite_store_large_data(store: SQLSpecSessionStore) -> None:
     assert len(retrieved["logs"]) == 50
 
 
-async def test_aiosqlite_store_concurrent_access(store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_store_concurrent_access(store: SQLSpecAsyncSessionStore) -> None:
     """Test concurrent access to the store."""
 
     async def update_value(key: str, value: int) -> None:
@@ -193,7 +195,7 @@ async def test_aiosqlite_store_concurrent_access(store: SQLSpecSessionStore) -> 
     assert 0 <= result["value"] <= 19
 
 
-async def test_aiosqlite_store_get_all(store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_store_get_all(store: SQLSpecAsyncSessionStore) -> None:
     """Test retrieving all entries from the store."""
     # Create multiple entries with different expiration times
     await store.set("key1", {"data": 1}, expires_in=3600)
@@ -222,7 +224,7 @@ async def test_aiosqlite_store_get_all(store: SQLSpecSessionStore) -> None:
     assert "key3" not in all_entries  # Should be expired
 
 
-async def test_aiosqlite_store_delete_expired(store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_store_delete_expired(store: SQLSpecAsyncSessionStore) -> None:
     """Test deletion of expired entries."""
     # Create entries with different expiration times
     await store.set("short1", {"data": 1}, expires_in=1)
@@ -243,7 +245,7 @@ async def test_aiosqlite_store_delete_expired(store: SQLSpecSessionStore) -> Non
     assert await store.get("long2") == {"data": 4}
 
 
-async def test_aiosqlite_store_special_characters(store: SQLSpecSessionStore) -> None:
+async def test_aiosqlite_store_special_characters(store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of special characters in keys and values."""
     # Test special characters in keys
     special_keys = [

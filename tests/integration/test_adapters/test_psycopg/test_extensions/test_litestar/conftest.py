@@ -9,7 +9,7 @@ import pytest
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar.store import SQLSpecAsyncSessionStore, SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 if TYPE_CHECKING:
@@ -120,9 +120,9 @@ async def psycopg_async_migrated_config(psycopg_async_migration_config: PsycopgA
 
 
 @pytest.fixture
-def sync_session_store(psycopg_sync_migrated_config: PsycopgSyncConfig) -> SQLSpecSessionStore:
+def sync_session_store(psycopg_sync_migrated_config: PsycopgSyncConfig) -> SQLSpecSyncSessionStore:
     """Create a sync session store with unique table name."""
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         psycopg_sync_migrated_config,
         table_name="litestar_sessions_psycopg_sync",  # Unique table name for psycopg sync
     )
@@ -141,9 +141,9 @@ def sync_session_backend(sync_session_backend_config: SQLSpecSessionConfig) -> S
 
 
 @pytest.fixture
-async def async_session_store(psycopg_async_migrated_config: PsycopgAsyncConfig) -> SQLSpecSessionStore:
+async def async_session_store(psycopg_async_migrated_config: PsycopgAsyncConfig) -> SQLSpecAsyncSessionStore:
     """Create an async session store with unique table name."""
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         psycopg_async_migrated_config,
         table_name="litestar_sessions_psycopg_async",  # Unique table name for psycopg async
     )
@@ -243,7 +243,7 @@ async def psycopg_async_migration_config_with_dict(
 
 
 @pytest.fixture
-def sync_session_store_custom(psycopg_sync_migration_config_with_dict: PsycopgSyncConfig) -> SQLSpecSessionStore:
+def sync_session_store_custom(psycopg_sync_migration_config_with_dict: PsycopgSyncConfig) -> SQLSpecSyncSessionStore:
     """Create a sync session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = SyncMigrationCommands(psycopg_sync_migration_config_with_dict)
@@ -256,19 +256,20 @@ def sync_session_store_custom(psycopg_sync_migration_config_with_dict: PsycopgSy
 
     # Extract session table name from config
     session_table_name = "custom_sessions"
-    for ext in psycopg_sync_migration_config_with_dict.migration_config.get("include_extensions", []):
+    extensions = psycopg_sync_migration_config_with_dict.migration_config.get("include_extensions", [])
+    for ext in extensions if isinstance(extensions, list) else []:
         if isinstance(ext, dict) and ext.get("name") == "litestar":
             session_table_name = ext.get("session_table", "custom_sessions")
             break
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(psycopg_sync_migration_config_with_dict, table_name=session_table_name)
+    return SQLSpecSyncSessionStore(psycopg_sync_migration_config_with_dict, table_name=session_table_name)
 
 
 @pytest.fixture
 async def async_session_store_custom(
     psycopg_async_migration_config_with_dict: PsycopgAsyncConfig,
-) -> SQLSpecSessionStore:
+) -> SQLSpecAsyncSessionStore:
     """Create an async session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = AsyncMigrationCommands(psycopg_async_migration_config_with_dict)
@@ -281,10 +282,11 @@ async def async_session_store_custom(
 
     # Extract session table name from config
     session_table_name = "custom_sessions"
-    for ext in psycopg_async_migration_config_with_dict.migration_config.get("include_extensions", []):
+    extensions = psycopg_async_migration_config_with_dict.migration_config.get("include_extensions", [])
+    for ext in extensions if isinstance(extensions, list) else []:
         if isinstance(ext, dict) and ext.get("name") == "litestar":
             session_table_name = ext.get("session_table", "custom_sessions")
             break
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(psycopg_async_migration_config_with_dict, table_name=session_table_name)
+    return SQLSpecAsyncSessionStore(psycopg_async_migration_config_with_dict, table_name=session_table_name)

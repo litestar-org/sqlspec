@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.sync_tools import async_
 
@@ -43,7 +43,7 @@ def sqlite_config(request: pytest.FixtureRequest) -> Generator[SqliteConfig, Non
 
 
 @pytest.fixture
-async def session_store(sqlite_config: SqliteConfig) -> SQLSpecSessionStore:
+async def session_store(sqlite_config: SqliteConfig) -> SQLSpecSyncSessionStore:
     """Create a session store with migrations applied using unique table names."""
 
     # Apply migrations synchronously (SQLite uses sync commands)
@@ -68,7 +68,7 @@ async def session_store(sqlite_config: SqliteConfig) -> SQLSpecSessionStore:
             session_table_name = ext.get("session_table", "litestar_sessions_sqlite")
             break
 
-    return SQLSpecSessionStore(sqlite_config, table_name=session_table_name)
+    return SQLSpecSyncSessionStore(sqlite_config, table_name=session_table_name)
 
 
 # Removed unused session backend fixtures - using store directly
@@ -113,7 +113,7 @@ async def test_sqlite_migration_creates_correct_table(sqlite_config: SqliteConfi
         assert "created_at" in columns
 
 
-async def test_sqlite_session_basic_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_sqlite_session_basic_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test basic session operations with SQLite backend."""
 
     # Test only direct store operations which should work
@@ -128,7 +128,7 @@ async def test_sqlite_session_basic_operations(session_store: SQLSpecSessionStor
     assert result is None
 
 
-async def test_sqlite_session_persistence(session_store: SQLSpecSessionStore) -> None:
+async def test_sqlite_session_persistence(session_store: SQLSpecSyncSessionStore) -> None:
     """Test that sessions persist across operations with SQLite."""
 
     # Test multiple set/get operations persist data
@@ -145,7 +145,7 @@ async def test_sqlite_session_persistence(session_store: SQLSpecSessionStore) ->
     assert result == {"count": 2}
 
 
-async def test_sqlite_session_expiration(session_store: SQLSpecSessionStore) -> None:
+async def test_sqlite_session_expiration(session_store: SQLSpecSyncSessionStore) -> None:
     """Test session expiration handling with SQLite."""
 
     # Test direct store expiration
@@ -166,7 +166,7 @@ async def test_sqlite_session_expiration(session_store: SQLSpecSessionStore) -> 
     assert result is None
 
 
-async def test_sqlite_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
+async def test_sqlite_concurrent_sessions(session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of concurrent sessions with SQLite."""
 
     # Test multiple concurrent session operations
@@ -188,7 +188,7 @@ async def test_sqlite_concurrent_sessions(session_store: SQLSpecSessionStore) ->
     assert result3 == {"user_id": 303}
 
 
-async def test_sqlite_session_cleanup(session_store: SQLSpecSessionStore) -> None:
+async def test_sqlite_session_cleanup(session_store: SQLSpecSyncSessionStore) -> None:
     """Test expired session cleanup with SQLite."""
     # Create multiple sessions with short expiration
     session_ids = []
@@ -221,7 +221,7 @@ async def test_sqlite_session_cleanup(session_store: SQLSpecSessionStore) -> Non
         assert result is not None
 
 
-async def test_sqlite_store_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_sqlite_store_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test SQLite store operations directly."""
     # Test basic store operations
     session_id = "test-session-sqlite"

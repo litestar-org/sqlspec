@@ -9,7 +9,7 @@ from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar.store import SQLSpecAsyncSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
 
@@ -118,7 +118,7 @@ async def asyncmy_migration_config_mixed(
 
 
 @pytest.fixture
-async def session_store_default(asyncmy_migration_config: AsyncmyConfig) -> SQLSpecSessionStore:
+async def session_store_default(asyncmy_migration_config: AsyncmyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with default table name."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(asyncmy_migration_config)
@@ -126,7 +126,7 @@ async def session_store_default(asyncmy_migration_config: AsyncmyConfig) -> SQLS
     await commands.upgrade()
 
     # Create store using the default migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         asyncmy_migration_config,
         table_name="litestar_sessions",  # Default table name
     )
@@ -145,7 +145,7 @@ def session_backend_default(session_backend_config_default: SQLSpecSessionConfig
 
 
 @pytest.fixture
-async def session_store_custom(asyncmy_migration_config_with_dict: AsyncmyConfig) -> SQLSpecSessionStore:
+async def session_store_custom(asyncmy_migration_config_with_dict: AsyncmyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = AsyncMigrationCommands(asyncmy_migration_config_with_dict)
@@ -153,7 +153,7 @@ async def session_store_custom(asyncmy_migration_config_with_dict: AsyncmyConfig
     await commands.upgrade()
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         asyncmy_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )

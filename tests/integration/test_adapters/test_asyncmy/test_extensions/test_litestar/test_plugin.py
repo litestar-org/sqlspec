@@ -14,7 +14,7 @@ from litestar.stores.registry import StoreRegistry
 from litestar.testing import AsyncTestClient
 
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
 from sqlspec.extensions.litestar.session import SQLSpecSessionConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
@@ -31,9 +31,9 @@ async def migrated_config(asyncmy_migration_config: AsyncmyConfig) -> AsyncmyCon
 
 
 @pytest.fixture
-async def session_store(migrated_config: AsyncmyConfig) -> SQLSpecSessionStore:
+async def session_store(migrated_config: AsyncmyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store instance using the migrated database."""
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         config=migrated_config,
         table_name="litestar_sessions",  # Use the default table created by migration
         session_id_column="session_id",
@@ -54,9 +54,9 @@ async def session_config(migrated_config: AsyncmyConfig) -> SQLSpecSessionConfig
 
 
 @pytest.fixture
-async def session_store_file(migrated_config: AsyncmyConfig) -> SQLSpecSessionStore:
+async def session_store_file(migrated_config: AsyncmyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store instance using MySQL for concurrent testing."""
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         config=migrated_config,
         table_name="litestar_sessions",  # Use the default table created by migration
         session_id_column="session_id",
@@ -66,7 +66,7 @@ async def session_store_file(migrated_config: AsyncmyConfig) -> SQLSpecSessionSt
     )
 
 
-async def test_session_store_creation(session_store: SQLSpecSessionStore) -> None:
+async def test_session_store_creation(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test that SessionStore can be created with AsyncMy configuration."""
     assert session_store is not None
     assert session_store.table_name == "litestar_sessions"
@@ -77,7 +77,7 @@ async def test_session_store_creation(session_store: SQLSpecSessionStore) -> Non
 
 
 async def test_session_store_mysql_table_structure(
-    session_store: SQLSpecSessionStore, asyncmy_migration_config: AsyncmyConfig
+    session_store: SQLSpecAsyncSessionStore, asyncmy_migration_config: AsyncmyConfig
 ) -> None:
     """Test that session table is created with proper MySQL structure."""
     async with asyncmy_migration_config.provide_session() as driver:
@@ -118,7 +118,7 @@ async def test_session_store_mysql_table_structure(
 
 @pytest.mark.xfail(reason="AsyncMy has async event loop conflicts with Litestar TestClient")
 async def test_basic_session_operations(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test basic session operations through Litestar application."""
 
@@ -191,7 +191,7 @@ async def test_basic_session_operations(
 
 @pytest.mark.xfail(reason="AsyncMy has async event loop conflicts with Litestar TestClient")
 async def test_session_persistence_across_requests(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test that sessions persist across multiple requests with MySQL."""
 
@@ -293,7 +293,7 @@ async def test_session_expiration(asyncmy_migration_config: AsyncmyConfig) -> No
     await commands.upgrade()
 
     # Create store and config with very short lifetime
-    session_store = SQLSpecSessionStore(
+    session_store = SQLSpecAsyncSessionStore(
         config=asyncmy_migration_config,
         table_name="litestar_sessions",  # Use the migrated table
     )
@@ -358,7 +358,7 @@ async def test_session_expiration(asyncmy_migration_config: AsyncmyConfig) -> No
 
 @pytest.mark.xfail(reason="AsyncMy has async event loop conflicts with Litestar TestClient")
 async def test_mysql_specific_utf8mb4_support(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test MySQL UTF8MB4 support for international characters and emojis."""
 
@@ -434,7 +434,9 @@ async def test_mysql_specific_utf8mb4_support(
 
 
 @pytest.mark.xfail(reason="AsyncMy has async event loop conflicts with Litestar TestClient")
-async def test_large_data_handling(session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore) -> None:
+async def test_large_data_handling(
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
+) -> None:
     """Test handling of large data structures with MySQL backend."""
 
     @post("/save-large-mysql-dataset")
@@ -559,7 +561,7 @@ async def test_large_data_handling(session_config: SQLSpecSessionConfig, session
 
 
 async def test_mysql_concurrent_webapp_simulation(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test concurrent web application behavior with MySQL session handling."""
 
@@ -681,7 +683,7 @@ async def test_session_cleanup_and_maintenance(asyncmy_migration_config: Asyncmy
     await commands.init(asyncmy_migration_config.migration_config["script_location"], package=False)
     await commands.upgrade()
 
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=asyncmy_migration_config,
         table_name="litestar_sessions",  # Use the migrated table
     )
@@ -746,7 +748,7 @@ async def test_session_cleanup_and_maintenance(asyncmy_migration_config: Asyncmy
 
 @pytest.mark.xfail(reason="AsyncMy has async event loop conflicts with Litestar TestClient")
 async def test_mysql_atomic_transactions_pattern(
-    session_config: SQLSpecSessionConfig, session_store: SQLSpecSessionStore
+    session_config: SQLSpecSessionConfig, session_store: SQLSpecAsyncSessionStore
 ) -> None:
     """Test atomic transaction patterns typical for MySQL applications."""
 
@@ -888,7 +890,7 @@ async def test_migration_with_default_table_name(asyncmy_migration_config: Async
     await commands.upgrade()
 
     # Create store using the migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=asyncmy_migration_config,
         table_name="litestar_sessions",  # Default table name
     )
@@ -911,7 +913,7 @@ async def test_migration_with_custom_table_name(asyncmy_migration_config_with_di
     await commands.upgrade()
 
     # Create store using the custom migrated table
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=asyncmy_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )
@@ -931,7 +933,7 @@ async def test_migration_with_custom_table_name(asyncmy_migration_config_with_di
             SELECT TABLE_NAME
             FROM information_schema.TABLES
             WHERE TABLE_SCHEMA = DATABASE()
-            AND TABLE_NAME = 'litestar_sessions'
+            AND TABLE_NAME = 'custom_sessions'
         """)
         assert len(result.data) == 0
 
@@ -944,7 +946,7 @@ async def test_migration_with_mixed_extensions(asyncmy_migration_config_mixed: A
     await commands.upgrade()
 
     # The litestar extension should use default table name
-    store = SQLSpecSessionStore(
+    store = SQLSpecAsyncSessionStore(
         config=asyncmy_migration_config_mixed,
         table_name="litestar_sessions",  # Default since string format was used
     )
@@ -959,7 +961,7 @@ async def test_migration_with_mixed_extensions(asyncmy_migration_config_mixed: A
     assert retrieved == test_data
 
 
-async def test_concurrent_sessions_with_mysql_backend(session_store_file: SQLSpecSessionStore) -> None:
+async def test_concurrent_sessions_with_mysql_backend(session_store_file: SQLSpecAsyncSessionStore) -> None:
     """Test concurrent session access with MySQL backend."""
 
     async def session_worker(worker_id: int, iterations: int) -> "list[dict]":

@@ -8,7 +8,7 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import AsyncGenerator, Generator
 
 
 @pytest.fixture
@@ -26,7 +26,9 @@ def psycopg_sync_config(postgres_service: PostgresService) -> "Generator[Psycopg
 
 
 @pytest.fixture
-def psycopg_async_config(postgres_service: PostgresService) -> "Generator[PsycopgAsyncConfig, None, None]":
+async def psycopg_async_config(
+    postgres_service: PostgresService, anyio_backend: str
+) -> "AsyncGenerator[PsycopgAsyncConfig, None]":
     """Create a psycopg async configuration."""
     config = PsycopgAsyncConfig(
         pool_config={
@@ -36,15 +38,4 @@ def psycopg_async_config(postgres_service: PostgresService) -> "Generator[Psycop
     yield config
 
     if config.pool_instance:
-        import asyncio
-
-        try:
-            loop = asyncio.get_running_loop()
-            if not loop.is_closed():
-                loop.run_until_complete(config.close_pool())
-        except RuntimeError:
-            new_loop = asyncio.new_event_loop()
-            try:
-                new_loop.run_until_complete(config.close_pool())
-            finally:
-                new_loop.close()
+        await config.close_pool()

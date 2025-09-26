@@ -9,7 +9,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc.config import AdbcConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
@@ -44,7 +44,7 @@ def adbc_config(postgres_service: PostgresService, request: pytest.FixtureReques
 
 
 @pytest.fixture
-def session_store(adbc_config: AdbcConfig) -> SQLSpecSessionStore:
+def session_store(adbc_config: AdbcConfig) -> SQLSpecSyncSessionStore:
     """Create a session store with migrations applied using unique table names."""
 
     # Apply migrations synchronously (ADBC uses sync commands)
@@ -59,7 +59,7 @@ def session_store(adbc_config: AdbcConfig) -> SQLSpecSessionStore:
             session_table_name = ext.get("session_table", "litestar_sessions_adbc")
             break
 
-    return SQLSpecSessionStore(adbc_config, table_name=session_table_name)
+    return SQLSpecSyncSessionStore(adbc_config, table_name=session_table_name)
 
 
 @xfail_if_driver_missing
@@ -112,9 +112,8 @@ def test_adbc_migration_creates_correct_table(adbc_config: AdbcConfig) -> None:
         assert "created_at" in columns
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_session_basic_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_adbc_session_basic_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test basic session operations with ADBC backend."""
 
     # Test only direct store operations which should work
@@ -129,9 +128,8 @@ async def test_adbc_session_basic_operations(session_store: SQLSpecSessionStore)
     assert result is None
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_session_persistence(session_store: SQLSpecSessionStore) -> None:
+async def test_adbc_session_persistence(session_store: SQLSpecSyncSessionStore) -> None:
     """Test that sessions persist across operations with ADBC."""
 
     # Test multiple set/get operations persist data
@@ -148,9 +146,8 @@ async def test_adbc_session_persistence(session_store: SQLSpecSessionStore) -> N
     assert result == {"count": 2}
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_session_expiration(session_store: SQLSpecSessionStore) -> None:
+async def test_adbc_session_expiration(session_store: SQLSpecSyncSessionStore) -> None:
     """Test session expiration handling with ADBC."""
 
     # Test direct store expiration
@@ -171,9 +168,8 @@ async def test_adbc_session_expiration(session_store: SQLSpecSessionStore) -> No
     assert result is None
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
+async def test_adbc_concurrent_sessions(session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of concurrent sessions with ADBC."""
 
     # Test multiple concurrent session operations
@@ -195,9 +191,8 @@ async def test_adbc_concurrent_sessions(session_store: SQLSpecSessionStore) -> N
     assert result3 == {"user_id": 303}
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_session_cleanup(session_store: SQLSpecSessionStore) -> None:
+async def test_adbc_session_cleanup(session_store: SQLSpecSyncSessionStore) -> None:
     """Test expired session cleanup with ADBC."""
     # Create multiple sessions with short expiration
     session_ids = []
@@ -230,9 +225,8 @@ async def test_adbc_session_cleanup(session_store: SQLSpecSessionStore) -> None:
         assert result is not None
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test ADBC store operations directly."""
     # Test basic store operations
     session_id = "test-session-adbc"

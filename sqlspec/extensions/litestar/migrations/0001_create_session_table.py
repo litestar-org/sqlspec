@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING, Optional
 
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.sync_tools import await_
 
 logger = get_logger("migrations.litestar.session")
 
@@ -44,18 +43,25 @@ async def up(context: "Optional[MigrationContext]" = None) -> "list[str]":
     timestamp_type = None
     if context and context.driver:
         try:
-            json_result = await_(context.driver.data_dictionary.get_optimal_type)(context.driver, "json")  # type: ignore[arg-type]
-            data_type = str(json_result) if json_result else None
-            logger.info("Oracle JSON type detected: %s", data_type)
-        except Exception as e:
-            logger.warning("Failed to detect optimal JSON type: %s", e)
-            data_type = None
+            # Try to get optimal types if data dictionary is available
+            dd = context.driver.data_dictionary
+            if hasattr(dd, "get_optimal_type"):
+                # Check if it's an async method
+                import inspect
 
-        try:
-            timestamp_result = await_(context.driver.data_dictionary.get_optimal_type)(context.driver, "timestamp")  # type: ignore[arg-type]
-            timestamp_type = str(timestamp_result) if timestamp_result else None
+                if inspect.iscoroutinefunction(dd.get_optimal_type):
+                    json_result = await dd.get_optimal_type(context.driver, "json")  # type: ignore[arg-type]
+                    timestamp_result = await dd.get_optimal_type(context.driver, "timestamp")  # type: ignore[arg-type]
+                else:
+                    json_result = dd.get_optimal_type(context.driver, "json")  # type: ignore[arg-type]
+                    timestamp_result = dd.get_optimal_type(context.driver, "timestamp")  # type: ignore[arg-type]
+
+                data_type = str(json_result) if json_result else None
+                timestamp_type = str(timestamp_result) if timestamp_result else None
+                logger.info("Detected types - JSON: %s, Timestamp: %s", data_type, timestamp_type)
         except Exception as e:
-            logger.warning("Failed to detect optimal timestamp type: %s", e)
+            logger.warning("Failed to detect optimal types: %s", e)
+            data_type = None
             timestamp_type = None
 
     # Set defaults based on dialect if data dictionary failed

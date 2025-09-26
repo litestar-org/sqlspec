@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
+from sqlspec.extensions.litestar.session import SQLSpecSessionBackend, SQLSpecSessionConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
 if TYPE_CHECKING:
@@ -119,7 +120,7 @@ async def asyncpg_migration_config_mixed(
 
 
 @pytest.fixture
-async def session_store_default(asyncpg_migration_config: AsyncpgConfig) -> SQLSpecSessionStore:
+async def session_store_default(asyncpg_migration_config: AsyncpgConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with default table name."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(asyncpg_migration_config)
@@ -127,7 +128,7 @@ async def session_store_default(asyncpg_migration_config: AsyncpgConfig) -> SQLS
     await commands.upgrade()
 
     # Create store using the default migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         asyncpg_migration_config,
         table_name="litestar_sessions_asyncpg",  # Unique table name for asyncpg
     )
@@ -146,7 +147,7 @@ def session_backend_default(session_backend_config_default: SQLSpecSessionConfig
 
 
 @pytest.fixture
-async def session_store_custom(asyncpg_migration_config_with_dict: AsyncpgConfig) -> SQLSpecSessionStore:
+async def session_store_custom(asyncpg_migration_config_with_dict: AsyncpgConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with custom table name."""
     # Apply migrations to create the session table with custom name
     commands = AsyncMigrationCommands(asyncpg_migration_config_with_dict)
@@ -154,7 +155,7 @@ async def session_store_custom(asyncpg_migration_config_with_dict: AsyncpgConfig
     await commands.upgrade()
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         asyncpg_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )
@@ -173,14 +174,14 @@ def session_backend_custom(session_backend_config_custom: SQLSpecSessionConfig) 
 
 
 @pytest.fixture
-async def session_store(asyncpg_migration_config: AsyncpgConfig) -> SQLSpecSessionStore:
+async def session_store(asyncpg_migration_config: AsyncpgConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store using migrated config."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(asyncpg_migration_config)
     await commands.init(asyncpg_migration_config.migration_config["script_location"], package=False)
     await commands.upgrade()
 
-    return SQLSpecSessionStore(config=asyncpg_migration_config, table_name="litestar_sessions_asyncpg")
+    return SQLSpecAsyncSessionStore(config=asyncpg_migration_config, table_name="litestar_sessions_asyncpg")
 
 
 @pytest.fixture

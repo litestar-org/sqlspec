@@ -79,7 +79,6 @@ def test_asyncmy_config_initialization() -> None:
     assert config.statement_config is custom_statement_config
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_config_provide_session(mysql_service: MySQLService) -> None:
     """Test Asyncmy config provide_session context manager."""
 

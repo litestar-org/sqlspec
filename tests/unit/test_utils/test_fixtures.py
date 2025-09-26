@@ -297,7 +297,6 @@ def test_open_fixture_invalid_json() -> None:
             open_fixture(fixtures_path, "invalid")
 
 
-@pytest.mark.asyncio
 async def test_open_fixture_async_valid_file() -> None:
     """Test open_fixture_async with valid JSON fixture file."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -312,7 +311,6 @@ async def test_open_fixture_async_valid_file() -> None:
         assert result == test_data
 
 
-@pytest.mark.asyncio
 async def test_open_fixture_async_gzipped() -> None:
     """Test open_fixture_async with gzipped file."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -327,7 +325,6 @@ async def test_open_fixture_async_gzipped() -> None:
         assert result == test_data
 
 
-@pytest.mark.asyncio
 async def test_open_fixture_async_zipped() -> None:
     """Test open_fixture_async with zipped file."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -342,7 +339,6 @@ async def test_open_fixture_async_zipped() -> None:
         assert result == test_data
 
 
-@pytest.mark.asyncio
 async def test_open_fixture_async_missing_file() -> None:
     """Test open_fixture_async with missing fixture file."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -417,7 +413,6 @@ def test_write_fixture_with_custom_backend(mock_registry: Mock) -> None:
     mock_storage.write_text.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_write_fixture_async_dict() -> None:
     """Test async writing a dictionary fixture."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -430,7 +425,6 @@ async def test_write_fixture_async_dict() -> None:
         assert loaded_data == test_data
 
 
-@pytest.mark.asyncio
 async def test_write_fixture_async_compressed() -> None:
     """Test async writing a compressed fixture."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -447,7 +441,6 @@ async def test_write_fixture_async_compressed() -> None:
         assert loaded_data == test_data
 
 
-@pytest.mark.asyncio
 async def test_write_fixture_async_storage_error() -> None:
     """Test async error handling for invalid storage backend."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -457,7 +450,6 @@ async def test_write_fixture_async_storage_error() -> None:
             await write_fixture_async(temp_dir, "test", test_data, storage_backend="invalid://backend")
 
 
-@pytest.mark.asyncio
 @patch("sqlspec.utils.fixtures.storage_registry")
 async def test_write_fixture_async_custom_backend(mock_registry: Mock) -> None:
     """Test async write_fixture with custom storage backend."""
@@ -492,7 +484,6 @@ def test_write_read_roundtrip() -> None:
         assert loaded_data == original_data
 
 
-@pytest.mark.asyncio
 async def test_async_write_read_roundtrip() -> None:
     """Test complete async write and read roundtrip."""
     with tempfile.TemporaryDirectory() as temp_dir:

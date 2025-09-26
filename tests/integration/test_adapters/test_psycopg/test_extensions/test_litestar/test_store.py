@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import tempfile
+from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 from typing import Any
 
@@ -11,14 +12,16 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore, SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 pytestmark = [pytest.mark.psycopg, pytest.mark.postgres, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
 
 @pytest.fixture
-def psycopg_sync_config(postgres_service: PostgresService, request: pytest.FixtureRequest) -> PsycopgSyncConfig:
+def psycopg_sync_config(
+    postgres_service: PostgresService, request: pytest.FixtureRequest
+) -> "Generator[PsycopgSyncConfig, None, None]":
     """Create Psycopg sync configuration for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
@@ -70,7 +73,10 @@ def down():
         commands = SyncMigrationCommands(config)
         commands.init(str(migration_dir), package=False)
         commands.upgrade()
-        config._session_table_name = session_table  # Store for cleanup
+        # Store table name in config for cleanup - using dict to avoid private attribute
+        if not hasattr(config, "_test_data"):
+            config._test_data = {}
+        config._test_data["session_table_name"] = session_table
         yield config
 
         # Cleanup: drop test tables and close pool
@@ -86,7 +92,9 @@ def down():
 
 
 @pytest.fixture
-async def psycopg_async_config(postgres_service: PostgresService, request: pytest.FixtureRequest) -> PsycopgAsyncConfig:
+async def psycopg_async_config(
+    postgres_service: PostgresService, request: pytest.FixtureRequest
+) -> "AsyncGenerator[PsycopgAsyncConfig, None]":
     """Create Psycopg async configuration for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migration_dir = Path(temp_dir) / "migrations"
@@ -138,7 +146,10 @@ def down():
         commands = AsyncMigrationCommands(config)
         await commands.init(str(migration_dir), package=False)
         await commands.upgrade()
-        config._session_table_name = session_table  # Store for cleanup
+        # Store table name in config for cleanup - using dict to avoid private attribute
+        if not hasattr(config, "_test_data"):
+            config._test_data = {}
+        config._test_data["session_table_name"] = session_table
         yield config
 
         # Cleanup: drop test tables and close pool
@@ -153,11 +164,12 @@ def down():
 
 
 @pytest.fixture
-def sync_store(psycopg_sync_config: PsycopgSyncConfig) -> SQLSpecSessionStore:
+def sync_store(psycopg_sync_config: PsycopgSyncConfig) -> SQLSpecSyncSessionStore:
     """Create a sync session store instance."""
-    return SQLSpecSessionStore(
+    table_name = getattr(psycopg_sync_config, "_test_data", {}).get("session_table_name", "litestar_session")
+    return SQLSpecSyncSessionStore(
         config=psycopg_sync_config,
-        table_name=getattr(psycopg_sync_config, "_session_table_name", "litestar_session"),
+        table_name=table_name,
         session_id_column="session_id",
         data_column="data",
         expires_at_column="expires_at",
@@ -166,11 +178,12 @@ def sync_store(psycopg_sync_config: PsycopgSyncConfig) -> SQLSpecSessionStore:
 
 
 @pytest.fixture
-async def async_store(psycopg_async_config: PsycopgAsyncConfig) -> SQLSpecSessionStore:
+async def async_store(psycopg_async_config: PsycopgAsyncConfig) -> SQLSpecAsyncSessionStore:
     """Create an async session store instance."""
-    return SQLSpecSessionStore(
+    table_name = getattr(psycopg_async_config, "_test_data", {}).get("session_table_name", "litestar_session")
+    return SQLSpecAsyncSessionStore(
         config=psycopg_async_config,
-        table_name=getattr(psycopg_async_config, "_session_table_name", "litestar_session"),
+        table_name=table_name,
         session_id_column="session_id",
         data_column="data",
         expires_at_column="expires_at",
@@ -179,12 +192,12 @@ async def async_store(psycopg_async_config: PsycopgAsyncConfig) -> SQLSpecSessio
 
 
 def test_psycopg_sync_store_table_creation(
-    sync_store: SQLSpecSessionStore, psycopg_sync_config: PsycopgSyncConfig
+    sync_store: SQLSpecSyncSessionStore, psycopg_sync_config: PsycopgSyncConfig
 ) -> None:
     """Test that store table is created automatically with sync driver."""
     with psycopg_sync_config.provide_session() as driver:
         # Verify table exists
-        table_name = getattr(psycopg_sync_config, "_session_table_name", "litestar_session")
+        table_name = getattr(psycopg_sync_config, "_test_data", {}).get("session_table_name", "litestar_session")
         result = driver.execute("SELECT table_name FROM information_schema.tables WHERE table_name = %s", (table_name,))
         assert len(result.data) == 1
         assert result.data[0]["table_name"] == table_name
@@ -205,12 +218,12 @@ def test_psycopg_sync_store_table_creation(
 
 
 async def test_psycopg_async_store_table_creation(
-    async_store: SQLSpecSessionStore, psycopg_async_config: PsycopgAsyncConfig
+    async_store: SQLSpecAsyncSessionStore, psycopg_async_config: PsycopgAsyncConfig
 ) -> None:
     """Test that store table is created automatically with async driver."""
     async with psycopg_async_config.provide_session() as driver:
         # Verify table exists
-        table_name = getattr(psycopg_async_config, "_session_table_name", "litestar_session")
+        table_name = getattr(psycopg_async_config, "_test_data", {}).get("session_table_name", "litestar_session")
         result = await driver.execute(
             "SELECT table_name FROM information_schema.tables WHERE table_name = %s", (table_name,)
         )
@@ -232,7 +245,7 @@ async def test_psycopg_async_store_table_creation(
         assert "timestamp" in columns["expires_at"].lower()
 
 
-async def test_psycopg_sync_store_crud_operations(sync_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_store_crud_operations(sync_store: SQLSpecSyncSessionStore) -> None:
     """Test complete CRUD operations on the sync store."""
     key = "test-key-psycopg-sync"
     value = {
@@ -267,7 +280,7 @@ async def test_psycopg_sync_store_crud_operations(sync_store: SQLSpecSessionStor
     assert result is None
 
 
-async def test_psycopg_async_store_crud_operations(async_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_store_crud_operations(async_store: SQLSpecAsyncSessionStore) -> None:
     """Test complete CRUD operations on the async store."""
     key = "test-key-psycopg-async"
     value = {
@@ -303,7 +316,7 @@ async def test_psycopg_async_store_crud_operations(async_store: SQLSpecSessionSt
 
 
 async def test_psycopg_sync_store_expiration(
-    sync_store: SQLSpecSessionStore, psycopg_sync_config: PsycopgSyncConfig
+    sync_store: SQLSpecSyncSessionStore, psycopg_sync_config: PsycopgSyncConfig
 ) -> None:
     """Test that expired entries are not returned with sync driver."""
     key = "expiring-key-psycopg-sync"
@@ -331,7 +344,7 @@ async def test_psycopg_sync_store_expiration(
 
 
 async def test_psycopg_async_store_expiration(
-    async_store: SQLSpecSessionStore, psycopg_async_config: PsycopgAsyncConfig
+    async_store: SQLSpecAsyncSessionStore, psycopg_async_config: PsycopgAsyncConfig
 ) -> None:
     """Test that expired entries are not returned with async driver."""
     key = "expiring-key-psycopg-async"
@@ -358,7 +371,7 @@ async def test_psycopg_async_store_expiration(
     assert result is None
 
 
-async def test_psycopg_sync_store_default_values(sync_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_store_default_values(sync_store: SQLSpecSyncSessionStore) -> None:
     """Test default value handling with sync driver."""
     # Non-existent key should return None
     result = await sync_store.get("non-existent-psycopg-sync")
@@ -371,7 +384,7 @@ async def test_psycopg_sync_store_default_values(sync_store: SQLSpecSessionStore
     assert result == {"default": True, "driver": "psycopg_sync"}
 
 
-async def test_psycopg_async_store_default_values(async_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_store_default_values(async_store: SQLSpecAsyncSessionStore) -> None:
     """Test default value handling with async driver."""
     # Non-existent key should return None
     result = await async_store.get("non-existent-psycopg-async")
@@ -384,10 +397,10 @@ async def test_psycopg_async_store_default_values(async_store: SQLSpecSessionSto
     assert result == {"default": True, "driver": "psycopg_async"}
 
 
-async def test_psycopg_sync_store_bulk_operations(sync_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_store_bulk_operations(sync_store: SQLSpecSyncSessionStore) -> None:
     """Test bulk operations on the Psycopg sync store."""
 
-    async def run_bulk_test():
+    async def run_bulk_test() -> None:
         # Create multiple entries efficiently
         entries = {}
         tasks = []
@@ -424,7 +437,7 @@ async def test_psycopg_sync_store_bulk_operations(sync_store: SQLSpecSessionStor
     await run_bulk_test()
 
 
-async def test_psycopg_async_store_bulk_operations(async_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_store_bulk_operations(async_store: SQLSpecAsyncSessionStore) -> None:
     """Test bulk operations on the Psycopg async store."""
     # Create multiple entries efficiently
     entries = {}
@@ -460,7 +473,7 @@ async def test_psycopg_async_store_bulk_operations(async_store: SQLSpecSessionSt
     assert all(result is None for result in results)
 
 
-async def test_psycopg_sync_store_large_data(sync_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_store_large_data(sync_store: SQLSpecSyncSessionStore) -> None:
     """Test storing large data structures in Psycopg sync store."""
     # Create a large data structure that tests PostgreSQL's JSONB capabilities
     large_data = {
@@ -503,7 +516,7 @@ async def test_psycopg_sync_store_large_data(sync_store: SQLSpecSessionStore) ->
     assert retrieved["postgres_metadata"]["driver"] == "psycopg"
 
 
-async def test_psycopg_async_store_large_data(async_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_store_large_data(async_store: SQLSpecAsyncSessionStore) -> None:
     """Test storing large data structures in Psycopg async store."""
     # Create a large data structure that tests PostgreSQL's JSONB capabilities
     large_data = {
@@ -547,7 +560,7 @@ async def test_psycopg_async_store_large_data(async_store: SQLSpecSessionStore) 
     assert "CONNECTION_POOLING" in retrieved["postgres_metadata"]["features"]
 
 
-async def test_psycopg_sync_store_concurrent_access(sync_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_store_concurrent_access(sync_store: SQLSpecSyncSessionStore) -> None:
     """Test concurrent access to the Psycopg sync store."""
 
     async def update_value(key: str, value: int) -> None:
@@ -556,7 +569,7 @@ async def test_psycopg_sync_store_concurrent_access(sync_store: SQLSpecSessionSt
             key, {"value": value, "operation": f"update_{value}", "postgres": "sync", "jsonb": True}, expires_in=3600
         )
 
-    async def run_concurrent_test():
+    async def run_concurrent_test() -> None:
         # Create many concurrent updates to test PostgreSQL's concurrency handling
         key = "psycopg-sync-concurrent-key"
         tasks = [update_value(key, i) for i in range(50)]
@@ -574,7 +587,7 @@ async def test_psycopg_sync_store_concurrent_access(sync_store: SQLSpecSessionSt
     await run_concurrent_test()
 
 
-async def test_psycopg_async_store_concurrent_access(async_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_store_concurrent_access(async_store: SQLSpecAsyncSessionStore) -> None:
     """Test concurrent access to the Psycopg async store."""
 
     async def update_value(key: str, value: int) -> None:
@@ -601,7 +614,7 @@ async def test_psycopg_async_store_concurrent_access(async_store: SQLSpecSession
     assert result["pool"] is True
 
 
-async def test_psycopg_sync_store_get_all(sync_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_store_get_all(sync_store: SQLSpecSyncSessionStore) -> None:
     """Test retrieving all entries from the sync store."""
 
     # Create multiple entries with different expiration times
@@ -631,7 +644,7 @@ async def test_psycopg_sync_store_get_all(sync_store: SQLSpecSessionStore) -> No
     assert "sync_key3" not in all_entries  # Should be expired
 
 
-async def test_psycopg_async_store_get_all(async_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_store_get_all(async_store: SQLSpecAsyncSessionStore) -> None:
     """Test retrieving all entries from the async store."""
 
     # Create multiple entries with different expiration times
@@ -664,7 +677,7 @@ async def test_psycopg_async_store_get_all(async_store: SQLSpecSessionStore) -> 
     assert "async_key3" not in all_entries  # Should be expired
 
 
-async def test_psycopg_sync_store_delete_expired(sync_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_store_delete_expired(sync_store: SQLSpecSyncSessionStore) -> None:
     """Test deletion of expired entries with sync driver."""
     # Create entries with different expiration times
     await sync_store.set("sync_short1", {"data": 1, "postgres": "sync"}, expires_in=1)
@@ -685,7 +698,7 @@ async def test_psycopg_sync_store_delete_expired(sync_store: SQLSpecSessionStore
     assert await sync_store.get("sync_long2") == {"data": 4, "postgres": "sync"}
 
 
-async def test_psycopg_async_store_delete_expired(async_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_store_delete_expired(async_store: SQLSpecAsyncSessionStore) -> None:
     """Test deletion of expired entries with async driver."""
     # Create entries with different expiration times
     await async_store.set("async_short1", {"data": 1, "postgres": "async"}, expires_in=1)
@@ -706,7 +719,7 @@ async def test_psycopg_async_store_delete_expired(async_store: SQLSpecSessionSto
     assert await async_store.get("async_long2") == {"data": 4, "postgres": "async"}
 
 
-async def test_psycopg_sync_store_special_characters(sync_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_store_special_characters(sync_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of special characters in keys and values with Psycopg sync."""
     # Test special characters in keys (PostgreSQL specific)
     special_keys = [
@@ -764,7 +777,7 @@ async def test_psycopg_sync_store_special_characters(sync_store: SQLSpecSessionS
     assert retrieved["postgres_specific"]["jsonb_ops"] is True
 
 
-async def test_psycopg_async_store_special_characters(async_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_store_special_characters(async_store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of special characters in keys and values with Psycopg async."""
     # Test special characters in keys (PostgreSQL specific)
     special_keys = [
@@ -823,7 +836,7 @@ async def test_psycopg_async_store_special_characters(async_store: SQLSpecSessio
     assert retrieved["postgres_specific"]["async_pool"] is True
 
 
-async def test_psycopg_sync_store_exists_and_expires_in(sync_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_sync_store_exists_and_expires_in(sync_store: SQLSpecSyncSessionStore) -> None:
     """Test exists and expires_in functionality with sync driver."""
     key = "psycopg-sync-exists-test"
     value = {"test": "data", "postgres": "sync"}
@@ -846,7 +859,7 @@ async def test_psycopg_sync_store_exists_and_expires_in(sync_store: SQLSpecSessi
     assert await sync_store.expires_in(key) == 0
 
 
-async def test_psycopg_async_store_exists_and_expires_in(async_store: SQLSpecSessionStore) -> None:
+async def test_psycopg_async_store_exists_and_expires_in(async_store: SQLSpecAsyncSessionStore) -> None:
     """Test exists and expires_in functionality with async driver."""
     key = "psycopg-async-exists-test"
     value = {"test": "data", "postgres": "async"}
@@ -870,11 +883,11 @@ async def test_psycopg_async_store_exists_and_expires_in(async_store: SQLSpecSes
 
 
 async def test_psycopg_sync_store_postgresql_features(
-    sync_store: SQLSpecSessionStore, psycopg_sync_config: PsycopgSyncConfig
+    sync_store: SQLSpecSyncSessionStore, psycopg_sync_config: PsycopgSyncConfig
 ) -> None:
     """Test PostgreSQL-specific features with sync driver."""
 
-    async def test_jsonb_operations():
+    async def test_jsonb_operations() -> None:
         # Test JSONB-specific operations
         key = "psycopg-sync-jsonb-test"
         complex_data = {
@@ -893,7 +906,7 @@ async def test_psycopg_sync_store_postgresql_features(
         await sync_store.set(key, complex_data, expires_in=3600)
 
         # Test direct JSONB queries to verify data is stored as JSONB
-        table_name = getattr(psycopg_sync_config, "_session_table_name", "litestar_session")
+        table_name = getattr(psycopg_sync_config, "_test_data", {}).get("session_table_name", "litestar_session")
         with psycopg_sync_config.provide_session() as driver:
             # Query JSONB field directly using PostgreSQL JSONB operators
             result = driver.execute(
@@ -917,7 +930,7 @@ async def test_psycopg_sync_store_postgresql_features(
 
 
 async def test_psycopg_async_store_postgresql_features(
-    async_store: SQLSpecSessionStore, psycopg_async_config: PsycopgAsyncConfig
+    async_store: SQLSpecAsyncSessionStore, psycopg_async_config: PsycopgAsyncConfig
 ) -> None:
     """Test PostgreSQL-specific features with async driver."""
     # Test JSONB-specific operations
@@ -967,7 +980,7 @@ async def test_psycopg_async_store_postgresql_features(
 
 
 async def test_psycopg_store_transaction_behavior(
-    async_store: SQLSpecSessionStore, psycopg_async_config: PsycopgAsyncConfig
+    async_store: SQLSpecAsyncSessionStore, psycopg_async_config: PsycopgAsyncConfig
 ) -> None:
     """Test transaction-like behavior in PostgreSQL store operations."""
     key = "psycopg-transaction-test"

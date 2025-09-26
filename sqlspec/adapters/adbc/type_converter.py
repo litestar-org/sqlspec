@@ -66,7 +66,8 @@ class ADBCTypeConverter(BaseTypeConverter):
                 elif self.dialect in {"mysql", "snowflake"} and detected_type in {"uuid", "json"}:
                     return self.convert_value(value, detected_type)
 
-                return self.convert_value(value, detected_type)
+                # For outbound parameters in type coercion, don't convert JSON strings back to dicts
+                # as this breaks JSONB handling. Only convert specific types that need it.
             except Exception:
                 return value
 

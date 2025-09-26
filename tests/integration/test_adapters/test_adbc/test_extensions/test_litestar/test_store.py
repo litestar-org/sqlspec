@@ -10,7 +10,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.driver import AdbcDriver
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.sync_tools import async_
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -74,9 +74,9 @@ def down():
 
 
 @pytest.fixture
-def store(adbc_config: AdbcConfig) -> SQLSpecSessionStore:
+def store(adbc_config: AdbcConfig) -> SQLSpecSyncSessionStore:
     """Create a session store instance for ADBC."""
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         config=adbc_config,
         table_name="litestar_session",
         session_id_column="session_id",
@@ -86,9 +86,8 @@ def store(adbc_config: AdbcConfig) -> SQLSpecSessionStore:
     )
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_table_creation(store: SQLSpecSessionStore, adbc_config: AdbcConfig) -> None:
+async def test_adbc_store_table_creation(store: SQLSpecSyncSessionStore, adbc_config: AdbcConfig) -> None:
     """Test that store table is created with ADBC-optimized structure."""
 
     def check_table() -> AdbcDriver:
@@ -128,9 +127,8 @@ async def test_adbc_store_table_creation(store: SQLSpecSessionStore, adbc_config
     await async_(check_structure)()
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_crud_operations(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_crud_operations(store: SQLSpecSyncSessionStore) -> None:
     """Test complete CRUD operations on the ADBC store."""
     key = "adbc-test-key"
     value = {
@@ -166,9 +164,8 @@ async def test_adbc_store_crud_operations(store: SQLSpecSessionStore) -> None:
     assert result is None
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_expiration(store: SQLSpecSessionStore, adbc_config: AdbcConfig) -> None:
+async def test_adbc_store_expiration(store: SQLSpecSyncSessionStore, adbc_config: AdbcConfig) -> None:
     """Test that expired entries are not returned with ADBC."""
 
     key = "adbc-expiring-key"
@@ -198,9 +195,8 @@ async def test_adbc_store_expiration(store: SQLSpecSessionStore, adbc_config: Ad
     assert result is None
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_default_values(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_default_values(store: SQLSpecSyncSessionStore) -> None:
     """Test default value handling with ADBC store."""
     # Non-existent key should return None
     result = await store.get("non-existent")
@@ -214,9 +210,8 @@ async def test_adbc_store_default_values(store: SQLSpecSessionStore) -> None:
     assert result["arrow_native"] is True
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_bulk_operations(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_bulk_operations(store: SQLSpecSyncSessionStore) -> None:
     """Test bulk operations on the ADBC store with Arrow optimization."""
     # Create multiple entries efficiently with ADBC/Arrow features
     entries = {}
@@ -258,9 +253,8 @@ async def test_adbc_store_bulk_operations(store: SQLSpecSessionStore) -> None:
     assert all(result is None for result in results)
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_large_data(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_large_data(store: SQLSpecSyncSessionStore) -> None:
     """Test storing large data structures in ADBC with Arrow optimization."""
     # Create a large data structure that tests ADBC's Arrow capabilities
     large_data = {
@@ -325,9 +319,8 @@ async def test_adbc_store_large_data(store: SQLSpecSessionStore) -> None:
     assert retrieved["adbc_configuration"]["batch_processing"]["enabled"] is True
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_concurrent_access(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_concurrent_access(store: SQLSpecSyncSessionStore) -> None:
     """Test concurrent access to the ADBC store."""
 
     async def update_value(key: str, value: int) -> None:
@@ -356,9 +349,8 @@ async def test_adbc_store_concurrent_access(store: SQLSpecSessionStore) -> None:
     assert result["arrow_metadata"]["columnar"] is True
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_get_all(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_get_all(store: SQLSpecSyncSessionStore) -> None:
     """Test retrieving all entries from the ADBC store."""
     import asyncio
 
@@ -388,9 +380,8 @@ async def test_adbc_store_get_all(store: SQLSpecSessionStore) -> None:
     assert all_entries["key1"]["engine"] == "ADBC"
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_delete_expired(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_delete_expired(store: SQLSpecSyncSessionStore) -> None:
     """Test deletion of expired entries with ADBC."""
 
     # Create entries with different expiration times and ADBC features
@@ -415,9 +406,8 @@ async def test_adbc_store_delete_expired(store: SQLSpecSessionStore) -> None:
     assert long2_result == {"data": 4, "engine": "ADBC", "persistent": True}
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_special_characters(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_special_characters(store: SQLSpecSyncSessionStore) -> None:
     """Test handling of special characters in keys and values with ADBC."""
     # Test special characters in keys (ADBC/PostgreSQL specific)
     special_keys = [
@@ -477,9 +467,8 @@ async def test_adbc_store_special_characters(store: SQLSpecSessionStore) -> None
     assert "Python" in retrieved["arrow_features"]["cross_language"]
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_crud_operations_enhanced(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_crud_operations_enhanced(store: SQLSpecSyncSessionStore) -> None:
     """Test enhanced CRUD operations on the ADBC store."""
     key = "adbc-enhanced-test-key"
     value = {
@@ -526,9 +515,8 @@ async def test_adbc_store_crud_operations_enhanced(store: SQLSpecSessionStore) -
     assert result is None
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_expiration_enhanced(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_expiration_enhanced(store: SQLSpecSyncSessionStore) -> None:
     """Test enhanced expiration handling with ADBC."""
 
     key = "adbc-expiring-key-enhanced"
@@ -554,9 +542,8 @@ async def test_adbc_store_expiration_enhanced(store: SQLSpecSessionStore) -> Non
     assert result is None
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_exists_and_expires_in(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_exists_and_expires_in(store: SQLSpecSyncSessionStore) -> None:
     """Test exists and expires_in functionality with ADBC."""
     key = "adbc-exists-test"
     value = {"test": "data", "adbc_engine": "Arrow", "columnar_format": True}
@@ -579,9 +566,8 @@ async def test_adbc_store_exists_and_expires_in(store: SQLSpecSessionStore) -> N
     assert await store.expires_in(key) == 0
 
 
-@pytest.mark.asyncio
 @xfail_if_driver_missing
-async def test_adbc_store_arrow_optimization(store: SQLSpecSessionStore) -> None:
+async def test_adbc_store_arrow_optimization(store: SQLSpecSyncSessionStore) -> None:
     """Test ADBC-specific Arrow optimization features."""
     key = "adbc-arrow-optimization-test"
 

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionConfig, SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSessionBackend, SQLSpecSessionConfig, SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.sync_tools import async_
 
@@ -90,7 +90,7 @@ def sqlite_migration_config_mixed(request: pytest.FixtureRequest) -> Generator[S
 
 
 @pytest.fixture
-def session_store_default(sqlite_migration_config: SqliteConfig) -> SQLSpecSessionStore:
+def session_store_default(sqlite_migration_config: SqliteConfig) -> SQLSpecSyncSessionStore:
     """Create a session store with default table name."""
 
     # Apply migrations to create the session table
@@ -103,7 +103,7 @@ def session_store_default(sqlite_migration_config: SqliteConfig) -> SQLSpecSessi
     async_(apply_migrations)()
 
     # Create store using the default migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         sqlite_migration_config,
         table_name="litestar_sessions",  # Default table name
     )
@@ -122,7 +122,7 @@ def session_backend_default(session_backend_config_default: SQLSpecSessionConfig
 
 
 @pytest.fixture
-def session_store_custom(sqlite_migration_config_with_dict: SqliteConfig) -> SQLSpecSessionStore:
+def session_store_custom(sqlite_migration_config_with_dict: SqliteConfig) -> SQLSpecSyncSessionStore:
     """Create a session store with custom table name."""
 
     # Apply migrations to create the session table with custom name
@@ -135,7 +135,7 @@ def session_store_custom(sqlite_migration_config_with_dict: SqliteConfig) -> SQL
     async_(apply_migrations)()
 
     # Create store using the custom migrated table
-    return SQLSpecSessionStore(
+    return SQLSpecSyncSessionStore(
         sqlite_migration_config_with_dict,
         table_name="custom_sessions",  # Custom table name from config
     )
@@ -154,7 +154,7 @@ def session_backend_custom(session_backend_config_custom: SQLSpecSessionConfig) 
 
 
 @pytest.fixture
-def session_store(sqlite_migration_config: SqliteConfig) -> SQLSpecSessionStore:
+def session_store(sqlite_migration_config: SqliteConfig) -> SQLSpecSyncSessionStore:
     """Create a session store using migrated config."""
 
     # Apply migrations to create the session table
@@ -166,7 +166,7 @@ def session_store(sqlite_migration_config: SqliteConfig) -> SQLSpecSessionStore:
     # Run migrations
     async_(apply_migrations)()
 
-    return SQLSpecSessionStore(config=sqlite_migration_config, table_name="litestar_sessions")
+    return SQLSpecSyncSessionStore(config=sqlite_migration_config, table_name="litestar_sessions")
 
 
 @pytest.fixture

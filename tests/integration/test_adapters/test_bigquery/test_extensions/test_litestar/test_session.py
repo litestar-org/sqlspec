@@ -10,7 +10,7 @@ from google.auth.credentials import AnonymousCredentials
 from pytest_databases.docker.bigquery import BigQueryService
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecSyncSessionStore
 from sqlspec.migrations.commands import SyncMigrationCommands
 
 pytestmark = [pytest.mark.bigquery, pytest.mark.integration]
@@ -47,7 +47,7 @@ def bigquery_config(
 
 
 @pytest.fixture
-def session_store(bigquery_config: BigQueryConfig) -> SQLSpecSessionStore:
+def session_store(bigquery_config: BigQueryConfig) -> SQLSpecSyncSessionStore:
     """Create a session store with migrations applied using unique table names."""
     # Apply migrations to create the session table
     commands = SyncMigrationCommands(bigquery_config)
@@ -61,7 +61,7 @@ def session_store(bigquery_config: BigQueryConfig) -> SQLSpecSessionStore:
             session_table_name = ext.get("session_table", "litestar_sessions_bigquery")
             break
 
-    return SQLSpecSessionStore(bigquery_config, table_name=session_table_name)
+    return SQLSpecSyncSessionStore(bigquery_config, table_name=session_table_name)
 
 
 def test_bigquery_migration_creates_correct_table(bigquery_config: BigQueryConfig, table_schema_prefix: str) -> None:
@@ -103,7 +103,7 @@ def test_bigquery_migration_creates_correct_table(bigquery_config: BigQueryConfi
         assert columns["created_at"]["data_type"] == "TIMESTAMP"
 
 
-async def test_bigquery_session_basic_operations_simple(session_store: SQLSpecSessionStore) -> None:
+async def test_bigquery_session_basic_operations_simple(session_store: SQLSpecSyncSessionStore) -> None:
     """Test basic session operations with BigQuery backend."""
 
     # Test only direct store operations which should work
@@ -118,7 +118,7 @@ async def test_bigquery_session_basic_operations_simple(session_store: SQLSpecSe
     assert result is None
 
 
-async def test_bigquery_session_persistence(session_store: SQLSpecSessionStore) -> None:
+async def test_bigquery_session_persistence(session_store: SQLSpecSyncSessionStore) -> None:
     """Test that sessions persist across operations with BigQuery."""
 
     # Test multiple set/get operations persist data
@@ -135,7 +135,7 @@ async def test_bigquery_session_persistence(session_store: SQLSpecSessionStore) 
     assert result == {"count": 2}
 
 
-async def test_bigquery_session_expiration(session_store: SQLSpecSessionStore) -> None:
+async def test_bigquery_session_expiration(session_store: SQLSpecSyncSessionStore) -> None:
     """Test session expiration handling with BigQuery."""
 
     # Test direct store expiration
@@ -156,7 +156,7 @@ async def test_bigquery_session_expiration(session_store: SQLSpecSessionStore) -
     assert result is None
 
 
-async def test_bigquery_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
+async def test_bigquery_concurrent_sessions(session_store: SQLSpecSyncSessionStore) -> None:
     """Test handling of concurrent sessions with BigQuery."""
 
     # Test multiple concurrent session operations
@@ -178,7 +178,7 @@ async def test_bigquery_concurrent_sessions(session_store: SQLSpecSessionStore) 
     assert result3 == {"user_id": 303}
 
 
-async def test_bigquery_session_cleanup(session_store: SQLSpecSessionStore) -> None:
+async def test_bigquery_session_cleanup(session_store: SQLSpecSyncSessionStore) -> None:
     """Test expired session cleanup with BigQuery."""
     # Create multiple sessions with short expiration
     session_ids = []
@@ -211,7 +211,7 @@ async def test_bigquery_session_cleanup(session_store: SQLSpecSessionStore) -> N
         assert result is not None
 
 
-async def test_bigquery_store_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_bigquery_store_operations(session_store: SQLSpecSyncSessionStore) -> None:
     """Test BigQuery store operations directly."""
     # Test basic store operations
     session_id = "test-session-bigquery"

@@ -100,6 +100,17 @@ class VersionInfo:
 class DataDictionaryMixin:
     """Mixin providing common data dictionary functionality."""
 
+    def get_dialect(self, driver: Any) -> str:
+        """Get database dialect name.
+
+        Args:
+            driver: Database driver instance
+
+        Returns:
+            Dialect name (e.g., 'postgres', 'sqlite', 'mysql')
+        """
+        return str(driver.dialect)
+
     def parse_version_string(self, version_str: str) -> "Optional[VersionInfo]":
         """Parse version string into VersionInfo.
 

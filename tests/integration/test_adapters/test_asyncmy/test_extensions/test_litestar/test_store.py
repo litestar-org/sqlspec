@@ -6,7 +6,7 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
-from sqlspec.extensions.litestar import SQLSpecSessionStore
+from sqlspec.extensions.litestar import SQLSpecAsyncSessionStore
 
 pytestmark = [pytest.mark.asyncmy, pytest.mark.mysql, pytest.mark.integration, pytest.mark.xdist_group("mysql")]
 
@@ -28,7 +28,7 @@ async def asyncmy_config(mysql_service: MySQLService) -> AsyncmyConfig:
 
 
 @pytest.fixture
-async def store(asyncmy_config: AsyncmyConfig) -> SQLSpecSessionStore:
+async def store(asyncmy_config: AsyncmyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store instance."""
     # Create the table manually since we're not using migrations here
     async with asyncmy_config.provide_session() as driver:
@@ -40,7 +40,7 @@ async def store(asyncmy_config: AsyncmyConfig) -> SQLSpecSessionStore:
             INDEX idx_test_store_mysql_expires_at (expires_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci""")
 
-    return SQLSpecSessionStore(
+    return SQLSpecAsyncSessionStore(
         config=asyncmy_config,
         table_name="test_store_mysql",
         session_id_column="session_key",
@@ -50,7 +50,7 @@ async def store(asyncmy_config: AsyncmyConfig) -> SQLSpecSessionStore:
     )
 
 
-async def test_mysql_store_table_creation(store: SQLSpecSessionStore, asyncmy_config: AsyncmyConfig) -> None:
+async def test_mysql_store_table_creation(store: SQLSpecAsyncSessionStore, asyncmy_config: AsyncmyConfig) -> None:
     """Test that store table is created automatically with proper structure."""
     async with asyncmy_config.provide_session() as driver:
         # Verify table exists
@@ -83,7 +83,7 @@ async def test_mysql_store_table_creation(store: SQLSpecSessionStore, asyncmy_co
                 assert row["CHARACTER_SET_NAME"] == "utf8mb4"
 
 
-async def test_mysql_store_crud_operations(store: SQLSpecSessionStore) -> None:
+async def test_mysql_store_crud_operations(store: SQLSpecAsyncSessionStore) -> None:
     """Test complete CRUD operations on the MySQL store."""
     key = "mysql-test-key"
     value = {
@@ -115,7 +115,7 @@ async def test_mysql_store_crud_operations(store: SQLSpecSessionStore) -> None:
     assert result is None
 
 
-async def test_mysql_store_expiration(store: SQLSpecSessionStore) -> None:
+async def test_mysql_store_expiration(store: SQLSpecAsyncSessionStore) -> None:
     """Test that expired entries are not returned from MySQL."""
     key = "mysql-expiring-key"
     value = {"test": "mysql_data", "engine": "InnoDB"}
@@ -135,7 +135,7 @@ async def test_mysql_store_expiration(store: SQLSpecSessionStore) -> None:
     assert result == {"expired": True}
 
 
-async def test_mysql_store_bulk_operations(store: SQLSpecSessionStore) -> None:
+async def test_mysql_store_bulk_operations(store: SQLSpecAsyncSessionStore) -> None:
     """Test bulk operations on the MySQL store."""
     # Create multiple entries
     entries = {}
@@ -166,7 +166,7 @@ async def test_mysql_store_bulk_operations(store: SQLSpecSessionStore) -> None:
     assert all(result is None for result in results)
 
 
-async def test_mysql_store_large_data(store: SQLSpecSessionStore) -> None:
+async def test_mysql_store_large_data(store: SQLSpecAsyncSessionStore) -> None:
     """Test storing large data structures in MySQL."""
     # Create a large data structure that tests MySQL's JSON and TEXT capabilities
     large_data = {
@@ -196,7 +196,7 @@ async def test_mysql_store_large_data(store: SQLSpecSessionStore) -> None:
     assert len(retrieved["logs"]) == 31
 
 
-async def test_mysql_store_concurrent_access(store: SQLSpecSessionStore) -> None:
+async def test_mysql_store_concurrent_access(store: SQLSpecAsyncSessionStore) -> None:
     """Test concurrent access to the MySQL store with transactions."""
 
     async def update_value(key: str, value: int) -> None:
@@ -217,7 +217,7 @@ async def test_mysql_store_concurrent_access(store: SQLSpecSessionStore) -> None
     assert 0 <= result["value"] <= 49
 
 
-async def test_mysql_store_get_all(store: SQLSpecSessionStore) -> None:
+async def test_mysql_store_get_all(store: SQLSpecAsyncSessionStore) -> None:
     """Test retrieving all entries from the MySQL store."""
     # Create multiple entries
     test_entries = {
@@ -254,7 +254,7 @@ async def test_mysql_store_get_all(store: SQLSpecSessionStore) -> None:
     assert "mysql-all-4" in all_entries
 
 
-async def test_mysql_store_delete_expired(store: SQLSpecSessionStore) -> None:
+async def test_mysql_store_delete_expired(store: SQLSpecAsyncSessionStore) -> None:
     """Test deletion of expired entries in MySQL."""
     # Create entries with different TTLs
     short_lived = ["mysql-short-1", "mysql-short-2", "mysql-short-3"]
@@ -282,7 +282,7 @@ async def test_mysql_store_delete_expired(store: SQLSpecSessionStore) -> None:
         assert result["ttl"] == "long"
 
 
-async def test_mysql_store_utf8mb4_characters(store: SQLSpecSessionStore) -> None:
+async def test_mysql_store_utf8mb4_characters(store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of UTF8MB4 characters and emojis in MySQL."""
     # Test UTF8MB4 characters in keys
     special_keys = ["key-with-emoji-🚀", "key-with-chinese-你好", "key-with-arabic-مرحبا", "key-with-special-♠♣♥♦"]

@@ -68,7 +68,6 @@ def test_sync_execute_many_insert_batch(oracle_sync_session: OracleSyncDriver) -
     )
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_execute_many_update_batch(oracle_async_session: OracleAsyncDriver) -> None:
     """Test execute_many with batch UPDATE operations."""
 
@@ -192,7 +191,6 @@ def test_sync_execute_many_with_named_parameters(oracle_sync_session: OracleSync
     )
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsyncDriver) -> None:
     """Test execute_many with Oracle sequences for auto-incrementing IDs."""
 

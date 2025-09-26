@@ -8,7 +8,7 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
-from sqlspec.extensions.litestar.store import SQLSpecSessionStore
+from sqlspec.extensions.litestar.store import SQLSpecAsyncSessionStore
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
 pytestmark = [pytest.mark.asyncmy, pytest.mark.mysql, pytest.mark.integration, pytest.mark.xdist_group("mysql")]
@@ -55,7 +55,7 @@ async def asyncmy_config(mysql_service: MySQLService, request: pytest.FixtureReq
 
 
 @pytest.fixture
-async def session_store(asyncmy_config: AsyncmyConfig) -> SQLSpecSessionStore:
+async def session_store(asyncmy_config: AsyncmyConfig) -> SQLSpecAsyncSessionStore:
     """Create a session store with migrations applied using unique table names."""
     # Apply migrations to create the session table
     commands = AsyncMigrationCommands(asyncmy_config)
@@ -69,7 +69,7 @@ async def session_store(asyncmy_config: AsyncmyConfig) -> SQLSpecSessionStore:
             session_table_name = ext.get("session_table", "litestar_sessions_asyncmy")
             break
 
-    return SQLSpecSessionStore(asyncmy_config, table_name=session_table_name)
+    return SQLSpecAsyncSessionStore(asyncmy_config, table_name=session_table_name)
 
 
 async def test_asyncmy_migration_creates_correct_table(asyncmy_config: AsyncmyConfig) -> None:
@@ -123,7 +123,7 @@ async def test_asyncmy_migration_creates_correct_table(asyncmy_config: AsyncmyCo
         assert "created_at" in columns
 
 
-async def test_asyncmy_session_basic_operations_simple(session_store: SQLSpecSessionStore) -> None:
+async def test_asyncmy_session_basic_operations_simple(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test basic session operations with AsyncMy backend."""
 
     # Test only direct store operations which should work
@@ -138,7 +138,7 @@ async def test_asyncmy_session_basic_operations_simple(session_store: SQLSpecSes
     assert result is None
 
 
-async def test_asyncmy_session_persistence(session_store: SQLSpecSessionStore) -> None:
+async def test_asyncmy_session_persistence(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test that sessions persist across operations with AsyncMy."""
 
     # Test multiple set/get operations persist data
@@ -155,7 +155,7 @@ async def test_asyncmy_session_persistence(session_store: SQLSpecSessionStore) -
     assert result == {"count": 2}
 
 
-async def test_asyncmy_session_expiration(session_store: SQLSpecSessionStore) -> None:
+async def test_asyncmy_session_expiration(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test session expiration handling with AsyncMy."""
 
     # Test direct store expiration
@@ -176,7 +176,7 @@ async def test_asyncmy_session_expiration(session_store: SQLSpecSessionStore) ->
     assert result is None
 
 
-async def test_asyncmy_concurrent_sessions(session_store: SQLSpecSessionStore) -> None:
+async def test_asyncmy_concurrent_sessions(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test handling of concurrent sessions with AsyncMy."""
 
     # Test multiple concurrent session operations
@@ -198,7 +198,7 @@ async def test_asyncmy_concurrent_sessions(session_store: SQLSpecSessionStore) -
     assert result3 == {"user_id": 303}
 
 
-async def test_asyncmy_session_cleanup(session_store: SQLSpecSessionStore) -> None:
+async def test_asyncmy_session_cleanup(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test expired session cleanup with AsyncMy."""
     # Create multiple sessions with short expiration
     session_ids = []
@@ -231,7 +231,7 @@ async def test_asyncmy_session_cleanup(session_store: SQLSpecSessionStore) -> No
         assert result is not None
 
 
-async def test_asyncmy_store_operations(session_store: SQLSpecSessionStore) -> None:
+async def test_asyncmy_store_operations(session_store: SQLSpecAsyncSessionStore) -> None:
     """Test AsyncMy store operations directly."""
     # Test basic store operations
     session_id = "test-session-asyncmy"
