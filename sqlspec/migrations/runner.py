@@ -310,11 +310,36 @@ class SyncMigrationRunner(BaseMigrationRunner):
         try:
             method = loader.get_up_sql if direction == "up" else loader.get_down_sql
             # Check if the method is async and handle appropriately
+            import asyncio
             import inspect
 
             if inspect.iscoroutinefunction(method):
-                # For async methods, use await_ to run in sync context
-                sql_statements = await_(method, raise_sync_error=False)(file_path)
+                # Check if we're already in an async context
+                try:
+                    loop = asyncio.get_running_loop()
+                    if loop.is_running():
+                        # We're in an async context, so we need to use a different approach
+                        # Create a new event loop in a thread to avoid "await_ cannot be called" error
+                        import concurrent.futures
+
+                        def run_async_in_new_loop() -> "list[str]":
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                return new_loop.run_until_complete(method(file_path))
+                            finally:
+                                new_loop.close()
+                                asyncio.set_event_loop(None)
+
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_async_in_new_loop)
+                            sql_statements = future.result()
+                    else:
+                        # No running loop, safe to use await_
+                        sql_statements = await_(method, raise_sync_error=False)(file_path)
+                except RuntimeError:
+                    # No event loop, safe to use await_
+                    sql_statements = await_(method, raise_sync_error=False)(file_path)
             else:
                 # For sync methods, call directly
                 sql_statements = method(file_path)

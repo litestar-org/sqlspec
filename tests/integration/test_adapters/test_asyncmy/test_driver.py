@@ -61,7 +61,6 @@ async def asyncmy_session(mysql_service: MySQLService) -> AsyncGenerator[Asyncmy
         yield session
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_basic_crud(asyncmy_driver: AsyncmyDriver) -> None:
     """Test basic CRUD operations."""
     driver = asyncmy_driver
@@ -89,7 +88,6 @@ async def test_asyncmy_basic_crud(asyncmy_driver: AsyncmyDriver) -> None:
     assert verify_result.get_data()[0]["count"] == 0
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_parameter_styles(asyncmy_driver: AsyncmyDriver) -> None:
     """Test different parameter binding styles."""
     driver = asyncmy_driver
@@ -108,7 +106,6 @@ async def test_asyncmy_parameter_styles(asyncmy_driver: AsyncmyDriver) -> None:
     assert select_result.get_data()[1]["value"] == 20
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_execute_many(asyncmy_driver: AsyncmyDriver) -> None:
     """Test execute_many functionality."""
     driver = asyncmy_driver
@@ -126,7 +123,6 @@ async def test_asyncmy_execute_many(asyncmy_driver: AsyncmyDriver) -> None:
     assert select_result.get_data()[0]["value"] == 100
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_execute_script(asyncmy_driver: AsyncmyDriver) -> None:
     """Test script execution with multiple statements."""
     driver = asyncmy_driver
@@ -148,7 +144,6 @@ async def test_asyncmy_execute_script(asyncmy_driver: AsyncmyDriver) -> None:
     assert select_result.get_data()[1]["value"] == 4000
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     """Test handling of various MySQL data types."""
     driver = asyncmy_driver
@@ -189,7 +184,6 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     assert row["bool_col"] == 1
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_transaction_management(asyncmy_driver: AsyncmyDriver) -> None:
     """Test transaction management (begin, commit, rollback)."""
     driver = asyncmy_driver
@@ -209,7 +203,6 @@ async def test_asyncmy_transaction_management(asyncmy_driver: AsyncmyDriver) -> 
     assert result.get_data()[0]["count"] == 0
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_null_parameters(asyncmy_driver: AsyncmyDriver) -> None:
     """Test handling of NULL parameters."""
     driver = asyncmy_driver
@@ -223,7 +216,6 @@ async def test_asyncmy_null_parameters(asyncmy_driver: AsyncmyDriver) -> None:
     assert select_result.get_data()[0]["value"] is None
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_error_handling(asyncmy_driver: AsyncmyDriver) -> None:
     """Test error handling and exception wrapping."""
     driver = asyncmy_driver
@@ -237,7 +229,6 @@ async def test_asyncmy_error_handling(asyncmy_driver: AsyncmyDriver) -> None:
         await driver.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "user2", 200))
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_large_result_set(asyncmy_driver: AsyncmyDriver) -> None:
     """Test handling of large result sets."""
     driver = asyncmy_driver
@@ -252,7 +243,6 @@ async def test_asyncmy_large_result_set(asyncmy_driver: AsyncmyDriver) -> None:
     assert result.get_data()[99]["name"] == "user_99"
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_mysql_specific_features(asyncmy_driver: AsyncmyDriver) -> None:
     """Test MySQL-specific features and SQL constructs."""
     driver = asyncmy_driver
@@ -269,7 +259,6 @@ async def test_asyncmy_mysql_specific_features(asyncmy_driver: AsyncmyDriver) ->
     assert select_result.get_data()[0]["value"] == 250
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_complex_queries(asyncmy_driver: AsyncmyDriver) -> None:
     """Test complex SQL queries with JOINs, subqueries, etc."""
     driver = asyncmy_driver
@@ -304,7 +293,6 @@ async def test_asyncmy_complex_queries(asyncmy_driver: AsyncmyDriver) -> None:
     assert row["age"] == 30
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_edge_cases(asyncmy_driver: AsyncmyDriver) -> None:
     """Test edge cases and boundary conditions."""
     driver = asyncmy_driver
@@ -328,7 +316,6 @@ async def test_asyncmy_edge_cases(asyncmy_driver: AsyncmyDriver) -> None:
     assert select_result.get_data()[1]["value"] is None
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_result_metadata(asyncmy_driver: AsyncmyDriver) -> None:
     """Test SQL result metadata and properties."""
     driver = asyncmy_driver
@@ -350,7 +337,6 @@ async def test_asyncmy_result_metadata(asyncmy_driver: AsyncmyDriver) -> None:
     assert len(empty_result.get_data()) == 0
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_sql_object_execution(asyncmy_driver: AsyncmyDriver) -> None:
     """Test execution of SQL objects."""
     driver = asyncmy_driver
@@ -372,7 +358,6 @@ async def test_asyncmy_sql_object_execution(asyncmy_driver: AsyncmyDriver) -> No
     assert select_result.operation_type == "SELECT"
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_for_update_locking(asyncmy_driver: AsyncmyDriver) -> None:
     """Test FOR UPDATE row locking with MySQL."""
     from sqlspec import sql
@@ -399,7 +384,6 @@ async def test_asyncmy_for_update_locking(asyncmy_driver: AsyncmyDriver) -> None
         raise
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_for_update_skip_locked(asyncmy_driver: AsyncmyDriver) -> None:
     """Test FOR UPDATE SKIP LOCKED with MySQL (MySQL 8.0+ feature)."""
     from sqlspec import sql
@@ -425,7 +409,6 @@ async def test_asyncmy_for_update_skip_locked(asyncmy_driver: AsyncmyDriver) -> 
         raise
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_for_share_locking(asyncmy_driver: AsyncmyDriver) -> None:
     """Test FOR SHARE row locking with MySQL."""
     from sqlspec import sql
