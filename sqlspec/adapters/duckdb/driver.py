@@ -15,7 +15,6 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -44,8 +43,6 @@ duckdb_statement_config = StatementConfig(
             datetime.datetime: lambda v: v.isoformat(),
             datetime.date: lambda v: v.isoformat(),
             Decimal: str,
-            dict: to_json,
-            list: to_json,
             str: _type_converter.convert_if_detected,
         },
         has_native_list_expansion=True,

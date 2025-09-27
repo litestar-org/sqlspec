@@ -57,7 +57,6 @@ def test_sync_oracle_parameter_styles(
         ),
     ],
 )
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_oracle_parameter_styles(
     oracle_async_session: OracleAsyncDriver, sql: str, params: OracleParamData, expected_rows: list[dict[str, Any]]
 ) -> None:
@@ -112,7 +111,6 @@ def test_sync_oracle_insert_with_named_params(oracle_sync_session: OracleSyncDri
     )
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_oracle_update_with_mixed_params(oracle_async_session: OracleAsyncDriver) -> None:
     """Test UPDATE operations using mixed parameter styles."""
 
@@ -203,7 +201,6 @@ def test_sync_oracle_in_clause_with_params(oracle_sync_session: OracleSyncDriver
     )
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_oracle_null_parameter_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test handling of NULL parameters in Oracle."""
 
@@ -479,7 +476,6 @@ def test_sync_oracle_none_parameters_with_execute_many(oracle_sync_session: Orac
     )
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle LOB (CLOB/RAW) None parameter handling in async operations."""
 
@@ -581,7 +577,6 @@ async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: Or
     )
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_oracle_json_none_parameter_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle JSON column None parameter handling (Oracle 21+ and constraint-based)."""
 

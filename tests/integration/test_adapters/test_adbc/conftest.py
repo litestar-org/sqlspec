@@ -1,8 +1,8 @@
 """Test fixtures and configuration for ADBC integration tests."""
 
 import functools
-from collections.abc import Generator
-from typing import Any, Callable, TypeVar, cast
+from collections.abc import Awaitable, Callable, Generator
+from typing import Any, TypeVar, cast, overload
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -10,13 +10,41 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 
 F = TypeVar("F", bound=Callable[..., Any])
+T = TypeVar("T")
+
+
+@overload
+def xfail_if_driver_missing(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]: ...
+
+
+@overload
+def xfail_if_driver_missing(func: Callable[..., T]) -> Callable[..., T]: ...
 
 
 def xfail_if_driver_missing(func: F) -> F:
     """Decorator to xfail a test if the ADBC driver shared object is missing."""
+    import inspect
+
+    if inspect.iscoroutinefunction(func):
+
+        @functools.wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                if (
+                    "cannot open shared object file" in str(e)
+                    or "No module named" in str(e)
+                    or "Failed to import connect function" in str(e)
+                    or "Could not configure connection" in str(e)
+                ):
+                    pytest.xfail(f"ADBC driver not available: {e}")
+                raise e
+
+        return cast("F", async_wrapper)
 
     @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return func(*args, **kwargs)
         except Exception as e:
@@ -29,7 +57,7 @@ def xfail_if_driver_missing(func: F) -> F:
                 pytest.xfail(f"ADBC driver not available: {e}")
             raise e
 
-    return cast("F", wrapper)
+    return cast("F", sync_wrapper)
 
 
 @pytest.fixture(scope="session")

@@ -113,7 +113,6 @@ test = [
   "anyio",
   "coverage>=7.6.1",
   "pytest>=8.0.0",
-  "pytest-asyncio>=0.23.8",
   "pytest-cov>=5.0.0",
   "pytest-databases[postgres,oracle,mysql,bigquery,spanner,minio]>=0.12.2",
   "pytest-mock>=3.14.0",
@@ -266,8 +265,7 @@ exclude_lines = [
 
 [tool.pytest.ini_options]
 addopts = ["-q", "-ra"]
-asyncio_default_fixture_loop_scope = "function"
-asyncio_mode = "auto"
+anyio_mode = "auto"
 filterwarnings = [
   "ignore::DeprecationWarning:pkg_resources.*",
   "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
