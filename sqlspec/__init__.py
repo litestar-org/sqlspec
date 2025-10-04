@@ -44,6 +44,9 @@ from sqlspec.typing import (
     StatementParameters,
     SupportedSchemaModel,
 )
+from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
+
+suppress_erroneous_sqlglot_log_messages()
 
 __all__ = (
     "SQL",

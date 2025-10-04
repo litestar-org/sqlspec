@@ -12,7 +12,15 @@ from typing import Any, Optional
 
 from sqlspec._serialization import encode_json
 
-__all__ = ("StructuredFormatter", "correlation_id_var", "get_correlation_id", "get_logger", "set_correlation_id")
+__all__ = (
+    "SqlglotCommandFallbackFilter",
+    "StructuredFormatter",
+    "correlation_id_var",
+    "get_correlation_id",
+    "get_logger",
+    "set_correlation_id",
+    "suppress_erroneous_sqlglot_log_messages",
+)
 
 correlation_id_var: "ContextVar[Optional[str]]" = ContextVar("correlation_id", default=None)
 
@@ -86,6 +94,26 @@ class CorrelationIDFilter(logging.Filter):
         return True
 
 
+class SqlglotCommandFallbackFilter(logging.Filter):
+    """Filter to suppress sqlglot's confusing 'Falling back to Command' warning.
+
+    This filter suppresses the warning message that sqlglot emits when it
+    encounters unsupported syntax and falls back to parsing as a Command.
+    This is expected behavior in SQLSpec and the warning is confusing to users.
+    """
+
+    def filter(self, record: LogRecord) -> bool:
+        """Suppress the 'Falling back to Command' warning message.
+
+        Args:
+            record: The log record to evaluate
+
+        Returns:
+            False if the record contains the fallback warning, True otherwise
+        """
+        return "Falling back to parsing as a 'Command'" not in record.getMessage()
+
+
 def get_logger(name: "Optional[str]" = None) -> logging.Logger:
     """Get a logger instance with standardized configuration.
 
@@ -121,3 +149,15 @@ def log_with_context(logger: logging.Logger, level: int, message: str, **extra_f
     record = logger.makeRecord(logger.name, level, "(unknown file)", 0, message, (), None)
     record.extra_fields = extra_fields
     logger.handle(record)
+
+
+def suppress_erroneous_sqlglot_log_messages() -> None:
+    """Suppress confusing sqlglot warning messages.
+
+    Adds a filter to the sqlglot logger to suppress the warning message
+    about falling back to parsing as a Command. This is expected behavior
+    in SQLSpec and the warning is confusing to users.
+    """
+    sqlglot_logger = logging.getLogger("sqlglot")
+    if not any(isinstance(f, SqlglotCommandFallbackFilter) for f in sqlglot_logger.filters):
+        sqlglot_logger.addFilter(SqlglotCommandFallbackFilter())
