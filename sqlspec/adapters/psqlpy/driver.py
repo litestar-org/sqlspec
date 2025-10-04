@@ -125,82 +125,78 @@ class PsqlpyExceptionHandler:
     def _map_postgres_exception(self, e: Any) -> None:
         """Map PostgreSQL exception to SQLSpec exception.
 
+        psqlpy does not expose SQLSTATE codes directly, so we use message-based
+        detection to map exceptions.
+
         Args:
             e: psqlpy exception instance
 
         Raises:
-            Specific SQLSpec exception based on SQLSTATE code
+            Specific SQLSpec exception based on error message patterns
         """
-        error_code = getattr(e, "sqlstate", None)
+        error_msg = str(e).lower()
 
-        if not error_code:
+        if "unique" in error_msg or "duplicate key" in error_msg:
+            self._raise_unique_violation(e, None)
+        elif "foreign key" in error_msg or "violates foreign key" in error_msg:
+            self._raise_foreign_key_violation(e, None)
+        elif "not null" in error_msg or ("null value" in error_msg and "violates not-null" in error_msg):
+            self._raise_not_null_violation(e, None)
+        elif "check constraint" in error_msg or "violates check constraint" in error_msg:
+            self._raise_check_violation(e, None)
+        elif "constraint" in error_msg:
+            self._raise_integrity_error(e, None)
+        elif "syntax error" in error_msg or "parse" in error_msg:
+            self._raise_parsing_error(e, None)
+        elif "connection" in error_msg or "could not connect" in error_msg:
+            self._raise_connection_error(e, None)
+        elif "deadlock" in error_msg or "serialization failure" in error_msg:
+            self._raise_transaction_error(e, None)
+        else:
             self._raise_generic_error(e, None)
 
-        if error_code == "23505":
-            self._raise_unique_violation(e, error_code)
-        elif error_code == "23503":
-            self._raise_foreign_key_violation(e, error_code)
-        elif error_code == "23502":
-            self._raise_not_null_violation(e, error_code)
-        elif error_code == "23514":
-            self._raise_check_violation(e, error_code)
-        elif error_code.startswith("23"):
-            self._raise_integrity_error(e, error_code)
-        elif error_code.startswith("42"):
-            self._raise_parsing_error(e, error_code)
-        elif error_code.startswith("08"):
-            self._raise_connection_error(e, error_code)
-        elif error_code.startswith("40"):
-            self._raise_transaction_error(e, error_code)
-        elif error_code.startswith("22"):
-            self._raise_data_error(e, error_code)
-        elif error_code.startswith(("53", "54", "55", "57", "58")):
-            self._raise_operational_error(e, error_code)
-        else:
-            self._raise_generic_error(e, error_code)
-
-    def _raise_unique_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL unique constraint violation [{code}]: {e}"
+    def _raise_unique_violation(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL unique constraint violation: {e}"
         raise UniqueViolationError(msg) from e
 
-    def _raise_foreign_key_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL foreign key constraint violation [{code}]: {e}"
+    def _raise_foreign_key_violation(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL foreign key constraint violation: {e}"
         raise ForeignKeyViolationError(msg) from e
 
-    def _raise_not_null_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL not-null constraint violation [{code}]: {e}"
+    def _raise_not_null_violation(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL not-null constraint violation: {e}"
         raise NotNullViolationError(msg) from e
 
-    def _raise_check_violation(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL check constraint violation [{code}]: {e}"
+    def _raise_check_violation(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL check constraint violation: {e}"
         raise CheckViolationError(msg) from e
 
-    def _raise_integrity_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL integrity constraint violation [{code}]: {e}"
+    def _raise_integrity_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL integrity constraint violation: {e}"
         raise IntegrityError(msg) from e
 
-    def _raise_parsing_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL SQL syntax error [{code}]: {e}"
+    def _raise_parsing_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL SQL syntax error: {e}"
         raise SQLParsingError(msg) from e
 
-    def _raise_connection_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL connection error [{code}]: {e}"
+    def _raise_connection_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL connection error: {e}"
         raise ConnectionError(msg) from e
 
-    def _raise_transaction_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL transaction error [{code}]: {e}"
+    def _raise_transaction_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL transaction error: {e}"
         raise TransactionError(msg) from e
 
-    def _raise_data_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL data error [{code}]: {e}"
+    def _raise_data_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL data error: {e}"
         raise DataError(msg) from e
 
-    def _raise_operational_error(self, e: Any, code: str) -> None:
-        msg = f"PostgreSQL operational error [{code}]: {e}"
+    def _raise_operational_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL operational error: {e}"
         raise OperationalError(msg) from e
 
     def _raise_generic_error(self, e: Any, code: "Optional[str]") -> None:
-        msg = f"PostgreSQL database error [{code}]: {e}" if code else f"PostgreSQL database error: {e}"
+        msg = f"PostgreSQL database error: {e}"
         raise SQLSpecError(msg) from e
 
 

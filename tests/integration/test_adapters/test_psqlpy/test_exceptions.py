@@ -98,7 +98,9 @@ async def test_not_null_violation(psqlpy_exception_session: PsqlpyDriver) -> Non
     with pytest.raises(NotNullViolationError) as exc_info:
         await psqlpy_exception_session.execute("INSERT INTO test_not_null (id) VALUES ($1)", (1,))
 
-    assert "not null" in str(exc_info.value).lower() or "23502" in str(exc_info.value)
+    assert ("not" in str(exc_info.value).lower() and "null" in str(exc_info.value).lower()) or "23502" in str(
+        exc_info.value
+    )
 
     await psqlpy_exception_session.execute("DROP TABLE test_not_null")
 

@@ -130,7 +130,7 @@ class AsyncmyExceptionHandler:
             self._raise_unique_violation(e, sqlstate, error_code)
         elif sqlstate == "23503" or error_code in (1216, 1217, 1451, 1452):
             self._raise_foreign_key_violation(e, sqlstate, error_code)
-        elif sqlstate == "23502" or error_code == 1048:
+        elif sqlstate == "23502" or error_code in (1048, 1364):
             self._raise_not_null_violation(e, sqlstate, error_code)
         elif sqlstate == "23514" or error_code == 3819:
             self._raise_check_violation(e, sqlstate, error_code)

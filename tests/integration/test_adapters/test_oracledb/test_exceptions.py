@@ -6,13 +6,7 @@ import pytest
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver, OracleSyncConfig, OracleSyncDriver
-from sqlspec.exceptions import (
-    CheckViolationError,
-    ForeignKeyViolationError,
-    NotNullViolationError,
-    SQLParsingError,
-    UniqueViolationError,
-)
+from sqlspec.exceptions import NotNullViolationError, SQLParsingError, UniqueViolationError
 
 pytestmark = pytest.mark.xdist_group("oracle")
 
@@ -70,7 +64,9 @@ def test_sync_unique_violation(oracle_sync_exception_session: OracleSyncDriver) 
         )
     """)
 
-    oracle_sync_exception_session.execute("INSERT INTO test_unique_constraint (email) VALUES (:1)", ("test@example.com",))
+    oracle_sync_exception_session.execute(
+        "INSERT INTO test_unique_constraint (email) VALUES (:1)", ("test@example.com",)
+    )
 
     with pytest.raises(UniqueViolationError) as exc_info:
         oracle_sync_exception_session.execute(

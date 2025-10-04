@@ -22,7 +22,8 @@ def psycopg_sync_exception_session(postgres_service: PostgresService) -> Generat
     """Create a psycopg sync session for exception testing."""
     config = PsycopgSyncConfig(
         pool_config={
-            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "kwargs": {"autocommit": True},
         }
     )
 
@@ -41,7 +42,8 @@ async def psycopg_async_exception_session(
     """Create a psycopg async session for exception testing."""
     config = PsycopgAsyncConfig(
         pool_config={
-            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "kwargs": {"autocommit": True},
         }
     )
 
@@ -64,17 +66,15 @@ def test_sync_unique_violation(psycopg_sync_exception_session: PsycopgSyncDriver
     """)
 
     psycopg_sync_exception_session.execute(
-        "INSERT INTO test_unique_constraint (email) VALUES ($1)", ("test@example.com",)
+        "INSERT INTO test_unique_constraint (email) VALUES (%s)", ("test@example.com",)
     )
 
     with pytest.raises(UniqueViolationError) as exc_info:
         psycopg_sync_exception_session.execute(
-            "INSERT INTO test_unique_constraint (email) VALUES ($1)", ("test@example.com",)
+            "INSERT INTO test_unique_constraint (email) VALUES (%s)", ("test@example.com",)
         )
 
     assert "unique" in str(exc_info.value).lower() or "23505" in str(exc_info.value)
-
-    psycopg_sync_exception_session.execute("DROP TABLE test_unique_constraint")
 
 
 async def test_async_unique_violation(psycopg_async_exception_session: PsycopgAsyncDriver) -> None:
@@ -88,17 +88,15 @@ async def test_async_unique_violation(psycopg_async_exception_session: PsycopgAs
     """)
 
     await psycopg_async_exception_session.execute(
-        "INSERT INTO test_unique_constraint (email) VALUES ($1)", ("test@example.com",)
+        "INSERT INTO test_unique_constraint (email) VALUES (%s)", ("test@example.com",)
     )
 
     with pytest.raises(UniqueViolationError) as exc_info:
         await psycopg_async_exception_session.execute(
-            "INSERT INTO test_unique_constraint (email) VALUES ($1)", ("test@example.com",)
+            "INSERT INTO test_unique_constraint (email) VALUES (%s)", ("test@example.com",)
         )
 
     assert "unique" in str(exc_info.value).lower() or "23505" in str(exc_info.value)
-
-    await psycopg_async_exception_session.execute("DROP TABLE test_unique_constraint")
 
 
 def test_sync_foreign_key_violation(psycopg_sync_exception_session: PsycopgSyncDriver) -> None:
@@ -118,14 +116,9 @@ def test_sync_foreign_key_violation(psycopg_sync_exception_session: PsycopgSyncD
     """)
 
     with pytest.raises(ForeignKeyViolationError) as exc_info:
-        psycopg_sync_exception_session.execute("INSERT INTO test_fk_child (parent_id) VALUES ($1)", (999,))
+        psycopg_sync_exception_session.execute("INSERT INTO test_fk_child (parent_id) VALUES (%s)", (999,))
 
     assert "foreign key" in str(exc_info.value).lower() or "23503" in str(exc_info.value)
-
-    psycopg_sync_exception_session.execute_script("""
-        DROP TABLE IF EXISTS test_fk_child CASCADE;
-        DROP TABLE IF EXISTS test_fk_parent CASCADE;
-    """)
 
 
 def test_sync_not_null_violation(psycopg_sync_exception_session: PsycopgSyncDriver) -> None:
@@ -139,11 +132,9 @@ def test_sync_not_null_violation(psycopg_sync_exception_session: PsycopgSyncDriv
     """)
 
     with pytest.raises(NotNullViolationError) as exc_info:
-        psycopg_sync_exception_session.execute("INSERT INTO test_not_null (id) VALUES ($1)", (1,))
+        psycopg_sync_exception_session.execute("INSERT INTO test_not_null (id) VALUES (%s)", (1,))
 
     assert "not null" in str(exc_info.value).lower() or "23502" in str(exc_info.value)
-
-    psycopg_sync_exception_session.execute("DROP TABLE test_not_null")
 
 
 def test_sync_check_violation(psycopg_sync_exception_session: PsycopgSyncDriver) -> None:
@@ -157,11 +148,9 @@ def test_sync_check_violation(psycopg_sync_exception_session: PsycopgSyncDriver)
     """)
 
     with pytest.raises(CheckViolationError) as exc_info:
-        psycopg_sync_exception_session.execute("INSERT INTO test_check_constraint (age) VALUES ($1)", (15,))
+        psycopg_sync_exception_session.execute("INSERT INTO test_check_constraint (age) VALUES (%s)", (15,))
 
     assert "check" in str(exc_info.value).lower() or "23514" in str(exc_info.value)
-
-    psycopg_sync_exception_session.execute("DROP TABLE test_check_constraint")
 
 
 def test_sync_sql_parsing_error(psycopg_sync_exception_session: PsycopgSyncDriver) -> None:

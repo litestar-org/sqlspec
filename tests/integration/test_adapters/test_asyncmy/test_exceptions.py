@@ -83,9 +83,7 @@ async def test_foreign_key_violation(asyncmy_exception_session: AsyncmyDriver) -
     with pytest.raises(ForeignKeyViolationError) as exc_info:
         await asyncmy_exception_session.execute("INSERT INTO test_fk_child (parent_id) VALUES (%s)", (999,))
 
-    assert "foreign key" in str(exc_info.value).lower() or any(
-        code in str(exc_info.value) for code in ["1216", "1452"]
-    )
+    assert "foreign key" in str(exc_info.value).lower() or any(code in str(exc_info.value) for code in ["1216", "1452"])
 
     await asyncmy_exception_session.execute_script("""
         DROP TABLE IF EXISTS test_fk_child;
@@ -106,7 +104,9 @@ async def test_not_null_violation(asyncmy_exception_session: AsyncmyDriver) -> N
     with pytest.raises(NotNullViolationError) as exc_info:
         await asyncmy_exception_session.execute("INSERT INTO test_not_null (id) VALUES (%s)", (1,))
 
-    assert "cannot be null" in str(exc_info.value).lower() or "1048" in str(exc_info.value)
+    assert "cannot be null" in str(exc_info.value).lower() or any(
+        code in str(exc_info.value) for code in ["1048", "1364"]
+    )
 
     await asyncmy_exception_session.execute("DROP TABLE test_not_null")
 

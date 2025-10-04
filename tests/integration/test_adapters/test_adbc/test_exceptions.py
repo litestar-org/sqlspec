@@ -50,8 +50,6 @@ def test_unique_violation(adbc_exception_session: AdbcDriver) -> None:
 
     assert "unique" in str(exc_info.value).lower() or "23505" in str(exc_info.value)
 
-    adbc_exception_session.execute("DROP TABLE test_unique_constraint")
-
 
 def test_foreign_key_violation(adbc_exception_session: AdbcDriver) -> None:
     """Test foreign key constraint violation raises ForeignKeyViolationError."""
@@ -95,8 +93,6 @@ def test_not_null_violation(adbc_exception_session: AdbcDriver) -> None:
 
     assert "not null" in str(exc_info.value).lower() or "23502" in str(exc_info.value)
 
-    adbc_exception_session.execute("DROP TABLE test_not_null")
-
 
 def test_check_violation(adbc_exception_session: AdbcDriver) -> None:
     """Test CHECK constraint violation raises CheckViolationError."""
@@ -112,8 +108,6 @@ def test_check_violation(adbc_exception_session: AdbcDriver) -> None:
         adbc_exception_session.execute("INSERT INTO test_check_constraint (age) VALUES ($1)", (15,))
 
     assert "check" in str(exc_info.value).lower() or "23514" in str(exc_info.value)
-
-    adbc_exception_session.execute("DROP TABLE test_check_constraint")
 
 
 def test_sql_parsing_error(adbc_exception_session: AdbcDriver) -> None:
