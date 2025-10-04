@@ -398,6 +398,11 @@ class ParameterValidator:
         if cached_result is not None:
             return cached_result
 
+        # PERF-OPT-PHASE-2A: Early exit for parameterless SQL
+        if not any(c in sql for c in ("?", "%", ":", "@", "$")):
+            self._parameter_cache[sql] = []
+            return []
+
         parameters: list[ParameterInfo] = []
         ordinal = 0
 
