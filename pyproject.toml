@@ -229,7 +229,7 @@ version = "{current_version}"
 """
 
 [tool.codespell]
-ignore-words-list = "te,ECT"
+ignore-words-list = "te,ECT,SELCT"
 skip = 'uv.lock'
 
 [tool.coverage.run]

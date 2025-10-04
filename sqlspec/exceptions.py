@@ -3,13 +3,19 @@ from contextlib import contextmanager
 from typing import Any, Optional, Union
 
 __all__ = (
+    "CheckViolationError",
     "ConfigResolverError",
+    "DataError",
+    "DatabaseConnectionError",
     "FileNotFoundInStorageError",
+    "ForeignKeyViolationError",
     "ImproperConfigurationError",
     "IntegrityError",
     "MissingDependencyError",
     "MultipleResultsFoundError",
     "NotFoundError",
+    "NotNullViolationError",
+    "OperationalError",
     "RepositoryError",
     "SQLBuilderError",
     "SQLConversionError",
@@ -19,6 +25,8 @@ __all__ = (
     "SQLSpecError",
     "SerializationError",
     "StorageOperationFailedError",
+    "TransactionError",
+    "UniqueViolationError",
 )
 
 
@@ -123,6 +131,38 @@ class NotFoundError(RepositoryError):
 
 class MultipleResultsFoundError(RepositoryError):
     """A single database result was required but more than one were found."""
+
+
+class UniqueViolationError(IntegrityError):
+    """A unique constraint was violated."""
+
+
+class ForeignKeyViolationError(IntegrityError):
+    """A foreign key constraint was violated."""
+
+
+class CheckViolationError(IntegrityError):
+    """A check constraint was violated."""
+
+
+class NotNullViolationError(IntegrityError):
+    """A not-null constraint was violated."""
+
+
+class DatabaseConnectionError(SQLSpecError):
+    """Database connection error (invalid credentials, network failure, etc.)."""
+
+
+class TransactionError(SQLSpecError):
+    """Transaction error (rollback, deadlock, serialization failure)."""
+
+
+class DataError(SQLSpecError):
+    """Invalid data type or format for database operation."""
+
+
+class OperationalError(SQLSpecError):
+    """Operational database error (timeout, disk full, resource limit)."""
 
 
 class StorageOperationFailedError(SQLSpecError):

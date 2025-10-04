@@ -21,7 +21,15 @@ from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import ExecutionResult
-from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    DataError,
+    NotFoundError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    UniqueViolationError,
+)
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -34,6 +42,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "bigquery_statement_config")
+
+HTTP_CONFLICT = 409
+HTTP_NOT_FOUND = 404
+HTTP_BAD_REQUEST = 400
+HTTP_FORBIDDEN = 403
+HTTP_SERVER_ERROR = 500
+
 
 _type_converter = BigQueryTypeConverter()
 
@@ -195,7 +210,11 @@ class BigQueryCursor:
 
 
 class BigQueryExceptionHandler:
-    """Custom sync context manager for handling BigQuery database exceptions."""
+    """Context manager for handling BigQuery API exceptions.
+
+    Maps HTTP status codes and error reasons to specific SQLSpec exceptions
+    for better error handling in application code.
+    """
 
     __slots__ = ()
 
@@ -203,28 +222,82 @@ class BigQueryExceptionHandler:
         return None
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        _ = exc_tb
         if exc_type is None:
             return
-
         if issubclass(exc_type, GoogleCloudError):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "syntax" in error_msg or "invalid" in error_msg:
-                msg = f"BigQuery SQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            if "permission" in error_msg or "access" in error_msg:
-                msg = f"BigQuery access error: {e}"
-                raise SQLSpecError(msg) from e
-            msg = f"BigQuery cloud error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, Exception):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected BigQuery operation error: {e}"
-            raise SQLSpecError(msg) from e
+            self._map_bigquery_exception(exc_val)
+
+    def _map_bigquery_exception(self, e: Any) -> None:
+        """Map BigQuery exception to SQLSpec exception.
+
+        Args:
+            e: Google API exception instance
+        """
+        status_code = getattr(e, "code", None)
+        error_msg = str(e).lower()
+
+        if status_code == HTTP_CONFLICT or "already exists" in error_msg:
+            self._raise_unique_violation(e, status_code)
+        elif status_code == HTTP_NOT_FOUND or "not found" in error_msg:
+            self._raise_not_found_error(e, status_code)
+        elif status_code == HTTP_BAD_REQUEST:
+            self._handle_bad_request(e, status_code, error_msg)
+        elif status_code == HTTP_FORBIDDEN:
+            self._raise_connection_error(e, status_code)
+        elif status_code and status_code >= HTTP_SERVER_ERROR:
+            self._raise_operational_error(e, status_code)
+        else:
+            self._raise_generic_error(e, status_code)
+
+    def _handle_bad_request(self, e: Any, code: "Optional[int]", error_msg: str) -> None:
+        """Handle 400 Bad Request errors.
+
+        Args:
+            e: Exception instance
+            code: HTTP status code
+            error_msg: Lowercase error message
+        """
+        if "syntax" in error_msg or "invalid query" in error_msg:
+            self._raise_parsing_error(e, code)
+        elif "type" in error_msg or "format" in error_msg:
+            self._raise_data_error(e, code)
+        else:
+            self._raise_generic_error(e, code)
+
+    def _raise_unique_violation(self, e: Any, code: "Optional[int]") -> None:
+        code_str = f"[HTTP {code}]" if code else ""
+        msg = f"BigQuery resource already exists {code_str}: {e}"
+        raise UniqueViolationError(msg) from e
+
+    def _raise_not_found_error(self, e: Any, code: "Optional[int]") -> None:
+        code_str = f"[HTTP {code}]" if code else ""
+        msg = f"BigQuery resource not found {code_str}: {e}"
+        raise NotFoundError(msg) from e
+
+    def _raise_parsing_error(self, e: Any, code: "Optional[int]") -> None:
+        code_str = f"[HTTP {code}]" if code else ""
+        msg = f"BigQuery query syntax error {code_str}: {e}"
+        raise SQLParsingError(msg) from e
+
+    def _raise_data_error(self, e: Any, code: "Optional[int]") -> None:
+        code_str = f"[HTTP {code}]" if code else ""
+        msg = f"BigQuery data error {code_str}: {e}"
+        raise DataError(msg) from e
+
+    def _raise_connection_error(self, e: Any, code: "Optional[int]") -> None:
+        code_str = f"[HTTP {code}]" if code else ""
+        msg = f"BigQuery permission denied {code_str}: {e}"
+        raise DatabaseConnectionError(msg) from e
+
+    def _raise_operational_error(self, e: Any, code: "Optional[int]") -> None:
+        code_str = f"[HTTP {code}]" if code else ""
+        msg = f"BigQuery operational error {code_str}: {e}"
+        raise OperationalError(msg) from e
+
+    def _raise_generic_error(self, e: Any, code: "Optional[int]") -> None:
+        msg = f"BigQuery error [HTTP {code}]: {e}" if code else f"BigQuery error: {e}"
+        raise SQLSpecError(msg) from e
 
 
 class BigQueryDriver(SyncDriverAdapterBase):

@@ -16,7 +16,19 @@ from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -93,7 +105,11 @@ class PsqlpyCursor:
 
 
 class PsqlpyExceptionHandler:
-    """Async context manager for handling psqlpy database exceptions."""
+    """Async context manager for handling psqlpy database exceptions.
+
+    Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
+    for better error handling in application code.
+    """
 
     __slots__ = ()
 
@@ -103,31 +119,85 @@ class PsqlpyExceptionHandler:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if exc_type is None:
             return
+        if issubclass(exc_type, (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.Error)):
+            self._map_postgres_exception(exc_val)
 
-        if issubclass(exc_type, psqlpy.exceptions.DatabaseError):
-            e = exc_val
-            msg = f"Psqlpy database error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, psqlpy.exceptions.InterfaceError):
-            e = exc_val
-            msg = f"Psqlpy interface error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, psqlpy.exceptions.Error):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "syntax" in error_msg or "parse" in error_msg:
-                msg = f"Psqlpy SQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Psqlpy error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, Exception):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected async database operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def _map_postgres_exception(self, e: Any) -> None:
+        """Map PostgreSQL exception to SQLSpec exception.
+
+        psqlpy does not expose SQLSTATE codes directly, so we use message-based
+        detection to map exceptions.
+
+        Args:
+            e: psqlpy exception instance
+
+        Raises:
+            Specific SQLSpec exception based on error message patterns
+        """
+        error_msg = str(e).lower()
+
+        if "unique" in error_msg or "duplicate key" in error_msg:
+            self._raise_unique_violation(e, None)
+        elif "foreign key" in error_msg or "violates foreign key" in error_msg:
+            self._raise_foreign_key_violation(e, None)
+        elif "not null" in error_msg or ("null value" in error_msg and "violates not-null" in error_msg):
+            self._raise_not_null_violation(e, None)
+        elif "check constraint" in error_msg or "violates check constraint" in error_msg:
+            self._raise_check_violation(e, None)
+        elif "constraint" in error_msg:
+            self._raise_integrity_error(e, None)
+        elif "syntax error" in error_msg or "parse" in error_msg:
+            self._raise_parsing_error(e, None)
+        elif "connection" in error_msg or "could not connect" in error_msg:
+            self._raise_connection_error(e, None)
+        elif "deadlock" in error_msg or "serialization failure" in error_msg:
+            self._raise_transaction_error(e, None)
+        else:
+            self._raise_generic_error(e, None)
+
+    def _raise_unique_violation(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL unique constraint violation: {e}"
+        raise UniqueViolationError(msg) from e
+
+    def _raise_foreign_key_violation(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL foreign key constraint violation: {e}"
+        raise ForeignKeyViolationError(msg) from e
+
+    def _raise_not_null_violation(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL not-null constraint violation: {e}"
+        raise NotNullViolationError(msg) from e
+
+    def _raise_check_violation(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL check constraint violation: {e}"
+        raise CheckViolationError(msg) from e
+
+    def _raise_integrity_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL integrity constraint violation: {e}"
+        raise IntegrityError(msg) from e
+
+    def _raise_parsing_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL SQL syntax error: {e}"
+        raise SQLParsingError(msg) from e
+
+    def _raise_connection_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL connection error: {e}"
+        raise DatabaseConnectionError(msg) from e
+
+    def _raise_transaction_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL transaction error: {e}"
+        raise TransactionError(msg) from e
+
+    def _raise_data_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL data error: {e}"
+        raise DataError(msg) from e
+
+    def _raise_operational_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL operational error: {e}"
+        raise OperationalError(msg) from e
+
+    def _raise_generic_error(self, e: Any, code: "Optional[str]") -> None:
+        msg = f"PostgreSQL database error: {e}"
+        raise SQLSpecError(msg) from e
 
 
 class PsqlpyDriver(AsyncDriverAdapterBase):

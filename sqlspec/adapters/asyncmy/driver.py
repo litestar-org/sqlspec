@@ -15,7 +15,18 @@ from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -31,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "asyncmy_statement_config")
 
+MYSQL_ER_DUP_ENTRY = 1062
+MYSQL_ER_NO_DEFAULT_FOR_FIELD = 1364
+MYSQL_ER_CHECK_CONSTRAINT_VIOLATED = 3819
 
 asyncmy_statement_config = StatementConfig(
     dialect="mysql",
@@ -73,10 +87,10 @@ class AsyncmyCursor:
 
 
 class AsyncmyExceptionHandler:
-    """Context manager for AsyncMy database exception handling.
+    """Async context manager for handling asyncmy (MySQL) database exceptions.
 
-    Converts AsyncMy-specific exceptions to SQLSpec exceptions with appropriate
-    error categorization and context preservation.
+    Maps MySQL error codes and SQLSTATE to specific SQLSpec exceptions
+    for better error handling in application code.
     """
 
     __slots__ = ()
@@ -87,49 +101,115 @@ class AsyncmyExceptionHandler:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "Optional[bool]":
         if exc_type is None:
             return None
-
-        if issubclass(exc_type, asyncmy.errors.IntegrityError):
-            e = exc_val
-            msg = f"AsyncMy MySQL integrity constraint violation: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, asyncmy.errors.ProgrammingError):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "syntax" in error_msg or "parse" in error_msg:
-                msg = f"AsyncMy MySQL SQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"AsyncMy MySQL programming error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, asyncmy.errors.OperationalError):
-            e = exc_val
-            # Handle specific MySQL errors that are expected in migrations
-            if hasattr(e, "args") and len(e.args) >= 1 and isinstance(e.args[0], int):
-                error_code = e.args[0]
-                # Error 1061: Duplicate key name (index already exists)
-                # Error 1091: Can't DROP index that doesn't exist
-                if error_code in {1061, 1091}:
-                    # These are acceptable during migrations - log and continue
-                    logger.warning("AsyncMy MySQL expected migration error (ignoring): %s", e)
-                    return True  # Suppress the exception by returning True
-            msg = f"AsyncMy MySQL operational error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, asyncmy.errors.DatabaseError):
-            e = exc_val
-            msg = f"AsyncMy MySQL database error: {e}"
-            raise SQLSpecError(msg) from e
         if issubclass(exc_type, asyncmy.errors.Error):
-            e = exc_val
-            msg = f"AsyncMy MySQL error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, Exception):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected async database operation error: {e}"
-            raise SQLSpecError(msg) from e
+            return self._map_mysql_exception(exc_val)
         return None
+
+    def _map_mysql_exception(self, e: Any) -> "Optional[bool]":
+        """Map MySQL exception to SQLSpec exception.
+
+        Args:
+            e: MySQL error instance
+
+        Returns:
+            True to suppress migration-related errors, None otherwise
+
+        Raises:
+            Specific SQLSpec exception based on error code
+        """
+        error_code = None
+        sqlstate = None
+
+        if hasattr(e, "args") and len(e.args) >= 1 and isinstance(e.args[0], int):
+            error_code = e.args[0]
+
+        sqlstate = getattr(e, "sqlstate", None)
+
+        if error_code in {1061, 1091}:
+            logger.warning("AsyncMy MySQL expected migration error (ignoring): %s", e)
+            return True
+
+        if sqlstate == "23505" or error_code == MYSQL_ER_DUP_ENTRY:
+            self._raise_unique_violation(e, sqlstate, error_code)
+        elif sqlstate == "23503" or error_code in (1216, 1217, 1451, 1452):
+            self._raise_foreign_key_violation(e, sqlstate, error_code)
+        elif sqlstate == "23502" or error_code in (1048, MYSQL_ER_NO_DEFAULT_FOR_FIELD):
+            self._raise_not_null_violation(e, sqlstate, error_code)
+        elif sqlstate == "23514" or error_code == MYSQL_ER_CHECK_CONSTRAINT_VIOLATED:
+            self._raise_check_violation(e, sqlstate, error_code)
+        elif sqlstate and sqlstate.startswith("23"):
+            self._raise_integrity_error(e, sqlstate, error_code)
+        elif sqlstate and sqlstate.startswith("42"):
+            self._raise_parsing_error(e, sqlstate, error_code)
+        elif sqlstate and sqlstate.startswith("08"):
+            self._raise_connection_error(e, sqlstate, error_code)
+        elif sqlstate and sqlstate.startswith("40"):
+            self._raise_transaction_error(e, sqlstate, error_code)
+        elif sqlstate and sqlstate.startswith("22"):
+            self._raise_data_error(e, sqlstate, error_code)
+        elif error_code in (2002, 2003, 2005, 2006, 2013):
+            self._raise_connection_error(e, sqlstate, error_code)
+        elif error_code in (1205, 1213):
+            self._raise_transaction_error(e, sqlstate, error_code)
+        elif error_code in range(1064, 1100):
+            self._raise_parsing_error(e, sqlstate, error_code)
+        else:
+            self._raise_generic_error(e, sqlstate, error_code)
+        return None
+
+    def _raise_unique_violation(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+        code_str = f"[{sqlstate or code}]"
+        msg = f"MySQL unique constraint violation {code_str}: {e}"
+        raise UniqueViolationError(msg) from e
+
+    def _raise_foreign_key_violation(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+        code_str = f"[{sqlstate or code}]"
+        msg = f"MySQL foreign key constraint violation {code_str}: {e}"
+        raise ForeignKeyViolationError(msg) from e
+
+    def _raise_not_null_violation(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+        code_str = f"[{sqlstate or code}]"
+        msg = f"MySQL not-null constraint violation {code_str}: {e}"
+        raise NotNullViolationError(msg) from e
+
+    def _raise_check_violation(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+        code_str = f"[{sqlstate or code}]"
+        msg = f"MySQL check constraint violation {code_str}: {e}"
+        raise CheckViolationError(msg) from e
+
+    def _raise_integrity_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+        code_str = f"[{sqlstate or code}]"
+        msg = f"MySQL integrity constraint violation {code_str}: {e}"
+        raise IntegrityError(msg) from e
+
+    def _raise_parsing_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+        code_str = f"[{sqlstate or code}]"
+        msg = f"MySQL SQL syntax error {code_str}: {e}"
+        raise SQLParsingError(msg) from e
+
+    def _raise_connection_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+        code_str = f"[{sqlstate or code}]"
+        msg = f"MySQL connection error {code_str}: {e}"
+        raise DatabaseConnectionError(msg) from e
+
+    def _raise_transaction_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+        code_str = f"[{sqlstate or code}]"
+        msg = f"MySQL transaction error {code_str}: {e}"
+        raise TransactionError(msg) from e
+
+    def _raise_data_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+        code_str = f"[{sqlstate or code}]"
+        msg = f"MySQL data error {code_str}: {e}"
+        raise DataError(msg) from e
+
+    def _raise_generic_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+        if sqlstate and code:
+            msg = f"MySQL database error [{sqlstate}:{code}]: {e}"
+        elif sqlstate or code:
+            msg = f"MySQL database error [{sqlstate or code}]: {e}"
+        else:
+            msg = f"MySQL database error: {e}"
+        raise SQLSpecError(msg) from e
 
 
 class AsyncmyDriver(AsyncDriverAdapterBase):
