@@ -129,24 +129,36 @@ class AiosqliteExceptionHandler:
             raise SQLSpecError(msg) from e
 
         if not error_code:
-            self._raise_generic_error(e)
+            if "unique constraint" in error_msg:
+                self._raise_unique_violation(e, 0)
+            elif "foreign key constraint" in error_msg:
+                self._raise_foreign_key_violation(e, 0)
+            elif "not null constraint" in error_msg:
+                self._raise_not_null_violation(e, 0)
+            elif "check constraint" in error_msg:
+                self._raise_check_violation(e, 0)
+            elif "syntax" in error_msg:
+                self._raise_parsing_error(e, None)
+            else:
+                self._raise_generic_error(e)
+            return
 
         if error_code == SQLITE_CONSTRAINT_UNIQUE_CODE or error_name == "SQLITE_CONSTRAINT_UNIQUE":
-            self._raise_unique_violation(e, error_code)  # type: ignore[arg-type]
+            self._raise_unique_violation(e, error_code)
         elif error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
-            self._raise_foreign_key_violation(e, error_code)  # type: ignore[arg-type]
+            self._raise_foreign_key_violation(e, error_code)
         elif error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
-            self._raise_not_null_violation(e, error_code)  # type: ignore[arg-type]
+            self._raise_not_null_violation(e, error_code)
         elif error_code == SQLITE_CONSTRAINT_CHECK_CODE or error_name == "SQLITE_CONSTRAINT_CHECK":
-            self._raise_check_violation(e, error_code)  # type: ignore[arg-type]
+            self._raise_check_violation(e, error_code)
         elif error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
-            self._raise_integrity_error(e, error_code)  # type: ignore[arg-type]
+            self._raise_integrity_error(e, error_code)
         elif error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
-            self._raise_connection_error(e, error_code)  # type: ignore[arg-type]
+            self._raise_connection_error(e, error_code)
         elif error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
-            self._raise_operational_error(e, error_code)  # type: ignore[arg-type]
+            self._raise_operational_error(e, error_code)
         elif error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
-            self._raise_data_error(e, error_code)  # type: ignore[arg-type]
+            self._raise_data_error(e, error_code)
         elif error_code == 1 or "syntax" in error_msg:
             self._raise_parsing_error(e, error_code)
         else:
