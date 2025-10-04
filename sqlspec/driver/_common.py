@@ -617,6 +617,19 @@ class CommonDriverAttributesMixin:
         )
 
         params = statement.parameters
+
+        # PERF-OPT-PHASE-3: Fast path for None or empty parameters
+        if params is None or (isinstance(params, (list, tuple, dict)) and not params):
+            return f"compiled:{hash(statement.sql)}:{context_hash}"
+
+        # PERF-OPT-PHASE-3: Fast path for simple tuple of hashable primitives
+        if isinstance(params, tuple) and all(isinstance(p, (int, str, bytes, bool, type(None))) for p in params):
+            try:
+                return f"compiled:{hash((statement.sql, params, statement.is_many, statement.is_script))}:{context_hash}"
+            except TypeError:
+                pass
+
+        # Complex parameter structures: use recursive hashing
         params_key: Any
 
         def make_hashable(obj: Any) -> Any:
