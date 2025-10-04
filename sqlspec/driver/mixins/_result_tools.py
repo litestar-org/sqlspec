@@ -130,7 +130,7 @@ def _default_msgspec_deserializer(
 
 
 @lru_cache(maxsize=1000)
-def _detect_schema_type(schema_type: type) -> "Optional[str]":
+def _detect_schema_type(schema_type: "type[Any]") -> "Optional[str]":
     """Detect schema type with LRU caching.
 
     Args:
@@ -154,19 +154,19 @@ def _detect_schema_type(schema_type: type) -> "Optional[str]":
     )
 
 
-def _convert_typed_dict(data: Any, schema_type: type) -> Any:
+def _convert_typed_dict(data: Any, schema_type: Any) -> Any:
     """Convert data to TypedDict."""
     return [item for item in data if is_dict(item)] if isinstance(data, list) else data
 
 
-def _convert_dataclass(data: Any, schema_type: type) -> Any:
+def _convert_dataclass(data: Any, schema_type: Any) -> Any:
     """Convert data to dataclass."""
     if isinstance(data, list):
         return [schema_type(**dict(item)) if is_dict(item) else item for item in data]
     return schema_type(**dict(data)) if is_dict(data) else (schema_type(**data) if isinstance(data, dict) else data)
 
 
-def _convert_msgspec(data: Any, schema_type: type) -> Any:
+def _convert_msgspec(data: Any, schema_type: Any) -> Any:
     """Convert data to msgspec Struct."""
     rename_config = get_msgspec_rename_config(schema_type)
     deserializer = partial(_default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS)
@@ -212,14 +212,14 @@ def _convert_msgspec(data: Any, schema_type: type) -> Any:
     )
 
 
-def _convert_pydantic(data: Any, schema_type: type) -> Any:
+def _convert_pydantic(data: Any, schema_type: Any) -> Any:
     """Convert data to Pydantic model."""
     if isinstance(data, Sequence):
         return get_type_adapter(list[schema_type]).validate_python(data, from_attributes=True)
     return get_type_adapter(schema_type).validate_python(data, from_attributes=True)
 
 
-def _convert_attrs(data: Any, schema_type: type) -> Any:
+def _convert_attrs(data: Any, schema_type: Any) -> Any:
     """Convert data to attrs class."""
     if CATTRS_INSTALLED:
         if isinstance(data, Sequence):
@@ -237,7 +237,7 @@ def _convert_attrs(data: Any, schema_type: type) -> Any:
     )
 
 
-_SCHEMA_CONVERTERS: "dict[str, Callable[[Any, type], Any]]" = {
+_SCHEMA_CONVERTERS: "dict[str, Callable[[Any, Any], Any]]" = {
     "typed_dict": _convert_typed_dict,
     "dataclass": _convert_dataclass,
     "msgspec": _convert_msgspec,
@@ -313,7 +313,7 @@ class ToSchemaMixin:
         if schema_type is None:
             return data
 
-        schema_type_key = _detect_schema_type(schema_type)
+        schema_type_key = _detect_schema_type(schema_type)  # type: ignore[arg-type]
         if schema_type_key is None:
             msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, Attrs class, or TypedDict"
             raise SQLSpecError(msg)
