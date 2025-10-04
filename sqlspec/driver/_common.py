@@ -460,6 +460,23 @@ class CommonDriverAttributesMixin:
             return [self._format_parameter_set_for_many(parameters, statement_config)]
         return self._format_parameter_set(parameters, statement_config)
 
+    def _apply_coercion(self, value: Any, statement_config: "StatementConfig") -> Any:
+        """Apply type coercion to a single value.
+
+        Args:
+            value: Value to coerce (may be TypedParameter or raw value)
+            statement_config: Statement configuration for type coercion map
+
+        Returns:
+            Coerced value with TypedParameter unwrapped
+        """
+        unwrapped_value = value.value if isinstance(value, TypedParameter) else value
+        if statement_config.parameter_config.type_coercion_map:
+            for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
+                if isinstance(unwrapped_value, type_check):
+                    return converter(unwrapped_value)
+        return unwrapped_value
+
     def _format_parameter_set_for_many(self, parameters: Any, statement_config: "StatementConfig") -> Any:
         """Prepare a single parameter set for execute_many operations.
 
@@ -476,27 +493,14 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return []
 
-        def apply_type_coercion(value: Any) -> Any:
-            """Apply type coercion to a single value."""
-            unwrapped_value = value.value if isinstance(value, TypedParameter) else value
-
-            if statement_config.parameter_config.type_coercion_map:
-                for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
-                    if type_check in {list, tuple} and isinstance(unwrapped_value, (list, tuple)):
-                        continue
-                    if isinstance(unwrapped_value, type_check):
-                        return converter(unwrapped_value)
-
-            return unwrapped_value
+        if not isinstance(parameters, (dict, list, tuple)):
+            return self._apply_coercion(parameters, statement_config)
 
         if isinstance(parameters, dict):
-            return {k: apply_type_coercion(v) for k, v in parameters.items()}
+            return {k: self._apply_coercion(v, statement_config) for k, v in parameters.items()}
 
-        if isinstance(parameters, (list, tuple)):
-            coerced_params = [apply_type_coercion(p) for p in parameters]
-            return tuple(coerced_params) if isinstance(parameters, tuple) else coerced_params
-
-        return apply_type_coercion(parameters)
+        coerced_params = [self._apply_coercion(p, statement_config) for p in parameters]
+        return tuple(coerced_params) if isinstance(parameters, tuple) else coerced_params
 
     def _format_parameter_set(self, parameters: Any, statement_config: "StatementConfig") -> Any:
         """Prepare a single parameter set for database driver consumption.
@@ -511,50 +515,34 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return []
 
-        def apply_type_coercion(value: Any) -> Any:
-            """Apply type coercion to a single value."""
-            unwrapped_value = value.value if isinstance(value, TypedParameter) else value
-
-            if statement_config.parameter_config.type_coercion_map:
-                for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
-                    if isinstance(unwrapped_value, type_check):
-                        return converter(unwrapped_value)
-
-            return unwrapped_value
+        if not isinstance(parameters, (dict, list, tuple)):
+            return [self._apply_coercion(parameters, statement_config)]
 
         if isinstance(parameters, dict):
-            if not parameters:
-                return []
             if statement_config.parameter_config.supported_execution_parameter_styles and (
                 ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles
                 or ParameterStyle.NAMED_COLON in statement_config.parameter_config.supported_execution_parameter_styles
             ):
-                return {k: apply_type_coercion(v) for k, v in parameters.items()}
+                return {k: self._apply_coercion(v, statement_config) for k, v in parameters.items()}
             if statement_config.parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.QMARK,
                 ParameterStyle.POSITIONAL_PYFORMAT,
             }:
-                ordered_parameters = []
                 sorted_items = sorted(
                     parameters.items(),
                     key=lambda item: int(item[0])
                     if item[0].isdigit()
                     else (int(item[0][6:]) if item[0].startswith("param_") and item[0][6:].isdigit() else float("inf")),
                 )
-                for _, value in sorted_items:
-                    ordered_parameters.append(apply_type_coercion(value))
-                return ordered_parameters
+                return [self._apply_coercion(value, statement_config) for _, value in sorted_items]
 
-            return {k: apply_type_coercion(v) for k, v in parameters.items()}
+            return {k: self._apply_coercion(v, statement_config) for k, v in parameters.items()}
 
-        if isinstance(parameters, (list, tuple)):
-            coerced_params = [apply_type_coercion(p) for p in parameters]
-            if statement_config.parameter_config.preserve_parameter_format and isinstance(parameters, tuple):
-                return tuple(coerced_params)
-            return coerced_params
-
-        return [apply_type_coercion(parameters)]
+        coerced_params = [self._apply_coercion(p, statement_config) for p in parameters]
+        if statement_config.parameter_config.preserve_parameter_format and isinstance(parameters, tuple):
+            return tuple(coerced_params)
+        return coerced_params
 
     def _get_compiled_sql(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
@@ -636,6 +624,18 @@ class CommonDriverAttributesMixin:
         )
 
         params = statement.parameters
+
+        if params is None or (isinstance(params, (list, tuple, dict)) and not params):
+            return f"compiled:{hash(statement.sql)}:{context_hash}"
+
+        if isinstance(params, tuple) and all(isinstance(p, (int, str, bytes, bool, type(None))) for p in params):
+            try:
+                return (
+                    f"compiled:{hash((statement.sql, params, statement.is_many, statement.is_script))}:{context_hash}"
+                )
+            except TypeError:
+                pass
+
         params_key: Any
 
         def make_hashable(obj: Any) -> Any:
