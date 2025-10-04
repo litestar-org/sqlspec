@@ -12,7 +12,18 @@ from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    ConnectionError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    UniqueViolationError,
+)
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -74,7 +85,11 @@ class AiosqliteCursor:
 
 
 class AiosqliteExceptionHandler:
-    """Async context manager for AIOSQLite database exceptions."""
+    """Async context manager for handling aiosqlite database exceptions.
+
+    Maps SQLite extended result codes to specific SQLSpec exceptions
+    for better error handling in application code.
+    """
 
     __slots__ = ()
 
@@ -84,37 +99,90 @@ class AiosqliteExceptionHandler:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if exc_type is None:
             return
-        if issubclass(exc_type, aiosqlite.IntegrityError):
-            e = exc_val
-            msg = f"AIOSQLite integrity constraint violation: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, aiosqlite.OperationalError):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "locked" in error_msg:
-                msg = f"AIOSQLite database locked: {e}. Consider enabling WAL mode or reducing concurrency."
-                raise SQLSpecError(msg) from e
-            if "syntax" in error_msg or "malformed" in error_msg:
-                msg = f"AIOSQLite SQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"AIOSQLite operational error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, aiosqlite.DatabaseError):
-            e = exc_val
-            msg = f"AIOSQLite database error: {e}"
-            raise SQLSpecError(msg) from e
         if issubclass(exc_type, aiosqlite.Error):
-            e = exc_val
-            msg = f"AIOSQLite error: {e}"
+            self._map_sqlite_exception(exc_val)
+
+    def _map_sqlite_exception(self, e: Any) -> None:
+        """Map SQLite exception to SQLSpec exception.
+
+        Args:
+            e: aiosqlite.Error instance
+
+        Raises:
+            Specific SQLSpec exception based on error code
+        """
+        error_code = getattr(e, "sqlite_errorcode", None)
+        error_name = getattr(e, "sqlite_errorname", None)
+        error_msg = str(e).lower()
+
+        if "locked" in error_msg:
+            msg = f"AIOSQLite database locked: {e}. Consider enabling WAL mode or reducing concurrency."
             raise SQLSpecError(msg) from e
-        if issubclass(exc_type, Exception):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected async database operation error: {e}"
-            raise SQLSpecError(msg) from e
+
+        if not error_code:
+            self._raise_generic_error(e)
+
+        if error_code == 2067 or error_name == "SQLITE_CONSTRAINT_UNIQUE":
+            self._raise_unique_violation(e, error_code)
+        elif error_code == 787 or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
+            self._raise_foreign_key_violation(e, error_code)
+        elif error_code == 1811 or error_name == "SQLITE_CONSTRAINT_NOTNULL":
+            self._raise_not_null_violation(e, error_code)
+        elif error_code == 531 or error_name == "SQLITE_CONSTRAINT_CHECK":
+            self._raise_check_violation(e, error_code)
+        elif error_code == 19 or error_name == "SQLITE_CONSTRAINT":
+            self._raise_integrity_error(e, error_code)
+        elif error_code == 14 or error_name == "SQLITE_CANTOPEN":
+            self._raise_connection_error(e, error_code)
+        elif error_code == 10 or error_name == "SQLITE_IOERR":
+            self._raise_operational_error(e, error_code)
+        elif error_code == 20 or error_name == "SQLITE_MISMATCH":
+            self._raise_data_error(e, error_code)
+        elif error_code == 1 or "syntax" in error_msg:
+            self._raise_parsing_error(e, error_code)
+        else:
+            self._raise_generic_error(e)
+
+    def _raise_unique_violation(self, e: Any, code: int) -> None:
+        msg = f"SQLite unique constraint violation [code {code}]: {e}"
+        raise UniqueViolationError(msg) from e
+
+    def _raise_foreign_key_violation(self, e: Any, code: int) -> None:
+        msg = f"SQLite foreign key constraint violation [code {code}]: {e}"
+        raise ForeignKeyViolationError(msg) from e
+
+    def _raise_not_null_violation(self, e: Any, code: int) -> None:
+        msg = f"SQLite not-null constraint violation [code {code}]: {e}"
+        raise NotNullViolationError(msg) from e
+
+    def _raise_check_violation(self, e: Any, code: int) -> None:
+        msg = f"SQLite check constraint violation [code {code}]: {e}"
+        raise CheckViolationError(msg) from e
+
+    def _raise_integrity_error(self, e: Any, code: int) -> None:
+        msg = f"SQLite integrity constraint violation [code {code}]: {e}"
+        raise IntegrityError(msg) from e
+
+    def _raise_parsing_error(self, e: Any, code: "Optional[int]") -> None:
+        code_str = f"[code {code}]" if code else ""
+        msg = f"SQLite SQL syntax error {code_str}: {e}"
+        raise SQLParsingError(msg) from e
+
+    def _raise_connection_error(self, e: Any, code: int) -> None:
+        msg = f"SQLite connection error [code {code}]: {e}"
+        raise ConnectionError(msg) from e
+
+    def _raise_operational_error(self, e: Any, code: int) -> None:
+        msg = f"SQLite operational error [code {code}]: {e}"
+        raise OperationalError(msg) from e
+
+    def _raise_data_error(self, e: Any, code: int) -> None:
+        msg = f"SQLite data error [code {code}]: {e}"
+        raise DataError(msg) from e
+
+    def _raise_generic_error(self, e: Any) -> None:
+        msg = f"SQLite database error: {e}"
+        raise SQLSpecError(msg) from e
 
 
 class AiosqliteDriver(AsyncDriverAdapterBase):
