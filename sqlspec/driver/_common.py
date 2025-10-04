@@ -479,11 +479,9 @@ class CommonDriverAttributesMixin:
         Returns:
             Processed parameter set with individual values coerced but structure preserved
         """
-        # PERF-OPT-PHASE-2B: Early exit for empty parameters
         if not parameters:
             return []
 
-        # PERF-OPT-PHASE-2B: Scalar fast path
         if not isinstance(parameters, (dict, list, tuple)):
             return self._apply_coercion(parameters, statement_config)
 
@@ -503,11 +501,9 @@ class CommonDriverAttributesMixin:
         Returns:
             Processed parameter set with TypedParameter objects unwrapped and type coercion applied
         """
-        # PERF-OPT-PHASE-2B: Early exit for empty parameters
         if not parameters:
             return []
 
-        # PERF-OPT-PHASE-2B: Scalar fast path - handle non-container types directly
         if not isinstance(parameters, (dict, list, tuple)):
             return [self._apply_coercion(parameters, statement_config)]
 
@@ -618,18 +614,17 @@ class CommonDriverAttributesMixin:
 
         params = statement.parameters
 
-        # PERF-OPT-PHASE-3: Fast path for None or empty parameters
         if params is None or (isinstance(params, (list, tuple, dict)) and not params):
             return f"compiled:{hash(statement.sql)}:{context_hash}"
 
-        # PERF-OPT-PHASE-3: Fast path for simple tuple of hashable primitives
         if isinstance(params, tuple) and all(isinstance(p, (int, str, bytes, bool, type(None))) for p in params):
             try:
-                return f"compiled:{hash((statement.sql, params, statement.is_many, statement.is_script))}:{context_hash}"
+                return (
+                    f"compiled:{hash((statement.sql, params, statement.is_many, statement.is_script))}:{context_hash}"
+                )
             except TypeError:
                 pass
 
-        # Complex parameter structures: use recursive hashing
         params_key: Any
 
         def make_hashable(obj: Any) -> Any:

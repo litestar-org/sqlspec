@@ -405,7 +405,6 @@ class ParameterValidator:
             self._parameter_cache.move_to_end(sql)
             return cached_result
 
-        # PERF-OPT-PHASE-2A: Early exit for parameterless SQL
         if not any(c in sql for c in ("?", "%", ":", "@", "$")):
             if len(self._parameter_cache) >= self._cache_max_size:
                 self._parameter_cache.popitem(last=False)
@@ -1020,12 +1019,7 @@ class ParameterProcessor:
         return self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)
 
     def _generate_processor_cache_key(
-        self,
-        sql: str,
-        parameters: Any,
-        config: ParameterStyleConfig,
-        is_many: bool,
-        dialect: "Optional[str]",
+        self, sql: str, parameters: Any, config: ParameterStyleConfig, is_many: bool, dialect: "Optional[str]"
     ) -> str:
         """Generate optimized cache key for parameter processing.
 

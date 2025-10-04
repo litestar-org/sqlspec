@@ -129,7 +129,6 @@ def _default_msgspec_deserializer(
     return value
 
 
-# PERF-OPT-PHASE-1: Schema dispatch table optimization - START
 @lru_cache(maxsize=1000)
 def _detect_schema_type(schema_type: type) -> "Optional[str]":
     """Detect schema type with LRU caching.
@@ -320,8 +319,3 @@ class ToSchemaMixin:
             raise SQLSpecError(msg)
 
         return _SCHEMA_CONVERTERS[schema_type_key](data, schema_type)
-
-
-# PERF-OPT-PHASE-1: Schema dispatch table optimization - COMPLETE
-# Changes: Added _detect_schema_type (cached), SCHEMA_CONVERTERS dispatch table
-# Impact: 30-50% faster schema conversions via O(1) lookup + cached type detection
