@@ -8,7 +8,6 @@ generation and data validation.
 import re
 import unicodedata
 from functools import lru_cache
-from typing import Optional
 
 _SLUGIFY_REMOVE_NON_ALPHANUMERIC = re.compile(r"[^\w]+", re.UNICODE)
 _SLUGIFY_HYPHEN_COLLAPSE = re.compile(r"-+")
@@ -22,7 +21,7 @@ _SNAKE_CASE_MULTIPLE_UNDERSCORES = re.compile(r"__+", re.UNICODE)
 __all__ = ("camelize", "kebabize", "pascalize", "slugify", "snake_case")
 
 
-def slugify(value: str, allow_unicode: bool = False, separator: Optional[str] = None) -> str:
+def slugify(value: str, allow_unicode: bool = False, separator: str | None = None) -> str:
     """Convert a string to a URL-friendly slug.
 
     Args:

@@ -4,7 +4,7 @@ Provides a fluent interface for building SQL MERGE queries with
 parameter binding and validation.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from sqlglot import exp
 
@@ -38,9 +38,9 @@ class Merge(
     """
 
     __slots__ = ()
-    _expression: Optional[exp.Expression]
+    _expression: exp.Expression | None
 
-    def __init__(self, target_table: Optional[str] = None, **kwargs: Any) -> None:
+    def __init__(self, target_table: str | None = None, **kwargs: Any) -> None:
         """Initialize MERGE with optional target table.
 
         Args:

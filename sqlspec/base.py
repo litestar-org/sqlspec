@@ -1,7 +1,7 @@
 import asyncio
 import atexit
 from collections.abc import Awaitable, Coroutine
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Union, cast, overload
 
 from sqlspec.config import (
     AsyncConfigT,
@@ -42,11 +42,11 @@ class SQLSpec:
 
     __slots__ = ("_configs", "_instance_cache_config", "_sql_loader")
 
-    def __init__(self, *, loader: "Optional[SQLFileLoader]" = None) -> None:
+    def __init__(self, *, loader: "SQLFileLoader | None" = None) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
         atexit.register(self._cleanup_sync_pools)
-        self._instance_cache_config: Optional[CacheConfig] = None
-        self._sql_loader: Optional[SQLFileLoader] = loader
+        self._instance_cache_config: CacheConfig | None = None
+        self._sql_loader: SQLFileLoader | None = loader
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
@@ -117,7 +117,7 @@ class SQLSpec:
     def add_config(self, config: "AsyncConfigT") -> "type[AsyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]
         ...
 
-    def add_config(self, config: "Union[SyncConfigT, AsyncConfigT]") -> "type[Union[SyncConfigT, AsyncConfigT]]":  # pyright: ignore[reportInvalidTypeVarUse]
+    def add_config(self, config: "SyncConfigT | AsyncConfigT") -> "type[SyncConfigT | AsyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Add a configuration instance to the registry.
 
         Args:
@@ -139,7 +139,7 @@ class SQLSpec:
     def get_config(self, name: "type[AsyncConfigT]") -> "AsyncConfigT": ...
 
     def get_config(
-        self, name: "Union[type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]], Any]"
+        self, name: "type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]] | Any"
     ) -> "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]":
         """Retrieve a configuration instance by its type or a key.
 
@@ -195,7 +195,7 @@ class SQLSpec:
             "NoPoolAsyncConfig[ConnectionT, DriverT]",
             "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
-    ) -> "Union[ConnectionT, Awaitable[ConnectionT]]":
+    ) -> "ConnectionT | Awaitable[ConnectionT]":
         """Get a database connection for the specified configuration.
 
         Args:
@@ -248,7 +248,7 @@ class SQLSpec:
             "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
             "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
-    ) -> "Union[DriverT, Awaitable[DriverT]]":
+    ) -> "DriverT | Awaitable[DriverT]":
         """Get a database session (driver adapter) for the specified configuration.
 
         Args:
@@ -322,7 +322,7 @@ class SQLSpec:
         ],
         *args: Any,
         **kwargs: Any,
-    ) -> "Union[AbstractContextManager[ConnectionT], AbstractAsyncContextManager[ConnectionT]]":
+    ) -> "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]":
         """Create and provide a database connection from the specified configuration.
 
         Args:
@@ -383,7 +383,7 @@ class SQLSpec:
         ],
         *args: Any,
         **kwargs: Any,
-    ) -> "Union[AbstractContextManager[DriverT], AbstractAsyncContextManager[DriverT]]":
+    ) -> "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]":
         """Create and provide a database session from the specified configuration.
 
         Args:
@@ -407,17 +407,17 @@ class SQLSpec:
     @overload
     def get_pool(
         self,
-        name: "Union[type[Union[NoPoolSyncConfig[ConnectionT, DriverT], NoPoolAsyncConfig[ConnectionT, DriverT]]], NoPoolSyncConfig[ConnectionT, DriverT], NoPoolAsyncConfig[ConnectionT, DriverT]]",
+        name: "type[NoPoolSyncConfig[ConnectionT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT]] | NoPoolSyncConfig[ConnectionT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT]",
     ) -> "None": ...
     @overload
     def get_pool(
         self,
-        name: "Union[type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]], SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+        name: "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
     ) -> "type[PoolT]": ...
     @overload
     def get_pool(
         self,
-        name: "Union[type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]],AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+        name: "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
     ) -> "Awaitable[type[PoolT]]": ...
 
     def get_pool(
@@ -432,7 +432,7 @@ class SQLSpec:
             "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
             "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
-    ) -> "Union[type[PoolT], Awaitable[type[PoolT]], None]":
+    ) -> "type[PoolT] | Awaitable[type[PoolT]] | None":
         """Get the connection pool for the specified configuration.
 
         Args:
@@ -450,7 +450,7 @@ class SQLSpec:
 
         if config.supports_connection_pooling:
             logger.debug("Getting pool for config: %s", config_name, extra={"config_type": config_name})
-            return cast("Union[type[PoolT], Awaitable[type[PoolT]]]", config.create_pool())
+            return cast("type[PoolT] | Awaitable[type[PoolT]]", config.create_pool())
 
         logger.debug("Config %s does not support connection pooling", config_name)
         return None
@@ -489,7 +489,7 @@ class SQLSpec:
             "NoPoolAsyncConfig[ConnectionT, DriverT]",
             "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
-    ) -> "Optional[Awaitable[None]]":
+    ) -> "Awaitable[None] | None":
         """Close the connection pool for the specified configuration.
 
         Args:
@@ -552,12 +552,12 @@ class SQLSpec:
     @staticmethod
     def configure_cache(
         *,
-        sql_cache_size: Optional[int] = None,
-        fragment_cache_size: Optional[int] = None,
-        optimized_cache_size: Optional[int] = None,
-        sql_cache_enabled: Optional[bool] = None,
-        fragment_cache_enabled: Optional[bool] = None,
-        optimized_cache_enabled: Optional[bool] = None,
+        sql_cache_size: int | None = None,
+        fragment_cache_size: int | None = None,
+        optimized_cache_size: int | None = None,
+        sql_cache_enabled: bool | None = None,
+        fragment_cache_enabled: bool | None = None,
+        optimized_cache_enabled: bool | None = None,
     ) -> None:
         """Update cache configuration with partial values.
 
@@ -591,7 +591,7 @@ class SQLSpec:
             )
         )
 
-    def load_sql_files(self, *paths: "Union[str, Path]") -> None:
+    def load_sql_files(self, *paths: "str | Path") -> None:
         """Load SQL files from paths or directories.
 
         Args:
@@ -605,7 +605,7 @@ class SQLSpec:
         self._sql_loader.load_sql(*paths)
         logger.debug("Loaded SQL files: %s", paths)
 
-    def add_named_sql(self, name: str, sql: str, dialect: "Optional[str]" = None) -> None:
+    def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
         """Add a named SQL query directly.
 
         Args:

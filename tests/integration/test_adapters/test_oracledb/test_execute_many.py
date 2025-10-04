@@ -1,13 +1,13 @@
 """Test Oracle execute_many functionality."""
 
-from typing import Any, Union
+from typing import Any
 
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 
-BatchParameters = Union[list[tuple[Any, ...]], list[dict[str, Any]], list[list[Any]]]
+BatchParameters = list[tuple[Any, ...]] | list[dict[str, Any]] | list[list[Any]]
 pytestmark = pytest.mark.xdist_group("oracle")
 
 

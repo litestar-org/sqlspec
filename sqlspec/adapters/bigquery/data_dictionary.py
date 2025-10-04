@@ -1,7 +1,5 @@
 """BigQuery-specific data dictionary for metadata queries."""
 
-from typing import Optional
-
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
 
@@ -13,7 +11,7 @@ __all__ = ("BigQuerySyncDataDictionary",)
 class BigQuerySyncDataDictionary(SyncDataDictionaryBase):
     """BigQuery-specific sync data dictionary."""
 
-    def get_version(self, driver: SyncDriverAdapterBase) -> "Optional[VersionInfo]":
+    def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get BigQuery version information.
 
         BigQuery is a cloud service without traditional versioning.

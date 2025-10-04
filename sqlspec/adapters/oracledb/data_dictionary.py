@@ -3,7 +3,7 @@
 
 import re
 from contextlib import suppress
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
@@ -15,6 +15,8 @@ from sqlspec.driver import (
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 
 logger = get_logger("adapters.oracledb.data_dictionary")
@@ -35,12 +37,7 @@ class OracleVersionInfo(VersionInfo):
     """Oracle database version information."""
 
     def __init__(
-        self,
-        major: int,
-        minor: int = 0,
-        patch: int = 0,
-        compatible: "Optional[str]" = None,
-        is_autonomous: bool = False,
+        self, major: int, minor: int = 0, patch: int = 0, compatible: "str | None" = None, is_autonomous: bool = False
     ) -> None:
         """Initialize Oracle version info.
 
@@ -56,7 +53,7 @@ class OracleVersionInfo(VersionInfo):
         self.is_autonomous = is_autonomous
 
     @property
-    def compatible_major(self) -> "Optional[int]":
+    def compatible_major(self) -> "int | None":
         """Get major version from compatible parameter."""
         if not self.compatible:
             return None
@@ -109,7 +106,7 @@ class OracleDataDictionaryMixin:
 
     __slots__ = ()
 
-    def _get_oracle_version(self, driver: "OracleAsyncDriver | OracleSyncDriver") -> "Optional[OracleVersionInfo]":
+    def _get_oracle_version(self, driver: "OracleAsyncDriver | OracleSyncDriver") -> "OracleVersionInfo | None":
         """Get Oracle database version information.
 
         Args:
@@ -143,7 +140,7 @@ class OracleDataDictionaryMixin:
         logger.debug("Detected Oracle version: %s", version_info)
         return version_info
 
-    def _get_oracle_compatible(self, driver: "OracleAsyncDriver | OracleSyncDriver") -> "Optional[str]":
+    def _get_oracle_compatible(self, driver: "OracleAsyncDriver | OracleSyncDriver") -> "str | None":
         """Get Oracle compatible parameter value.
 
         Args:
@@ -160,7 +157,7 @@ class OracleDataDictionaryMixin:
             logger.warning("Compatible parameter not found")
             return None
 
-    def _get_oracle_json_type(self, version_info: "Optional[OracleVersionInfo]") -> str:
+    def _get_oracle_json_type(self, version_info: "OracleVersionInfo | None") -> str:
         """Determine the appropriate JSON column type for Oracle.
 
         Args:
@@ -199,7 +196,7 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         result = driver.select_value_or_none("SELECT COUNT(1) as cnt FROM v$pdbs WHERE cloud_identity IS NOT NULL")
         return bool(result and int(result) > 0)
 
-    def get_version(self, driver: SyncDriverAdapterBase) -> "Optional[OracleVersionInfo]":
+    def get_version(self, driver: SyncDriverAdapterBase) -> "OracleVersionInfo | None":
         """Get Oracle database version information.
 
         Args:
@@ -293,7 +290,7 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
 class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBase):
     """Oracle-specific async data dictionary."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "Optional[OracleVersionInfo]":
+    async def get_version(self, driver: AsyncDriverAdapterBase) -> "OracleVersionInfo | None":
         """Get Oracle database version information.
 
         Args:
@@ -333,7 +330,7 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         logger.debug("Detected Oracle version: %s", version_info)
         return version_info
 
-    async def _get_oracle_compatible_async(self, driver: "OracleAsyncDriver") -> "Optional[str]":
+    async def _get_oracle_compatible_async(self, driver: "OracleAsyncDriver") -> "str | None":
         """Get Oracle compatible parameter value (async version).
 
         Args:

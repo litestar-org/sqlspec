@@ -6,9 +6,11 @@ Provides mixins for WHERE and HAVING clause functionality with
 parameter binding and various condition operators.
 """
 
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Union, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.core.statement import SQL
 
 from mypy_extensions import trait
@@ -41,12 +43,12 @@ class WhereClauseMixin:
     __slots__ = ()
 
     # Type annotations for PyRight - these will be provided by the base class
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
     def _create_parameterized_condition(
         self,
-        column: Union[str, exp.Column],
+        column: str | exp.Column,
         value: Any,
         condition_factory: "Callable[[exp.Expression, exp.Placeholder], exp.Expression]",
     ) -> exp.Expression:
@@ -258,7 +260,7 @@ class WhereClauseMixin:
             str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any], "ColumnExpression", "SQL"
         ],
         *values: Any,
-        operator: Optional[str] = None,
+        operator: str | None = None,
         **kwargs: Any,
     ) -> Self:
         """Add a WHERE clause to the statement.
@@ -387,45 +389,45 @@ class WhereClauseMixin:
             raise SQLBuilderError(msg)
         return self
 
-    def where_eq(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def where_eq(self, column: str | exp.Column, value: Any) -> Self:
         """Add WHERE column = value clause."""
         condition = self._create_parameterized_condition(column, value, lambda col, placeholder: col.eq(placeholder))
         return self.where(condition)
 
-    def where_neq(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def where_neq(self, column: str | exp.Column, value: Any) -> Self:
         """Add WHERE column != value clause."""
         condition = self._create_parameterized_condition(column, value, lambda col, placeholder: col.neq(placeholder))
         return self.where(condition)
 
-    def where_lt(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def where_lt(self, column: str | exp.Column, value: Any) -> Self:
         """Add WHERE column < value clause."""
         condition = self._create_parameterized_condition(
             column, value, lambda col, placeholder: exp.LT(this=col, expression=placeholder)
         )
         return self.where(condition)
 
-    def where_lte(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def where_lte(self, column: str | exp.Column, value: Any) -> Self:
         """Add WHERE column <= value clause."""
         condition = self._create_parameterized_condition(
             column, value, lambda col, placeholder: exp.LTE(this=col, expression=placeholder)
         )
         return self.where(condition)
 
-    def where_gt(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def where_gt(self, column: str | exp.Column, value: Any) -> Self:
         """Add WHERE column > value clause."""
         condition = self._create_parameterized_condition(
             column, value, lambda col, placeholder: exp.GT(this=col, expression=placeholder)
         )
         return self.where(condition)
 
-    def where_gte(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def where_gte(self, column: str | exp.Column, value: Any) -> Self:
         """Add WHERE column >= value clause."""
         condition = self._create_parameterized_condition(
             column, value, lambda col, placeholder: exp.GTE(this=col, expression=placeholder)
         )
         return self.where(condition)
 
-    def where_between(self, column: Union[str, exp.Column], low: Any, high: Any) -> Self:
+    def where_between(self, column: str | exp.Column, low: Any, high: Any) -> Self:
         """Add WHERE column BETWEEN low AND high clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
@@ -437,7 +439,7 @@ class WhereClauseMixin:
         condition: exp.Expression = col_expr.between(exp.Placeholder(this=low_param), exp.Placeholder(this=high_param))
         return self.where(condition)
 
-    def where_like(self, column: Union[str, exp.Column], pattern: str, escape: Optional[str] = None) -> Self:
+    def where_like(self, column: str | exp.Column, pattern: str, escape: str | None = None) -> Self:
         """Add WHERE column LIKE pattern clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
@@ -451,33 +453,33 @@ class WhereClauseMixin:
         condition: exp.Expression = cond
         return self.where(condition)
 
-    def where_not_like(self, column: Union[str, exp.Column], pattern: str) -> Self:
+    def where_not_like(self, column: str | exp.Column, pattern: str) -> Self:
         """Add WHERE column NOT LIKE pattern clause."""
         condition = self._create_parameterized_condition(
             column, pattern, lambda col, placeholder: col.like(placeholder).not_()
         )
         return self.where(condition)
 
-    def where_ilike(self, column: Union[str, exp.Column], pattern: str) -> Self:
+    def where_ilike(self, column: str | exp.Column, pattern: str) -> Self:
         """Add WHERE column ILIKE pattern clause."""
         condition = self._create_parameterized_condition(
             column, pattern, lambda col, placeholder: col.ilike(placeholder)
         )
         return self.where(condition)
 
-    def where_is_null(self, column: Union[str, exp.Column]) -> Self:
+    def where_is_null(self, column: str | exp.Column) -> Self:
         """Add WHERE column IS NULL clause."""
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.is_(exp.null())
         return self.where(condition)
 
-    def where_is_not_null(self, column: Union[str, exp.Column]) -> Self:
+    def where_is_not_null(self, column: str | exp.Column) -> Self:
         """Add WHERE column IS NOT NULL clause."""
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.is_(exp.null()).not_()
         return self.where(condition)
 
-    def where_in(self, column: Union[str, exp.Column], values: Any) -> Self:
+    def where_in(self, column: str | exp.Column, values: Any) -> Self:
         """Add WHERE column IN (values) clause."""
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -511,7 +513,7 @@ class WhereClauseMixin:
         condition = col_expr.isin(*parameters)
         return self.where(condition)
 
-    def where_not_in(self, column: Union[str, exp.Column], values: Any) -> Self:
+    def where_not_in(self, column: str | exp.Column, values: Any) -> Self:
         """Add WHERE column NOT IN (values) clause."""
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -540,15 +542,15 @@ class WhereClauseMixin:
         condition = exp.Not(this=col_expr.isin(*parameters))
         return self.where(condition)
 
-    def where_null(self, column: Union[str, exp.Column]) -> Self:
+    def where_null(self, column: str | exp.Column) -> Self:
         """Add WHERE column IS NULL clause."""
         return self.where_is_null(column)
 
-    def where_not_null(self, column: Union[str, exp.Column]) -> Self:
+    def where_not_null(self, column: str | exp.Column) -> Self:
         """Add WHERE column IS NOT NULL clause."""
         return self.where_is_not_null(column)
 
-    def where_exists(self, subquery: Union[str, Any]) -> Self:
+    def where_exists(self, subquery: str | Any) -> Self:
         """Add WHERE EXISTS (subquery) clause."""
         builder = cast("SQLBuilderProtocol", self)
         sub_expr: exp.Expression
@@ -570,7 +572,7 @@ class WhereClauseMixin:
         exists_expr = exp.Exists(this=sub_expr)
         return self.where(exists_expr)
 
-    def where_not_exists(self, subquery: Union[str, Any]) -> Self:
+    def where_not_exists(self, subquery: str | Any) -> Self:
         """Add WHERE NOT EXISTS (subquery) clause."""
         builder = cast("SQLBuilderProtocol", self)
         sub_expr: exp.Expression
@@ -591,7 +593,7 @@ class WhereClauseMixin:
         not_exists_expr = exp.Not(this=exp.Exists(this=sub_expr))
         return self.where(not_exists_expr)
 
-    def where_any(self, column: Union[str, exp.Column], values: Any) -> Self:
+    def where_any(self, column: str | exp.Column, values: Any) -> Self:
         """Add WHERE column = ANY(values) clause."""
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -606,7 +608,7 @@ class WhereClauseMixin:
             return self.where(condition)
         if isinstance(values, str):
             try:
-                parsed_expr: Optional[exp.Expression] = exp.maybe_parse(values)
+                parsed_expr: exp.Expression | None = exp.maybe_parse(values)
                 if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.EQ(this=col_expr, expression=exp.Any(this=subquery_exp))
@@ -631,7 +633,7 @@ class WhereClauseMixin:
         condition = exp.EQ(this=col_expr, expression=exp.Any(this=tuple_expr))
         return self.where(condition)
 
-    def where_not_any(self, column: Union[str, exp.Column], values: Any) -> Self:
+    def where_not_any(self, column: str | exp.Column, values: Any) -> Self:
         """Add WHERE column <> ANY(values) clause."""
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -646,7 +648,7 @@ class WhereClauseMixin:
             return self.where(condition)
         if isinstance(values, str):
             try:
-                parsed_expr: Optional[exp.Expression] = exp.maybe_parse(values)
+                parsed_expr: exp.Expression | None = exp.maybe_parse(values)
                 if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.NEQ(this=col_expr, expression=exp.Any(this=subquery_exp))
@@ -677,7 +679,7 @@ class WhereClauseMixin:
             str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any], "ColumnExpression", "SQL"
         ],
         *values: Any,
-        operator: Optional[str] = None,
+        operator: str | None = None,
         **kwargs: Any,
     ) -> Self:
         """Add an OR condition to the existing WHERE clause.
@@ -792,7 +794,7 @@ class WhereClauseMixin:
             str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any], "ColumnExpression", "SQL"
         ],
         values: tuple[Any, ...],
-        operator: Optional[str],
+        operator: str | None,
         kwargs: dict[str, Any],
     ) -> exp.Expression:
         """Process a WHERE condition into a sqlglot expression.
@@ -909,17 +911,17 @@ class WhereClauseMixin:
         return result
 
     # OR helper methods for consistency with existing where_* methods
-    def or_where_eq(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def or_where_eq(self, column: str | exp.Column, value: Any) -> Self:
         """Add OR column = value clause."""
         condition = self._create_parameterized_condition(column, value, lambda col, placeholder: col.eq(placeholder))
         return self.or_where(condition)
 
-    def or_where_neq(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def or_where_neq(self, column: str | exp.Column, value: Any) -> Self:
         """Add OR column != value clause."""
         condition = self._create_parameterized_condition(column, value, lambda col, placeholder: col.neq(placeholder))
         return self.or_where(condition)
 
-    def or_where_in(self, column: Union[str, exp.Column], values: Any) -> Self:
+    def or_where_in(self, column: str | exp.Column, values: Any) -> Self:
         """Add OR column IN (values) clause."""
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -963,7 +965,7 @@ class WhereClauseMixin:
         condition = col_expr.isin(*parameters)
         return self.or_where(condition)
 
-    def or_where_like(self, column: Union[str, exp.Column], pattern: str, escape: Optional[str] = None) -> Self:
+    def or_where_like(self, column: str | exp.Column, pattern: str, escape: str | None = None) -> Self:
         """Add OR column LIKE pattern clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
@@ -977,47 +979,47 @@ class WhereClauseMixin:
         condition: exp.Expression = cond
         return self.or_where(condition)
 
-    def or_where_is_null(self, column: Union[str, exp.Column]) -> Self:
+    def or_where_is_null(self, column: str | exp.Column) -> Self:
         """Add OR column IS NULL clause."""
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.is_(exp.null())
         return self.or_where(condition)
 
-    def or_where_is_not_null(self, column: Union[str, exp.Column]) -> Self:
+    def or_where_is_not_null(self, column: str | exp.Column) -> Self:
         """Add OR column IS NOT NULL clause."""
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.is_(exp.null()).not_()
         return self.or_where(condition)
 
-    def or_where_lt(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def or_where_lt(self, column: str | exp.Column, value: Any) -> Self:
         """Add OR column < value clause."""
         condition = self._create_parameterized_condition(
             column, value, lambda col, placeholder: exp.LT(this=col, expression=placeholder)
         )
         return self.or_where(condition)
 
-    def or_where_lte(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def or_where_lte(self, column: str | exp.Column, value: Any) -> Self:
         """Add OR column <= value clause."""
         condition = self._create_parameterized_condition(
             column, value, lambda col, placeholder: exp.LTE(this=col, expression=placeholder)
         )
         return self.or_where(condition)
 
-    def or_where_gt(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def or_where_gt(self, column: str | exp.Column, value: Any) -> Self:
         """Add OR column > value clause."""
         condition = self._create_parameterized_condition(
             column, value, lambda col, placeholder: exp.GT(this=col, expression=placeholder)
         )
         return self.or_where(condition)
 
-    def or_where_gte(self, column: Union[str, exp.Column], value: Any) -> Self:
+    def or_where_gte(self, column: str | exp.Column, value: Any) -> Self:
         """Add OR column >= value clause."""
         condition = self._create_parameterized_condition(
             column, value, lambda col, placeholder: exp.GTE(this=col, expression=placeholder)
         )
         return self.or_where(condition)
 
-    def or_where_between(self, column: Union[str, exp.Column], low: Any, high: Any) -> Self:
+    def or_where_between(self, column: str | exp.Column, low: Any, high: Any) -> Self:
         """Add OR column BETWEEN low AND high clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
@@ -1029,14 +1031,14 @@ class WhereClauseMixin:
         condition: exp.Expression = col_expr.between(exp.Placeholder(this=low_param), exp.Placeholder(this=high_param))
         return self.or_where(condition)
 
-    def or_where_not_like(self, column: Union[str, exp.Column], pattern: str) -> Self:
+    def or_where_not_like(self, column: str | exp.Column, pattern: str) -> Self:
         """Add OR column NOT LIKE pattern clause."""
         condition = self._create_parameterized_condition(
             column, pattern, lambda col, placeholder: col.like(placeholder).not_()
         )
         return self.or_where(condition)
 
-    def or_where_not_in(self, column: Union[str, exp.Column], values: Any) -> Self:
+    def or_where_not_in(self, column: str | exp.Column, values: Any) -> Self:
         """Add OR column NOT IN (values) clause."""
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -1080,22 +1082,22 @@ class WhereClauseMixin:
         condition = exp.Not(this=col_expr.isin(*parameters))
         return self.or_where(condition)
 
-    def or_where_ilike(self, column: Union[str, exp.Column], pattern: str) -> Self:
+    def or_where_ilike(self, column: str | exp.Column, pattern: str) -> Self:
         """Add OR column ILIKE pattern clause."""
         condition = self._create_parameterized_condition(
             column, pattern, lambda col, placeholder: col.ilike(placeholder)
         )
         return self.or_where(condition)
 
-    def or_where_null(self, column: Union[str, exp.Column]) -> Self:
+    def or_where_null(self, column: str | exp.Column) -> Self:
         """Add OR column IS NULL clause."""
         return self.or_where_is_null(column)
 
-    def or_where_not_null(self, column: Union[str, exp.Column]) -> Self:
+    def or_where_not_null(self, column: str | exp.Column) -> Self:
         """Add OR column IS NOT NULL clause."""
         return self.or_where_is_not_null(column)
 
-    def or_where_exists(self, subquery: Union[str, Any]) -> Self:
+    def or_where_exists(self, subquery: str | Any) -> Self:
         """Add OR EXISTS (subquery) clause."""
         builder = cast("SQLBuilderProtocol", self)
         sub_expr: exp.Expression
@@ -1122,7 +1124,7 @@ class WhereClauseMixin:
         exists_expr = exp.Exists(this=sub_expr)
         return self.or_where(exists_expr)
 
-    def or_where_not_exists(self, subquery: Union[str, Any]) -> Self:
+    def or_where_not_exists(self, subquery: str | Any) -> Self:
         """Add OR NOT EXISTS (subquery) clause."""
         builder = cast("SQLBuilderProtocol", self)
         sub_expr: exp.Expression
@@ -1149,7 +1151,7 @@ class WhereClauseMixin:
         not_exists_expr = exp.Not(this=exp.Exists(this=sub_expr))
         return self.or_where(not_exists_expr)
 
-    def or_where_any(self, column: Union[str, exp.Column], values: Any) -> Self:
+    def or_where_any(self, column: str | exp.Column, values: Any) -> Self:
         """Add OR column = ANY(values) clause."""
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -1180,7 +1182,7 @@ class WhereClauseMixin:
             return self.or_where(condition)
         if isinstance(values, str):
             try:
-                parsed_expr: Optional[exp.Expression] = exp.maybe_parse(values)
+                parsed_expr: exp.Expression | None = exp.maybe_parse(values)
                 if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.EQ(this=col_expr, expression=exp.Any(this=subquery_exp))
@@ -1205,7 +1207,7 @@ class WhereClauseMixin:
         condition = exp.EQ(this=col_expr, expression=exp.Any(this=tuple_expr))
         return self.or_where(condition)
 
-    def or_where_not_any(self, column: Union[str, exp.Column], values: Any) -> Self:
+    def or_where_not_any(self, column: str | exp.Column, values: Any) -> Self:
         """Add OR column <> ANY(values) clause."""
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -1236,7 +1238,7 @@ class WhereClauseMixin:
             return self.or_where(condition)
         if isinstance(values, str):
             try:
-                parsed_expr: Optional[exp.Expression] = exp.maybe_parse(values)
+                parsed_expr: exp.Expression | None = exp.maybe_parse(values)
                 if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.NEQ(this=col_expr, expression=exp.Any(this=subquery_exp))
@@ -1269,10 +1271,10 @@ class HavingClauseMixin:
     __slots__ = ()
 
     # Type annotations for PyRight - these will be provided by the base class
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def having(self, condition: Union[str, exp.Expression]) -> Self:
+    def having(self, condition: str | exp.Expression) -> Self:
         """Add HAVING clause.
 
         Args:

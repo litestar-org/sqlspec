@@ -4,7 +4,7 @@ This module provides functionality to track applied migrations in the database.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.utils.logging import get_logger
@@ -29,7 +29,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         driver.execute(self._get_create_table_sql())
         self._safe_commit(driver)
 
-    def get_current_version(self, driver: "SyncDriverAdapterBase") -> Optional[str]:
+    def get_current_version(self, driver: "SyncDriverAdapterBase") -> str | None:
         """Get the latest applied migration version.
 
         Args:
@@ -114,7 +114,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         await driver.execute(self._get_create_table_sql())
         await self._safe_commit_async(driver)
 
-    async def get_current_version(self, driver: "AsyncDriverAdapterBase") -> Optional[str]:
+    async def get_current_version(self, driver: "AsyncDriverAdapterBase") -> str | None:
         """Get the latest applied migration version.
 
         Args:

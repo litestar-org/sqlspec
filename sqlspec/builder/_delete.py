@@ -4,7 +4,7 @@ Provides a fluent interface for building SQL DELETE queries with
 parameter binding and validation.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from sqlglot import exp
 
@@ -24,9 +24,9 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
     """
 
     __slots__ = ("_table",)
-    _expression: Optional[exp.Expression]
+    _expression: exp.Expression | None
 
-    def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
+    def __init__(self, table: str | None = None, **kwargs: Any) -> None:
         """Initialize DELETE with optional table.
 
         Args:

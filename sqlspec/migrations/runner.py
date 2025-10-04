@@ -8,7 +8,7 @@ import operator
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Union, cast, overload
 
 from sqlspec.core.statement import SQL
 from sqlspec.migrations.context import MigrationContext
@@ -32,9 +32,9 @@ class BaseMigrationRunner(ABC):
     def __init__(
         self,
         migrations_path: Path,
-        extension_migrations: "Optional[dict[str, Path]]" = None,
-        context: "Optional[MigrationContext]" = None,
-        extension_configs: "Optional[dict[str, dict[str, Any]]]" = None,
+        extension_migrations: "dict[str, Path] | None" = None,
+        context: "MigrationContext | None" = None,
+        extension_configs: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize the migration runner.
 
@@ -49,11 +49,11 @@ class BaseMigrationRunner(ABC):
         from sqlspec.loader import SQLFileLoader
 
         self.loader = SQLFileLoader()
-        self.project_root: Optional[Path] = None
+        self.project_root: Path | None = None
         self.context = context
         self.extension_configs = extension_configs or {}
 
-    def _extract_version(self, filename: str) -> "Optional[str]":
+    def _extract_version(self, filename: str) -> "str | None":
         """Extract version from filename.
 
         Args:
@@ -161,7 +161,7 @@ class BaseMigrationRunner(ABC):
             "content": content,
         }
 
-    def _get_context_for_migration(self, file_path: Path) -> "Optional[MigrationContext]":
+    def _get_context_for_migration(self, file_path: Path) -> "MigrationContext | None":
         """Get the appropriate context for a migration file.
 
         Args:
@@ -238,9 +238,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         metadata.update({"has_upgrade": has_upgrade, "has_downgrade": has_downgrade, "loader": loader})
         return metadata
 
-    def execute_upgrade(
-        self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]"
-    ) -> "tuple[Optional[str], int]":
+    def execute_upgrade(self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]") -> "tuple[str | None, int]":
         """Execute an upgrade migration.
 
         Args:
@@ -264,7 +262,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
     def execute_downgrade(
         self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]"
-    ) -> "tuple[Optional[str], int]":
+    ) -> "tuple[str | None, int]":
         """Execute a downgrade migration.
 
         Args:
@@ -286,7 +284,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
-    def _get_migration_sql_sync(self, migration: "dict[str, Any]", direction: str) -> "Optional[list[str]]":
+    def _get_migration_sql_sync(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (sync version).
 
         Args:
@@ -435,7 +433,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
     async def execute_upgrade(
         self, driver: "AsyncDriverAdapterBase", migration: "dict[str, Any]"
-    ) -> "tuple[Optional[str], int]":
+    ) -> "tuple[str | None, int]":
         """Execute an upgrade migration.
 
         Args:
@@ -459,7 +457,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
     async def execute_downgrade(
         self, driver: "AsyncDriverAdapterBase", migration: "dict[str, Any]"
-    ) -> "tuple[Optional[str], int]":
+    ) -> "tuple[str | None, int]":
         """Execute a downgrade migration.
 
         Args:
@@ -481,7 +479,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
-    async def _get_migration_sql_async(self, migration: "dict[str, Any]", direction: str) -> "Optional[list[str]]":
+    async def _get_migration_sql_async(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (async version).
 
         Args:
@@ -553,7 +551,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 def create_migration_runner(
     migrations_path: Path,
     extension_migrations: "dict[str, Path]",
-    context: "Optional[MigrationContext]",
+    context: "MigrationContext | None",
     extension_configs: "dict[str, Any]",
     is_async: "Literal[False]" = False,
 ) -> SyncMigrationRunner: ...
@@ -563,7 +561,7 @@ def create_migration_runner(
 def create_migration_runner(
     migrations_path: Path,
     extension_migrations: "dict[str, Path]",
-    context: "Optional[MigrationContext]",
+    context: "MigrationContext | None",
     extension_configs: "dict[str, Any]",
     is_async: "Literal[True]",
 ) -> AsyncMigrationRunner: ...
@@ -572,10 +570,10 @@ def create_migration_runner(
 def create_migration_runner(
     migrations_path: Path,
     extension_migrations: "dict[str, Path]",
-    context: "Optional[MigrationContext]",
+    context: "MigrationContext | None",
     extension_configs: "dict[str, Any]",
     is_async: bool = False,
-) -> "Union[SyncMigrationRunner, AsyncMigrationRunner]":
+) -> "SyncMigrationRunner | AsyncMigrationRunner":
     """Factory function to create the appropriate migration runner.
 
     Args:

@@ -1,6 +1,6 @@
 """SQL translation mixin for cross-database compatibility."""
 
-from typing import Final, NoReturn, Optional
+from typing import Final, NoReturn
 
 from mypy_extensions import trait
 from sqlglot import exp, parse_one
@@ -20,10 +20,10 @@ class SQLTranslatorMixin:
     """Mixin for drivers supporting SQL translation."""
 
     __slots__ = ()
-    dialect: "Optional[DialectType]"
+    dialect: "DialectType | None"
 
     def convert_to_dialect(
-        self, statement: "Statement", to_dialect: "Optional[DialectType]" = None, pretty: bool = _DEFAULT_PRETTY
+        self, statement: "Statement", to_dialect: "DialectType | None" = None, pretty: bool = _DEFAULT_PRETTY
     ) -> str:
         """Convert a statement to a target SQL dialect.
 
@@ -38,7 +38,7 @@ class SQLTranslatorMixin:
 
         """
 
-        parsed_expression: Optional[exp.Expression] = None
+        parsed_expression: exp.Expression | None = None
 
         if statement is not None and isinstance(statement, SQL):
             if statement.expression is None:

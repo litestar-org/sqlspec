@@ -5,8 +5,6 @@ Provides mixins for DELETE statement functionality including
 FROM clause specification.
 """
 
-from typing import Optional
-
 from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
@@ -23,7 +21,7 @@ class DeleteFromClauseMixin:
     __slots__ = ()
 
     # Type annotations for PyRight - these will be provided by the base class
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
     def from_(self, table: str) -> Self:

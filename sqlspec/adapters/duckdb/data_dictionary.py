@@ -1,12 +1,14 @@
 """DuckDB-specific data dictionary for metadata queries."""
 
 import re
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
 
 logger = get_logger("adapters.duckdb.data_dictionary")
@@ -20,7 +22,7 @@ __all__ = ("DuckDBSyncDataDictionary",)
 class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
     """DuckDB-specific sync data dictionary."""
 
-    def get_version(self, driver: SyncDriverAdapterBase) -> "Optional[VersionInfo]":
+    def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get DuckDB database version information.
 
         Args:

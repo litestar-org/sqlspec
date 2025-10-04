@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
@@ -81,7 +81,7 @@ class AiosqliteCursor:
 
     def __init__(self, connection: "AiosqliteConnection") -> None:
         self.connection = connection
-        self.cursor: Optional[aiosqlite.Cursor] = None
+        self.cursor: aiosqlite.Cursor | None = None
 
     async def __aenter__(self) -> "aiosqlite.Cursor":
         self.cursor = await self.connection.cursor()
@@ -184,7 +184,7 @@ class AiosqliteExceptionHandler:
         msg = f"SQLite integrity constraint violation [code {code}]: {e}"
         raise IntegrityError(msg) from e
 
-    def _raise_parsing_error(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_parsing_error(self, e: Any, code: "int | None") -> None:
         code_str = f"[code {code}]" if code else ""
         msg = f"SQLite SQL syntax error {code_str}: {e}"
         raise SQLParsingError(msg) from e
@@ -215,15 +215,15 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     def __init__(
         self,
         connection: "AiosqliteConnection",
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
             statement_config = aiosqlite_statement_config.replace(enable_caching=cache_config.compiled_cache_enabled)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
+        self._data_dictionary: AsyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         """Create async context manager for AIOSQLite cursor."""
@@ -233,7 +233,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Handle AIOSQLite-specific exceptions."""
         return AiosqliteExceptionHandler()
 
-    async def _try_special_handling(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "Optional[SQLResult]":
+    async def _try_special_handling(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "SQLResult | None":
         """Hook for AIOSQLite-specific special operations.
 
         Args:
@@ -285,7 +285,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             fetched_data = await cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
 
-            data = [dict(zip(column_names, row)) for row in fetched_data]
+            data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True

@@ -5,7 +5,7 @@ Provides mixins for SELECT statement functionality including column selection,
 CASE expressions, subqueries, and window functions.
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Union, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -29,7 +29,7 @@ class SelectClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
     def select(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn", "SQL", "Case"]) -> Self:
@@ -80,7 +80,7 @@ class SelectClauseMixin:
             builder._expression.set("distinct", exp.Distinct(expressions=distinct_columns))
         return cast("Self", builder)
 
-    def from_(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
+    def from_(self, table: str | exp.Expression | Any, alias: str | None = None) -> Self:
         """Add FROM clause.
 
         Args:
@@ -124,7 +124,7 @@ class SelectClauseMixin:
         builder._expression = builder._expression.from_(from_expr, copy=False)
         return cast("Self", builder)
 
-    def group_by(self, *columns: Union[str, exp.Expression]) -> Self:
+    def group_by(self, *columns: str | exp.Expression) -> Self:
         """Add GROUP BY clause.
 
         Args:
@@ -143,7 +143,7 @@ class SelectClauseMixin:
         self.set_expression(current_expr)
         return self
 
-    def group_by_rollup(self, *columns: Union[str, exp.Expression]) -> Self:
+    def group_by_rollup(self, *columns: str | exp.Expression) -> Self:
         """Add GROUP BY ROLLUP clause.
 
         ROLLUP generates subtotals and grand totals for a hierarchical set of columns.
@@ -167,7 +167,7 @@ class SelectClauseMixin:
         rollup_expr = exp.Rollup(expressions=column_exprs)
         return self.group_by(rollup_expr)
 
-    def group_by_cube(self, *columns: Union[str, exp.Expression]) -> Self:
+    def group_by_cube(self, *columns: str | exp.Expression) -> Self:
         """Add GROUP BY CUBE clause.
 
         CUBE generates subtotals for all possible combinations of the specified columns.
@@ -191,7 +191,7 @@ class SelectClauseMixin:
         cube_expr = exp.Cube(expressions=column_exprs)
         return self.group_by(cube_expr)
 
-    def group_by_grouping_sets(self, *column_sets: Union[tuple[str, ...], list[str]]) -> Self:
+    def group_by_grouping_sets(self, *column_sets: tuple[str, ...] | list[str]) -> Self:
         """Add GROUP BY GROUPING SETS clause.
 
         GROUPING SETS allows you to specify multiple grouping sets in a single query.
@@ -226,7 +226,7 @@ class SelectClauseMixin:
         grouping_sets_expr = exp.GroupingSets(expressions=set_expressions)
         return self.group_by(grouping_sets_expr)
 
-    def count_(self, column: "Union[str, exp.Expression]" = "*", alias: Optional[str] = None) -> Self:
+    def count_(self, column: "str | exp.Expression" = "*", alias: str | None = None) -> Self:
         """Add COUNT function to SELECT clause.
 
         Args:
@@ -246,7 +246,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(count_expr, alias) if alias else count_expr
         return cast("Self", builder.select(select_expr))
 
-    def sum_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def sum_(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add SUM function to SELECT clause.
 
         Args:
@@ -262,7 +262,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(sum_expr, alias) if alias else sum_expr
         return cast("Self", builder.select(select_expr))
 
-    def avg_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def avg_(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add AVG function to SELECT clause.
 
         Args:
@@ -278,7 +278,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(avg_expr, alias) if alias else avg_expr
         return cast("Self", builder.select(select_expr))
 
-    def max_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def max_(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add MAX function to SELECT clause.
 
         Args:
@@ -294,7 +294,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(max_expr, alias) if alias else max_expr
         return cast("Self", builder.select(select_expr))
 
-    def min_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def min_(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add MIN function to SELECT clause.
 
         Args:
@@ -310,7 +310,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(min_expr, alias) if alias else min_expr
         return cast("Self", builder.select(select_expr))
 
-    def array_agg(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def array_agg(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add ARRAY_AGG aggregate function to SELECT clause.
 
         Args:
@@ -326,7 +326,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(array_agg_expr, alias) if alias else array_agg_expr
         return cast("Self", builder.select(select_expr))
 
-    def count_distinct(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def count_distinct(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add COUNT(DISTINCT column) to SELECT clause.
 
         Args:
@@ -342,7 +342,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(count_expr, alias) if alias else count_expr
         return cast("Self", builder.select(select_expr))
 
-    def stddev(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def stddev(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add STDDEV aggregate function to SELECT clause.
 
         Args:
@@ -358,7 +358,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(stddev_expr, alias) if alias else stddev_expr
         return cast("Self", builder.select(select_expr))
 
-    def stddev_pop(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def stddev_pop(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add STDDEV_POP aggregate function to SELECT clause.
 
         Args:
@@ -374,7 +374,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(stddev_pop_expr, alias) if alias else stddev_pop_expr
         return cast("Self", builder.select(select_expr))
 
-    def stddev_samp(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def stddev_samp(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add STDDEV_SAMP aggregate function to SELECT clause.
 
         Args:
@@ -390,7 +390,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(stddev_samp_expr, alias) if alias else stddev_samp_expr
         return cast("Self", builder.select(select_expr))
 
-    def variance(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def variance(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add VARIANCE aggregate function to SELECT clause.
 
         Args:
@@ -406,7 +406,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(variance_expr, alias) if alias else variance_expr
         return cast("Self", builder.select(select_expr))
 
-    def var_pop(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def var_pop(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add VAR_POP aggregate function to SELECT clause.
 
         Args:
@@ -422,7 +422,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(var_pop_expr, alias) if alias else var_pop_expr
         return cast("Self", builder.select(select_expr))
 
-    def string_agg(self, column: Union[str, exp.Expression], separator: str = ",", alias: Optional[str] = None) -> Self:
+    def string_agg(self, column: str | exp.Expression, separator: str = ",", alias: str | None = None) -> Self:
         """Add STRING_AGG aggregate function to SELECT clause.
 
         Args:
@@ -446,7 +446,7 @@ class SelectClauseMixin:
         select_expr = exp.alias_(string_agg_expr, alias) if alias else string_agg_expr
         return cast("Self", builder.select(select_expr))
 
-    def json_agg(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def json_agg(self, column: str | exp.Expression, alias: str | None = None) -> Self:
         """Add JSON_AGG aggregate function to SELECT clause.
 
         Args:
@@ -464,11 +464,11 @@ class SelectClauseMixin:
 
     def window(
         self,
-        function_expr: Union[str, exp.Expression],
-        partition_by: Optional[Union[str, list[str], exp.Expression, list[exp.Expression]]] = None,
-        order_by: Optional[Union[str, list[str], exp.Expression, list[exp.Expression]]] = None,
-        frame: Optional[str] = None,
-        alias: Optional[str] = None,
+        function_expr: str | exp.Expression,
+        partition_by: str | list[str] | exp.Expression | list[exp.Expression] | None = None,
+        order_by: str | list[str] | exp.Expression | list[exp.Expression] | None = None,
+        frame: str | None = None,
+        alias: str | None = None,
     ) -> Self:
         """Add a window function to the SELECT clause.
 
@@ -496,7 +496,7 @@ class SelectClauseMixin:
 
         func_expr_parsed: exp.Expression
         if isinstance(function_expr, str):
-            parsed: Optional[exp.Expression] = exp.maybe_parse(function_expr, dialect=getattr(self, "dialect", None))
+            parsed: exp.Expression | None = exp.maybe_parse(function_expr, dialect=getattr(self, "dialect", None))
             if not parsed:
                 msg = f"Could not parse function expression: {function_expr}"
                 raise SQLBuilderError(msg)
@@ -517,7 +517,7 @@ class SelectClauseMixin:
             if isinstance(order_by, str):
                 over_args["order"] = exp.column(order_by).asc()
             elif isinstance(order_by, list):
-                order_expressions: list[Union[exp.Expression, exp.Column]] = []
+                order_expressions: list[exp.Expression | exp.Column] = []
                 for col in order_by:
                     if isinstance(col, str):
                         order_expressions.append(exp.column(col).asc())
@@ -528,7 +528,7 @@ class SelectClauseMixin:
                 over_args["order"] = order_by
 
         if frame:
-            frame_expr: Optional[exp.Expression] = exp.maybe_parse(frame, dialect=getattr(self, "dialect", None))
+            frame_expr: exp.Expression | None = exp.maybe_parse(frame, dialect=getattr(self, "dialect", None))
             if frame_expr:
                 over_args["frame"] = frame_expr
 
@@ -537,7 +537,7 @@ class SelectClauseMixin:
         self.set_expression(current_expr)
         return self
 
-    def case_(self, alias: "Optional[str]" = None) -> "CaseBuilder":
+    def case_(self, alias: "str | None" = None) -> "CaseBuilder":
         """Create a CASE expression for the SELECT clause.
 
         Args:
@@ -555,7 +555,7 @@ class CaseBuilder:
 
     __slots__ = ("_alias", "_case_expr", "_parent")
 
-    def __init__(self, parent: "SelectBuilderProtocol", alias: "Optional[str]" = None) -> None:
+    def __init__(self, parent: "SelectBuilderProtocol", alias: "str | None" = None) -> None:
         """Initialize CaseBuilder.
 
         Args:
@@ -566,7 +566,7 @@ class CaseBuilder:
         self._alias = alias
         self._case_expr = exp.Case()
 
-    def when(self, condition: "Union[str, exp.Expression]", value: "Any") -> "CaseBuilder":
+    def when(self, condition: "str | exp.Expression", value: "Any") -> "CaseBuilder":
         """Add WHEN clause to CASE expression.
 
         Args:
@@ -639,7 +639,7 @@ class WindowFunctionBuilder:
         self._function_name = function_name
         self._partition_by_cols: list[exp.Expression] = []
         self._order_by_cols: list[exp.Expression] = []
-        self._alias: Optional[str] = None
+        self._alias: str | None = None
 
     def __eq__(self, other: object) -> "ColumnExpression":  # type: ignore[override]
         """Equal to (==) - convert to expression then compare."""
@@ -654,7 +654,7 @@ class WindowFunctionBuilder:
         """Make WindowFunctionBuilder hashable."""
         return hash(id(self))
 
-    def partition_by(self, *columns: Union[str, exp.Expression]) -> "WindowFunctionBuilder":
+    def partition_by(self, *columns: str | exp.Expression) -> "WindowFunctionBuilder":
         """Add PARTITION BY clause.
 
         Args:
@@ -668,7 +668,7 @@ class WindowFunctionBuilder:
             self._partition_by_cols.append(col_expr)
         return self
 
-    def order_by(self, *columns: Union[str, exp.Expression]) -> "WindowFunctionBuilder":
+    def order_by(self, *columns: str | exp.Expression) -> "WindowFunctionBuilder":
         """Add ORDER BY clause.
 
         Args:
@@ -770,7 +770,7 @@ class SubqueryBuilder:
         """Make SubqueryBuilder hashable."""
         return hash(id(self))
 
-    def __call__(self, subquery: Union[str, exp.Expression, Any]) -> exp.Expression:
+    def __call__(self, subquery: str | exp.Expression | Any) -> exp.Expression:
         """Build the subquery expression.
 
         Args:
@@ -782,7 +782,7 @@ class SubqueryBuilder:
         subquery_expr: exp.Expression
         if isinstance(subquery, str):
             # Parse as SQL
-            parsed: Optional[exp.Expression] = exp.maybe_parse(subquery)
+            parsed: exp.Expression | None = exp.maybe_parse(subquery)
             if not parsed:
                 msg = f"Could not parse subquery SQL: {subquery}"
                 raise SQLBuilderError(msg)
@@ -839,7 +839,7 @@ class Case:
     def __init__(self) -> None:
         """Initialize the CASE expression builder."""
         self._conditions: list[exp.If] = []
-        self._default: Optional[exp.Expression] = None
+        self._default: exp.Expression | None = None
 
     def __eq__(self, other: object) -> "ColumnExpression":  # type: ignore[override]
         """Equal to (==) - convert to expression then compare."""
@@ -854,7 +854,7 @@ class Case:
         """Make Case hashable."""
         return hash(id(self))
 
-    def when(self, condition: Union[str, exp.Expression], value: Union[str, exp.Expression, Any]) -> Self:
+    def when(self, condition: str | exp.Expression, value: str | exp.Expression | Any) -> Self:
         """Add a WHEN clause.
 
         Args:
@@ -871,7 +871,7 @@ class Case:
         self._conditions.append(when_clause)
         return self
 
-    def else_(self, value: Union[str, exp.Expression, Any]) -> Self:
+    def else_(self, value: str | exp.Expression | Any) -> Self:
         """Add an ELSE clause.
 
         Args:
@@ -921,7 +921,7 @@ class Case:
         return self._conditions
 
     @property
-    def default(self) -> Optional[exp.Expression]:
+    def default(self) -> exp.Expression | None:
         """Get CASE default value (public API).
 
         Returns:

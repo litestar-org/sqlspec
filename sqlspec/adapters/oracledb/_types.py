@@ -3,8 +3,9 @@ from typing import TYPE_CHECKING
 from oracledb import AsyncConnection, Connection
 
 if TYPE_CHECKING:
+    from typing import TypeAlias
+
     from oracledb.pool import AsyncConnectionPool, ConnectionPool
-    from typing_extensions import TypeAlias
 
     OracleSyncConnection: TypeAlias = Connection
     OracleAsyncConnection: TypeAlias = AsyncConnection

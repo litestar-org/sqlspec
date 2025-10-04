@@ -3,7 +3,7 @@
 This module provides the main command interface for database migrations.
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rich.console import Console
 from rich.table import Table
@@ -53,7 +53,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         self.init_directory(directory, package)
 
-    def current(self, verbose: bool = False) -> "Optional[str]":
+    def current(self, verbose: bool = False) -> "str | None":
         """Show current migration version.
 
         Args:
@@ -93,7 +93,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
                 console.print(table)
 
-            return cast("Optional[str]", current)
+            return cast("str | None", current)
 
     def upgrade(self, revision: str = "head") -> None:
         """Upgrade to a target revision.
@@ -236,7 +236,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         """
         self.init_directory(directory, package)
 
-    async def current(self, verbose: bool = False) -> "Optional[str]":
+    async def current(self, verbose: bool = False) -> "str | None":
         """Show current migration version.
 
         Args:
@@ -272,7 +272,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     )
                 console.print(table)
 
-            return cast("Optional[str]", current)
+            return cast("str | None", current)
 
     async def upgrade(self, revision: str = "head") -> None:
         """Upgrade to a target revision.
@@ -385,8 +385,8 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
 
 def create_migration_commands(
-    config: "Union[SyncConfigT, AsyncConfigT]",
-) -> "Union[SyncMigrationCommands[Any], AsyncMigrationCommands[Any]]":
+    config: "SyncConfigT | AsyncConfigT",
+) -> "SyncMigrationCommands[SyncConfigT] | AsyncMigrationCommands[AsyncConfigT]":
     """Factory function to create the appropriate migration commands.
 
     Args:
@@ -396,5 +396,5 @@ def create_migration_commands(
         Appropriate migration commands instance.
     """
     if config.is_async:
-        return AsyncMigrationCommands(cast("AsyncConfigT", config))
-    return SyncMigrationCommands(cast("SyncConfigT", config))
+        return cast("AsyncMigrationCommands[AsyncConfigT]", AsyncMigrationCommands(cast("AsyncConfigT", config)))
+    return cast("SyncMigrationCommands[SyncConfigT]", SyncMigrationCommands(cast("SyncConfigT", config)))

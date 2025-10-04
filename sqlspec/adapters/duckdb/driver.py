@@ -2,7 +2,7 @@
 
 import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import duckdb  # type: ignore[import-untyped]
 from sqlglot import exp
@@ -78,7 +78,7 @@ class DuckDBCursor:
 
     def __init__(self, connection: "DuckDBConnection") -> None:
         self.connection = connection
-        self.cursor: Optional[Any] = None
+        self.cursor: Any | None = None
 
     def __enter__(self) -> Any:
         self.cursor = self.connection.cursor()
@@ -208,8 +208,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def __init__(
         self,
         connection: "DuckDBConnection",
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
@@ -222,7 +222,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             statement_config = updated_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
+        self._data_dictionary: SyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         """Create context manager for DuckDB cursor.
@@ -243,7 +243,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         return DuckDBExceptionHandler()
 
-    def _try_special_handling(self, cursor: Any, statement: SQL) -> "Optional[SQLResult]":
+    def _try_special_handling(self, cursor: Any, statement: SQL) -> "SQLResult | None":
         """Handle DuckDB-specific special operations.
 
         DuckDB does not require special operation handling, so this method
@@ -358,7 +358,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             column_names = [col[0] for col in cursor.description or []]
 
             if fetched_data and isinstance(fetched_data[0], tuple):
-                dict_data = [dict(zip(column_names, row)) for row in fetched_data]
+                dict_data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
             else:
                 dict_data = fetched_data
 

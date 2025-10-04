@@ -7,7 +7,7 @@ This module contains functions to create dependency providers for services and f
 import datetime
 import inspect
 from collections.abc import Callable
-from typing import Any, Literal, NamedTuple, Optional, TypedDict, Union, cast
+from typing import Any, Literal, NamedTuple, TypedDict, cast
 from uuid import UUID
 
 from litestar.di import Provide
@@ -44,15 +44,15 @@ __all__ = (
     "dep_cache",
 )
 
-DTorNone = Optional[datetime.datetime]
-StringOrNone = Optional[str]
-UuidOrNone = Optional[UUID]
-IntOrNone = Optional[int]
-BooleanOrNone = Optional[bool]
+DTorNone = datetime.datetime | None
+StringOrNone = str | None
+UuidOrNone = UUID | None
+IntOrNone = int | None
+BooleanOrNone = bool | None
 SortOrder = Literal["asc", "desc"]
-SortOrderOrNone = Optional[SortOrder]
-HashableValue = Union[str, int, float, bool, None]
-HashableType = Union[HashableValue, tuple[Any, ...], tuple[tuple[str, Any], ...], tuple[HashableValue, ...]]
+SortOrderOrNone = SortOrder | None
+HashableValue = str | int | float | bool | None
+HashableType = HashableValue | tuple[Any, ...] | tuple[tuple[str, Any], ...] | tuple[HashableValue, ...]
 
 
 class DependencyDefaults:
@@ -79,30 +79,30 @@ class FieldNameType(NamedTuple):
 class FilterConfig(TypedDict):
     """Configuration for generating dynamic filters."""
 
-    id_filter: NotRequired[type[Union[UUID, int, str]]]
+    id_filter: NotRequired[type[UUID | int | str]]
     id_field: NotRequired[str]
     sort_field: NotRequired[str]
     sort_order: NotRequired[SortOrder]
     pagination_type: NotRequired[Literal["limit_offset"]]
     pagination_size: NotRequired[int]
-    search: NotRequired[Union[str, set[str], list[str]]]
+    search: NotRequired[str | set[str] | list[str]]
     search_ignore_case: NotRequired[bool]
     created_at: NotRequired[bool]
     updated_at: NotRequired[bool]
-    not_in_fields: NotRequired[Union[FieldNameType, set[FieldNameType], list[Union[str, FieldNameType]]]]
-    in_fields: NotRequired[Union[FieldNameType, set[FieldNameType], list[Union[str, FieldNameType]]]]
+    not_in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
+    in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
 
 
 class DependencyCache(metaclass=SingletonMeta):
     """Dependency cache for memoizing dynamically generated dependencies."""
 
     def __init__(self) -> None:
-        self.dependencies: dict[Union[int, str], dict[str, Provide]] = {}
+        self.dependencies: dict[int | str, dict[str, Provide]] = {}
 
-    def add_dependencies(self, key: Union[int, str], dependencies: dict[str, Provide]) -> None:
+    def add_dependencies(self, key: int | str, dependencies: dict[str, Provide]) -> None:
         self.dependencies[key] = dependencies
 
-    def get_dependencies(self, key: Union[int, str]) -> Optional[dict[str, Provide]]:
+    def get_dependencies(self, key: int | str) -> dict[str, Provide] | None:
         return self.dependencies.get(key)
 
 
@@ -169,8 +169,8 @@ def _create_statement_filters(
     if config.get("id_filter", False):
 
         def provide_id_filter(  # pyright: ignore[reportUnknownParameterType]
-            ids: Optional[list[str]] = Parameter(query="ids", default=None, required=False),
-        ) -> "InCollectionFilter[Any]":
+            ids: list[str] | None = Parameter(query="ids", default=None, required=False),
+        ) -> InCollectionFilter:  # pyright: ignore[reportMissingTypeArgument]
             return InCollectionFilter(field_name=config.get("id_field", "id"), values=ids)
 
         filters[dep_defaults.ID_FILTER_DEPENDENCY_KEY] = Provide(provide_id_filter, sync_to_thread=False)  # pyright: ignore[reportUnknownArgumentType]
@@ -257,12 +257,12 @@ def _create_statement_filters(
 
             def create_not_in_filter_provider(  # pyright: ignore
                 field_name: FieldNameType,
-            ) -> Callable[..., Optional[NotInCollectionFilter[field_def.type_hint]]]:  # type: ignore
+            ) -> Callable[..., NotInCollectionFilter[field_def.type_hint] | None]:  # type: ignore
                 def provide_not_in_filter(  # pyright: ignore
-                    values: Optional[list[field_name.type_hint]] = Parameter(  # type: ignore
+                    values: list[field_name.type_hint] | None = Parameter(  # type: ignore
                         query=camelize(f"{field_name.name}_not_in"), default=None, required=False
                     ),
-                ) -> Optional[NotInCollectionFilter[field_name.type_hint]]:  # type: ignore
+                ) -> NotInCollectionFilter[field_name.type_hint] | None:  # type: ignore
                     return (
                         NotInCollectionFilter[field_name.type_hint](field_name=field_name.name, values=values)  # type: ignore
                         if values
@@ -282,12 +282,12 @@ def _create_statement_filters(
 
             def create_in_filter_provider(  # pyright: ignore
                 field_name: FieldNameType,
-            ) -> Callable[..., Optional[InCollectionFilter[field_def.type_hint]]]:  # type: ignore # pyright: ignore
+            ) -> Callable[..., InCollectionFilter[field_def.type_hint] | None]:  # type: ignore # pyright: ignore
                 def provide_in_filter(  # pyright: ignore
-                    values: Optional[list[field_name.type_hint]] = Parameter(  # type: ignore # pyright: ignore
+                    values: list[field_name.type_hint] | None = Parameter(  # type: ignore # pyright: ignore
                         query=camelize(f"{field_name.name}_in"), default=None, required=False
                     ),
-                ) -> Optional[InCollectionFilter[field_name.type_hint]]:  # type: ignore # pyright: ignore
+                ) -> InCollectionFilter[field_name.type_hint] | None:  # type: ignore # pyright: ignore
                     return (
                         InCollectionFilter[field_name.type_hint](field_name=field_name.name, values=values)  # type: ignore  # pyright: ignore
                         if values
@@ -415,14 +415,14 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
         if updated_filter := kwargs.get("updated_filter"):
             filters.append(updated_filter)
         if (
-            (search_filter := cast("Optional[SearchFilter]", kwargs.get("search_filter")))
+            (search_filter := cast("SearchFilter | None", kwargs.get("search_filter")))
             and search_filter is not None  # pyright: ignore[reportUnnecessaryComparison]
             and search_filter.field_name is not None  # pyright: ignore[reportUnnecessaryComparison]
             and search_filter.value is not None  # pyright: ignore[reportUnnecessaryComparison]
         ):
             filters.append(search_filter)
         if (
-            (order_by := cast("Optional[OrderByFilter]", kwargs.get("order_by_filter")))
+            (order_by := cast("OrderByFilter | None", kwargs.get("order_by_filter")))
             and order_by is not None  # pyright: ignore[reportUnnecessaryComparison]
             and order_by.field_name is not None  # pyright: ignore[reportUnnecessaryComparison]
         ):

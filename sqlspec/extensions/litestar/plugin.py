@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Union, cast, overload
 
 from litestar.di import Provide
 from litestar.plugins import CLIPlugin, InitPluginProtocol
@@ -49,7 +49,7 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
         self,
         config: Union["SyncConfigT", "AsyncConfigT", "DatabaseConfig", list["DatabaseConfig"]],
         *,
-        loader: "Optional[SQLFileLoader]" = None,
+        loader: "SQLFileLoader | None" = None,
     ) -> None:
         """Initialize SQLSpec plugin.
 
@@ -129,7 +129,7 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
 
         return app_config
 
-    def get_annotations(self) -> "list[type[Union[SyncConfigT, AsyncConfigT]]]":  # pyright: ignore[reportInvalidTypeVarUse]
+    def get_annotations(self) -> "list[type[SyncConfigT | AsyncConfigT]]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Return the list of annotations.
 
         Returns:
@@ -138,8 +138,8 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
         return [c.annotation for c in self.config]
 
     def get_annotation(
-        self, key: "Union[str, SyncConfigT, AsyncConfigT, type[Union[SyncConfigT, AsyncConfigT]]]"
-    ) -> "type[Union[SyncConfigT, AsyncConfigT]]":
+        self, key: "str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]"
+    ) -> "type[SyncConfigT | AsyncConfigT]":
         """Return the annotation for the given configuration.
 
         Args:
@@ -180,8 +180,8 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
     def get_config(self, name: "type[AsyncDatabaseConfig]") -> "AsyncDatabaseConfig": ...
 
     def get_config(
-        self, name: "Union[type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]], str, Any]"
-    ) -> "Union[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT], DatabaseConfig, SyncDatabaseConfig, AsyncDatabaseConfig]":
+        self, name: "type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]] | str | Any"
+    ) -> "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT] | DatabaseConfig | SyncDatabaseConfig | AsyncDatabaseConfig":
         """Get a configuration instance by name, supporting both base behavior and Litestar extensions.
 
         This method extends the base get_config to support Litestar-specific lookup patterns
@@ -228,11 +228,8 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
         raise KeyError(msg)
 
     def provide_request_session(
-        self,
-        key: "Union[str, SyncConfigT, AsyncConfigT, type[Union[SyncConfigT, AsyncConfigT]]]",
-        state: "State",
-        scope: "Scope",
-    ) -> "Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]":
+        self, key: "str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]", state: "State", scope: "Scope"
+    ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
         """Provide a database session for the specified configuration key from request scope.
 
         This is a convenience method that combines get_config and get_request_session
@@ -261,7 +258,7 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
         return db_config.get_request_session(state, scope)
 
     def provide_sync_request_session(
-        self, key: "Union[str, SyncConfigT, type[SyncConfigT]]", state: "State", scope: "Scope"
+        self, key: "str | SyncConfigT | type[SyncConfigT]", state: "State", scope: "Scope"
     ) -> "SyncDriverAdapterBase":
         """Provide a sync database session for the specified configuration key from request scope.
 
@@ -289,7 +286,7 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
         return cast("SyncDriverAdapterBase", session)
 
     def provide_async_request_session(
-        self, key: "Union[str, AsyncConfigT, type[AsyncConfigT]]", state: "State", scope: "Scope"
+        self, key: "str | AsyncConfigT | type[AsyncConfigT]", state: "State", scope: "Scope"
     ) -> "AsyncDriverAdapterBase":
         """Provide an async database session for the specified configuration key from request scope.
 
@@ -317,10 +314,7 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
         return cast("AsyncDriverAdapterBase", session)
 
     def provide_request_connection(
-        self,
-        key: "Union[str, SyncConfigT, AsyncConfigT, type[Union[SyncConfigT, AsyncConfigT]]]",
-        state: "State",
-        scope: "Scope",
+        self, key: "str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]", state: "State", scope: "Scope"
     ) -> Any:
         """Provide a database connection for the specified configuration key from request scope.
 
@@ -350,7 +344,7 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
         return db_config.get_request_connection(state, scope)
 
     def _get_database_config(
-        self, key: "Union[str, SyncConfigT, AsyncConfigT, type[Union[SyncConfigT, AsyncConfigT]]]"
+        self, key: "str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]"
     ) -> DatabaseConfig:
         """Get a DatabaseConfig wrapper instance by name.
 

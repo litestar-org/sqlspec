@@ -5,7 +5,7 @@ type coercion, error handling, and transaction management.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import asyncmy
 import asyncmy.errors  # pyright: ignore
@@ -75,9 +75,9 @@ class AsyncmyCursor:
 
     def __init__(self, connection: "AsyncmyConnection") -> None:
         self.connection = connection
-        self.cursor: Optional[Union[Cursor, DictCursor]] = None
+        self.cursor: Cursor | DictCursor | None = None
 
-    async def __aenter__(self) -> Union[Cursor, DictCursor]:
+    async def __aenter__(self) -> Cursor | DictCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
@@ -98,14 +98,14 @@ class AsyncmyExceptionHandler:
     async def __aenter__(self) -> None:
         return None
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "Optional[bool]":
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> "bool | None":
         if exc_type is None:
             return None
         if issubclass(exc_type, asyncmy.errors.Error):
             return self._map_mysql_exception(exc_val)
         return None
 
-    def _map_mysql_exception(self, e: Any) -> "Optional[bool]":
+    def _map_mysql_exception(self, e: Any) -> "bool | None":
         """Map MySQL exception to SQLSpec exception.
 
         Args:
@@ -157,52 +157,52 @@ class AsyncmyExceptionHandler:
             self._raise_generic_error(e, sqlstate, error_code)
         return None
 
-    def _raise_unique_violation(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+    def _raise_unique_violation(self, e: Any, sqlstate: "str | None", code: "int | None") -> None:
         code_str = f"[{sqlstate or code}]"
         msg = f"MySQL unique constraint violation {code_str}: {e}"
         raise UniqueViolationError(msg) from e
 
-    def _raise_foreign_key_violation(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+    def _raise_foreign_key_violation(self, e: Any, sqlstate: "str | None", code: "int | None") -> None:
         code_str = f"[{sqlstate or code}]"
         msg = f"MySQL foreign key constraint violation {code_str}: {e}"
         raise ForeignKeyViolationError(msg) from e
 
-    def _raise_not_null_violation(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+    def _raise_not_null_violation(self, e: Any, sqlstate: "str | None", code: "int | None") -> None:
         code_str = f"[{sqlstate or code}]"
         msg = f"MySQL not-null constraint violation {code_str}: {e}"
         raise NotNullViolationError(msg) from e
 
-    def _raise_check_violation(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+    def _raise_check_violation(self, e: Any, sqlstate: "str | None", code: "int | None") -> None:
         code_str = f"[{sqlstate or code}]"
         msg = f"MySQL check constraint violation {code_str}: {e}"
         raise CheckViolationError(msg) from e
 
-    def _raise_integrity_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+    def _raise_integrity_error(self, e: Any, sqlstate: "str | None", code: "int | None") -> None:
         code_str = f"[{sqlstate or code}]"
         msg = f"MySQL integrity constraint violation {code_str}: {e}"
         raise IntegrityError(msg) from e
 
-    def _raise_parsing_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+    def _raise_parsing_error(self, e: Any, sqlstate: "str | None", code: "int | None") -> None:
         code_str = f"[{sqlstate or code}]"
         msg = f"MySQL SQL syntax error {code_str}: {e}"
         raise SQLParsingError(msg) from e
 
-    def _raise_connection_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+    def _raise_connection_error(self, e: Any, sqlstate: "str | None", code: "int | None") -> None:
         code_str = f"[{sqlstate or code}]"
         msg = f"MySQL connection error {code_str}: {e}"
         raise DatabaseConnectionError(msg) from e
 
-    def _raise_transaction_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+    def _raise_transaction_error(self, e: Any, sqlstate: "str | None", code: "int | None") -> None:
         code_str = f"[{sqlstate or code}]"
         msg = f"MySQL transaction error {code_str}: {e}"
         raise TransactionError(msg) from e
 
-    def _raise_data_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+    def _raise_data_error(self, e: Any, sqlstate: "str | None", code: "int | None") -> None:
         code_str = f"[{sqlstate or code}]"
         msg = f"MySQL data error {code_str}: {e}"
         raise DataError(msg) from e
 
-    def _raise_generic_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
+    def _raise_generic_error(self, e: Any, sqlstate: "str | None", code: "int | None") -> None:
         if sqlstate and code:
             msg = f"MySQL database error [{sqlstate}:{code}]: {e}"
         elif sqlstate or code:
@@ -226,8 +226,8 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     def __init__(
         self,
         connection: "AsyncmyConnection",
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
@@ -239,7 +239,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
+        self._data_dictionary: AsyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         """Create cursor context manager for the connection.
@@ -260,7 +260,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         return AsyncmyExceptionHandler()
 
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
+    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Handle AsyncMy-specific operations before standard execution.
 
         Args:
@@ -349,7 +349,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             column_names = [desc[0] for desc in cursor.description or []]
 
             if fetched_data and not isinstance(fetched_data[0], dict):
-                data = [dict(zip(column_names, row)) for row in fetched_data]
+                data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
             else:
                 data = fetched_data
 

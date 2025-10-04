@@ -4,7 +4,7 @@ import contextlib
 import sqlite3
 import threading
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional, TypedDict, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -20,9 +20,9 @@ class SqliteConnectionParams(TypedDict, total=False):
     database: NotRequired[str]
     timeout: NotRequired[float]
     detect_types: NotRequired[int]
-    isolation_level: "NotRequired[Optional[str]]"
+    isolation_level: "NotRequired[str | None]"
     check_same_thread: NotRequired[bool]
-    factory: "NotRequired[Optional[type[SqliteConnection]]]"
+    factory: "NotRequired[type[SqliteConnection] | None]"
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
 

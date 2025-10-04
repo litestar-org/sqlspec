@@ -2,7 +2,7 @@
 
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -32,7 +32,7 @@ class AiosqliteConnectionParams(TypedDict, total=False):
     database: NotRequired[str]
     timeout: NotRequired[float]
     detect_types: NotRequired[int]
-    isolation_level: NotRequired[Optional[str]]
+    isolation_level: NotRequired[str | None]
     check_same_thread: NotRequired[bool]
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
@@ -57,12 +57,12 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
     def __init__(
         self,
         *,
-        pool_config: "Optional[Union[AiosqlitePoolParams, dict[str, Any]]]" = None,
-        pool_instance: "Optional[AiosqliteConnectionPool]" = None,
-        migration_config: "Optional[dict[str, Any]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        pool_config: "AiosqlitePoolParams | dict[str, Any] | None" = None,
+        pool_instance: "AiosqliteConnectionPool | None" = None,
+        migration_config: "dict[str, Any] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         """Initialize AioSQLite configuration.
 
@@ -138,7 +138,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
     @asynccontextmanager
     async def provide_session(
-        self, *_args: Any, statement_config: "Optional[StatementConfig]" = None, **_kwargs: Any
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
     ) -> "AsyncGenerator[AiosqliteDriver, None]":
         """Provide an async driver session context manager.
 

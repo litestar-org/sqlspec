@@ -1,7 +1,6 @@
 """Utility functions for DuckDB integration tests."""
 
 import uuid
-from typing import Optional
 
 
 def get_unique_table_name(base_name: str = "test_table") -> str:
@@ -17,7 +16,7 @@ def get_unique_table_name(base_name: str = "test_table") -> str:
     return f"{base_name}_{suffix}"
 
 
-def get_test_table_ddl(table_name: Optional[str] = None) -> tuple[str, str]:
+def get_test_table_ddl(table_name: str | None = None) -> tuple[str, str]:
     """Get DDL for creating a test table with a unique name.
 
     Args:

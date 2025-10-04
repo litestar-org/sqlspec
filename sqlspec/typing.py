@@ -1,9 +1,9 @@
 # pyright: ignore[reportAttributeAccessIssue]
 from collections.abc import Iterator, Mapping
 from functools import lru_cache
-from typing import TYPE_CHECKING, Annotated, Any, Protocol, Union
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, TypeAlias
 
-from typing_extensions import TypeAlias, TypeVar
+from typing_extensions import TypeVar
 
 from sqlspec._typing import (
     AIOSQL_INSTALLED,
@@ -92,7 +92,7 @@ PoolT_co = TypeVar("PoolT_co", covariant=True)
 
 :class:`~sqlspec.typing.PoolT_co`
 """
-ModelT = TypeVar("ModelT", bound="Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]")
+ModelT = TypeVar("ModelT", bound="DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub")
 """Type variable for model types.
 
 :class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
@@ -105,12 +105,12 @@ DictRow: TypeAlias = "dict[str, Any]"
 TupleRow: TypeAlias = "tuple[Any, ...]"
 """Type variable for TupleRow types."""
 
-SupportedSchemaModel: TypeAlias = "Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]"
+SupportedSchemaModel: TypeAlias = "DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub"
 """Type alias for pydantic or msgspec models.
 
 :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
 """
-StatementParameters: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
+StatementParameters: TypeAlias = "Any | dict[str, Any] | list[Any] | tuple[Any, ...] | None"
 """Type alias for statement parameters.
 
 Represents:
@@ -130,7 +130,7 @@ PydanticOrMsgspecT = SupportedSchemaModel
 :class:`msgspec.Struct` or :class:`pydantic.BaseModel`
 """
 ModelDict: TypeAlias = (
-    "Union[dict[str, Any], Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub], Any]"
+    "dict[str, Any] | DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub | Any"
 )
 """Type alias for model dictionaries.
 
@@ -138,7 +138,7 @@ Represents:
 - :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` |  :class:`pydantic.BaseModel`
 """
 ModelDictList: TypeAlias = (
-    "Sequence[Union[dict[str, Any], Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]]]"
+    "Sequence[dict[str, Any] | DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub]"
 )
 """Type alias for model dictionary lists.
 
@@ -146,7 +146,9 @@ A list or sequence of any of the following:
 - :type:`Sequence`[:type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
 
 """
-BulkModelDict: TypeAlias = "Union[Sequence[Union[dict[str, Any], Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]]], Any]"
+BulkModelDict: TypeAlias = (
+    "Sequence[dict[str, Any] | DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub] | Any"
+)
 """Type alias for bulk model dictionaries.
 
 Represents:

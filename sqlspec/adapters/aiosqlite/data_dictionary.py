@@ -1,12 +1,14 @@
 """SQLite-specific data dictionary for metadata queries via aiosqlite."""
 
 import re
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 
 logger = get_logger("adapters.aiosqlite.data_dictionary")
@@ -20,7 +22,7 @@ __all__ = ("AiosqliteAsyncDataDictionary",)
 class AiosqliteAsyncDataDictionary(AsyncDataDictionaryBase):
     """SQLite-specific async data dictionary via aiosqlite."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "Optional[VersionInfo]":
+    async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Get SQLite database version information.
 
         Args:

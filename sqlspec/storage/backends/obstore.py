@@ -7,7 +7,7 @@ and local file storage.
 import fnmatch
 import logging
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -30,8 +30,8 @@ class _AsyncArrowIterator:
         self.backend = backend
         self.pattern = pattern
         self.kwargs = kwargs
-        self._files_iterator: Optional[Iterator[str]] = None
-        self._current_file_iterator: Optional[Iterator[ArrowRecordBatch]] = None
+        self._files_iterator: Iterator[str] | None = None
+        self._current_file_iterator: Iterator[ArrowRecordBatch] | None = None
 
     def __aiter__(self) -> "_AsyncArrowIterator":
         return self
@@ -141,7 +141,7 @@ class ObStoreBackend:
 
         return cls(uri=store_uri, **kwargs)
 
-    def _resolve_path(self, path: "Union[str, Path]") -> str:
+    def _resolve_path(self, path: "str | Path") -> str:
         """Resolve path relative to base_path."""
         path_str = str(path)
         if path_str.startswith("file://"):
@@ -154,20 +154,20 @@ class ObStoreBackend:
             return f"{clean_base}/{clean_path}"
         return path_str
 
-    def read_bytes(self, path: "Union[str, Path]", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
+    def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes using obstore."""
         result = self.store.get(self._resolve_path(path))
         return cast("bytes", result.bytes().to_bytes())
 
-    def write_bytes(self, path: "Union[str, Path]", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes using obstore."""
         self.store.put(self._resolve_path(path), data)
 
-    def read_text(self, path: "Union[str, Path]", encoding: str = "utf-8", **kwargs: Any) -> str:
+    def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text using obstore."""
         return self.read_bytes(path, **kwargs).decode(encoding)
 
-    def write_text(self, path: "Union[str, Path]", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text using obstore."""
         self.write_bytes(path, data.encode(encoding), **kwargs)
 
@@ -180,7 +180,7 @@ class ObStoreBackend:
             paths.extend(item["path"] for item in batch)
         return sorted(paths)
 
-    def exists(self, path: "Union[str, Path]", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
+    def exists(self, path: "str | Path", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Check if object exists using obstore."""
         try:
             self.store.head(self._resolve_path(path))
@@ -188,15 +188,15 @@ class ObStoreBackend:
             return False
         return True
 
-    def delete(self, path: "Union[str, Path]", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    def delete(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Delete object using obstore."""
         self.store.delete(self._resolve_path(path))
 
-    def copy(self, source: "Union[str, Path]", destination: "Union[str, Path]", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Copy object using obstore."""
         self.store.copy(self._resolve_path(source), self._resolve_path(destination))
 
-    def move(self, source: "Union[str, Path]", destination: "Union[str, Path]", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Move object using obstore."""
         self.store.rename(self._resolve_path(source), self._resolve_path(destination))
 
@@ -229,7 +229,7 @@ class ObStoreBackend:
             return matching_objects
         return [obj for obj in all_objects if fnmatch.fnmatch(obj, resolved_pattern)]
 
-    def get_metadata(self, path: "Union[str, Path]", **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
+    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
         """Get object metadata using obstore."""
         resolved_path = self._resolve_path(path)
         result: dict[str, Any] = {}
@@ -253,12 +253,12 @@ class ObStoreBackend:
         else:
             return result
 
-    def is_object(self, path: "Union[str, Path]") -> bool:
+    def is_object(self, path: "str | Path") -> bool:
         """Check if path is an object using obstore."""
         resolved_path = self._resolve_path(path)
         return self.exists(path) and not resolved_path.endswith("/")
 
-    def is_path(self, path: "Union[str, Path]") -> bool:
+    def is_path(self, path: "str | Path") -> bool:
         """Check if path is a prefix/directory using obstore."""
         resolved_path = self._resolve_path(path)
 
@@ -271,7 +271,7 @@ class ObStoreBackend:
         except Exception:
             return False
 
-    def read_arrow(self, path: "Union[str, Path]", **kwargs: Any) -> ArrowTable:
+    def read_arrow(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
         """Read Arrow table using obstore."""
         resolved_path = self._resolve_path(path)
         if hasattr(self.store, "read_arrow"):
@@ -284,7 +284,7 @@ class ObStoreBackend:
 
         return pq.read_table(io.BytesIO(self.read_bytes(resolved_path)), **kwargs)
 
-    def write_arrow(self, path: "Union[str, Path]", table: ArrowTable, **kwargs: Any) -> None:
+    def write_arrow(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table using obstore."""
         resolved_path = self._resolve_path(path)
         if hasattr(self.store, "write_arrow"):
@@ -345,14 +345,14 @@ class ObStoreBackend:
             return self.store.sign_url(resolved_path, expires_in=expires_in)  # type: ignore[no-any-return]
         return f"{self.store_uri}/{resolved_path}"
 
-    async def read_bytes_async(self, path: "Union[str, Path]", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
+    async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes from storage asynchronously."""
         resolved_path = self._resolve_path(path)
         result = await self.store.get_async(resolved_path)
         bytes_obj = await result.bytes_async()
         return bytes_obj.to_bytes()  # type: ignore[no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def write_bytes_async(self, path: "Union[str, Path]", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes to storage asynchronously."""
         resolved_path = self._resolve_path(path)
         await self.store.put_async(resolved_path, data)
@@ -371,19 +371,17 @@ class ObStoreBackend:
 
         return sorted(objects)
 
-    async def read_text_async(self, path: "Union[str, Path]", encoding: str = "utf-8", **kwargs: Any) -> str:
+    async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage asynchronously."""
         data = await self.read_bytes_async(path, **kwargs)
         return data.decode(encoding)
 
-    async def write_text_async(
-        self, path: "Union[str, Path]", data: str, encoding: str = "utf-8", **kwargs: Any
-    ) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def write_text_async(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write text to storage asynchronously."""
         encoded_data = data.encode(encoding)
         await self.write_bytes_async(path, encoded_data, **kwargs)
 
-    async def exists_async(self, path: "Union[str, Path]", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
+    async def exists_async(self, path: "str | Path", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Check if object exists in storage asynchronously."""
         resolved_path = self._resolve_path(path)
         try:
@@ -392,24 +390,24 @@ class ObStoreBackend:
             return False
         return True
 
-    async def delete_async(self, path: "Union[str, Path]", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Delete object from storage asynchronously."""
         resolved_path = self._resolve_path(path)
         await self.store.delete_async(resolved_path)
 
-    async def copy_async(self, source: "Union[str, Path]", destination: "Union[str, Path]", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def copy_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Copy object in storage asynchronously."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         await self.store.copy_async(source_path, dest_path)
 
-    async def move_async(self, source: "Union[str, Path]", destination: "Union[str, Path]", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def move_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Move object in storage asynchronously."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         await self.store.rename_async(source_path, dest_path)
 
-    async def get_metadata_async(self, path: "Union[str, Path]", **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
+    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
         """Get object metadata from storage asynchronously."""
         resolved_path = self._resolve_path(path)
         result: dict[str, Any] = {}
@@ -433,7 +431,7 @@ class ObStoreBackend:
         else:
             return result
 
-    async def read_arrow_async(self, path: "Union[str, Path]", **kwargs: Any) -> ArrowTable:
+    async def read_arrow_async(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
         """Read Arrow table from storage asynchronously."""
         resolved_path = self._resolve_path(path)
         if hasattr(self.store, "read_arrow_async"):
@@ -446,7 +444,7 @@ class ObStoreBackend:
 
         return pq.read_table(io.BytesIO(await self.read_bytes_async(resolved_path)), **kwargs)
 
-    async def write_arrow_async(self, path: "Union[str, Path]", table: ArrowTable, **kwargs: Any) -> None:
+    async def write_arrow_async(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously."""
         resolved_path = self._resolve_path(path)
         if hasattr(self.store, "write_arrow_async"):

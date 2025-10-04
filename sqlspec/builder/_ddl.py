@@ -4,7 +4,7 @@ Provides builders for DDL operations including CREATE, DROP, ALTER,
 TRUNCATE, and other schema manipulation statements.
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
@@ -89,7 +89,7 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
         constraints.append(exp.ColumnConstraint(kind=exp.UniqueColumnConstraint()))
 
     if col.default is not None:
-        default_expr: Optional[exp.Expression] = None
+        default_expr: exp.Expression | None = None
         if isinstance(col.default, str):
             default_upper = col.default.upper()
             if default_upper == CURRENT_TIMESTAMP_KEYWORD:
@@ -127,7 +127,7 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
     return col_def
 
 
-def build_constraint_expression(constraint: "ConstraintDefinition") -> "Optional[exp.Expression]":
+def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expression | None":
     """Build SQLGlot expression for a table constraint."""
     if constraint.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY:
         pk_constraint = exp.PrimaryKey(expressions=[exp.to_identifier(col) for col in constraint.columns])
@@ -175,7 +175,7 @@ class DDLBuilder(QueryBuilder):
 
     def __init__(self, dialect: DialectType = None) -> None:
         super().__init__(dialect=dialect)
-        self._expression: Optional[exp.Expression] = None
+        self._expression: exp.Expression | None = None
 
     def _create_base_expression(self) -> exp.Expression:
         msg = "Subclasses must implement _create_base_expression."
@@ -190,7 +190,7 @@ class DDLBuilder(QueryBuilder):
             self._expression = self._create_base_expression()
         return super().build()
 
-    def to_statement(self, config: "Optional[StatementConfig]" = None) -> "SQL":
+    def to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
         return super().to_statement(config=config)
 
 
@@ -215,15 +215,15 @@ class ColumnDefinition:
         self,
         name: str,
         dtype: str,
-        default: "Optional[Any]" = None,
+        default: "Any | None" = None,
         not_null: bool = False,
         primary_key: bool = False,
         unique: bool = False,
         auto_increment: bool = False,
-        comment: "Optional[str]" = None,
-        check: "Optional[str]" = None,
-        generated: "Optional[str]" = None,
-        collate: "Optional[str]" = None,
+        comment: "str | None" = None,
+        check: "str | None" = None,
+        generated: "str | None" = None,
+        collate: "str | None" = None,
     ) -> None:
         self.name = name
         self.dtype = dtype
@@ -257,13 +257,13 @@ class ConstraintDefinition:
     def __init__(
         self,
         constraint_type: str,
-        name: "Optional[str]" = None,
-        columns: "Optional[list[str]]" = None,
-        references_table: "Optional[str]" = None,
-        references_columns: "Optional[list[str]]" = None,
-        condition: "Optional[str]" = None,
-        on_delete: "Optional[str]" = None,
-        on_update: "Optional[str]" = None,
+        name: "str | None" = None,
+        columns: "list[str] | None" = None,
+        references_table: "str | None" = None,
+        references_columns: "list[str] | None" = None,
+        condition: "str | None" = None,
+        on_delete: "str | None" = None,
+        on_update: "str | None" = None,
         deferrable: bool = False,
         initially_deferred: bool = False,
     ) -> None:
@@ -314,10 +314,10 @@ class CreateTable(DDLBuilder):
         self._columns: list[ColumnDefinition] = []
         self._constraints: list[ConstraintDefinition] = []
         self._table_options: dict[str, Any] = {}
-        self._schema: Optional[str] = None
-        self._tablespace: Optional[str] = None
-        self._like_table: Optional[str] = None
-        self._partition_by: Optional[str] = None
+        self._schema: str | None = None
+        self._tablespace: str | None = None
+        self._like_table: str | None = None
+        self._partition_by: str | None = None
 
     def in_schema(self, schema_name: str) -> "Self":
         """Set the schema for the table."""
@@ -353,15 +353,15 @@ class CreateTable(DDLBuilder):
         self,
         name: str,
         dtype: str,
-        default: "Optional[Any]" = None,
+        default: "Any | None" = None,
         not_null: bool = False,
         primary_key: bool = False,
         unique: bool = False,
         auto_increment: bool = False,
-        comment: "Optional[str]" = None,
-        check: "Optional[str]" = None,
-        generated: "Optional[str]" = None,
-        collate: "Optional[str]" = None,
+        comment: "str | None" = None,
+        check: "str | None" = None,
+        generated: "str | None" = None,
+        collate: "str | None" = None,
     ) -> "Self":
         """Add a column definition to the table."""
         if not name:
@@ -394,7 +394,7 @@ class CreateTable(DDLBuilder):
 
         return self
 
-    def primary_key_constraint(self, columns: "Union[str, list[str]]", name: "Optional[str]" = None) -> "Self":
+    def primary_key_constraint(self, columns: "str | list[str]", name: "str | None" = None) -> "Self":
         """Add a primary key constraint."""
         col_list = [columns] if isinstance(columns, str) else list(columns)
 
@@ -414,12 +414,12 @@ class CreateTable(DDLBuilder):
 
     def foreign_key_constraint(
         self,
-        columns: "Union[str, list[str]]",
+        columns: "str | list[str]",
         references_table: str,
-        references_columns: "Union[str, list[str]]",
-        name: "Optional[str]" = None,
-        on_delete: "Optional[str]" = None,
-        on_update: "Optional[str]" = None,
+        references_columns: "str | list[str]",
+        name: "str | None" = None,
+        on_delete: "str | None" = None,
+        on_update: "str | None" = None,
         deferrable: bool = False,
         initially_deferred: bool = False,
     ) -> "Self":
@@ -449,7 +449,7 @@ class CreateTable(DDLBuilder):
         self._constraints.append(constraint)
         return self
 
-    def unique_constraint(self, columns: "Union[str, list[str]]", name: "Optional[str]" = None) -> "Self":
+    def unique_constraint(self, columns: "str | list[str]", name: "str | None" = None) -> "Self":
         """Add a unique constraint."""
         col_list = [columns] if isinstance(columns, str) else list(columns)
 
@@ -461,7 +461,7 @@ class CreateTable(DDLBuilder):
         self._constraints.append(constraint)
         return self
 
-    def check_constraint(self, condition: Union[str, "ColumnExpression"], name: "Optional[str]" = None) -> "Self":
+    def check_constraint(self, condition: Union[str, "ColumnExpression"], name: "str | None" = None) -> "Self":
         """Add a check constraint."""
         if not condition:
             self._raise_sql_builder_error("Check constraint must have a condition")
@@ -563,11 +563,11 @@ class CreateTable(DDLBuilder):
         """Check if table already has a primary key constraint."""
         return any(c.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY for c in self._constraints)
 
-    def _find_primary_key_constraint(self) -> "Optional[ConstraintDefinition]":
+    def _find_primary_key_constraint(self) -> "ConstraintDefinition | None":
         """Find existing primary key constraint."""
         return next((c for c in self._constraints if c.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY), None)
 
-    def _validate_foreign_key_action(self, action: "Optional[str]", action_type: str) -> None:
+    def _validate_foreign_key_action(self, action: "str | None", action_type: str) -> None:
         """Validate foreign key action (ON DELETE or ON UPDATE)."""
         if action and action.upper() not in VALID_FOREIGN_KEY_ACTIONS:
             self._raise_sql_builder_error(f"Invalid {action_type} action: {action}")
@@ -596,7 +596,7 @@ class DropTable(DDLBuilder):
         super().__init__(dialect=dialect)
         self._table_name = table_name
         self._if_exists = False
-        self._cascade: Optional[bool] = None
+        self._cascade: bool | None = None
 
     def table(self, name: str) -> Self:
         self._table_name = name
@@ -636,9 +636,9 @@ class DropIndex(DDLBuilder):
         """
         super().__init__(dialect=dialect)
         self._index_name = index_name
-        self._table_name: Optional[str] = None
+        self._table_name: str | None = None
         self._if_exists = False
-        self._cascade: Optional[bool] = None
+        self._cascade: bool | None = None
 
     def name(self, index_name: str) -> Self:
         self._index_name = index_name
@@ -687,7 +687,7 @@ class DropView(DDLBuilder):
         super().__init__(dialect=dialect)
         self._view_name = view_name
         self._if_exists = False
-        self._cascade: Optional[bool] = None
+        self._cascade: bool | None = None
 
     def name(self, view_name: str) -> Self:
         self._view_name = view_name
@@ -728,7 +728,7 @@ class DropSchema(DDLBuilder):
         super().__init__(dialect=dialect)
         self._schema_name = schema_name
         self._if_exists = False
-        self._cascade: Optional[bool] = None
+        self._cascade: bool | None = None
 
     def name(self, schema_name: str) -> Self:
         self._schema_name = schema_name
@@ -768,12 +768,12 @@ class CreateIndex(DDLBuilder):
         """
         super().__init__(dialect=dialect)
         self._index_name = index_name
-        self._table_name: Optional[str] = None
-        self._columns: list[Union[str, exp.Ordered, exp.Expression]] = []
+        self._table_name: str | None = None
+        self._columns: list[str | exp.Ordered | exp.Expression] = []
         self._unique = False
         self._if_not_exists = False
-        self._using: Optional[str] = None
-        self._where: Optional[Union[str, exp.Expression]] = None
+        self._using: str | None = None
+        self._where: str | exp.Expression | None = None
 
     def name(self, index_name: str) -> Self:
         self._index_name = index_name
@@ -783,11 +783,11 @@ class CreateIndex(DDLBuilder):
         self._table_name = table_name
         return self
 
-    def columns(self, *cols: Union[str, exp.Ordered, exp.Expression]) -> Self:
+    def columns(self, *cols: str | exp.Ordered | exp.Expression) -> Self:
         self._columns.extend(cols)
         return self
 
-    def expressions(self, *exprs: Union[str, exp.Expression]) -> Self:
+    def expressions(self, *exprs: str | exp.Expression) -> Self:
         self._columns.extend(exprs)
         return self
 
@@ -803,7 +803,7 @@ class CreateIndex(DDLBuilder):
         self._using = method
         return self
 
-    def where(self, condition: Union[str, exp.Expression]) -> Self:
+    def where(self, condition: str | exp.Expression) -> Self:
         self._where = condition
         return self
 
@@ -845,8 +845,8 @@ class Truncate(DDLBuilder):
         """
         super().__init__(dialect=dialect)
         self._table_name = table_name
-        self._cascade: Optional[bool] = None
-        self._identity: Optional[str] = None
+        self._cascade: bool | None = None
+        self._identity: str | None = None
 
     def table(self, name: str) -> Self:
         self._table_name = name
@@ -894,15 +894,15 @@ class AlterOperation:
     def __init__(
         self,
         operation_type: str,
-        column_name: "Optional[str]" = None,
-        column_definition: "Optional[ColumnDefinition]" = None,
-        constraint_name: "Optional[str]" = None,
-        constraint_definition: "Optional[ConstraintDefinition]" = None,
-        new_type: "Optional[str]" = None,
-        new_name: "Optional[str]" = None,
-        after_column: "Optional[str]" = None,
+        column_name: "str | None" = None,
+        column_definition: "ColumnDefinition | None" = None,
+        constraint_name: "str | None" = None,
+        constraint_definition: "ConstraintDefinition | None" = None,
+        new_type: "str | None" = None,
+        new_name: "str | None" = None,
+        after_column: "str | None" = None,
         first: bool = False,
-        using_expression: "Optional[str]" = None,
+        using_expression: "str | None" = None,
     ) -> None:
         self.operation_type = operation_type
         self.column_name = column_name
@@ -931,7 +931,7 @@ class CreateSchema(DDLBuilder):
         super().__init__(dialect=dialect)
         self._schema_name = schema_name
         self._if_not_exists = False
-        self._authorization: Optional[str] = None
+        self._authorization: str | None = None
 
     def name(self, schema_name: str) -> Self:
         self._schema_name = schema_name
@@ -986,10 +986,10 @@ class CreateTableAsSelect(DDLBuilder):
 
     def __init__(self, dialect: DialectType = None) -> None:
         super().__init__(dialect=dialect)
-        self._table_name: Optional[str] = None
+        self._table_name: str | None = None
         self._if_not_exists = False
         self._columns: list[str] = []
-        self._select_query: Optional[object] = None
+        self._select_query: object | None = None
 
     def name(self, table_name: str) -> Self:
         self._table_name = table_name
@@ -1003,7 +1003,7 @@ class CreateTableAsSelect(DDLBuilder):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: "Union[str, exp.Expression]") -> Self:
+    def as_select(self, select_query: "str | exp.Expression") -> Self:
         self._select_query = select_query
         return self
 
@@ -1080,12 +1080,12 @@ class CreateMaterializedView(DDLBuilder):
         self._view_name = view_name
         self._if_not_exists = False
         self._columns: list[str] = []
-        self._select_query: Optional[Union[str, exp.Expression]] = None
-        self._with_data: Optional[bool] = None
-        self._refresh_mode: Optional[str] = None
+        self._select_query: str | exp.Expression | None = None
+        self._with_data: bool | None = None
+        self._refresh_mode: str | None = None
         self._storage_parameters: dict[str, Any] = {}
-        self._tablespace: Optional[str] = None
-        self._using_index: Optional[str] = None
+        self._tablespace: str | None = None
+        self._using_index: str | None = None
         self._hints: list[str] = []
 
     def name(self, view_name: str) -> Self:
@@ -1100,7 +1100,7 @@ class CreateMaterializedView(DDLBuilder):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: "Union[str, exp.Expression]") -> Self:
+    def as_select(self, select_query: "str | exp.Expression") -> Self:
         self._select_query = select_query
         return self
 
@@ -1205,7 +1205,7 @@ class CreateView(DDLBuilder):
         self._view_name = view_name
         self._if_not_exists = False
         self._columns: list[str] = []
-        self._select_query: Optional[Union[str, exp.Expression]] = None
+        self._select_query: str | exp.Expression | None = None
         self._hints: list[str] = []
 
     def name(self, view_name: str) -> Self:
@@ -1220,7 +1220,7 @@ class CreateView(DDLBuilder):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: "Union[str, exp.Expression]") -> Self:
+    def as_select(self, select_query: "str | exp.Expression") -> Self:
         self._select_query = select_query
         return self
 
@@ -1292,7 +1292,7 @@ class AlterTable(DDLBuilder):
         super().__init__(dialect=dialect)
         self._table_name = table_name
         self._operations: list[AlterOperation] = []
-        self._schema: Optional[str] = None
+        self._schema: str | None = None
         self._if_exists = False
 
     def if_exists(self) -> "Self":
@@ -1304,11 +1304,11 @@ class AlterTable(DDLBuilder):
         self,
         name: str,
         dtype: str,
-        default: "Optional[Any]" = None,
+        default: "Any | None" = None,
         not_null: bool = False,
         unique: bool = False,
-        comment: "Optional[str]" = None,
-        after: "Optional[str]" = None,
+        comment: "str | None" = None,
+        after: "str | None" = None,
         first: bool = False,
     ) -> "Self":
         """Add a new column to the table."""
@@ -1339,7 +1339,7 @@ class AlterTable(DDLBuilder):
         self._operations.append(operation)
         return self
 
-    def alter_column_type(self, name: str, new_type: str, using: "Optional[str]" = None) -> "Self":
+    def alter_column_type(self, name: str, new_type: str, using: "str | None" = None) -> "Self":
         """Change the type of an existing column."""
         if not name:
             self._raise_sql_builder_error("Column name must be a non-empty string")
@@ -1370,13 +1370,13 @@ class AlterTable(DDLBuilder):
     def add_constraint(
         self,
         constraint_type: str,
-        columns: "Optional[Union[str, list[str]]]" = None,
-        name: "Optional[str]" = None,
-        references_table: "Optional[str]" = None,
-        references_columns: "Optional[Union[str, list[str]]]" = None,
-        condition: "Optional[Union[str, ColumnExpression]]" = None,
-        on_delete: "Optional[str]" = None,
-        on_update: "Optional[str]" = None,
+        columns: "str | list[str] | None" = None,
+        name: "str | None" = None,
+        references_table: "str | None" = None,
+        references_columns: "str | list[str] | None" = None,
+        condition: "str | ColumnExpression | None" = None,
+        on_delete: "str | None" = None,
+        on_update: "str | None" = None,
     ) -> "Self":
         """Add a constraint to the table.
 
@@ -1401,7 +1401,7 @@ class AlterTable(DDLBuilder):
         if references_columns is not None:
             ref_col_list = [references_columns] if isinstance(references_columns, str) else list(references_columns)
 
-        condition_str: Optional[str] = None
+        condition_str: str | None = None
         if condition is not None:
             if has_sqlglot_expression(condition):
                 sqlglot_expr = condition.sqlglot_expression
@@ -1514,7 +1514,7 @@ class AlterTable(DDLBuilder):
             if not op.column_definition or op.column_definition.default is None:
                 self._raise_sql_builder_error("Default value required for SET DEFAULT")
             default_val = op.column_definition.default
-            default_expr: Optional[exp.Expression]
+            default_expr: exp.Expression | None
             if isinstance(default_val, str):
                 if self._is_sql_function_default(default_val):
                     default_expr = exp.maybe_parse(default_val)
@@ -1557,10 +1557,10 @@ class CommentOn(DDLBuilder):
             dialect: SQL dialect to use
         """
         super().__init__(dialect=dialect)
-        self._target_type: Optional[str] = None
-        self._table: Optional[str] = None
-        self._column: Optional[str] = None
-        self._comment: Optional[str] = None
+        self._target_type: str | None = None
+        self._table: str | None = None
+        self._column: str | None = None
+        self._comment: str | None = None
 
     def on_table(self, table: str) -> Self:
         self._target_type = "TABLE"
@@ -1605,7 +1605,7 @@ class RenameTable(DDLBuilder):
         """
         super().__init__(dialect=dialect)
         self._old_name = old_name
-        self._new_name: Optional[str] = None
+        self._new_name: str | None = None
 
     def table(self, old_name: str) -> Self:
         self._old_name = old_name

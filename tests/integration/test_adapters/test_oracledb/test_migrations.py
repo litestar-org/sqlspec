@@ -2,12 +2,13 @@
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
-from sqlspec.migrations.commands import AsyncMigrationCommands, create_migration_commands
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
 
 pytestmark = pytest.mark.xdist_group("oracle")
 
@@ -32,7 +33,7 @@ def test_oracledb_sync_migration_full_workflow(oracle_23ai_service: OracleServic
             },
             migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -195,7 +196,7 @@ def test_oracledb_sync_multiple_migrations_workflow(oracle_23ai_service: OracleS
             },
             migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -424,7 +425,7 @@ def test_oracledb_sync_migration_current_command(oracle_23ai_service: OracleServ
             },
             migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         try:
             commands.init(str(migration_dir), package=True)
@@ -547,7 +548,7 @@ def test_oracledb_sync_migration_error_handling(oracle_23ai_service: OracleServi
             },
             migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         try:
             commands.init(str(migration_dir), package=True)
@@ -654,7 +655,7 @@ def test_oracledb_sync_migration_with_transactions(oracle_23ai_service: OracleSe
             },
             migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         try:
             commands.init(str(migration_dir), package=True)

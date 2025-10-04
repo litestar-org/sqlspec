@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from contextlib import contextmanager, suppress
-from typing import TYPE_CHECKING, Any, Final, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import duckdb  # type: ignore[import-untyped]
 
@@ -51,9 +51,9 @@ class DuckDBConnectionPool:
         self,
         connection_config: "dict[str, Any]",
         pool_recycle_seconds: int = POOL_RECYCLE,
-        extensions: "Optional[list[dict[str, Any]]]" = None,
-        secrets: "Optional[list[dict[str, Any]]]" = None,
-        on_connection_create: "Optional[Callable[[DuckDBConnection], None]]" = None,
+        extensions: "list[dict[str, Any]] | None" = None,
+        secrets: "list[dict[str, Any]] | None" = None,
+        on_connection_create: "Callable[[DuckDBConnection], None] | None" = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the thread-local connection manager.

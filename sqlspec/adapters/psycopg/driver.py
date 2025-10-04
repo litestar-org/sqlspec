@@ -16,7 +16,7 @@ PostgreSQL Features:
 
 import datetime
 import io
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import psycopg
 
@@ -139,7 +139,7 @@ class PsycopgSyncCursor:
 
     def __init__(self, connection: PsycopgSyncConnection) -> None:
         self.connection = connection
-        self.cursor: Optional[Any] = None
+        self.cursor: Any | None = None
 
     def __enter__(self) -> Any:
         self.cursor = self.connection.cursor()
@@ -246,7 +246,7 @@ class PsycopgSyncExceptionHandler:
         msg = f"PostgreSQL operational error [{code}]: {e}"
         raise OperationalError(msg) from e
 
-    def _raise_generic_error(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_generic_error(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL database error [{code}]: {e}" if code else f"PostgreSQL database error: {e}"
         raise SQLSpecError(msg) from e
 
@@ -267,8 +267,8 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
     def __init__(
         self,
         connection: PsycopgSyncConnection,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
@@ -281,7 +281,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
             statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
+        self._data_dictionary: SyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
         """Create context manager for PostgreSQL cursor."""
@@ -330,7 +330,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         except Exception as cleanup_error:
             logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
 
-    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
+    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for PostgreSQL-specific special operations.
 
         Args:
@@ -507,7 +507,7 @@ class PsycopgAsyncCursor:
 
     def __init__(self, connection: "PsycopgAsyncConnection") -> None:
         self.connection = connection
-        self.cursor: Optional[Any] = None
+        self.cursor: Any | None = None
 
     async def __aenter__(self) -> Any:
         self.cursor = self.connection.cursor()
@@ -615,7 +615,7 @@ class PsycopgAsyncExceptionHandler:
         msg = f"PostgreSQL operational error [{code}]: {e}"
         raise OperationalError(msg) from e
 
-    def _raise_generic_error(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_generic_error(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL database error [{code}]: {e}" if code else f"PostgreSQL database error: {e}"
         raise SQLSpecError(msg) from e
 
@@ -637,8 +637,8 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     def __init__(
         self,
         connection: "PsycopgAsyncConnection",
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
@@ -651,7 +651,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             statement_config = default_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
+        self._data_dictionary: AsyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
         """Create async context manager for PostgreSQL cursor."""
@@ -700,7 +700,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         except Exception as cleanup_error:
             logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
 
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
+    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for PostgreSQL-specific special operations.
 
         Args:

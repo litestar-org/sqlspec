@@ -1,7 +1,7 @@
 """ADBC multi-dialect data dictionary for metadata queries."""
 
 import re
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -36,20 +36,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         """
         return str(cast("AdbcDriver", driver).dialect)
 
-    def get_dialect(self, driver: SyncDriverAdapterBase) -> str:
-        """Get database dialect name.
-
-        Overrides the mixin method to use ADBC's native dialect detection.
-
-        Args:
-            driver: ADBC driver instance
-
-        Returns:
-            Dialect name (e.g., 'postgres', 'sqlite', 'mysql')
-        """
-        return self._get_dialect(driver)
-
-    def get_version(self, driver: SyncDriverAdapterBase) -> "Optional[VersionInfo]":
+    def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get database version information based on detected dialect.
 
         Args:

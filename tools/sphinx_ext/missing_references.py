@@ -8,7 +8,7 @@ import inspect
 import re
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from docutils.utils import get_source_line
 
@@ -119,37 +119,6 @@ def _resolve_litestar_reference(target: str) -> bool:
         return False
 
 
-def _resolve_sqlalchemy_type_reference(target: str) -> bool:
-    """Attempt to resolve SQLAlchemy type references.
-
-    Args:
-        target: The target class/attribute name
-
-    Returns:
-        bool: True if reference exists, False otherwise
-    """
-    try:
-        from sqlalchemy import types as sa_types
-
-        type_classes = {
-            "TypeEngine",
-            "TypeDecorator",
-            "UserDefinedType",
-            "ExternalType",
-            "Dialect",
-            "_types.TypeDecorator",
-        }
-
-        if target in type_classes:
-            return True
-        if target.startswith("_types."):
-            _, attr = target.split(".")
-            return hasattr(sa_types, attr)
-        return hasattr(sa_types, target)
-    except ImportError:
-        return False
-
-
 def _resolve_sqlspec_reference(target: str, module: str) -> bool:
     """Attempt to resolve SQLSpec references.
 
@@ -237,7 +206,7 @@ def on_warn_missing_reference(app: Sphinx, domain: str, node: Node) -> bool | No
 
         # Check the original ignore logic first
         if reference_target_source_obj := cast(
-            "Optional[str]",
+            "str | None",
             attributes.get(  # pyright: ignore[reportUnknownMemberType]
                 "py:class",
                 attributes.get("py:meth", attributes.get("py:func")),  # pyright: ignore[reportUnknownMemberType]
@@ -259,33 +228,6 @@ def on_warn_missing_reference(app: Sphinx, domain: str, node: Node) -> bool | No
         # Handle SQLSpec references
         if _resolve_sqlspec_reference(target, module):  # pyright: ignore
             return True
-
-        # Handle SQLAlchemy type system references
-        if ref_type in {"class", "meth", "attr"} and any(
-            x in target for x in ["TypeDecorator", "TypeEngine", "Dialect", "ExternalType", "UserDefinedType"]
-        ):
-            return _resolve_sqlalchemy_type_reference(target)  # pyright: ignore
-
-        # Handle SQLAlchemy core references
-        if (isinstance(target, str) and target.startswith("sqlalchemy.")) or (
-            ref_type in {"class", "attr", "obj", "meth"}
-            and target
-            in {
-                "Engine",
-                "Session",
-                "Connection",
-                "MetaData",
-                "AsyncSession",
-                "AsyncEngine",
-                "AsyncConnection",
-                "sessionmaker",
-                "async_sessionmaker",
-            }
-        ):
-            # Ensure target is string before replace
-            clean_target = target.replace("sqlalchemy.", "") if isinstance(target, str) else ""
-            if clean_target and _resolve_sqlalchemy_reference(clean_target):
-                return True
 
         # Handle Litestar references
         if ref_type in {"class", "obj"} and (

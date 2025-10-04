@@ -5,7 +5,7 @@ Uses function-based pytest approach as per CLAUDE.md requirements.
 """
 
 from dataclasses import dataclass
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import msgspec
 import pytest
@@ -73,7 +73,7 @@ class SampleDataclass:
 
     name: str
     age: int
-    optional_field: "Optional[str]" = None
+    optional_field: "str | None" = None
 
 
 class SampleTypedDict(TypedDict):
@@ -81,7 +81,7 @@ class SampleTypedDict(TypedDict):
 
     name: str
     age: int
-    optional_field: "Optional[str]"
+    optional_field: "str | None"
 
 
 class MockSQLGlotExpression:
@@ -92,11 +92,7 @@ class MockSQLGlotExpression:
     """
 
     def __init__(
-        self,
-        this: Any = _UNSET,
-        expressions: Any = _UNSET,
-        parent: Any = _UNSET,
-        args: "Optional[dict[str, Any]]" = None,
+        self, this: Any = _UNSET, expressions: Any = _UNSET, parent: Any = _UNSET, args: "dict[str, Any] | None" = None
     ) -> None:
         # Only set attributes if they were explicitly provided
         if this is not _UNSET:
@@ -120,11 +116,7 @@ class MockLiteral:
     """Mock literal for testing."""
 
     def __init__(
-        self,
-        this: "Optional[Any]" = None,
-        is_string: bool = False,
-        is_number: bool = False,
-        parent: "Optional[Any]" = None,
+        self, this: "Any | None" = None, is_string: bool = False, is_number: bool = False, parent: "Any | None" = None
     ) -> None:
         if this is not None:
             self.this = this
@@ -139,7 +131,7 @@ class MockLiteral:
 class MockParameterProtocol:
     """Mock parameter with protocol attributes."""
 
-    def __init__(self, style: "Optional[str]" = None, name: "Optional[str]" = None) -> None:
+    def __init__(self, style: "str | None" = None, name: "str | None" = None) -> None:
         if style is not None:
             self.style = style
         if name is not None:

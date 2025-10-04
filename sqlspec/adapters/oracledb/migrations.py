@@ -5,7 +5,7 @@ to handle Oracle's unique SQL syntax requirements.
 """
 
 import getpass
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec._sql import sql
 from sqlspec.builder import CreateTable
@@ -85,7 +85,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         driver.execute_script(create_script)
         driver.commit()
 
-    def get_current_version(self, driver: "SyncDriverAdapterBase") -> "Optional[str]":
+    def get_current_version(self, driver: "SyncDriverAdapterBase") -> "str | None":
         """Get the latest applied migration version.
 
         Args:
@@ -181,7 +181,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         await driver.execute_script(create_script)
         await driver.commit()
 
-    async def get_current_version(self, driver: "AsyncDriverAdapterBase") -> "Optional[str]":
+    async def get_current_version(self, driver: "AsyncDriverAdapterBase") -> "str | None":
         """Get the latest applied migration version.
 
         Args:

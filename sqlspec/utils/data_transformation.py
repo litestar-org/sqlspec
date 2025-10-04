@@ -5,7 +5,8 @@ field name conversion when mapping database results to schema objects.
 Used primarily for msgspec field name conversion with rename configurations.
 """
 
-from typing import Any, Callable, Union
+from collections.abc import Callable
+from typing import Any
 
 __all__ = ("transform_dict_keys",)
 
@@ -30,7 +31,7 @@ def _safe_convert_key(key: Any, converter: Callable[[str], str]) -> Any:
         return key
 
 
-def transform_dict_keys(data: Union[dict, list, Any], converter: Callable[[str], str]) -> Union[dict, list, Any]:
+def transform_dict_keys(data: dict | list | Any, converter: Callable[[str], str]) -> dict | list | Any:
     """Transform dictionary keys using the provided converter function.
 
     Recursively transforms all dictionary keys in a data structure using

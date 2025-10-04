@@ -14,7 +14,7 @@ Components:
 import threading
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
@@ -173,8 +173,8 @@ class CacheNode:
         """
         self.key = key
         self.value = value
-        self.prev: Optional[CacheNode] = None
-        self.next: Optional[CacheNode] = None
+        self.prev: CacheNode | None = None
+        self.next: CacheNode | None = None
         self.timestamp = time.time()
         self.access_count = 1
 
@@ -190,7 +190,7 @@ class UnifiedCache:
 
     __slots__ = UNIFIED_CACHE_SLOTS
 
-    def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: Optional[int] = DEFAULT_TTL_SECONDS) -> None:
+    def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: int | None = DEFAULT_TTL_SECONDS) -> None:
         """Initialize unified cache.
 
         Args:
@@ -208,7 +208,7 @@ class UnifiedCache:
         self._head.next = self._tail
         self._tail.prev = self._head
 
-    def get(self, key: CacheKey) -> Optional[Any]:
+    def get(self, key: CacheKey) -> Any | None:
         """Get value from cache.
 
         Args:
@@ -275,7 +275,7 @@ class UnifiedCache:
             True if key was found and deleted, False otherwise
         """
         with self._lock:
-            node: Optional[CacheNode] = self._cache.get(key)
+            node: CacheNode | None = self._cache.get(key)
             if node is None:
                 return False
 
@@ -306,7 +306,7 @@ class UnifiedCache:
     def _add_to_head(self, node: CacheNode) -> None:
         """Add node to head of list."""
         node.prev = self._head
-        head_next: Optional[CacheNode] = self._head.next
+        head_next: CacheNode | None = self._head.next
         node.next = head_next
         if head_next is not None:
             head_next.prev = node
@@ -314,8 +314,8 @@ class UnifiedCache:
 
     def _remove_node(self, node: CacheNode) -> None:
         """Remove node from linked list."""
-        node_prev: Optional[CacheNode] = node.prev
-        node_next: Optional[CacheNode] = node.next
+        node_prev: CacheNode | None = node.prev
+        node_next: CacheNode | None = node.next
         if node_prev is not None:
             node_prev.next = node_next
         if node_next is not None:
@@ -341,7 +341,7 @@ class UnifiedCache:
             return not (ttl is not None and time.time() - node.timestamp > ttl)
 
 
-_default_cache: Optional[UnifiedCache] = None
+_default_cache: UnifiedCache | None = None
 _cache_lock = threading.Lock()
 
 
@@ -381,7 +381,7 @@ def get_cache_statistics() -> dict[str, CacheStats]:
     return stats
 
 
-_global_cache_config: "Optional[CacheConfig]" = None
+_global_cache_config: "CacheConfig | None" = None
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -558,7 +558,7 @@ class CachedStatement:
     """
 
     compiled_sql: str
-    parameters: Optional[Union[tuple[Any, ...], dict[str, Any]]]  # None allowed for static script compilation
+    parameters: tuple[Any, ...] | dict[str, Any] | None  # None allowed for static script compilation
     expression: Optional["exp.Expression"]
 
     def get_parameters_view(self) -> "ParametersView":
@@ -572,7 +572,7 @@ class CachedStatement:
         return ParametersView(list(self.parameters), {})
 
 
-def create_cache_key(level: str, key: str, dialect: Optional[str] = None) -> str:
+def create_cache_key(level: str, key: str, dialect: str | None = None) -> str:
     """Create optimized cache key using string concatenation.
 
     Args:
@@ -592,7 +592,7 @@ class MultiLevelCache:
 
     __slots__ = ("_cache",)
 
-    def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: Optional[int] = DEFAULT_TTL_SECONDS) -> None:
+    def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: int | None = DEFAULT_TTL_SECONDS) -> None:
         """Initialize multi-level cache.
 
         Args:
@@ -601,7 +601,7 @@ class MultiLevelCache:
         """
         self._cache = UnifiedCache(max_size, ttl_seconds)
 
-    def get(self, level: str, key: str, dialect: Optional[str] = None) -> Optional[Any]:
+    def get(self, level: str, key: str, dialect: str | None = None) -> Any | None:
         """Get value from cache with level and dialect namespace.
 
         Args:
@@ -616,7 +616,7 @@ class MultiLevelCache:
         cache_key = CacheKey((full_key,))
         return self._cache.get(cache_key)
 
-    def put(self, level: str, key: str, value: Any, dialect: Optional[str] = None) -> None:
+    def put(self, level: str, key: str, value: Any, dialect: str | None = None) -> None:
         """Put value in cache with level and dialect namespace.
 
         Args:
@@ -629,7 +629,7 @@ class MultiLevelCache:
         cache_key = CacheKey((full_key,))
         self._cache.put(cache_key, value)
 
-    def delete(self, level: str, key: str, dialect: Optional[str] = None) -> bool:
+    def delete(self, level: str, key: str, dialect: str | None = None) -> bool:
         """Delete entry from cache.
 
         Args:
@@ -653,7 +653,7 @@ class MultiLevelCache:
         return self._cache.get_stats()
 
 
-_multi_level_cache: Optional[MultiLevelCache] = None
+_multi_level_cache: MultiLevelCache | None = None
 
 
 def get_cache() -> MultiLevelCache:

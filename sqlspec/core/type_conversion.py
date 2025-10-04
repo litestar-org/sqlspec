@@ -5,9 +5,10 @@ adapters, with MyPyC-compatible optimizations.
 """
 
 import re
+from collections.abc import Callable
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
-from typing import Any, Callable, Final, Optional
+from typing import Any, Final
 from uuid import UUID
 
 from sqlspec._serialization import decode_json
@@ -38,7 +39,7 @@ class BaseTypeConverter:
 
     __slots__ = ()
 
-    def detect_type(self, value: str) -> Optional[str]:
+    def detect_type(self, value: str) -> str | None:
         """Detect special types from string values.
 
         Args:

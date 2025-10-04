@@ -3,7 +3,7 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
@@ -85,12 +85,12 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     def __init__(
         self,
         *,
-        pool_config: Optional[Union[PsqlpyPoolParams, dict[str, Any]]] = None,
-        pool_instance: Optional[ConnectionPool] = None,
-        migration_config: Optional[dict[str, Any]] = None,
-        statement_config: Optional[StatementConfig] = None,
-        driver_features: Optional[dict[str, Any]] = None,
-        bind_key: Optional[str] = None,
+        pool_config: PsqlpyPoolParams | dict[str, Any] | None = None,
+        pool_instance: ConnectionPool | None = None,
+        migration_config: dict[str, Any] | None = None,
+        statement_config: StatementConfig | None = None,
+        driver_features: dict[str, Any] | None = None,
+        bind_key: str | None = None,
     ) -> None:
         """Initialize Psqlpy configuration.
 
@@ -185,7 +185,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     @asynccontextmanager
     async def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> AsyncGenerator[PsqlpyDriver, None]:
         """Provide an async driver session context manager.
 

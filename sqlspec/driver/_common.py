@@ -2,7 +2,7 @@
 
 import re
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional, TypeVar, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -100,18 +100,7 @@ class VersionInfo:
 class DataDictionaryMixin:
     """Mixin providing common data dictionary functionality."""
 
-    def get_dialect(self, driver: Any) -> str:
-        """Get database dialect name.
-
-        Args:
-            driver: Database driver instance
-
-        Returns:
-            Dialect name (e.g., 'postgres', 'sqlite', 'mysql')
-        """
-        return str(driver.dialect)
-
-    def parse_version_string(self, version_str: str) -> "Optional[VersionInfo]":
+    def parse_version_string(self, version_str: str) -> "VersionInfo | None":
         """Parse version string into VersionInfo.
 
         Args:
@@ -139,7 +128,7 @@ class DataDictionaryMixin:
 
         return None
 
-    def detect_version_with_queries(self, driver: Any, queries: "list[str]") -> "Optional[VersionInfo]":
+    def detect_version_with_queries(self, driver: Any, queries: "list[str]") -> "VersionInfo | None":
         """Try multiple version queries to detect database version.
 
         Args:
@@ -195,7 +184,7 @@ class ScriptExecutionResult(NamedTuple):
     """Result from script execution with statement count information."""
 
     cursor_result: Any
-    rowcount_override: Optional[int]
+    rowcount_override: int | None
     special_data: Any
     statement_count: int
     successful_statements: int
@@ -205,23 +194,23 @@ class ExecutionResult(NamedTuple):
     """Execution result containing all data needed for SQLResult building."""
 
     cursor_result: Any
-    rowcount_override: Optional[int]
+    rowcount_override: int | None
     special_data: Any
     selected_data: Optional["list[dict[str, Any]]"]
     column_names: Optional["list[str]"]
-    data_row_count: Optional[int]
-    statement_count: Optional[int]
-    successful_statements: Optional[int]
+    data_row_count: int | None
+    statement_count: int | None
+    successful_statements: int | None
     is_script_result: bool
     is_select_result: bool
     is_many_result: bool
-    last_inserted_id: Optional[Union[int, str]] = None
+    last_inserted_id: int | str | None = None
 
 
 EXEC_CURSOR_RESULT: Final[int] = 0
 EXEC_ROWCOUNT_OVERRIDE: Final[int] = 1
 EXEC_SPECIAL_DATA: Final[int] = 2
-DEFAULT_EXECUTION_RESULT: Final[tuple[Any, Optional[int], Any]] = (None, None, None)
+DEFAULT_EXECUTION_RESULT: Final[tuple[Any, int | None, Any]] = (None, None, None)
 
 
 @trait
@@ -234,7 +223,7 @@ class CommonDriverAttributesMixin:
     driver_features: "dict[str, Any]"
 
     def __init__(
-        self, connection: "Any", statement_config: "StatementConfig", driver_features: "Optional[dict[str, Any]]" = None
+        self, connection: "Any", statement_config: "StatementConfig", driver_features: "dict[str, Any] | None" = None
     ) -> None:
         """Initialize driver adapter with connection and configuration.
 
@@ -251,17 +240,17 @@ class CommonDriverAttributesMixin:
         self,
         cursor_result: Any,
         *,
-        rowcount_override: Optional[int] = None,
+        rowcount_override: int | None = None,
         special_data: Any = None,
         selected_data: Optional["list[dict[str, Any]]"] = None,
         column_names: Optional["list[str]"] = None,
-        data_row_count: Optional[int] = None,
-        statement_count: Optional[int] = None,
-        successful_statements: Optional[int] = None,
+        data_row_count: int | None = None,
+        statement_count: int | None = None,
+        successful_statements: int | None = None,
         is_script_result: bool = False,
         is_select_result: bool = False,
         is_many_result: bool = False,
-        last_inserted_id: Optional[Union[int, str]] = None,
+        last_inserted_id: int | str | None = None,
     ) -> ExecutionResult:
         """Create ExecutionResult with all necessary data for any operation type.
 
@@ -339,11 +328,11 @@ class CommonDriverAttributesMixin:
 
     def prepare_statement(
         self,
-        statement: "Union[Statement, QueryBuilder]",
-        parameters: "tuple[Union[StatementParameters, StatementFilter], ...]" = (),
+        statement: "Statement | QueryBuilder",
+        parameters: "tuple[StatementParameters | StatementFilter, ...]" = (),
         *,
         statement_config: "StatementConfig",
-        kwargs: "Optional[dict[str, Any]]" = None,
+        kwargs: "dict[str, Any] | None" = None,
     ) -> "SQL":
         """Build SQL statement from various input types.
 
@@ -432,7 +421,7 @@ class CommonDriverAttributesMixin:
         parameters: Any,
         statement_config: "StatementConfig",
         is_many: bool = False,
-        prepared_statement: Optional[Any] = None,  # pyright: ignore[reportUnusedParameter]
+        prepared_statement: Any | None = None,  # pyright: ignore[reportUnusedParameter]
     ) -> Any:
         """Prepare parameters for database driver consumption.
 
@@ -666,7 +655,7 @@ class CommonDriverAttributesMixin:
         base_hash = hash((statement.sql, params_key, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 
-    def _get_dominant_parameter_style(self, parameters: "list[Any]") -> "Optional[ParameterStyle]":
+    def _get_dominant_parameter_style(self, parameters: "list[Any]") -> "ParameterStyle | None":
         """Determine the dominant parameter style from parameter info list.
 
         Args:
@@ -699,7 +688,7 @@ class CommonDriverAttributesMixin:
     def find_filter(
         filter_type: "type[FilterTypeT]",
         filters: "Sequence[StatementFilter | StatementParameters] | Sequence[StatementFilter]",
-    ) -> "Optional[FilterTypeT]":
+    ) -> "FilterTypeT | None":
         """Get the filter specified by filter type from the filters.
 
         Args:

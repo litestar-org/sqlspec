@@ -6,7 +6,7 @@ and transaction management.
 
 import decimal
 import re
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import psqlpy
 import psqlpy.exceptions
@@ -155,47 +155,47 @@ class PsqlpyExceptionHandler:
         else:
             self._raise_generic_error(e, None)
 
-    def _raise_unique_violation(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_unique_violation(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL unique constraint violation: {e}"
         raise UniqueViolationError(msg) from e
 
-    def _raise_foreign_key_violation(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_foreign_key_violation(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL foreign key constraint violation: {e}"
         raise ForeignKeyViolationError(msg) from e
 
-    def _raise_not_null_violation(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_not_null_violation(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL not-null constraint violation: {e}"
         raise NotNullViolationError(msg) from e
 
-    def _raise_check_violation(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_check_violation(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL check constraint violation: {e}"
         raise CheckViolationError(msg) from e
 
-    def _raise_integrity_error(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_integrity_error(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL integrity constraint violation: {e}"
         raise IntegrityError(msg) from e
 
-    def _raise_parsing_error(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_parsing_error(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL SQL syntax error: {e}"
         raise SQLParsingError(msg) from e
 
-    def _raise_connection_error(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_connection_error(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL connection error: {e}"
         raise DatabaseConnectionError(msg) from e
 
-    def _raise_transaction_error(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_transaction_error(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL transaction error: {e}"
         raise TransactionError(msg) from e
 
-    def _raise_data_error(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_data_error(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL data error: {e}"
         raise DataError(msg) from e
 
-    def _raise_operational_error(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_operational_error(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL operational error: {e}"
         raise OperationalError(msg) from e
 
-    def _raise_generic_error(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_generic_error(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL database error: {e}"
         raise SQLSpecError(msg) from e
 
@@ -213,8 +213,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     def __init__(
         self,
         connection: "PsqlpyConnection",
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
@@ -226,7 +226,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
+        self._data_dictionary: AsyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: "PsqlpyConnection") -> "PsqlpyCursor":
         """Create context manager for psqlpy cursor.
@@ -247,7 +247,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """
         return PsqlpyExceptionHandler()
 
-    async def _try_special_handling(self, cursor: "PsqlpyConnection", statement: SQL) -> "Optional[SQLResult]":
+    async def _try_special_handling(self, cursor: "PsqlpyConnection", statement: SQL) -> "SQLResult | None":
         """Hook for psqlpy-specific special operations.
 
         Args:

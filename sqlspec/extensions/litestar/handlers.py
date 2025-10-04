@@ -1,8 +1,8 @@
 import contextlib
 import inspect
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Any, Callable, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from litestar.constants import HTTP_DISCONNECT, HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
 
@@ -66,8 +66,8 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
 def autocommit_handler_maker(
     connection_scope_key: str,
     commit_on_redirect: bool = False,
-    extra_commit_statuses: "Optional[set[int]]" = None,
-    extra_rollback_statuses: "Optional[set[int]]" = None,
+    extra_commit_statuses: "set[int] | None" = None,
+    extra_rollback_statuses: "set[int] | None" = None,
 ) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
     """Create handler for automatic transaction commit/rollback based on response status.
 

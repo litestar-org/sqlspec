@@ -3,7 +3,7 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 import asyncmy
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
@@ -44,7 +44,7 @@ class AsyncmyConnectionParams(TypedDict, total=False):
     ssl: NotRequired[Any]
     sql_mode: NotRequired[str]
     init_command: NotRequired[str]
-    cursor_class: NotRequired[Union[type["Cursor"], type["DictCursor"]]]
+    cursor_class: NotRequired[type["Cursor"] | type["DictCursor"]]
     extra: NotRequired[dict[str, Any]]
 
 
@@ -66,12 +66,12 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
     def __init__(
         self,
         *,
-        pool_config: "Optional[Union[AsyncmyPoolParams, dict[str, Any]]]" = None,
-        pool_instance: "Optional[AsyncmyPool]" = None,
-        migration_config: Optional[dict[str, Any]] = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        pool_config: "AsyncmyPoolParams | dict[str, Any] | None" = None,
+        pool_instance: "AsyncmyPool | None" = None,
+        migration_config: dict[str, Any] | None = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         """Initialize Asyncmy configuration.
 
@@ -146,7 +146,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
     @asynccontextmanager
     async def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> AsyncGenerator[AsyncmyDriver, None]:
         """Provide an async driver session context manager.
 

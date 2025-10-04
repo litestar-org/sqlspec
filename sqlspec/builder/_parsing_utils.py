@@ -5,7 +5,7 @@ passed as strings to builder methods.
 """
 
 import contextlib
-from typing import Any, Final, Optional, Union, cast
+from typing import Any, Final, cast
 
 from sqlglot import exp, maybe_parse, parse_one
 
@@ -18,7 +18,7 @@ from sqlspec.utils.type_guards import (
 )
 
 
-def extract_column_name(column: Union[str, exp.Column]) -> str:
+def extract_column_name(column: str | exp.Column) -> str:
     """Extract column name from column expression for parameter naming.
 
     Args:
@@ -39,9 +39,7 @@ def extract_column_name(column: Union[str, exp.Column]) -> str:
     return "column"
 
 
-def parse_column_expression(
-    column_input: Union[str, exp.Expression, Any], builder: Optional[Any] = None
-) -> exp.Expression:
+def parse_column_expression(column_input: str | exp.Expression | Any, builder: Any | None = None) -> exp.Expression:
     """Parse a column input that might be a complex expression.
 
     Handles cases like:
@@ -87,7 +85,7 @@ def parse_column_expression(
     return exp.maybe_parse(column_input) or exp.column(str(column_input))
 
 
-def parse_table_expression(table_input: str, explicit_alias: Optional[str] = None) -> exp.Expression:
+def parse_table_expression(table_input: str, explicit_alias: str | None = None) -> exp.Expression:
     """Parses a table string that can be a name, a name with an alias, or a subquery string."""
     with contextlib.suppress(Exception):
         parsed = parse_one(f"SELECT * FROM {table_input}")
@@ -102,7 +100,7 @@ def parse_table_expression(table_input: str, explicit_alias: Optional[str] = Non
     return exp.to_table(table_input, alias=explicit_alias)
 
 
-def parse_order_expression(order_input: Union[str, exp.Expression]) -> exp.Expression:
+def parse_order_expression(order_input: str | exp.Expression) -> exp.Expression:
     """Parse an ORDER BY expression that might include direction.
 
     Handles cases like:
@@ -129,7 +127,7 @@ def parse_order_expression(order_input: Union[str, exp.Expression]) -> exp.Expre
 
 
 def parse_condition_expression(
-    condition_input: Union[str, exp.Expression, tuple[str, Any]], builder: "Any" = None
+    condition_input: str | exp.Expression | tuple[str, Any], builder: "Any" = None
 ) -> exp.Expression:
     """Parse a condition that might be complex SQL.
 
@@ -193,13 +191,13 @@ def parse_condition_expression(
                 )
         condition_input = converted_condition
 
-    parsed: Optional[exp.Expression] = exp.maybe_parse(condition_input)
+    parsed: exp.Expression | None = exp.maybe_parse(condition_input)
     if parsed:
         return parsed
     return exp.condition(condition_input)
 
 
-def extract_sql_object_expression(value: Any, builder: Optional[Any] = None) -> exp.Expression:
+def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp.Expression:
     """Extract SQLGlot expression from SQL object value with parameter merging.
 
     Handles the common pattern of:
