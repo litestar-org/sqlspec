@@ -2,11 +2,12 @@
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from sqlspec.adapters.adbc.config import AdbcConfig
-from sqlspec.migrations.commands import create_migration_commands
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
 
 # xdist_group is assigned per test based on database backend to enable parallel execution
 
@@ -22,7 +23,7 @@ def test_adbc_sqlite_migration_full_workflow() -> None:
             connection_config={"driver_name": "adbc_driver_sqlite", "uri": f"file:{db_path}", "autocommit": True},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -89,7 +90,7 @@ def test_adbc_multiple_migrations_workflow() -> None:
             connection_config={"driver_name": "adbc_driver_sqlite", "uri": f"file:{db_path}", "autocommit": True},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -183,7 +184,7 @@ def test_adbc_migration_current_command() -> None:
             connection_config={"driver_name": "adbc_driver_sqlite", "uri": f"file:{db_path}", "autocommit": True},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -220,7 +221,7 @@ def test_adbc_migration_error_handling() -> None:
             connection_config={"driver_name": "adbc_driver_sqlite", "uri": f"file:{db_path}", "autocommit": True},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -254,7 +255,7 @@ def test_adbc_migration_with_transactions() -> None:
             connection_config={"driver_name": "adbc_driver_sqlite", "uri": f"file:{db_path}", "autocommit": True},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 

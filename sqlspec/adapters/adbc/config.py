@@ -1,8 +1,9 @@
 """ADBC database configuration."""
 
 import logging
+from collections.abc import Callable
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -73,11 +74,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     def __init__(
         self,
         *,
-        connection_config: Optional[Union[AdbcConnectionParams, dict[str, Any]]] = None,
-        migration_config: Optional[dict[str, Any]] = None,
-        statement_config: Optional[StatementConfig] = None,
-        driver_features: Optional[dict[str, Any]] = None,
-        bind_key: Optional[str] = None,
+        connection_config: AdbcConnectionParams | dict[str, Any] | None = None,
+        migration_config: dict[str, Any] | None = None,
+        statement_config: StatementConfig | None = None,
+        driver_features: dict[str, Any] | None = None,
+        bind_key: str | None = None,
     ) -> None:
         """Initialize configuration.
 
@@ -284,7 +285,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             connection.close()
 
     def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractContextManager[AdbcDriver]":
         """Provide a driver session context manager.
 

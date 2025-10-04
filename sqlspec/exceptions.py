@@ -1,6 +1,6 @@
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Optional, Union
+from typing import Any
 
 __all__ = (
     "CheckViolationError",
@@ -63,7 +63,7 @@ class SQLSpecError(Exception):
 class MissingDependencyError(SQLSpecError, ImportError):
     """Raised when a required dependency is not installed."""
 
-    def __init__(self, package: str, install_package: Optional[str] = None) -> None:
+    def __init__(self, package: str, install_package: str | None = None) -> None:
         super().__init__(
             f"Package {package!r} is not installed but required. You can install it by running "
             f"'pip install sqlspec[{install_package or package}]' to install sqlspec with the required extra "
@@ -85,7 +85,7 @@ class ConfigResolverError(SQLSpecError):
 class SQLParsingError(SQLSpecError):
     """Issues parsing SQL statements."""
 
-    def __init__(self, message: Optional[str] = None) -> None:
+    def __init__(self, message: str | None = None) -> None:
         if message is None:
             message = "Issues parsing SQL statement."
         super().__init__(message)
@@ -94,7 +94,7 @@ class SQLParsingError(SQLSpecError):
 class SQLBuilderError(SQLSpecError):
     """Issues Building or Generating SQL statements."""
 
-    def __init__(self, message: Optional[str] = None) -> None:
+    def __init__(self, message: str | None = None) -> None:
         if message is None:
             message = "Issues building SQL statement."
         super().__init__(message)
@@ -103,7 +103,7 @@ class SQLBuilderError(SQLSpecError):
 class SQLConversionError(SQLSpecError):
     """Issues converting SQL statements."""
 
-    def __init__(self, message: Optional[str] = None) -> None:
+    def __init__(self, message: str | None = None) -> None:
         if message is None:
             message = "Issues converting SQL statement."
         super().__init__(message)
@@ -176,7 +176,7 @@ class FileNotFoundInStorageError(StorageOperationFailedError):
 class SQLFileNotFoundError(SQLSpecError):
     """Raised when a SQL file cannot be found."""
 
-    def __init__(self, name: str, path: "Optional[str]" = None) -> None:
+    def __init__(self, name: str, path: "str | None" = None) -> None:
         """Initialize the error.
 
         Args:
@@ -209,7 +209,7 @@ class SQLFileParseError(SQLSpecError):
 
 @contextmanager
 def wrap_exceptions(
-    wrap_exceptions: bool = True, suppress: "Optional[Union[type[Exception], tuple[type[Exception], ...]]]" = None
+    wrap_exceptions: bool = True, suppress: "type[Exception] | tuple[type[Exception], ...] | None" = None
 ) -> Generator[None, None, None]:
     """Context manager for exception handling with optional suppression.
 

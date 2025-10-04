@@ -7,7 +7,7 @@ used in testing and development. Supports both sync and async operations.
 import gzip
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.storage import storage_registry
 from sqlspec.utils.serializers import from_json as decode_json
@@ -171,7 +171,7 @@ def _serialize_data(data: Any) -> str:
 def write_fixture(
     fixtures_path: str,
     table_name: str,
-    data: "Union[ModelDictList, list[dict[str, Any]], SupportedSchemaModel]",
+    data: "ModelDictList | list[dict[str, Any]] | SupportedSchemaModel",
     storage_backend: str = "local",
     compress: bool = False,
     **storage_kwargs: Any,
@@ -219,7 +219,7 @@ def write_fixture(
 async def write_fixture_async(
     fixtures_path: str,
     table_name: str,
-    data: "Union[ModelDictList, list[dict[str, Any]], SupportedSchemaModel]",
+    data: "ModelDictList | list[dict[str, Any]] | SupportedSchemaModel",
     storage_backend: str = "local",
     compress: bool = False,
     **storage_kwargs: Any,

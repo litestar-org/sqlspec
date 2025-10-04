@@ -1,18 +1,12 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
-dependencies = [
-  "typing-extensions",
-  "eval_type_backport; python_version < \"3.10\"",
-  "sqlglot>=19.9.0",
-  "mypy-extensions",
-  "rich-click",
-]
+dependencies = ["typing-extensions", "sqlglot>=19.9.0", "mypy-extensions", "rich-click"]
 description = "SQL Experiments in Python"
 license = "MIT"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
-requires-python = ">=3.9, <4.0"
+requires-python = ">=3.10, <4.0"
 version = "0.26.0"
 
 [project.urls]
@@ -68,8 +62,7 @@ dev = [
 doc = [
   "auto-pytabs[sphinx]>=0.5.0",
   "shibuya",
-  "sphinx>=7.0.0; python_version <= \"3.9\"",
-  "sphinx>=8.0.0; python_version >= \"3.10\"",
+  "sphinx",
   "sphinx-autobuild>=2021.3.14",
   "sphinx-copybutton>=0.5.2",
   "sphinx-click>=6.0.0",
@@ -91,7 +84,7 @@ extras = [
   "adbc_driver_postgresql",
   "adbc_driver_flightsql",
   "adbc_driver_bigquery",
-  "dishka ; python_version >= \"3.10\"",
+  "dishka",
 ]
 lint = [
   "mypy>=1.13.0",
@@ -309,7 +302,7 @@ testpaths = ["tests"]
 [tool.mypy]
 exclude = ["tmp/", ".tmp/", ".bugs/"]
 packages = ["sqlspec", "tests"]
-python_version = "3.9"
+python_version = "3.10"
 
 disallow_any_generics = false
 disallow_untyped_decorators = true
@@ -366,7 +359,7 @@ module = "tests.*"
 disableBytesTypePromotions = true
 exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs", "tmp", ".tmp", ".bugs"]
 include = ["sqlspec", "tests"]
-pythonVersion = "3.9"
+pythonVersion = "3.10"
 reportMissingTypeStubs = false
 reportPrivateImportUsage = true
 reportPrivateUsage = true
@@ -384,7 +377,7 @@ strict-imports = false
 exclude = [".venv", "node_modules", "tmp", ".tmp", ".bugs"]
 line-length = 120
 src = ["sqlspec", "tests", "docs/examples", "tools"]
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.format]
 docstring-code-format = true

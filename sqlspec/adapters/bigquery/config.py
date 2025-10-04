@@ -2,7 +2,7 @@
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
@@ -14,7 +14,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
     from google.api_core.client_info import ClientInfo
     from google.api_core.client_options import ClientOptions
@@ -90,11 +90,11 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     def __init__(
         self,
         *,
-        connection_config: "Optional[Union[BigQueryConnectionParams, dict[str, Any]]]" = None,
-        migration_config: Optional[dict[str, Any]] = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[Union[BigQueryDriverFeatures, dict[str, Any]]]" = None,
-        bind_key: "Optional[str]" = None,
+        connection_config: "BigQueryConnectionParams | dict[str, Any] | None" = None,
+        migration_config: dict[str, Any] | None = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "BigQueryDriverFeatures | dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         """Initialize BigQuery configuration.
 
@@ -113,7 +113,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         self.driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
 
-        self._connection_instance: Optional[BigQueryConnection] = self.driver_features.get("connection_instance")
+        self._connection_instance: BigQueryConnection | None = self.driver_features.get("connection_instance")
 
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
@@ -215,7 +215,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
     @contextlib.contextmanager
     def provide_session(
-        self, *_args: Any, statement_config: "Optional[StatementConfig]" = None, **_kwargs: Any
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
     ) -> "Generator[BigQueryDriver, None, None]":
         """Provide a BigQuery driver session context manager.
 

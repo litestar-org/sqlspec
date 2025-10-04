@@ -48,7 +48,8 @@ def test_where_neq_uses_placeholder() -> None:
 
 def test_where_comparison_operators_use_placeholders() -> None:
     """Test all comparison WHERE methods use proper parameter binding."""
-    from typing import Any, Callable
+    from collections.abc import Callable
+    from typing import Any
 
     test_cases: list[tuple[str, Callable[[Any], Any], str]] = [
         ("where_lt", lambda q: q.where_lt("age", 18), "age"),

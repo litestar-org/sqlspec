@@ -7,7 +7,7 @@ type coercion, error handling, and query job management.
 import datetime
 import logging
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -53,7 +53,7 @@ HTTP_SERVER_ERROR = 500
 _type_converter = BigQueryTypeConverter()
 
 
-_BQ_TYPE_MAP: dict[type, tuple[str, Optional[str]]] = {
+_BQ_TYPE_MAP: dict[type, tuple[str, str | None]] = {
     bool: ("BOOL", None),
     int: ("INT64", None),
     float: ("FLOAT64", None),
@@ -66,7 +66,7 @@ _BQ_TYPE_MAP: dict[type, tuple[str, Optional[str]]] = {
 }
 
 
-def _get_bq_param_type(value: Any) -> tuple[Optional[str], Optional[str]]:
+def _get_bq_param_type(value: Any) -> tuple[str | None, str | None]:
     """Determine BigQuery parameter type from Python value.
 
     Args:
@@ -108,7 +108,7 @@ _BQ_PARAM_CREATOR_MAP: dict[str, Any] = {
 }
 
 
-def _create_bq_parameters(parameters: Any) -> "list[Union[ArrayQueryParameter, ScalarQueryParameter]]":
+def _create_bq_parameters(parameters: Any) -> "list[ArrayQueryParameter | ScalarQueryParameter]":
     """Create BigQuery QueryParameter objects from parameters.
 
     Args:
@@ -120,7 +120,7 @@ def _create_bq_parameters(parameters: Any) -> "list[Union[ArrayQueryParameter, S
     if not parameters:
         return []
 
-    bq_parameters: list[Union[ArrayQueryParameter, ScalarQueryParameter]] = []
+    bq_parameters: list[ArrayQueryParameter | ScalarQueryParameter] = []
 
     if isinstance(parameters, dict):
         for name, value in parameters.items():
@@ -191,7 +191,7 @@ class BigQueryCursor:
 
     def __init__(self, connection: "BigQueryConnection") -> None:
         self.connection = connection
-        self.job: Optional[QueryJob] = None
+        self.job: QueryJob | None = None
 
     def __enter__(self) -> "BigQueryConnection":
         return self.connection
@@ -250,7 +250,7 @@ class BigQueryExceptionHandler:
         else:
             self._raise_generic_error(e, status_code)
 
-    def _handle_bad_request(self, e: Any, code: "Optional[int]", error_msg: str) -> None:
+    def _handle_bad_request(self, e: Any, code: "int | None", error_msg: str) -> None:
         """Handle 400 Bad Request errors.
 
         Args:
@@ -265,37 +265,37 @@ class BigQueryExceptionHandler:
         else:
             self._raise_generic_error(e, code)
 
-    def _raise_unique_violation(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_unique_violation(self, e: Any, code: "int | None") -> None:
         code_str = f"[HTTP {code}]" if code else ""
         msg = f"BigQuery resource already exists {code_str}: {e}"
         raise UniqueViolationError(msg) from e
 
-    def _raise_not_found_error(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_not_found_error(self, e: Any, code: "int | None") -> None:
         code_str = f"[HTTP {code}]" if code else ""
         msg = f"BigQuery resource not found {code_str}: {e}"
         raise NotFoundError(msg) from e
 
-    def _raise_parsing_error(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_parsing_error(self, e: Any, code: "int | None") -> None:
         code_str = f"[HTTP {code}]" if code else ""
         msg = f"BigQuery query syntax error {code_str}: {e}"
         raise SQLParsingError(msg) from e
 
-    def _raise_data_error(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_data_error(self, e: Any, code: "int | None") -> None:
         code_str = f"[HTTP {code}]" if code else ""
         msg = f"BigQuery data error {code_str}: {e}"
         raise DataError(msg) from e
 
-    def _raise_connection_error(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_connection_error(self, e: Any, code: "int | None") -> None:
         code_str = f"[HTTP {code}]" if code else ""
         msg = f"BigQuery permission denied {code_str}: {e}"
         raise DatabaseConnectionError(msg) from e
 
-    def _raise_operational_error(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_operational_error(self, e: Any, code: "int | None") -> None:
         code_str = f"[HTTP {code}]" if code else ""
         msg = f"BigQuery operational error {code_str}: {e}"
         raise OperationalError(msg) from e
 
-    def _raise_generic_error(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_generic_error(self, e: Any, code: "int | None") -> None:
         msg = f"BigQuery error [HTTP {code}]: {e}" if code else f"BigQuery error: {e}"
         raise SQLSpecError(msg) from e
 
@@ -313,8 +313,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def __init__(
         self,
         connection: BigQueryConnection,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
@@ -326,10 +326,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._default_query_job_config: Optional[QueryJobConfig] = (driver_features or {}).get(
-            "default_query_job_config"
-        )
-        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
+        self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
+        self._data_dictionary: SyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
         """Create context manager for cursor management.
@@ -373,8 +371,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self,
         sql_str: str,
         parameters: Any,
-        connection: Optional[BigQueryConnection] = None,
-        job_config: Optional[QueryJobConfig] = None,
+        connection: BigQueryConnection | None = None,
+        job_config: QueryJobConfig | None = None,
     ) -> QueryJob:
         """Execute a BigQuery job with configuration support.
 
@@ -414,7 +412,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """
         return [dict(row) for row in rows_iterator]
 
-    def _try_special_handling(self, cursor: "Any", statement: "SQL") -> "Optional[SQLResult]":
+    def _try_special_handling(self, cursor: "Any", statement: "SQL") -> "SQLResult | None":
         """Hook for BigQuery-specific special operations.
 
         BigQuery doesn't have complex special operations like PostgreSQL COPY,

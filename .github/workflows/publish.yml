@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: [  "3.10", "3.11", "3.12", "3.13"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -89,7 +89,7 @@ jobs:
           MYPYC_MULTI_FILE: "1"
 
           # Configure cibuildwheel
-          CIBW_BUILD: "cp${{ matrix.python-version == '3.9' && '39' || matrix.python-version == '3.10' && '310' || matrix.python-version == '3.11' && '311' || matrix.python-version == '3.12' && '312' || matrix.python-version == '3.13' && '313' }}-*"
+          CIBW_BUILD: "cp${{  matrix.python-version == '3.10' && '310' || matrix.python-version == '3.11' && '311' || matrix.python-version == '3.12' && '312' || matrix.python-version == '3.13' && '313' }}-*"
           CIBW_BUILD_VERBOSITY: 1
 
           # Platform configuration - comprehensive coverage with QEMU emulation

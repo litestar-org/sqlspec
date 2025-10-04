@@ -2,11 +2,12 @@
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.migrations.commands import create_migration_commands
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 
@@ -21,7 +22,7 @@ def test_duckdb_migration_full_workflow() -> None:
             pool_config={"database": str(db_path)},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -81,7 +82,7 @@ def test_duckdb_multiple_migrations_workflow() -> None:
             pool_config={"database": str(db_path)},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -178,7 +179,7 @@ def test_duckdb_migration_current_command() -> None:
             pool_config={"database": str(db_path)},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -214,7 +215,7 @@ def test_duckdb_migration_error_handling() -> None:
             pool_config={"database": str(db_path)},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 
@@ -247,7 +248,7 @@ def test_duckdb_migration_with_transactions() -> None:
             pool_config={"database": str(db_path)},
             migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
-        commands = create_migration_commands(config)
+        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
         commands.init(str(migration_dir), package=True)
 

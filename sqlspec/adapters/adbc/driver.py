@@ -7,7 +7,7 @@ database dialects, parameter style conversion, and transaction management.
 import contextlib
 import datetime
 import decimal
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlglot import exp
 
@@ -340,7 +340,7 @@ class AdbcCursor:
 
     def __init__(self, connection: "AdbcConnection") -> None:
         self.connection = connection
-        self.cursor: Optional[Cursor] = None
+        self.cursor: Cursor | None = None
 
     def __enter__(self) -> "Cursor":
         self.cursor = self.connection.cursor()
@@ -491,8 +491,8 @@ class AdbcDriver(SyncDriverAdapterBase):
     def __init__(
         self,
         connection: "AdbcConnection",
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         self._detected_dialect = self._get_dialect(connection)
 
@@ -505,7 +505,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self.dialect = statement_config.dialect
-        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
+        self._data_dictionary: SyncDataDictionaryBase | None = None
 
     @staticmethod
     def _ensure_pyarrow_installed() -> None:
@@ -573,7 +573,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         parameters: Any,
         statement_config: "StatementConfig",
         is_many: bool = False,
-        prepared_statement: Optional[Any] = None,
+        prepared_statement: Any | None = None,
     ) -> Any:
         """Prepare parameters with cast-aware type coercion for ADBC.
 
@@ -668,7 +668,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         return AdbcExceptionHandler()
 
-    def _try_special_handling(self, cursor: "Cursor", statement: SQL) -> "Optional[SQLResult]":
+    def _try_special_handling(self, cursor: "Cursor", statement: SQL) -> "SQLResult | None":
         """Handle special operations.
 
         Args:
@@ -761,7 +761,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             column_names = [col[0] for col in cursor.description or []]
 
             if fetched_data and isinstance(fetched_data[0], tuple):
-                dict_data: list[dict[Any, Any]] = [dict(zip(column_names, row)) for row in fetched_data]
+                dict_data: list[dict[Any, Any]] = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
             else:
                 dict_data = fetched_data  # type: ignore[assignment]
 

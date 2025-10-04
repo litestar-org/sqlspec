@@ -4,7 +4,7 @@ Provides hashing functions for SQL statements, expressions, parameters,
 filters, and AST sub-expressions.
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
 
@@ -23,7 +23,7 @@ __all__ = (
 )
 
 
-def hash_expression(expr: Optional[exp.Expression], _seen: Optional[set[int]] = None) -> int:
+def hash_expression(expr: exp.Expression | None, _seen: set[int] | None = None) -> int:
     """Generate hash from AST structure.
 
     Args:
@@ -77,9 +77,9 @@ def _hash_value(value: Any, _seen: set[int]) -> int:
 
 
 def hash_parameters(
-    positional_parameters: Optional[list[Any]] = None,
-    named_parameters: Optional[dict[str, Any]] = None,
-    original_parameters: Optional[Any] = None,
+    positional_parameters: list[Any] | None = None,
+    named_parameters: dict[str, Any] | None = None,
+    original_parameters: Any | None = None,
 ) -> int:
     """Generate hash for SQL parameters.
 
@@ -148,7 +148,7 @@ def _hash_filter_value(value: Any) -> int:
         return hash(repr(value))
 
 
-def hash_filters(filters: Optional[list["StatementFilter"]] = None) -> int:
+def hash_filters(filters: list["StatementFilter"] | None = None) -> int:
     """Generate hash for statement filters.
 
     Args:
@@ -208,7 +208,7 @@ def hash_sql_statement(statement: "SQL") -> str:
     return f"sql:{hash(tuple(state_components))}"
 
 
-def hash_expression_node(node: exp.Expression, include_children: bool = True, dialect: Optional[str] = None) -> str:
+def hash_expression_node(node: exp.Expression, include_children: bool = True, dialect: str | None = None) -> str:
     """Generate cache key for an expression node.
 
     Args:
@@ -235,8 +235,8 @@ def hash_expression_node(node: exp.Expression, include_children: bool = True, di
 def hash_optimized_expression(
     expr: exp.Expression,
     dialect: str,
-    schema: Optional[dict[str, Any]] = None,
-    optimizer_settings: Optional[dict[str, Any]] = None,
+    schema: dict[str, Any] | None = None,
+    optimizer_settings: dict[str, Any] | None = None,
 ) -> str:
     """Generate cache key for optimized expressions.
 

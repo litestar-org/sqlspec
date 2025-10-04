@@ -2,7 +2,7 @@
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import oracledb
 from oracledb import AsyncCursor, Cursor
@@ -90,7 +90,7 @@ class OracleSyncCursor:
 
     def __init__(self, connection: OracleSyncConnection) -> None:
         self.connection = connection
-        self.cursor: Optional[Cursor] = None
+        self.cursor: Cursor | None = None
 
     def __enter__(self) -> Cursor:
         self.cursor = self.connection.cursor()
@@ -108,7 +108,7 @@ class OracleAsyncCursor:
 
     def __init__(self, connection: OracleAsyncConnection) -> None:
         self.connection = connection
-        self.cursor: Optional[AsyncCursor] = None
+        self.cursor: AsyncCursor | None = None
 
     async def __aenter__(self) -> AsyncCursor:
         self.cursor = self.connection.cursor()
@@ -220,7 +220,7 @@ class OracleSyncExceptionHandler:
         msg = f"Oracle operational error [ORA-{code:05d}]: {e}"
         raise OperationalError(msg) from e
 
-    def _raise_generic_error(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_generic_error(self, e: Any, code: "int | None") -> None:
         msg = f"Oracle database error [ORA-{code:05d}]: {e}" if code else f"Oracle database error: {e}"
         raise SQLSpecError(msg) from e
 
@@ -322,7 +322,7 @@ class OracleAsyncExceptionHandler:
         msg = f"Oracle operational error [ORA-{code:05d}]: {e}"
         raise OperationalError(msg) from e
 
-    def _raise_generic_error(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_generic_error(self, e: Any, code: "int | None") -> None:
         msg = f"Oracle database error [ORA-{code:05d}]: {e}" if code else f"Oracle database error: {e}"
         raise SQLSpecError(msg) from e
 
@@ -340,8 +340,8 @@ class OracleSyncDriver(SyncDriverAdapterBase):
     def __init__(
         self,
         connection: OracleSyncConnection,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
@@ -353,7 +353,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
+        self._data_dictionary: SyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: OracleSyncConnection) -> OracleSyncCursor:
         """Create context manager for Oracle cursor.
@@ -370,7 +370,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return OracleSyncExceptionHandler()
 
-    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
+    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for Oracle-specific special operations.
 
         Oracle doesn't have complex special operations like PostgreSQL COPY,
@@ -470,7 +470,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             column_names = [col[0] for col in cursor.description or []]
 
             # Oracle returns tuples - convert to consistent dict format
-            data = [dict(zip(column_names, row)) for row in fetched_data]
+            data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
@@ -537,8 +537,8 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
     def __init__(
         self,
         connection: OracleAsyncConnection,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
@@ -550,7 +550,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
+        self._data_dictionary: AsyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: OracleAsyncConnection) -> OracleAsyncCursor:
         """Create context manager for Oracle cursor.
@@ -567,7 +567,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return OracleAsyncExceptionHandler()
 
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
+    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for Oracle-specific special operations.
 
         Oracle doesn't have complex special operations like PostgreSQL COPY,
@@ -662,7 +662,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             column_names = [col[0] for col in cursor.description or []]
 
             # Oracle returns tuples - convert to consistent dict format
-            data = [dict(zip(column_names, row)) for row in fetched_data]
+            data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True

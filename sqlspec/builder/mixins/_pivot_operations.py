@@ -4,7 +4,7 @@
 Provides mixins for PIVOT and UNPIVOT operations in SELECT statements.
 """
 
-from typing import TYPE_CHECKING, Optional, Union, cast
+from typing import TYPE_CHECKING, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -23,17 +23,17 @@ class PivotClauseMixin:
 
     __slots__ = ()
     # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    _expression: exp.Expression | None
 
     dialect: "DialectType" = None
 
     def pivot(
         self: "PivotClauseMixin",
-        aggregate_function: Union[str, exp.Expression],
-        aggregate_column: Union[str, exp.Expression],
-        pivot_column: Union[str, exp.Expression],
-        pivot_values: list[Union[str, int, float, exp.Expression]],
-        alias: Optional[str] = None,
+        aggregate_function: str | exp.Expression,
+        aggregate_column: str | exp.Expression,
+        pivot_column: str | exp.Expression,
+        pivot_values: list[str | int | float | exp.Expression],
+        alias: str | None = None,
     ) -> "Select":
         """Adds a PIVOT clause to the SELECT statement.
 
@@ -94,7 +94,7 @@ class UnpivotClauseMixin:
 
     __slots__ = ()
     # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    _expression: exp.Expression | None
 
     dialect: "DialectType" = None
 
@@ -102,8 +102,8 @@ class UnpivotClauseMixin:
         self: "UnpivotClauseMixin",
         value_column_name: str,
         name_column_name: str,
-        columns_to_unpivot: list[Union[str, exp.Expression]],
-        alias: Optional[str] = None,
+        columns_to_unpivot: list[str | exp.Expression],
+        alias: str | None = None,
     ) -> "Select":
         """Adds an UNPIVOT clause to the SELECT statement.
 

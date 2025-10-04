@@ -5,7 +5,7 @@ Provides mixins for query result ordering, limiting, and result
 returning functionality.
 """
 
-from typing import TYPE_CHECKING, Optional, Union, cast
+from typing import TYPE_CHECKING, Union, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -29,7 +29,7 @@ class OrderByClauseMixin:
 
     __slots__ = ()
 
-    _expression: Optional[exp.Expression]
+    _expression: exp.Expression | None
 
     def order_by(self, *items: Union[str, exp.Ordered, "Column"], desc: bool = False) -> Self:
         """Add ORDER BY clause.
@@ -72,7 +72,7 @@ class LimitOffsetClauseMixin:
 
     __slots__ = ()
 
-    _expression: Optional[exp.Expression]
+    _expression: exp.Expression | None
 
     def limit(self, value: int) -> Self:
         """Add LIMIT clause.
@@ -118,7 +118,7 @@ class ReturningClauseMixin:
     """Mixin providing RETURNING clause."""
 
     __slots__ = ()
-    _expression: Optional[exp.Expression]
+    _expression: exp.Expression | None
 
     def returning(self, *columns: Union[str, exp.Expression, "Column", "ExpressionWrapper", "Case"]) -> Self:
         """Add RETURNING clause to the statement.

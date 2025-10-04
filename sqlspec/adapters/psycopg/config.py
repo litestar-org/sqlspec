@@ -3,7 +3,7 @@
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, cast
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -83,12 +83,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     def __init__(
         self,
         *,
-        pool_config: "Optional[Union[PsycopgPoolParams, dict[str, Any]]]" = None,
+        pool_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
         pool_instance: Optional["ConnectionPool"] = None,
-        migration_config: Optional[dict[str, Any]] = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        migration_config: dict[str, Any] | None = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         """Initialize Psycopg synchronous configuration.
 
@@ -219,7 +219,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
     @contextlib.contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "Generator[PsycopgSyncDriver, None, None]":
         """Provide a driver session context manager.
 
@@ -268,12 +268,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     def __init__(
         self,
         *,
-        pool_config: "Optional[Union[PsycopgPoolParams, dict[str, Any]]]" = None,
-        pool_instance: "Optional[AsyncConnectionPool]" = None,
-        migration_config: "Optional[dict[str, Any]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        pool_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
+        pool_instance: "AsyncConnectionPool | None" = None,
+        migration_config: "dict[str, Any] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
@@ -394,7 +394,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     @asynccontextmanager
     async def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AsyncGenerator[PsycopgAsyncDriver, None]":
         """Provide an async driver session context manager.
 

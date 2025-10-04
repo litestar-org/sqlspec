@@ -11,7 +11,7 @@ Tests the 2-Phase Parameter Conversion System:
 import math
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 
@@ -171,7 +171,7 @@ def test_wrap_with_type_no_wrapping_needed() -> None:
     ],
 )
 def test_parameter_info_creation(
-    name: Optional[str], style: ParameterStyle, position: int, ordinal: int, placeholder_text: str
+    name: str | None, style: ParameterStyle, position: int, ordinal: int, placeholder_text: str
 ) -> None:
     """Test ParameterInfo creation with various parameter types."""
     param_info = ParameterInfo(
@@ -481,7 +481,7 @@ def test_parameter_position_tracking(validator: ParameterValidator) -> None:
     ],
 )
 def test_get_sqlglot_incompatible_styles(
-    validator: ParameterValidator, dialect: Optional[str], expected_incompatible: set[ParameterStyle]
+    validator: ParameterValidator, dialect: str | None, expected_incompatible: set[ParameterStyle]
 ) -> None:
     """Test dialect-specific SQLGlot incompatible style detection."""
     incompatible = validator.get_sqlglot_incompatible_styles(dialect)

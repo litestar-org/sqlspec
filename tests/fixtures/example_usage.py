@@ -1,6 +1,6 @@
 """Example usage of SQL formatting utilities."""
 
-from typing import Any, Union
+from typing import Any
 
 from tests.fixtures.sql_utils import create_tuple_or_dict_parameters, format_placeholder, format_sql_parameters
 
@@ -23,9 +23,7 @@ def example_direct_placeholder(style: str, dialect: str = "postgres") -> str:
 
 
 # Example 2: Using format_sql_parameters for a more complex query
-def example_with_formatting(
-    style: str, dialect: str = "postgres"
-) -> tuple[str, Union[tuple[Any, ...], dict[str, Any]]]:
+def example_with_formatting(style: str, dialect: str = "postgres") -> tuple[str, tuple[Any, ...] | dict[str, Any]]:
     """Example of using format_sql_parameters for a query with multiple parameters."""
     sql_template = """
     INSERT INTO test_table (name, id, created_at)
@@ -37,7 +35,7 @@ def example_with_formatting(
     return formatted_sql, empty_parameters
 
 
-def example_param_creation(style: str, name: str, id_value: int) -> Union[tuple[Any, ...], dict[str, Any]]:
+def example_param_creation(style: str, name: str, id_value: int) -> tuple[Any, ...] | dict[str, Any]:
     """Example of creating parameter objects based on style."""
     values = [name, id_value]
     field_names = ["name", "id"]

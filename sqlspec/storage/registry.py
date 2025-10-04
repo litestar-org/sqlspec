@@ -8,7 +8,7 @@ scheme-based routing, and named aliases for common configurations.
 import logging
 import re
 from pathlib import Path
-from typing import Any, Final, Optional, Union, cast
+from typing import Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -74,7 +74,7 @@ class StorageRegistry:
     def __init__(self) -> None:
         self._alias_configs: dict[str, tuple[type[ObjectStoreProtocol], str, dict[str, Any]]] = {}
         self._aliases: dict[str, dict[str, Any]] = {}
-        self._instances: dict[Union[str, tuple[str, tuple[tuple[str, Any], ...]]], ObjectStoreProtocol] = {}
+        self._instances: dict[str | tuple[str, tuple[tuple[str, Any], ...]], ObjectStoreProtocol] = {}
         self._cache: dict[str, tuple[str, type[ObjectStoreProtocol]]] = {}
 
     def _make_hashable(self, obj: Any) -> Any:
@@ -88,7 +88,7 @@ class StorageRegistry:
         return obj
 
     def register_alias(
-        self, alias: str, uri: str, *, backend: Optional[str] = None, base_path: str = "", **kwargs: Any
+        self, alias: str, uri: str, *, backend: str | None = None, base_path: str = "", **kwargs: Any
     ) -> None:
         """Register a named alias for a storage configuration.
 
@@ -110,9 +110,7 @@ class StorageRegistry:
         test_config["uri"] = uri
         self._aliases[alias] = test_config
 
-    def get(
-        self, uri_or_alias: Union[str, Path], *, backend: Optional[str] = None, **kwargs: Any
-    ) -> ObjectStoreProtocol:
+    def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
         """Get backend instance using URI-first routing with automatic backend selection.
 
         Args:
@@ -154,9 +152,7 @@ class StorageRegistry:
         self._instances[cache_key] = instance
         return instance
 
-    def _resolve_from_uri(
-        self, uri: str, *, backend_override: Optional[str] = None, **kwargs: Any
-    ) -> ObjectStoreProtocol:
+    def _resolve_from_uri(self, uri: str, *, backend_override: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
         """Resolve backend from URI with optional backend override."""
         if backend_override:
             return self._create_backend(backend_override, uri, **kwargs)
@@ -229,7 +225,7 @@ class StorageRegistry:
         """Create backend instance for URI."""
         return self._get_backend_class(backend_type)(uri, **kwargs)
 
-    def _get_scheme(self, uri: str) -> Optional[str]:
+    def _get_scheme(self, uri: str) -> str | None:
         """Extract the scheme from a URI using regex."""
         if not uri:
             return None
@@ -244,7 +240,7 @@ class StorageRegistry:
         """List all registered aliases."""
         return list(self._alias_configs.keys())
 
-    def clear_cache(self, uri_or_alias: Optional[str] = None) -> None:
+    def clear_cache(self, uri_or_alias: str | None = None) -> None:
         """Clear resolved backend cache."""
         if uri_or_alias:
             self._instances.pop(uri_or_alias, None)

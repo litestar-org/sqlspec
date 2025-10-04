@@ -6,9 +6,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from importlib.util import find_spec
-from typing import Any, ClassVar, Final, Optional, Protocol, Union, cast, runtime_checkable
+from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
 
-from typing_extensions import Literal, TypeVar, dataclass_transform
+from typing_extensions import TypeVar, dataclass_transform
 
 
 @runtime_checkable
@@ -38,15 +38,15 @@ class BaseModelStub:
         self,
         /,
         *,
-        include: "Optional[Any]" = None,  # noqa: ARG002
-        exclude: "Optional[Any]" = None,  # noqa: ARG002
-        context: "Optional[Any]" = None,  # noqa: ARG002
+        include: "Any | None" = None,  # noqa: ARG002
+        exclude: "Any | None" = None,  # noqa: ARG002
+        context: "Any | None" = None,  # noqa: ARG002
         by_alias: bool = False,  # noqa: ARG002
         exclude_unset: bool = False,  # noqa: ARG002
         exclude_defaults: bool = False,  # noqa: ARG002
         exclude_none: bool = False,  # noqa: ARG002
         round_trip: bool = False,  # noqa: ARG002
-        warnings: "Union[bool, Literal['none', 'warn', 'error']]" = True,  # noqa: ARG002
+        warnings: "bool | Literal['none', 'warn', 'error']" = True,  # noqa: ARG002
         serialize_as_any: bool = False,  # noqa: ARG002
     ) -> "dict[str, Any]":
         """Placeholder implementation."""
@@ -56,15 +56,15 @@ class BaseModelStub:
         self,
         /,
         *,
-        include: "Optional[Any]" = None,  # noqa: ARG002
-        exclude: "Optional[Any]" = None,  # noqa: ARG002
-        context: "Optional[Any]" = None,  # noqa: ARG002
+        include: "Any | None" = None,  # noqa: ARG002
+        exclude: "Any | None" = None,  # noqa: ARG002
+        context: "Any | None" = None,  # noqa: ARG002
         by_alias: bool = False,  # noqa: ARG002
         exclude_unset: bool = False,  # noqa: ARG002
         exclude_defaults: bool = False,  # noqa: ARG002
         exclude_none: bool = False,  # noqa: ARG002
         round_trip: bool = False,  # noqa: ARG002
-        warnings: "Union[bool, Literal['none', 'warn', 'error']]" = True,  # noqa: ARG002
+        warnings: "bool | Literal['none', 'warn', 'error']" = True,  # noqa: ARG002
         serialize_as_any: bool = False,  # noqa: ARG002
     ) -> str:
         """Placeholder implementation."""
@@ -78,9 +78,9 @@ class TypeAdapterStub:
         self,
         type: Any,  # noqa: A002
         *,
-        config: "Optional[Any]" = None,  # noqa: ARG002
+        config: "Any | None" = None,  # noqa: ARG002
         _parent_depth: int = 2,  # noqa: ARG002
-        module: "Optional[str]" = None,  # noqa: ARG002
+        module: "str | None" = None,  # noqa: ARG002
     ) -> None:
         """Initialize."""
         self._type = type
@@ -90,10 +90,10 @@ class TypeAdapterStub:
         object: Any,
         /,
         *,
-        strict: "Optional[bool]" = None,  # noqa: ARG002
-        from_attributes: "Optional[bool]" = None,  # noqa: ARG002
-        context: "Optional[dict[str, Any]]" = None,  # noqa: ARG002
-        experimental_allow_partial: "Union[bool, Literal['off', 'on', 'trailing-strings']]" = False,  # noqa: ARG002
+        strict: "bool | None" = None,  # noqa: ARG002
+        from_attributes: "bool | None" = None,  # noqa: ARG002
+        context: "dict[str, Any] | None" = None,  # noqa: ARG002
+        experimental_allow_partial: "bool | Literal['off', 'on', 'trailing-strings']" = False,  # noqa: ARG002
     ) -> Any:
         """Validate Python object."""
         return object
@@ -143,8 +143,8 @@ def convert_stub(  # noqa: PLR0913
     *,
     strict: bool = True,  # noqa: ARG001
     from_attributes: bool = False,  # noqa: ARG001
-    dec_hook: "Optional[Any]" = None,  # noqa: ARG001
-    builtin_types: "Optional[Any]" = None,  # noqa: ARG001
+    dec_hook: "Any | None" = None,  # noqa: ARG001
+    builtin_types: "Any | None" = None,  # noqa: ARG001
     str_keys: bool = False,  # noqa: ARG001
 ) -> Any:
     """Placeholder implementation."""
@@ -308,7 +308,7 @@ class EmptyEnum(Enum):
     EMPTY = 0
 
 
-EmptyType = Union[Literal[EmptyEnum.EMPTY], UnsetType]
+EmptyType = Literal[EmptyEnum.EMPTY] | UnsetType
 Empty: Final = EmptyEnum.EMPTY
 
 
@@ -336,18 +336,18 @@ class ArrowTableResult(Protocol):
     def from_arrays(
         self,
         arrays: list[Any],
-        names: "Optional[list[str]]" = None,
-        schema: "Optional[Any]" = None,
-        metadata: "Optional[Mapping[str, Any]]" = None,
+        names: "list[str] | None" = None,
+        schema: "Any | None" = None,
+        metadata: "Mapping[str, Any] | None" = None,
     ) -> Any:
         return None
 
     def from_pydict(
-        self, mapping: dict[str, Any], schema: "Optional[Any]" = None, metadata: "Optional[Mapping[str, Any]]" = None
+        self, mapping: dict[str, Any], schema: "Any | None" = None, metadata: "Mapping[str, Any] | None" = None
     ) -> Any:
         return None
 
-    def from_batches(self, batches: Iterable[Any], schema: Optional[Any] = None) -> Any:
+    def from_batches(self, batches: Iterable[Any], schema: Any | None = None) -> Any:
         return None
 
 
@@ -373,7 +373,7 @@ class ArrowRecordBatchResult(Protocol):
     def column(self, i: int) -> Any:
         return None
 
-    def slice(self, offset: int = 0, length: "Optional[int]" = None) -> Any:
+    def slice(self, offset: int = 0, length: "int | None" = None) -> Any:
         return None
 
 
@@ -409,16 +409,16 @@ except ImportError:
         def record_exception(
             self,
             exception: "Exception",
-            attributes: "Optional[Mapping[str, Any]]" = None,
-            timestamp: "Optional[int]" = None,
+            attributes: "Mapping[str, Any] | None" = None,
+            timestamp: "int | None" = None,
             escaped: bool = False,
         ) -> None:
             return None
 
-        def set_status(self, status: Any, description: "Optional[str]" = None) -> None:
+        def set_status(self, status: Any, description: "str | None" = None) -> None:
             return None
 
-        def end(self, end_time: "Optional[int]" = None) -> None:
+        def end(self, end_time: "int | None" = None) -> None:
             return None
 
         def __enter__(self) -> "Span":
@@ -445,8 +445,8 @@ except ImportError:
         def get_tracer(
             self,
             instrumenting_module_name: str,
-            instrumenting_library_version: "Optional[str]" = None,
-            schema_url: "Optional[str]" = None,
+            instrumenting_library_version: "str | None" = None,
+            schema_url: "str | None" = None,
             tracer_provider: Any = None,
         ) -> Tracer:
             return Tracer()  # type: ignore[abstract] # pragma: no cover
@@ -553,7 +553,7 @@ except ImportError:
     aiosql = _AiosqlShim()  # type: ignore[assignment]
 
     # Placeholder types for aiosql protocols
-    AiosqlParamType = Union[dict[str, Any], list[Any], tuple[Any, ...], None]  # type: ignore[misc]
+    AiosqlParamType = dict[str, Any] | list[Any] | tuple[Any, ...] | None  # type: ignore[misc]
 
     class AiosqlSQLOperationType(Enum):  # type: ignore[no-redef]
         """Enumeration of aiosql operation types."""
@@ -580,16 +580,16 @@ except ImportError:
 
         def process_sql(self, query_name: str, op_type: Any, sql: str) -> str: ...
         def select(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Optional[Any]" = None
+            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Any | None" = None
         ) -> Any: ...
         def select_one(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Optional[Any]" = None
-        ) -> "Optional[Any]": ...
-        def select_value(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Optional[Any]": ...
+            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Any | None" = None
+        ) -> "Any | None": ...
+        def select_value(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Any | None": ...
         def select_cursor(self, conn: Any, query_name: str, sql: str, parameters: Any) -> Any: ...
         def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: Any) -> int: ...
         def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: Any) -> int: ...
-        def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Optional[Any]": ...
+        def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Any | None": ...
 
     @runtime_checkable
     class AiosqlAsyncProtocol(Protocol):  # type: ignore[no-redef]
@@ -599,16 +599,16 @@ except ImportError:
 
         def process_sql(self, query_name: str, op_type: Any, sql: str) -> str: ...
         async def select(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Optional[Any]" = None
+            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Any | None" = None
         ) -> Any: ...
         async def select_one(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Optional[Any]" = None
-        ) -> "Optional[Any]": ...
-        async def select_value(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Optional[Any]": ...
+            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Any | None" = None
+        ) -> "Any | None": ...
+        async def select_value(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Any | None": ...
         async def select_cursor(self, conn: Any, query_name: str, sql: str, parameters: Any) -> Any: ...
         async def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: Any) -> None: ...
         async def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: Any) -> None: ...
-        async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Optional[Any]": ...
+        async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Any | None": ...
 
     AIOSQL_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]  # pyright: ignore[reportConstantRedefinition]
 

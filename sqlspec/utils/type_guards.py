@@ -7,7 +7,7 @@ understand type narrowing, replacing defensive hasattr() and duck typing pattern
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from typing_extensions import is_typeddict
 
@@ -26,9 +26,9 @@ from sqlspec.typing import (
 
 if TYPE_CHECKING:
     from dataclasses import Field
+    from typing import TypeGuard
 
     from sqlglot import exp
-    from typing_extensions import TypeGuard
 
     from sqlspec._typing import AttrsInstanceStub, BaseModelStub, DTODataStub, StructStub
     from sqlspec.builder import Select
@@ -449,7 +449,7 @@ def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Str
 
 
 @lru_cache(maxsize=500)
-def _detect_rename_pattern(field_name: str, encode_name: str) -> "Optional[str]":
+def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
     """Detect the rename pattern by comparing field name transformations.
 
     Args:
@@ -473,7 +473,7 @@ def _detect_rename_pattern(field_name: str, encode_name: str) -> "Optional[str]"
     return None
 
 
-def get_msgspec_rename_config(schema_type: type) -> "Optional[str]":
+def get_msgspec_rename_config(schema_type: type) -> "str | None":
     """Extract msgspec rename configuration from a struct type.
 
     Analyzes field name transformations to detect the rename pattern used by msgspec.
@@ -626,7 +626,7 @@ def is_schema(obj: Any) -> "TypeGuard[SupportedSchemaModel]":
     )
 
 
-def is_schema_or_dict(obj: Any) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
+def is_schema_or_dict(obj: Any) -> "TypeGuard[SupportedSchemaModel | dict[str, Any]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict.
 
     Args:
@@ -664,7 +664,7 @@ def is_schema_without_field(obj: Any, field_name: str) -> "TypeGuard[SupportedSc
     return not is_schema_with_field(obj, field_name)
 
 
-def is_schema_or_dict_with_field(obj: Any, field_name: str) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
+def is_schema_or_dict_with_field(obj: Any, field_name: str) -> "TypeGuard[SupportedSchemaModel | dict[str, Any]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict with a specific field.
 
     Args:
@@ -677,9 +677,7 @@ def is_schema_or_dict_with_field(obj: Any, field_name: str) -> "TypeGuard[Union[
     return is_schema_with_field(obj, field_name) or is_dict_with_field(obj, field_name)
 
 
-def is_schema_or_dict_without_field(
-    obj: Any, field_name: str
-) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
+def is_schema_or_dict_without_field(obj: Any, field_name: str) -> "TypeGuard[SupportedSchemaModel | dict[str, Any]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict without a specific field.
 
     Args:
@@ -736,8 +734,8 @@ def extract_dataclass_fields(
     obj: "DataclassProtocol",
     exclude_none: bool = False,
     exclude_empty: bool = False,
-    include: "Optional[AbstractSet[str]]" = None,
-    exclude: "Optional[AbstractSet[str]]" = None,
+    include: "AbstractSet[str] | None" = None,
+    exclude: "AbstractSet[str] | None" = None,
 ) -> "tuple[Field[Any], ...]":
     """Extract dataclass fields.
 
@@ -782,8 +780,8 @@ def extract_dataclass_items(
     obj: "DataclassProtocol",
     exclude_none: bool = False,
     exclude_empty: bool = False,
-    include: "Optional[AbstractSet[str]]" = None,
-    exclude: "Optional[AbstractSet[str]]" = None,
+    include: "AbstractSet[str] | None" = None,
+    exclude: "AbstractSet[str] | None" = None,
 ) -> "tuple[tuple[str, Any], ...]":
     """Extract name-value pairs from a dataclass instance.
 
@@ -806,7 +804,7 @@ def dataclass_to_dict(
     exclude_none: bool = False,
     exclude_empty: bool = False,
     convert_nested: bool = True,
-    exclude: "Optional[AbstractSet[str]]" = None,
+    exclude: "AbstractSet[str] | None" = None,
 ) -> "dict[str, Any]":
     """Convert a dataclass instance to a dictionary.
 
@@ -993,7 +991,7 @@ def has_attr(obj: Any, attr: str) -> bool:
     return True
 
 
-def get_node_this(node: "exp.Expression", default: Optional[Any] = None) -> Any:
+def get_node_this(node: "exp.Expression", default: Any | None = None) -> Any:
     """Safely get the 'this' attribute from a SQLGlot node.
 
     Args:
@@ -1025,7 +1023,7 @@ def has_this_attribute(node: "exp.Expression") -> bool:
     return True
 
 
-def get_node_expressions(node: "exp.Expression", default: Optional[Any] = None) -> Any:
+def get_node_expressions(node: "exp.Expression", default: Any | None = None) -> Any:
     """Safely get the 'expressions' attribute from a SQLGlot node.
 
     Args:
@@ -1057,7 +1055,7 @@ def has_expressions_attribute(node: "exp.Expression") -> bool:
     return True
 
 
-def get_literal_parent(literal: "exp.Expression", default: Optional[Any] = None) -> Any:
+def get_literal_parent(literal: "exp.Expression", default: Any | None = None) -> Any:
     """Safely get the 'parent' attribute from a SQLGlot literal.
 
     Args:
@@ -1128,7 +1126,7 @@ def is_number_literal(literal: "exp.Literal") -> bool:
         return False
 
 
-def get_initial_expression(context: Any) -> "Optional[exp.Expression]":
+def get_initial_expression(context: Any) -> "exp.Expression | None":
     """Safely get initial_expression from context.
 
     Args:
@@ -1143,7 +1141,7 @@ def get_initial_expression(context: Any) -> "Optional[exp.Expression]":
         return None
 
 
-def expression_has_limit(expr: "Optional[exp.Expression]") -> bool:
+def expression_has_limit(expr: "exp.Expression | None") -> bool:
     """Check if an expression has a limit clause.
 
     Args:
@@ -1175,7 +1173,7 @@ def get_value_attribute(obj: Any) -> Any:
         return obj
 
 
-def get_param_style_and_name(param: Any) -> "tuple[Optional[str], Optional[str]]":
+def get_param_style_and_name(param: Any) -> "tuple[str | None, str | None]":
     """Safely get style and name attributes from a parameter.
 
     Args:

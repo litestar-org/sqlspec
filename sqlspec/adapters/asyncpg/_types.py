@@ -1,17 +1,18 @@
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
 from asyncpg import Connection
 from asyncpg.pool import PoolConnectionProxy
 
 if TYPE_CHECKING:
+    from typing import TypeAlias
+
     from asyncpg import Record
-    from typing_extensions import TypeAlias
 
 
 if TYPE_CHECKING:
-    AsyncpgConnection: TypeAlias = Union[Connection[Record], PoolConnectionProxy[Record]]
+    AsyncpgConnection: TypeAlias = Connection[Record] | PoolConnectionProxy[Record]
 else:
-    AsyncpgConnection = Union[Connection, PoolConnectionProxy]
+    AsyncpgConnection = Connection | PoolConnectionProxy
 
 
 __all__ = ("AsyncpgConnection",)

@@ -8,13 +8,12 @@ Components:
 
 import hashlib
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import sqlglot
 from mypy_extensions import mypyc_attr
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
-from typing_extensions import Literal
 
 from sqlspec.core.parameters import ParameterProcessor
 from sqlspec.exceptions import SQLSpecError
@@ -85,7 +84,7 @@ class CompiledSQL:
         execution_parameters: Any,
         operation_type: "OperationType",
         expression: Optional["exp.Expression"] = None,
-        parameter_style: Optional[str] = None,
+        parameter_style: str | None = None,
         supports_many: bool = False,
         parameter_casts: Optional["dict[int, str]"] = None,
     ) -> None:
@@ -107,7 +106,7 @@ class CompiledSQL:
         self.parameter_style = parameter_style
         self.supports_many = supports_many
         self.parameter_casts = parameter_casts or {}
-        self._hash: Optional[int] = None
+        self._hash: int | None = None
 
     def __hash__(self) -> int:
         """Cached hash value."""
@@ -382,7 +381,7 @@ class SQLProcessor:
         return cast_positions
 
     def _apply_final_transformations(
-        self, expression: "Optional[exp.Expression]", sql: str, parameters: Any, dialect_str: "Optional[str]"
+        self, expression: "exp.Expression | None", sql: str, parameters: Any, dialect_str: "str | None"
     ) -> "tuple[str, Any]":
         """Apply final transformations.
 

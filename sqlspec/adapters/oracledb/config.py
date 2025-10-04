@@ -3,7 +3,7 @@
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 import oracledb
 from typing_extensions import NotRequired
@@ -89,12 +89,12 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def __init__(
         self,
         *,
-        pool_config: "Optional[Union[OraclePoolParams, dict[str, Any]]]" = None,
-        pool_instance: "Optional[OracleSyncConnectionPool]" = None,
-        migration_config: Optional[dict[str, Any]] = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        pool_config: "OraclePoolParams | dict[str, Any] | None" = None,
+        pool_instance: "OracleSyncConnectionPool | None" = None,
+        migration_config: dict[str, Any] | None = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
@@ -158,7 +158,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 
     @contextlib.contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "Generator[OracleSyncDriver, None, None]":
         """Provide a driver session context manager.
 
@@ -218,12 +218,12 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     def __init__(
         self,
         *,
-        pool_config: "Optional[Union[OraclePoolParams, dict[str, Any]]]" = None,
-        pool_instance: "Optional[OracleAsyncConnectionPool]" = None,
-        migration_config: Optional[dict[str, Any]] = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        pool_config: "OraclePoolParams | dict[str, Any] | None" = None,
+        pool_instance: "OracleAsyncConnectionPool | None" = None,
+        migration_config: dict[str, Any] | None = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 
@@ -291,7 +291,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
     @asynccontextmanager
     async def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AsyncGenerator[OracleAsyncDriver, None]":
         """Provide an async driver session context manager.
 

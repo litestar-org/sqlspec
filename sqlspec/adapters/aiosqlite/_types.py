@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 import aiosqlite
 
 if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
+    from typing import TypeAlias
 
     AiosqliteConnection: TypeAlias = aiosqlite.Connection
 else:

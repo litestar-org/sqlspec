@@ -4,7 +4,7 @@ import contextlib
 import datetime
 import sqlite3
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
@@ -85,7 +85,7 @@ class SqliteCursor:
             connection: SQLite database connection
         """
         self.connection = connection
-        self.cursor: Optional[sqlite3.Cursor] = None
+        self.cursor: sqlite3.Cursor | None = None
 
     def __enter__(self) -> "sqlite3.Cursor":
         """Create and return a new cursor.
@@ -199,7 +199,7 @@ class SqliteExceptionHandler:
         msg = f"SQLite integrity constraint violation [code {code}]: {e}"
         raise IntegrityError(msg) from e
 
-    def _raise_parsing_error(self, e: Any, code: "Optional[int]") -> None:
+    def _raise_parsing_error(self, e: Any, code: "int | None") -> None:
         code_str = f"[code {code}]" if code else ""
         msg = f"SQLite SQL syntax error {code_str}: {e}"
         raise SQLParsingError(msg) from e
@@ -234,8 +234,8 @@ class SqliteDriver(SyncDriverAdapterBase):
     def __init__(
         self,
         connection: "SqliteConnection",
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         """Initialize SQLite driver.
 
@@ -254,7 +254,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
+        self._data_dictionary: SyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         """Create context manager for SQLite cursor.
@@ -275,7 +275,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         return SqliteExceptionHandler()
 
-    def _try_special_handling(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "Optional[SQLResult]":
+    def _try_special_handling(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "SQLResult | None":
         """Hook for SQLite-specific special operations.
 
         Args:
@@ -350,7 +350,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
 
-            data = [dict(zip(column_names, row)) for row in fetched_data]
+            data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True

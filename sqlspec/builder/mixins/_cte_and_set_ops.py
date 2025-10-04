@@ -5,7 +5,7 @@ Provides mixins for Common Table Expressions (WITH clause) and
 set operations (UNION, INTERSECT, EXCEPT).
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -26,13 +26,13 @@ class CommonTableExpressionMixin:
     __slots__ = ()
 
     # Type annotations for PyRight - these will be provided by the base class
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
     _with_ctes: Any  # Provided by QueryBuilder
     dialect: Any  # Provided by QueryBuilder
 
-    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
@@ -49,9 +49,7 @@ class CommonTableExpressionMixin:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
-    def with_(
-        self, name: str, query: Union[Any, str], recursive: bool = False, columns: Optional[list[str]] = None
-    ) -> Self:
+    def with_(self, name: str, query: Any | str, recursive: bool = False, columns: list[str] | None = None) -> Self:
         """Add WITH clause (Common Table Expression).
 
         Args:
@@ -76,7 +74,7 @@ class CommonTableExpressionMixin:
             msg = f"Cannot add WITH clause to {type(expression).__name__} expression."
             raise SQLBuilderError(msg)
 
-        cte_expr: Optional[exp.Expression] = None
+        cte_expr: exp.Expression | None = None
         if isinstance(query, str):
             cte_expr = exp.maybe_parse(query, dialect=self.dialect)
         elif isinstance(query, exp.Expression):
@@ -136,7 +134,7 @@ class SetOperationMixin:
     __slots__ = ()
 
     # Type annotations for PyRight - these will be provided by the base class
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
     def set_parameters(self, parameters: "dict[str, Any]") -> None: ...
 
@@ -162,8 +160,8 @@ class SetOperationMixin:
         """
         left_query = self.build()
         right_query = other.build()
-        left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=self.dialect)
-        right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=self.dialect)
+        left_expr: exp.Expression | None = exp.maybe_parse(left_query.sql, dialect=self.dialect)
+        right_expr: exp.Expression | None = exp.maybe_parse(right_query.sql, dialect=self.dialect)
         if not left_expr or not right_expr:
             msg = "Could not parse queries for UNION operation"
             raise SQLBuilderError(msg)
@@ -210,8 +208,8 @@ class SetOperationMixin:
         """
         left_query = self.build()
         right_query = other.build()
-        left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=self.dialect)
-        right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=self.dialect)
+        left_expr: exp.Expression | None = exp.maybe_parse(left_query.sql, dialect=self.dialect)
+        right_expr: exp.Expression | None = exp.maybe_parse(right_query.sql, dialect=self.dialect)
         if not left_expr or not right_expr:
             msg = "Could not parse queries for INTERSECT operation"
             raise SQLBuilderError(msg)
@@ -238,8 +236,8 @@ class SetOperationMixin:
         """
         left_query = self.build()
         right_query = other.build()
-        left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=self.dialect)
-        right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=self.dialect)
+        left_expr: exp.Expression | None = exp.maybe_parse(left_query.sql, dialect=self.dialect)
+        right_expr: exp.Expression | None = exp.maybe_parse(right_query.sql, dialect=self.dialect)
         if not left_expr or not right_expr:
             msg = "Could not parse queries for EXCEPT operation"
             raise SQLBuilderError(msg)

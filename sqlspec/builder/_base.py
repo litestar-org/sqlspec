@@ -6,7 +6,7 @@ Provides abstract base classes and core functionality for SQL query builders.
 import hashlib
 import uuid
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, NoReturn, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 import sqlglot
 from sqlglot import Dialect, exp
@@ -38,9 +38,7 @@ class SafeQuery:
 
     __slots__ = ("dialect", "parameters", "sql")
 
-    def __init__(
-        self, sql: str, parameters: Optional[dict[str, Any]] = None, dialect: Optional[DialectType] = None
-    ) -> None:
+    def __init__(self, sql: str, parameters: dict[str, Any] | None = None, dialect: DialectType | None = None) -> None:
         self.sql = sql
         self.parameters = parameters if parameters is not None else {}
         self.dialect = dialect
@@ -68,8 +66,8 @@ class QueryBuilder(ABC):
 
     def __init__(
         self,
-        dialect: Optional[DialectType] = None,
-        schema: Optional[dict[str, dict[str, str]]] = None,
+        dialect: DialectType | None = None,
+        schema: dict[str, dict[str, str]] | None = None,
         enable_optimization: bool = True,
         optimize_joins: bool = True,
         optimize_predicates: bool = True,
@@ -82,7 +80,7 @@ class QueryBuilder(ABC):
         self.optimize_predicates = optimize_predicates
         self.simplify_expressions = simplify_expressions
 
-        self._expression: Optional[exp.Expression] = None
+        self._expression: exp.Expression | None = None
         self._parameters: dict[str, Any] = {}
         self._parameter_counter: int = 0
         self._with_ctes: dict[str, exp.CTE] = {}
@@ -95,7 +93,7 @@ class QueryBuilder(ABC):
                 "QueryBuilder._create_base_expression must return a valid sqlglot expression."
             )
 
-    def get_expression(self) -> Optional[exp.Expression]:
+    def get_expression(self) -> exp.Expression | None:
         """Get expression reference (no copy).
 
         Returns:
@@ -139,7 +137,7 @@ class QueryBuilder(ABC):
         """
 
     @staticmethod
-    def _raise_sql_builder_error(message: str, cause: Optional[BaseException] = None) -> NoReturn:
+    def _raise_sql_builder_error(message: str, cause: BaseException | None = None) -> NoReturn:
         """Helper to raise SQLBuilderError, potentially with a cause.
 
         Args:
@@ -191,7 +189,7 @@ class QueryBuilder(ABC):
         msg = f"Failed to parse CTE query: {cause!s}"
         raise SQLBuilderError(msg) from cause
 
-    def _add_parameter(self, value: Any, context: Optional[str] = None) -> str:
+    def _add_parameter(self, value: Any, context: str | None = None) -> str:
         """Adds a parameter to the query and returns its placeholder name.
 
         Args:
@@ -232,7 +230,7 @@ class QueryBuilder(ABC):
 
         return expression.transform(replacer, copy=False)
 
-    def add_parameter(self: Self, value: Any, name: Optional[str] = None) -> tuple[Self, str]:
+    def add_parameter(self: Self, value: Any, name: str | None = None) -> tuple[Self, str]:
         """Explicitly adds a parameter to the query.
 
         This is useful for parameters that are not directly tied to a
@@ -313,7 +311,7 @@ class QueryBuilder(ABC):
 
         return expression.transform(placeholder_replacer, copy=False)
 
-    def _generate_builder_cache_key(self, config: "Optional[StatementConfig]" = None) -> str:
+    def _generate_builder_cache_key(self, config: "StatementConfig | None" = None) -> str:
         """Generate cache key based on builder state and configuration.
 
         Args:
@@ -356,7 +354,7 @@ class QueryBuilder(ABC):
         state_string = "|".join(state_parts)
         return f"builder:{hashlib.sha256(state_string.encode()).hexdigest()[:16]}"
 
-    def with_cte(self: Self, alias: str, query: "Union[QueryBuilder, exp.Select, str]") -> Self:
+    def with_cte(self: Self, alias: str, query: "QueryBuilder | exp.Select | str") -> Self:
         """Adds a Common Table Expression (CTE) to the query.
 
         Args:
@@ -475,7 +473,7 @@ class QueryBuilder(ABC):
         else:
             return optimized
 
-    def to_statement(self, config: "Optional[StatementConfig]" = None) -> "SQL":
+    def to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
         """Converts the built query into a SQL statement object.
 
         Args:
@@ -500,7 +498,7 @@ class QueryBuilder(ABC):
 
         return sql_statement
 
-    def _to_statement(self, config: "Optional[StatementConfig]" = None) -> "SQL":
+    def _to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
         """Internal method to create SQL statement.
 
         Args:
@@ -541,7 +539,7 @@ class QueryBuilder(ABC):
 
     def _extract_statement_parameters(
         self, raw_parameters: Any
-    ) -> "tuple[Optional[dict[str, Any]], Optional[tuple[Any, ...]]]":
+    ) -> "tuple[dict[str, Any] | None, tuple[Any, ...] | None]":
         """Extract parameters for SQL statement creation.
 
         Args:
@@ -570,7 +568,7 @@ class QueryBuilder(ABC):
         return self.build().sql
 
     @property
-    def dialect_name(self) -> "Optional[str]":
+    def dialect_name(self) -> "str | None":
         """Returns the name of the dialect, if set."""
         if isinstance(self.dialect, str):
             return self.dialect

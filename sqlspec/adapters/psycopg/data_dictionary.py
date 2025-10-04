@@ -1,7 +1,7 @@
 """PostgreSQL-specific data dictionary for metadata queries via psycopg."""
 
 import re
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
@@ -28,7 +28,7 @@ __all__ = ("PostgresAsyncDataDictionary", "PostgresSyncDataDictionary")
 class PostgresSyncDataDictionary(SyncDataDictionaryBase):
     """PostgreSQL-specific sync data dictionary."""
 
-    def get_version(self, driver: SyncDriverAdapterBase) -> "Optional[VersionInfo]":
+    def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 
         Args:
@@ -144,7 +144,7 @@ class PostgresSyncDataDictionary(SyncDataDictionaryBase):
 class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "Optional[VersionInfo]":
+    async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 
         Args:

@@ -6,7 +6,7 @@ SQL conditions with parameter binding.
 
 from collections.abc import Iterable
 from datetime import date, datetime
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from sqlglot import exp
 
@@ -77,7 +77,7 @@ class Column:
 
     __slots__ = ("_expression", "name", "table")
 
-    def __init__(self, name: str, table: Optional[str] = None) -> None:
+    def __init__(self, name: str, table: str | None = None) -> None:
         self.name = name
         self.table = table
 
@@ -122,7 +122,7 @@ class Column:
         """Apply NOT operator (~)."""
         return ColumnExpression(exp.Not(this=self._expression))
 
-    def like(self, pattern: str, escape: Optional[str] = None) -> ColumnExpression:
+    def like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
         """SQL LIKE pattern matching."""
         if escape:
             like_expr = exp.Like(
@@ -159,7 +159,7 @@ class Column:
         """SQL IS NOT NULL."""
         return ColumnExpression(exp.Not(this=exp.Is(this=self._expression, expression=exp.Null())))
 
-    def not_like(self, pattern: str, escape: Optional[str] = None) -> ColumnExpression:
+    def not_like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
         """SQL NOT LIKE pattern matching."""
         return ~self.like(pattern, escape)
 
@@ -211,7 +211,7 @@ class Column:
         """SQL CEIL() function."""
         return FunctionColumn(exp.Ceil(this=self._expression))
 
-    def substring(self, start: int, length: Optional[int] = None) -> "FunctionColumn":
+    def substring(self, start: int, length: int | None = None) -> "FunctionColumn":
         """SQL SUBSTRING() function."""
         args = [self._convert_value(start)]
         if length is not None:

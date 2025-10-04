@@ -2,11 +2,11 @@
 
 import datetime
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from enum import Enum
 from functools import lru_cache, partial
 from pathlib import Path, PurePath
-from typing import Any, Callable, Final, Optional, TypeVar, Union, overload
+from typing import Any, Final, TypeVar, overload
 from uuid import UUID
 
 from mypy_extensions import trait
@@ -78,7 +78,7 @@ _DEFAULT_TYPE_DECODERS: Final[list[tuple[Callable[[Any], bool], Callable[[Any, A
 
 
 def _default_msgspec_deserializer(
-    target_type: Any, value: Any, type_decoders: "Optional[Sequence[tuple[Any, Any]]]" = None
+    target_type: Any, value: Any, type_decoders: "Sequence[tuple[Any, Any]] | None" = None
 ) -> Any:
     """Convert msgspec types with type decoder support.
 
@@ -130,7 +130,7 @@ def _default_msgspec_deserializer(
 
 
 @lru_cache(maxsize=1000)
-def _detect_schema_type(schema_type: "type[Any]") -> "Optional[str]":
+def _detect_schema_type(schema_type: "type[Any]") -> "str | None":
     """Detect schema type with LRU caching.
 
     Args:
@@ -297,7 +297,7 @@ class ToSchemaMixin:
     def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
 
     @staticmethod  # type: ignore[misc,unused-ignore]
-    def to_schema(data: Any, *, schema_type: "Optional[type[Union[ModelDTOT, TypedDictT]]]" = None) -> Any:  # type: ignore[misc,unused-ignore]
+    def to_schema(data: Any, *, schema_type: "type[ModelDTOT | TypedDictT] | None" = None) -> Any:  # type: ignore[misc,unused-ignore]
         """Convert data to a specified schema type.
 
         Args:

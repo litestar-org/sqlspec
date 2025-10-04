@@ -3,7 +3,7 @@
 import asyncio
 import inspect
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.utils.logging import get_logger
 
@@ -23,16 +23,16 @@ class MigrationContext:
     to migration functions, allowing them to generate dialect-specific SQL.
     """
 
-    config: "Optional[Any]" = None
+    config: "Any | None" = None
     """Database configuration object."""
-    dialect: "Optional[str]" = None
+    dialect: "str | None" = None
     """Database dialect (e.g., 'postgres', 'mysql', 'sqlite')."""
-    metadata: "Optional[dict[str, Any]]" = None
+    metadata: "dict[str, Any] | None" = None
     """Additional metadata for the migration."""
-    extension_config: "Optional[dict[str, Any]]" = None
+    extension_config: "dict[str, Any] | None" = None
     """Extension-specific configuration options."""
 
-    driver: "Optional[Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]]" = None
+    driver: "SyncDriverAdapterBase | AsyncDriverAdapterBase | None" = None
     """Database driver instance (available during execution)."""
 
     _execution_metadata: "dict[str, Any]" = field(default_factory=dict)

@@ -6,7 +6,7 @@ PostgreSQL COPY operation support, and transaction management.
 
 import datetime
 import re
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import asyncpg
 
@@ -222,7 +222,7 @@ class AsyncpgExceptionHandler:
         msg = f"PostgreSQL operational error [{code}]: {e}"
         raise OperationalError(msg) from e
 
-    def _raise_generic_error(self, e: Any, code: "Optional[str]") -> None:
+    def _raise_generic_error(self, e: Any, code: "str | None") -> None:
         msg = f"PostgreSQL database error [{code}]: {e}" if code else f"PostgreSQL database error: {e}"
         raise SQLSpecError(msg) from e
 
@@ -241,8 +241,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     def __init__(
         self,
         connection: "AsyncpgConnection",
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
@@ -254,7 +254,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
+        self._data_dictionary: AsyncDataDictionaryBase | None = None
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
         """Create context manager for AsyncPG cursor."""
@@ -264,7 +264,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Handle database exceptions with PostgreSQL error codes."""
         return AsyncpgExceptionHandler()
 
-    async def _try_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "Optional[SQLResult]":
+    async def _try_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "SQLResult | None":
         """Handle PostgreSQL COPY operations and other special cases.
 
         Args:

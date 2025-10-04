@@ -4,7 +4,7 @@ Provides a fluent interface for building SQL INSERT queries with
 parameter binding and validation.
 """
 
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -38,7 +38,7 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
 
     __slots__ = ("_columns", "_table", "_values_added_count")
 
-    def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
+    def __init__(self, table: str | None = None, **kwargs: Any) -> None:
         """Initialize INSERT with optional table.
 
         Args:
@@ -47,7 +47,7 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         """
         super().__init__(**kwargs)
 
-        self._table: Optional[str] = None
+        self._table: str | None = None
         self._columns: list[str] = []
         self._values_added_count: int = 0
 

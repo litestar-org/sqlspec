@@ -1,12 +1,11 @@
 """SQL statement and configuration management."""
 
-from typing import TYPE_CHECKING, Any, Callable, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias
 
 import sqlglot
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from sqlglot.errors import ParseError
-from typing_extensions import TypeAlias
 
 from sqlspec.core.compiler import OperationType, SQLProcessor
 from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
@@ -16,6 +15,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.core.cache import FiltersView
@@ -80,10 +81,10 @@ class ProcessedState:
         self,
         compiled_sql: str,
         execution_parameters: Any,
-        parsed_expression: "Optional[exp.Expression]" = None,
+        parsed_expression: "exp.Expression | None" = None,
         operation_type: "OperationType" = "UNKNOWN",
-        parameter_casts: "Optional[dict[int, str]]" = None,
-        validation_errors: "Optional[list[str]]" = None,
+        parameter_casts: "dict[int, str] | None" = None,
+        validation_errors: "list[str] | None" = None,
         is_many: bool = False,
     ) -> None:
         self.compiled_sql = compiled_sql
@@ -123,10 +124,10 @@ class SQL:
 
     def __init__(
         self,
-        statement: "Union[str, exp.Expression, 'SQL']",
-        *parameters: "Union[Any, StatementFilter, list[Union[Any, StatementFilter]]]",
+        statement: "str | exp.Expression | 'SQL'",
+        *parameters: "Any | StatementFilter | list[Any | StatementFilter]",
         statement_config: Optional["StatementConfig"] = None,
-        is_many: Optional[bool] = None,
+        is_many: bool | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize SQL statement.
@@ -141,8 +142,8 @@ class SQL:
         config = statement_config or self._create_auto_config(statement, parameters, kwargs)
         self._statement_config = config
         self._dialect = self._normalize_dialect(config.dialect)
-        self._processed_state: Union[EmptyEnum, ProcessedState] = Empty
-        self._hash: Optional[int] = None
+        self._processed_state: EmptyEnum | ProcessedState = Empty
+        self._hash: int | None = None
         self._filters: list[StatementFilter] = []
         self._named_parameters: dict[str, Any] = {}
         self._positional_parameters: list[Any] = []
@@ -165,7 +166,7 @@ class SQL:
         self._process_parameters(*parameters, **kwargs)
 
     def _create_auto_config(
-        self, _statement: "Union[str, exp.Expression, 'SQL']", _parameters: tuple, _kwargs: dict[str, Any]
+        self, _statement: "str | exp.Expression | 'SQL'", _parameters: tuple, _kwargs: dict[str, Any]
     ) -> "StatementConfig":
         """Create default StatementConfig when none provided.
 
@@ -179,7 +180,7 @@ class SQL:
         """
         return get_default_config()
 
-    def _normalize_dialect(self, dialect: "Optional[DialectType]") -> "Optional[str]":
+    def _normalize_dialect(self, dialect: "DialectType | None") -> "str | None":
         """Convert dialect to string representation.
 
         Args:
@@ -224,7 +225,7 @@ class SQL:
                 return len(param_list) > 1
         return False
 
-    def _process_parameters(self, *parameters: Any, dialect: Optional[str] = None, **kwargs: Any) -> None:
+    def _process_parameters(self, *parameters: Any, dialect: str | None = None, **kwargs: Any) -> None:
         """Process and organize parameters and filters.
 
         Args:
@@ -318,7 +319,7 @@ class SQL:
         return self._statement_config
 
     @property
-    def expression(self) -> "Optional[exp.Expression]":
+    def expression(self) -> "exp.Expression | None":
         """SQLGlot expression."""
         if self._processed_state is not Empty:
             return self._processed_state.parsed_expression
@@ -349,17 +350,17 @@ class SQL:
         return self._processed_state
 
     @property
-    def dialect(self) -> "Optional[str]":
+    def dialect(self) -> "str | None":
         """SQL dialect."""
         return self._dialect
 
     @property
-    def _statement(self) -> "Optional[exp.Expression]":
+    def _statement(self) -> "exp.Expression | None":
         """Internal SQLGlot expression."""
         return self.expression
 
     @property
-    def statement_expression(self) -> "Optional[exp.Expression]":
+    def statement_expression(self) -> "exp.Expression | None":
         """Get parsed statement expression (public API).
 
         Returns:
@@ -485,7 +486,7 @@ class SQL:
         return new_sql
 
     def copy(
-        self, statement: "Optional[Union[str, exp.Expression]]" = None, parameters: Optional[Any] = None, **kwargs: Any
+        self, statement: "str | exp.Expression | None" = None, parameters: Any | None = None, **kwargs: Any
     ) -> "SQL":
         """Create copy with modifications.
 
@@ -530,7 +531,7 @@ class SQL:
         new_sql._filters = self._filters.copy()
         return new_sql
 
-    def where(self, condition: "Union[str, exp.Expression]") -> "SQL":
+    def where(self, condition: "str | exp.Expression") -> "SQL":
         """Add WHERE condition to the SQL statement.
 
         Args:
@@ -623,7 +624,7 @@ class StatementConfig:
 
     def __init__(
         self,
-        parameter_config: "Optional[ParameterStyleConfig]" = None,
+        parameter_config: "ParameterStyleConfig | None" = None,
         enable_parsing: bool = True,
         enable_validation: bool = True,
         enable_transformations: bool = True,
@@ -631,14 +632,14 @@ class StatementConfig:
         enable_expression_simplification: bool = False,
         enable_parameter_type_wrapping: bool = True,
         enable_caching: bool = True,
-        parameter_converter: "Optional[ParameterConverter]" = None,
-        parameter_validator: "Optional[ParameterValidator]" = None,
-        dialect: "Optional[DialectType]" = None,
-        pre_process_steps: "Optional[list[Any]]" = None,
-        post_process_steps: "Optional[list[Any]]" = None,
-        execution_mode: "Optional[str]" = None,
-        execution_args: "Optional[dict[str, Any]]" = None,
-        output_transformer: "Optional[Callable[[str, Any], tuple[str, Any]]]" = None,
+        parameter_converter: "ParameterConverter | None" = None,
+        parameter_validator: "ParameterValidator | None" = None,
+        dialect: "DialectType | None" = None,
+        pre_process_steps: "list[Any] | None" = None,
+        post_process_steps: "list[Any] | None" = None,
+        execution_mode: "str | None" = None,
+        execution_args: "dict[str, Any] | None" = None,
+        output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None,
     ) -> None:
         """Initialize StatementConfig.
 
@@ -805,4 +806,4 @@ def get_default_parameter_config() -> ParameterStyleConfig:
     )
 
 
-Statement: TypeAlias = Union[str, exp.Expression, SQL]
+Statement: TypeAlias = str | exp.Expression | SQL

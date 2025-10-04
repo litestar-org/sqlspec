@@ -10,7 +10,7 @@ import functools
 import inspect
 import sys
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from typing_extensions import ParamSpec
 
@@ -46,7 +46,7 @@ class CapacityLimiter:
             total_tokens: Maximum number of concurrent operations allowed
         """
         self._total_tokens = total_tokens
-        self._semaphore_instance: Optional[asyncio.Semaphore] = None
+        self._semaphore_instance: asyncio.Semaphore | None = None
 
     @property
     def _semaphore(self) -> asyncio.Semaphore:
@@ -78,10 +78,7 @@ class CapacityLimiter:
         await self.acquire()
 
     async def __aexit__(
-        self,
-        exc_type: "Optional[type[BaseException]]",
-        exc_val: "Optional[BaseException]",
-        exc_tb: "Optional[TracebackType]",
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> None:
         """Async context manager exit."""
         self.release()
@@ -169,7 +166,7 @@ def await_(
 
 
 def async_(
-    function: "Callable[ParamSpecT, ReturnT]", *, limiter: "Optional[CapacityLimiter]" = None
+    function: "Callable[ParamSpecT, ReturnT]", *, limiter: "CapacityLimiter | None" = None
 ) -> "Callable[ParamSpecT, Awaitable[ReturnT]]":
     """Convert a blocking function to an async one using asyncio.to_thread().
 
@@ -192,7 +189,7 @@ def async_(
 
 
 def ensure_async_(
-    function: "Callable[ParamSpecT, Union[Awaitable[ReturnT], ReturnT]]",
+    function: "Callable[ParamSpecT, Awaitable[ReturnT] | ReturnT]",
 ) -> "Callable[ParamSpecT, Awaitable[ReturnT]]":
     """Convert a function to an async one if it is not already.
 
@@ -223,16 +220,13 @@ class _ContextManagerWrapper(Generic[T]):
         return self._cm.__enter__()
 
     async def __aexit__(
-        self,
-        exc_type: "Optional[type[BaseException]]",
-        exc_val: "Optional[BaseException]",
-        exc_tb: "Optional[TracebackType]",
-    ) -> "Optional[bool]":
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> "bool | None":
         return self._cm.__exit__(exc_type, exc_val, exc_tb)
 
 
 def with_ensure_async_(
-    obj: "Union[AbstractContextManager[T], AbstractAsyncContextManager[T]]",
+    obj: "AbstractContextManager[T] | AbstractAsyncContextManager[T]",
 ) -> "AbstractAsyncContextManager[T]":
     """Convert a context manager to an async one if it is not already.
 

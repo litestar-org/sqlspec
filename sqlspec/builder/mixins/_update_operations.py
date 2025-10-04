@@ -6,7 +6,7 @@ table specification, SET clauses, and FROM clauses.
 """
 
 from collections.abc import Mapping
-from typing import Any, Optional, Union
+from typing import Any
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -27,10 +27,10 @@ class UpdateTableClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def table(self, table_name: str, alias: Optional[str] = None) -> Self:
+    def table(self, table_name: str, alias: str | None = None) -> Self:
         """Set the table to update.
 
         Args:
@@ -58,10 +58,10 @@ class UpdateSetClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
@@ -152,10 +152,10 @@ class UpdateFromClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def from_(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
+    def from_(self, table: str | exp.Expression | Any, alias: str | None = None) -> Self:
         """Add a FROM clause to the UPDATE statement.
 
         Args:

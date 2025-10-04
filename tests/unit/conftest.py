@@ -6,9 +6,10 @@ cleanup, and performance testing with proper scoping and test isolation.
 
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from contextlib import asynccontextmanager, contextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -297,7 +298,7 @@ class MockSyncConnection:
         self.autocommit = True
         self.execute_count = 0
         self.execute_many_count = 0
-        self.last_sql: Optional[str] = None
+        self.last_sql: str | None = None
         self.last_parameters: Any = None
         self.cursor_results: list[dict[str, Any]] = []
         self.connection_info = {
@@ -352,7 +353,7 @@ class MockAsyncConnection:
         self.autocommit = True
         self.execute_count = 0
         self.execute_many_count = 0
-        self.last_sql: Optional[str] = None
+        self.last_sql: str | None = None
         self.last_parameters: Any = None
         self.cursor_results: list[dict[str, Any]] = []
         self.connection_info = {
@@ -402,9 +403,9 @@ class MockSyncCursor:
     def __init__(self, connection: MockSyncConnection) -> None:
         self.connection = connection
         self.rowcount = 0
-        self.description: Optional[list[tuple[str, ...]]] = None
+        self.description: list[tuple[str, ...]] | None = None
         self.fetchall_result: list[tuple[Any, ...]] = []
-        self.fetchone_result: Optional[tuple[Any, ...]] = None
+        self.fetchone_result: tuple[Any, ...] | None = None
         self.closed = False
         self.arraysize = 1
 
@@ -452,11 +453,11 @@ class MockSyncCursor:
         """Mock fetchall method."""
         return self.fetchall_result
 
-    def fetchone(self) -> Optional[tuple[Any, ...]]:
+    def fetchone(self) -> tuple[Any, ...] | None:
         """Mock fetchone method."""
         return self.fetchone_result
 
-    def fetchmany(self, size: Optional[int] = None) -> list[tuple[Any, ...]]:
+    def fetchmany(self, size: int | None = None) -> list[tuple[Any, ...]]:
         """Mock fetchmany method."""
         size = size or self.arraysize
         return self.fetchall_result[:size]
@@ -480,9 +481,9 @@ class MockAsyncCursor:
     def __init__(self, connection: MockAsyncConnection) -> None:
         self.connection = connection
         self.rowcount = 0
-        self.description: Optional[list[tuple[str, ...]]] = None
+        self.description: list[tuple[str, ...]] | None = None
         self.fetchall_result: list[tuple[Any, ...]] = []
-        self.fetchone_result: Optional[tuple[Any, ...]] = None
+        self.fetchone_result: tuple[Any, ...] | None = None
         self.closed = False
         self.arraysize = 1
 
@@ -530,11 +531,11 @@ class MockAsyncCursor:
         """Mock async fetchall method."""
         return self.fetchall_result
 
-    async def fetchone(self) -> Optional[tuple[Any, ...]]:
+    async def fetchone(self) -> tuple[Any, ...] | None:
         """Mock async fetchone method."""
         return self.fetchone_result
 
-    async def fetchmany(self, size: Optional[int] = None) -> list[tuple[Any, ...]]:
+    async def fetchmany(self, size: int | None = None) -> list[tuple[Any, ...]]:
         """Mock async fetchmany method."""
         size = size or self.arraysize
         return self.fetchall_result[:size]
@@ -555,7 +556,7 @@ class MockAsyncCursor:
 class MockSyncDataDictionary(SyncDataDictionaryBase):
     """Mock sync data dictionary for testing."""
 
-    def get_version(self, driver: SyncDriverAdapterBase) -> "Optional[VersionInfo]":
+    def get_version(self, driver: SyncDriverAdapterBase) -> "VersionInfo | None":
         """Return mock version info."""
         return VersionInfo(3, 42, 0)
 
@@ -575,7 +576,7 @@ class MockSyncDataDictionary(SyncDataDictionaryBase):
 class MockAsyncDataDictionary(AsyncDataDictionaryBase):
     """Mock async data dictionary for testing."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "Optional[VersionInfo]":
+    async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Return mock version info."""
         return VersionInfo(3, 42, 0)
 
@@ -600,8 +601,8 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def __init__(
         self,
         connection: MockSyncConnection,
-        statement_config: Optional[StatementConfig] = None,
-        driver_features: Optional[dict[str, Any]] = None,
+        statement_config: StatementConfig | None = None,
+        driver_features: dict[str, Any] | None = None,
     ) -> None:
         if statement_config is None:
             from sqlspec.core.parameters import ParameterStyleConfig
@@ -616,7 +617,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
                 dialect="sqlite", parameter_config=parameter_config, enable_caching=False
             )
         super().__init__(connection, statement_config, driver_features)
-        self._data_dictionary: Optional[SyncDataDictionaryBase] = None
+        self._data_dictionary: SyncDataDictionaryBase | None = None
 
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
@@ -642,7 +643,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
         except Exception as e:
             raise SQLSpecError(f"Mock database error: {e}") from e
 
-    def _try_special_handling(self, cursor: MockSyncCursor, statement: SQL) -> Optional[Any]:
+    def _try_special_handling(self, cursor: MockSyncCursor, statement: SQL) -> Any | None:
         """Mock special handling - always return None."""
         return None
 
@@ -708,8 +709,8 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     def __init__(
         self,
         connection: MockAsyncConnection,
-        statement_config: Optional[StatementConfig] = None,
-        driver_features: Optional[dict[str, Any]] = None,
+        statement_config: StatementConfig | None = None,
+        driver_features: dict[str, Any] | None = None,
     ) -> None:
         if statement_config is None:
             from sqlspec.core.parameters import ParameterStyleConfig
@@ -724,7 +725,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
                 dialect="sqlite", parameter_config=parameter_config, enable_caching=False
             )
         super().__init__(connection, statement_config, driver_features)
-        self._data_dictionary: Optional[AsyncDataDictionaryBase] = None
+        self._data_dictionary: AsyncDataDictionaryBase | None = None
 
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
@@ -750,7 +751,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         except Exception as e:
             raise SQLSpecError(f"Mock async database error: {e}") from e
 
-    async def _try_special_handling(self, cursor: MockAsyncCursor, statement: SQL) -> Optional[Any]:
+    async def _try_special_handling(self, cursor: MockAsyncCursor, statement: SQL) -> Any | None:
         """Mock async special handling - always return None."""
         return None
 

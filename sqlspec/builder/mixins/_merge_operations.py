@@ -5,7 +5,7 @@ Provides mixins for MERGE statement functionality including INTO,
 USING, ON, WHEN MATCHED, and WHEN NOT MATCHED clauses.
 """
 
-from typing import Any, Optional, Union
+from typing import Any
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -31,10 +31,10 @@ class MergeIntoClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def into(self, table: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def into(self, table: str | exp.Expression, alias: str | None = None) -> Self:
         """Set the target table for the MERGE operation (INTO clause).
 
         Args:
@@ -61,10 +61,10 @@ class MergeUsingClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
@@ -74,7 +74,7 @@ class MergeUsingClauseMixin:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
-    def using(self, source: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
+    def using(self, source: str | exp.Expression | Any, alias: str | None = None) -> Self:
         """Set the source data for the MERGE operation (USING clause).
 
         Args:
@@ -102,7 +102,7 @@ class MergeUsingClauseMixin:
             values = list(source.values())
 
             parameterized_values: list[exp.Expression] = []
-            for col, val in zip(columns, values):
+            for col, val in zip(columns, values, strict=False):
                 column_name = col if isinstance(col, str) else str(col)
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
@@ -148,10 +148,10 @@ class MergeOnClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def on(self, condition: Union[str, exp.Expression]) -> Self:
+    def on(self, condition: str | exp.Expression) -> Self:
         """Set the join condition for the MERGE operation (ON clause).
 
         Args:
@@ -172,9 +172,7 @@ class MergeOnClauseMixin:
         assert current_expr is not None
         condition_expr: exp.Expression
         if isinstance(condition, str):
-            parsed_condition: Optional[exp.Expression] = exp.maybe_parse(
-                condition, dialect=getattr(self, "dialect", None)
-            )
+            parsed_condition: exp.Expression | None = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
             if not parsed_condition:
                 msg = f"Could not parse ON condition: {condition}"
                 raise SQLBuilderError(msg)
@@ -195,10 +193,10 @@ class MergeMatchedClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
@@ -231,7 +229,7 @@ class MergeMatchedClauseMixin:
 
         try:
             # Try to parse as SQL expression
-            parsed: Optional[exp.Expression] = exp.maybe_parse(value)
+            parsed: exp.Expression | None = exp.maybe_parse(value)
             if parsed is None:
                 return False
 
@@ -264,10 +262,7 @@ class MergeMatchedClauseMixin:
         whens.append("expressions", when_clause)
 
     def when_matched_then_update(
-        self,
-        set_values: Optional[dict[str, Any]] = None,
-        condition: Optional[Union[str, exp.Expression]] = None,
-        **kwargs: Any,
+        self, set_values: dict[str, Any] | None = None, condition: str | exp.Expression | None = None, **kwargs: Any
     ) -> Self:
         """Define the UPDATE action for matched rows.
 
@@ -322,9 +317,7 @@ class MergeMatchedClauseMixin:
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond: Optional[exp.Expression] = exp.maybe_parse(
-                    condition, dialect=getattr(self, "dialect", None)
-                )
+                parsed_cond: exp.Expression | None = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -340,7 +333,7 @@ class MergeMatchedClauseMixin:
         self._add_when_clause(when_clause)
         return self
 
-    def when_matched_then_delete(self, condition: Optional[Union[str, exp.Expression]] = None) -> Self:
+    def when_matched_then_delete(self, condition: str | exp.Expression | None = None) -> Self:
         """Define the DELETE action for matched rows.
 
         Args:
@@ -357,9 +350,7 @@ class MergeMatchedClauseMixin:
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond: Optional[exp.Expression] = exp.maybe_parse(
-                    condition, dialect=getattr(self, "dialect", None)
-                )
+                parsed_cond: exp.Expression | None = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -382,10 +373,10 @@ class MergeNotMatchedClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
@@ -410,7 +401,7 @@ class MergeNotMatchedClauseMixin:
 
         try:
             # Try to parse as SQL expression
-            parsed: Optional[exp.Expression] = exp.maybe_parse(value)
+            parsed: exp.Expression | None = exp.maybe_parse(value)
             if parsed is None:
                 return False
 
@@ -450,9 +441,9 @@ class MergeNotMatchedClauseMixin:
 
     def when_not_matched_then_insert(
         self,
-        columns: Optional[list[str]] = None,
-        values: Optional[list[Any]] = None,
-        condition: Optional[Union[str, exp.Expression]] = None,
+        columns: list[str] | None = None,
+        values: list[Any] | None = None,
+        condition: str | exp.Expression | None = None,
         by_target: bool = True,
     ) -> Self:
         """Define the INSERT action for rows not matched.
@@ -510,9 +501,7 @@ class MergeNotMatchedClauseMixin:
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond: Optional[exp.Expression] = exp.maybe_parse(
-                    condition, dialect=getattr(self, "dialect", None)
-                )
+                parsed_cond: exp.Expression | None = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -535,10 +524,10 @@ class MergeNotMatchedBySourceClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
@@ -569,7 +558,7 @@ class MergeNotMatchedBySourceClauseMixin:
             return False
 
         try:
-            parsed: Optional[exp.Expression] = exp.maybe_parse(value)
+            parsed: exp.Expression | None = exp.maybe_parse(value)
             if parsed is None:
                 return False
 
@@ -583,10 +572,7 @@ class MergeNotMatchedBySourceClauseMixin:
         )
 
     def when_not_matched_by_source_then_update(
-        self,
-        set_values: Optional[dict[str, Any]] = None,
-        condition: Optional[Union[str, exp.Expression]] = None,
-        **kwargs: Any,
+        self, set_values: dict[str, Any] | None = None, condition: str | exp.Expression | None = None, **kwargs: Any
     ) -> Self:
         """Define the UPDATE action for rows not matched by source.
 
@@ -642,9 +628,7 @@ class MergeNotMatchedBySourceClauseMixin:
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond: Optional[exp.Expression] = exp.maybe_parse(
-                    condition, dialect=getattr(self, "dialect", None)
-                )
+                parsed_cond: exp.Expression | None = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -660,7 +644,7 @@ class MergeNotMatchedBySourceClauseMixin:
         self._add_when_clause(when_clause)
         return self
 
-    def when_not_matched_by_source_then_delete(self, condition: Optional[Union[str, exp.Expression]] = None) -> Self:
+    def when_not_matched_by_source_then_delete(self, condition: str | exp.Expression | None = None) -> Self:
         """Define the DELETE action for rows not matched by source.
 
         This is useful for cleaning up rows that exist in the target but not in the source.
@@ -679,9 +663,7 @@ class MergeNotMatchedBySourceClauseMixin:
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond: Optional[exp.Expression] = exp.maybe_parse(
-                    condition, dialect=getattr(self, "dialect", None)
-                )
+                parsed_cond: exp.Expression | None = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)

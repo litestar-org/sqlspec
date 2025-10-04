@@ -5,7 +5,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager, suppress
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
@@ -48,7 +48,7 @@ class AiosqlitePoolConnection:
         """
         self.id = uuid.uuid4().hex
         self.connection = connection
-        self.idle_since: Optional[float] = None
+        self.idle_since: float | None = None
         self._closed = False
 
     @property
@@ -160,12 +160,12 @@ class AiosqliteConnectionPool:
         self._operation_timeout = operation_timeout
 
         self._connection_registry: dict[str, AiosqlitePoolConnection] = {}
-        self._tracked_threads: set[Union[threading.Thread, AiosqliteConnection]] = set()
+        self._tracked_threads: set[threading.Thread | AiosqliteConnection] = set()
         self._wal_initialized = False
 
-        self._queue_instance: Optional[asyncio.Queue[AiosqlitePoolConnection]] = None
-        self._lock_instance: Optional[asyncio.Lock] = None
-        self._closed_event_instance: Optional[asyncio.Event] = None
+        self._queue_instance: asyncio.Queue[AiosqlitePoolConnection] | None = None
+        self._lock_instance: asyncio.Lock | None = None
+        self._closed_event_instance: asyncio.Event | None = None
 
     @property
     def _queue(self) -> "asyncio.Queue[AiosqlitePoolConnection]":
@@ -312,7 +312,7 @@ class AiosqliteConnectionPool:
         except asyncio.TimeoutError:
             logger.warning("Connection %s close timed out during retirement", connection.id)
 
-    async def _try_provision_new_connection(self) -> "Optional[AiosqlitePoolConnection]":
+    async def _try_provision_new_connection(self) -> "AiosqlitePoolConnection | None":
         """Try to create a new connection if under capacity.
 
         Returns:
