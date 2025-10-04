@@ -1,6 +1,6 @@
 from sqlspec.exceptions import (
     CheckViolationError,
-    ConnectionError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     IntegrityError,
@@ -12,27 +12,27 @@ from sqlspec.exceptions import (
 )
 
 
-def test_new_exception_hierarchy():
+def test_new_exception_hierarchy() -> None:
     """Test new exception classes inherit correctly."""
     assert issubclass(UniqueViolationError, IntegrityError)
     assert issubclass(ForeignKeyViolationError, IntegrityError)
     assert issubclass(CheckViolationError, IntegrityError)
     assert issubclass(NotNullViolationError, IntegrityError)
 
-    assert issubclass(ConnectionError, SQLSpecError)
+    assert issubclass(DatabaseConnectionError, SQLSpecError)
     assert issubclass(TransactionError, SQLSpecError)
     assert issubclass(DataError, SQLSpecError)
     assert issubclass(OperationalError, SQLSpecError)
 
 
-def test_exception_instantiation():
+def test_exception_instantiation() -> None:
     """Test exceptions can be instantiated with messages."""
     exc = UniqueViolationError("Duplicate key")
     assert str(exc) == "Duplicate key"
     assert isinstance(exc, Exception)
 
 
-def test_exception_chaining():
+def test_exception_chaining() -> None:
     """Test exceptions support chaining with 'from'."""
     try:
         try:

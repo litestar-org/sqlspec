@@ -12,7 +12,7 @@ from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
-    ConnectionError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     IntegrityError,
@@ -35,6 +35,14 @@ if TYPE_CHECKING:
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "sqlite_statement_config")
 
+SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
+SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
+SQLITE_CONSTRAINT_NOTNULL_CODE = 1811
+SQLITE_CONSTRAINT_CHECK_CODE = 531
+SQLITE_CONSTRAINT_CODE = 19
+SQLITE_CANTOPEN_CODE = 14
+SQLITE_IOERR_CODE = 10
+SQLITE_MISMATCH_CODE = 20
 
 sqlite_statement_config = StatementConfig(
     dialect="sqlite",
@@ -133,27 +141,27 @@ class SqliteExceptionHandler:
         error_msg = str(e).lower()
 
         if "locked" in error_msg:
-            raise
+            self._raise_operational_error(e, error_code or 0)
 
         if not error_code:
             self._raise_generic_error(e)
 
-        if error_code == 2067 or error_name == "SQLITE_CONSTRAINT_UNIQUE":
-            self._raise_unique_violation(e, error_code)
-        elif error_code == 787 or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
-            self._raise_foreign_key_violation(e, error_code)
-        elif error_code == 1811 or error_name == "SQLITE_CONSTRAINT_NOTNULL":
-            self._raise_not_null_violation(e, error_code)
-        elif error_code == 531 or error_name == "SQLITE_CONSTRAINT_CHECK":
-            self._raise_check_violation(e, error_code)
-        elif error_code == 19 or error_name == "SQLITE_CONSTRAINT":
-            self._raise_integrity_error(e, error_code)
-        elif error_code == 14 or error_name == "SQLITE_CANTOPEN":
-            self._raise_connection_error(e, error_code)
-        elif error_code == 10 or error_name == "SQLITE_IOERR":
-            self._raise_operational_error(e, error_code)
-        elif error_code == 20 or error_name == "SQLITE_MISMATCH":
-            self._raise_data_error(e, error_code)
+        if error_code == SQLITE_CONSTRAINT_UNIQUE_CODE or error_name == "SQLITE_CONSTRAINT_UNIQUE":
+            self._raise_unique_violation(e, error_code)  # type: ignore[arg-type]
+        elif error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
+            self._raise_foreign_key_violation(e, error_code)  # type: ignore[arg-type]
+        elif error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
+            self._raise_not_null_violation(e, error_code)  # type: ignore[arg-type]
+        elif error_code == SQLITE_CONSTRAINT_CHECK_CODE or error_name == "SQLITE_CONSTRAINT_CHECK":
+            self._raise_check_violation(e, error_code)  # type: ignore[arg-type]
+        elif error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
+            self._raise_integrity_error(e, error_code)  # type: ignore[arg-type]
+        elif error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
+            self._raise_connection_error(e, error_code)  # type: ignore[arg-type]
+        elif error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
+            self._raise_operational_error(e, error_code)  # type: ignore[arg-type]
+        elif error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
+            self._raise_data_error(e, error_code)  # type: ignore[arg-type]
         elif error_code == 1 or "syntax" in error_msg:
             self._raise_parsing_error(e, error_code)
         else:
@@ -186,7 +194,7 @@ class SqliteExceptionHandler:
 
     def _raise_connection_error(self, e: Any, code: int) -> None:
         msg = f"SQLite connection error [code {code}]: {e}"
-        raise ConnectionError(msg) from e
+        raise DatabaseConnectionError(msg) from e
 
     def _raise_operational_error(self, e: Any, code: int) -> None:
         msg = f"SQLite operational error [code {code}]: {e}"

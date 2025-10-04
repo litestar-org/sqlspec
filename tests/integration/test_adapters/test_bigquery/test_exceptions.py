@@ -26,7 +26,7 @@ def bigquery_exception_session(bigquery_service: BigQueryService) -> Generator[B
             "project": bigquery_service.project,
             "dataset_id": table_prefix,
             "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
-            "credentials": AnonymousCredentials(),
+            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
         }
     )
 

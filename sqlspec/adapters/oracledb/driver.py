@@ -21,7 +21,7 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import (
     CheckViolationError,
-    ConnectionError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     IntegrityError,
@@ -55,6 +55,13 @@ __all__ = (
     "OracleSyncExceptionHandler",
     "oracledb_statement_config",
 )
+
+ORA_CHECK_CONSTRAINT = 2290
+ORA_INTEGRITY_RANGE_START = 2200
+ORA_INTEGRITY_RANGE_END = 2300
+ORA_PARSING_RANGE_START = 900
+ORA_PARSING_RANGE_END = 1000
+ORA_TABLESPACE_FULL = 1652
 
 
 oracledb_statement_config = StatementConfig(
@@ -152,23 +159,23 @@ class OracleSyncExceptionHandler:
 
         if error_code == 1:
             self._raise_unique_violation(e, error_code)
-        elif error_code in (2291, 2292):
+        elif error_code in {2291, 2292}:
             self._raise_foreign_key_violation(e, error_code)
-        elif error_code == 2290:
+        elif error_code == ORA_CHECK_CONSTRAINT:
             self._raise_check_violation(e, error_code)
-        elif error_code in (1400, 1407):
+        elif error_code in {1400, 1407}:
             self._raise_not_null_violation(e, error_code)
-        elif 2200 <= error_code < 2300:
+        elif error_code and ORA_INTEGRITY_RANGE_START <= error_code < ORA_INTEGRITY_RANGE_END:
             self._raise_integrity_error(e, error_code)
-        elif error_code in (1017, 12154, 12541, 12545, 12514, 12505):
+        elif error_code in {1017, 12154, 12541, 12545, 12514, 12505}:
             self._raise_connection_error(e, error_code)
-        elif error_code in (60, 8176):
+        elif error_code in {60, 8176}:
             self._raise_transaction_error(e, error_code)
-        elif error_code in (1722, 1858, 1840):
+        elif error_code in {1722, 1858, 1840}:
             self._raise_data_error(e, error_code)
-        elif 900 <= error_code < 1000:
+        elif error_code and ORA_PARSING_RANGE_START <= error_code < ORA_PARSING_RANGE_END:
             self._raise_parsing_error(e, error_code)
-        elif error_code == 1652:
+        elif error_code == ORA_TABLESPACE_FULL:
             self._raise_operational_error(e, error_code)
         else:
             self._raise_generic_error(e, error_code)
@@ -199,7 +206,7 @@ class OracleSyncExceptionHandler:
 
     def _raise_connection_error(self, e: Any, code: int) -> None:
         msg = f"Oracle connection error [ORA-{code:05d}]: {e}"
-        raise ConnectionError(msg) from e
+        raise DatabaseConnectionError(msg) from e
 
     def _raise_transaction_error(self, e: Any, code: int) -> None:
         msg = f"Oracle transaction error [ORA-{code:05d}]: {e}"
@@ -254,23 +261,23 @@ class OracleAsyncExceptionHandler:
 
         if error_code == 1:
             self._raise_unique_violation(e, error_code)
-        elif error_code in (2291, 2292):
+        elif error_code in {2291, 2292}:
             self._raise_foreign_key_violation(e, error_code)
-        elif error_code == 2290:
+        elif error_code == ORA_CHECK_CONSTRAINT:
             self._raise_check_violation(e, error_code)
-        elif error_code in (1400, 1407):
+        elif error_code in {1400, 1407}:
             self._raise_not_null_violation(e, error_code)
-        elif 2200 <= error_code < 2300:
+        elif error_code and ORA_INTEGRITY_RANGE_START <= error_code < ORA_INTEGRITY_RANGE_END:
             self._raise_integrity_error(e, error_code)
-        elif error_code in (1017, 12154, 12541, 12545, 12514, 12505):
+        elif error_code in {1017, 12154, 12541, 12545, 12514, 12505}:
             self._raise_connection_error(e, error_code)
-        elif error_code in (60, 8176):
+        elif error_code in {60, 8176}:
             self._raise_transaction_error(e, error_code)
-        elif error_code in (1722, 1858, 1840):
+        elif error_code in {1722, 1858, 1840}:
             self._raise_data_error(e, error_code)
-        elif 900 <= error_code < 1000:
+        elif error_code and ORA_PARSING_RANGE_START <= error_code < ORA_PARSING_RANGE_END:
             self._raise_parsing_error(e, error_code)
-        elif error_code == 1652:
+        elif error_code == ORA_TABLESPACE_FULL:
             self._raise_operational_error(e, error_code)
         else:
             self._raise_generic_error(e, error_code)
@@ -301,7 +308,7 @@ class OracleAsyncExceptionHandler:
 
     def _raise_connection_error(self, e: Any, code: int) -> None:
         msg = f"Oracle connection error [ORA-{code:05d}]: {e}"
-        raise ConnectionError(msg) from e
+        raise DatabaseConnectionError(msg) from e
 
     def _raise_transaction_error(self, e: Any, code: int) -> None:
         msg = f"Oracle transaction error [ORA-{code:05d}]: {e}"

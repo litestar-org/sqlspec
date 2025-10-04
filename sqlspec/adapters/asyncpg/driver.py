@@ -16,7 +16,7 @@ from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
-    ConnectionError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     IntegrityError,
@@ -157,6 +157,7 @@ class AsyncpgExceptionHandler:
 
         if not error_code:
             self._raise_generic_error(e, None)
+            return
 
         if error_code == "23505":
             self._raise_unique_violation(e, error_code)
@@ -207,7 +208,7 @@ class AsyncpgExceptionHandler:
 
     def _raise_connection_error(self, e: Any, code: str) -> None:
         msg = f"PostgreSQL connection error [{code}]: {e}"
-        raise ConnectionError(msg) from e
+        raise DatabaseConnectionError(msg) from e
 
     def _raise_transaction_error(self, e: Any, code: str) -> None:
         msg = f"PostgreSQL transaction error [{code}]: {e}"

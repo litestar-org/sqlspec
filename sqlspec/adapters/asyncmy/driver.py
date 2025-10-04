@@ -17,7 +17,7 @@ from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
-    ConnectionError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     IntegrityError,
@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "asyncmy_statement_config")
 
+MYSQL_ER_DUP_ENTRY = 1062
+MYSQL_ER_NO_DEFAULT_FOR_FIELD = 1364
+MYSQL_ER_CHECK_CONSTRAINT_VIOLATED = 3819
 
 asyncmy_statement_config = StatementConfig(
     dialect="mysql",
@@ -126,13 +129,13 @@ class AsyncmyExceptionHandler:
             logger.warning("AsyncMy MySQL expected migration error (ignoring): %s", e)
             return True
 
-        if sqlstate == "23505" or error_code == 1062:
+        if sqlstate == "23505" or error_code == MYSQL_ER_DUP_ENTRY:
             self._raise_unique_violation(e, sqlstate, error_code)
         elif sqlstate == "23503" or error_code in (1216, 1217, 1451, 1452):
             self._raise_foreign_key_violation(e, sqlstate, error_code)
-        elif sqlstate == "23502" or error_code in (1048, 1364):
+        elif sqlstate == "23502" or error_code in (1048, MYSQL_ER_NO_DEFAULT_FOR_FIELD):
             self._raise_not_null_violation(e, sqlstate, error_code)
-        elif sqlstate == "23514" or error_code == 3819:
+        elif sqlstate == "23514" or error_code == MYSQL_ER_CHECK_CONSTRAINT_VIOLATED:
             self._raise_check_violation(e, sqlstate, error_code)
         elif sqlstate and sqlstate.startswith("23"):
             self._raise_integrity_error(e, sqlstate, error_code)
@@ -187,7 +190,7 @@ class AsyncmyExceptionHandler:
     def _raise_connection_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
         code_str = f"[{sqlstate or code}]"
         msg = f"MySQL connection error {code_str}: {e}"
-        raise ConnectionError(msg) from e
+        raise DatabaseConnectionError(msg) from e
 
     def _raise_transaction_error(self, e: Any, sqlstate: "Optional[str]", code: "Optional[int]") -> None:
         code_str = f"[{sqlstate or code}]"

@@ -19,7 +19,7 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
-    ConnectionError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     IntegrityError,
@@ -464,7 +464,7 @@ class AdbcExceptionHandler:
 
     def _raise_connection_error(self, e: Any) -> None:
         msg = f"ADBC connection error: {e}"
-        raise ConnectionError(msg) from e
+        raise DatabaseConnectionError(msg) from e
 
     def _raise_transaction_error(self, e: Any) -> None:
         msg = f"ADBC transaction error: {e}"

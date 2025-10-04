@@ -18,7 +18,7 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
-    ConnectionError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     IntegrityError,
@@ -181,7 +181,7 @@ class PsqlpyExceptionHandler:
 
     def _raise_connection_error(self, e: Any, code: "Optional[str]") -> None:
         msg = f"PostgreSQL connection error: {e}"
-        raise ConnectionError(msg) from e
+        raise DatabaseConnectionError(msg) from e
 
     def _raise_transaction_error(self, e: Any, code: "Optional[str]") -> None:
         msg = f"PostgreSQL transaction error: {e}"

@@ -5,8 +5,8 @@ from typing import Any, Optional, Union
 __all__ = (
     "CheckViolationError",
     "ConfigResolverError",
-    "ConnectionError",
     "DataError",
+    "DatabaseConnectionError",
     "FileNotFoundInStorageError",
     "ForeignKeyViolationError",
     "ImproperConfigurationError",
@@ -149,7 +149,7 @@ class NotNullViolationError(IntegrityError):
     """A not-null constraint was violated."""
 
 
-class ConnectionError(SQLSpecError):
+class DatabaseConnectionError(SQLSpecError):
     """Database connection error (invalid credentials, network failure, etc.)."""
 
 

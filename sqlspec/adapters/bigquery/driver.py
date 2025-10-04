@@ -22,7 +22,7 @@ from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import ExecutionResult
 from sqlspec.exceptions import (
-    ConnectionError,
+    DatabaseConnectionError,
     DataError,
     NotFoundError,
     OperationalError,
@@ -42,6 +42,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "bigquery_statement_config")
+
+HTTP_CONFLICT = 409
+HTTP_NOT_FOUND = 404
+HTTP_BAD_REQUEST = 400
+HTTP_FORBIDDEN = 403
+HTTP_SERVER_ERROR = 500
+
 
 _type_converter = BigQueryTypeConverter()
 
@@ -230,15 +237,15 @@ class BigQueryExceptionHandler:
         status_code = getattr(e, "code", None)
         error_msg = str(e).lower()
 
-        if status_code == 409 or "already exists" in error_msg:
+        if status_code == HTTP_CONFLICT or "already exists" in error_msg:
             self._raise_unique_violation(e, status_code)
-        elif status_code == 404 or "not found" in error_msg:
+        elif status_code == HTTP_NOT_FOUND or "not found" in error_msg:
             self._raise_not_found_error(e, status_code)
-        elif status_code == 400:
+        elif status_code == HTTP_BAD_REQUEST:
             self._handle_bad_request(e, status_code, error_msg)
-        elif status_code == 403:
+        elif status_code == HTTP_FORBIDDEN:
             self._raise_connection_error(e, status_code)
-        elif status_code and status_code >= 500:
+        elif status_code and status_code >= HTTP_SERVER_ERROR:
             self._raise_operational_error(e, status_code)
         else:
             self._raise_generic_error(e, status_code)
@@ -281,7 +288,7 @@ class BigQueryExceptionHandler:
     def _raise_connection_error(self, e: Any, code: "Optional[int]") -> None:
         code_str = f"[HTTP {code}]" if code else ""
         msg = f"BigQuery permission denied {code_str}: {e}"
-        raise ConnectionError(msg) from e
+        raise DatabaseConnectionError(msg) from e
 
     def _raise_operational_error(self, e: Any, code: "Optional[int]") -> None:
         code_str = f"[HTTP {code}]" if code else ""
