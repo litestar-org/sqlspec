@@ -5,10 +5,13 @@ support and standardized datetime formatting.
 """
 
 from datetime import datetime
-from typing import Any
+from functools import lru_cache
+from typing import Any, Final
 from uuid import UUID
 
 from sqlspec.core.type_conversion import BaseTypeConverter, convert_uuid, format_datetime_rfc3339
+
+DUCKDB_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"-", ":", "T", ".", "[", "{"})
 
 
 class DuckDBTypeConverter(BaseTypeConverter):
@@ -16,9 +19,45 @@ class DuckDBTypeConverter(BaseTypeConverter):
 
     Extends the base TypeDetector with DuckDB-specific functionality
     including native UUID handling and standardized datetime formatting.
+    Includes per-instance LRU cache for improved performance.
     """
 
-    __slots__ = ()
+    __slots__ = ("_convert_cache",)
+
+    def __init__(self, cache_size: int = 5000) -> None:
+        """Initialize converter with per-instance conversion cache.
+
+        Args:
+            cache_size: Maximum number of string values to cache (default: 5000)
+        """
+        super().__init__()
+
+        @lru_cache(maxsize=cache_size)
+        def _cached_convert(value: str) -> Any:
+            if not value or not any(c in value for c in DUCKDB_SPECIAL_CHARS):
+                return value
+            detected_type = self.detect_type(value)
+            if detected_type:
+                try:
+                    return self.convert_value(value, detected_type)
+                except Exception:
+                    return value
+            return value
+
+        self._convert_cache = _cached_convert
+
+    def convert_if_detected(self, value: Any) -> Any:
+        """Convert string if special type detected (cached).
+
+        Args:
+            value: Value to potentially convert
+
+        Returns:
+            Converted value or original value
+        """
+        if not isinstance(value, str):
+            return value
+        return self._convert_cache(value)
 
     def handle_uuid(self, value: Any) -> Any:
         """Handle UUID conversion for DuckDB.
@@ -30,7 +69,7 @@ class DuckDBTypeConverter(BaseTypeConverter):
             UUID object if value is UUID-like, original value otherwise.
         """
         if isinstance(value, UUID):
-            return value  # DuckDB supports UUID natively
+            return value
 
         if isinstance(value, str):
             detected_type = self.detect_type(value)
@@ -59,23 +98,14 @@ class DuckDBTypeConverter(BaseTypeConverter):
         Returns:
             Converted value appropriate for DuckDB.
         """
-        # Handle UUIDs
         if isinstance(value, (str, UUID)):
             uuid_value = self.handle_uuid(value)
             if isinstance(uuid_value, UUID):
                 return uuid_value
 
-        # Handle other string types
         if isinstance(value, str):
-            detected_type = self.detect_type(value)
-            if detected_type:
-                try:
-                    return self.convert_value(value, detected_type)
-                except Exception:
-                    # If conversion fails, return original value
-                    return value
+            return self.convert_if_detected(value)
 
-        # Handle datetime formatting
         if isinstance(value, datetime):
             return self.format_datetime(value)
 
@@ -90,14 +120,10 @@ class DuckDBTypeConverter(BaseTypeConverter):
         Returns:
             Value ready for DuckDB parameter binding.
         """
-        # DuckDB can handle most Python types natively
         converted = self.convert_duckdb_value(value)
-
-        # Ensure UUIDs are properly handled
         if isinstance(converted, UUID):
-            return converted  # DuckDB native UUID support
-
+            return converted
         return converted
 
 
-__all__ = ("DuckDBTypeConverter",)
+__all__ = ("DUCKDB_SPECIAL_CHARS", "DuckDBTypeConverter")

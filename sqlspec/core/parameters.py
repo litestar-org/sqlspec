@@ -20,6 +20,7 @@ Processing:
 """
 
 import re
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from decimal import Decimal
@@ -343,11 +344,16 @@ class ParameterValidator:
     compatibility with target dialects.
     """
 
-    __slots__ = ("_parameter_cache",)
+    __slots__ = ("_cache_max_size", "_parameter_cache")
 
-    def __init__(self) -> None:
-        """Initialize validator with parameter cache."""
-        self._parameter_cache: dict[str, list[ParameterInfo]] = {}
+    def __init__(self, cache_max_size: int = 5000) -> None:
+        """Initialize validator with bounded LRU cache.
+
+        Args:
+            cache_max_size: Maximum number of SQL strings to cache (default: 5000)
+        """
+        self._parameter_cache: OrderedDict[str, list[ParameterInfo]] = OrderedDict()
+        self._cache_max_size = cache_max_size
 
     def _extract_parameter_style(self, match: "re.Match[str]") -> "tuple[Optional[ParameterStyle], Optional[str]]":
         """Extract parameter style and name from regex match.
@@ -396,7 +402,14 @@ class ParameterValidator:
         """
         cached_result = self._parameter_cache.get(sql)
         if cached_result is not None:
+            self._parameter_cache.move_to_end(sql)
             return cached_result
+
+        if not any(c in sql for c in ("?", "%", ":", "@", "$")):
+            if len(self._parameter_cache) >= self._cache_max_size:
+                self._parameter_cache.popitem(last=False)
+            self._parameter_cache[sql] = []
+            return []
 
         parameters: list[ParameterInfo] = []
         ordinal = 0
@@ -424,6 +437,9 @@ class ParameterValidator:
                     )
                 )
                 ordinal += 1
+
+        if len(self._parameter_cache) >= self._cache_max_size:
+            self._parameter_cache.popitem(last=False)
 
         self._parameter_cache[sql] = parameters
         return parameters
@@ -1002,6 +1018,35 @@ class ParameterProcessor:
         target_style = self._determine_target_execution_style(original_styles, config)
         return self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)
 
+    def _generate_processor_cache_key(
+        self, sql: str, parameters: Any, config: ParameterStyleConfig, is_many: bool, dialect: "Optional[str]"
+    ) -> str:
+        """Generate optimized cache key for parameter processing.
+
+        Uses parameter fingerprint (type + structure) instead of repr()
+        for better performance on large parameter sets.
+
+        Args:
+            sql: SQL string
+            parameters: Parameter values
+            config: Parameter style configuration
+            is_many: Whether this is execute_many
+            dialect: SQL dialect
+
+        Returns:
+            Cache key string
+        """
+        param_fingerprint = (
+            "none"
+            if parameters is None
+            else f"seq_{len(parameters)}_{type(parameters).__name__}"
+            if isinstance(parameters, (list, tuple))
+            else f"map_{len(parameters)}"
+            if isinstance(parameters, dict)
+            else f"scalar_{type(parameters).__name__}"
+        )
+        return f"{sql}:{param_fingerprint}:{config.default_parameter_style}:{is_many}:{dialect}"
+
     def process(
         self,
         sql: str,
@@ -1029,7 +1074,7 @@ class ParameterProcessor:
         Returns:
             Tuple of (final_sql, execution_parameters)
         """
-        cache_key = f"{sql}:{hash(repr(parameters))}:{config.default_parameter_style}:{is_many}:{dialect}"
+        cache_key = self._generate_processor_cache_key(sql, parameters, config, is_many, dialect)
         if cache_key in self._cache:
             return self._cache[cache_key]
 

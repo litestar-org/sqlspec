@@ -31,6 +31,48 @@ __all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "asyncpg
 logger = get_logger("adapters.asyncpg")
 
 
+def _convert_datetime_param(value: Any) -> Any:
+    """Convert datetime parameter, handling ISO strings.
+
+    Args:
+        value: datetime object or ISO format string
+
+    Returns:
+        datetime object for asyncpg
+    """
+    if isinstance(value, str):
+        return datetime.datetime.fromisoformat(value)
+    return value
+
+
+def _convert_date_param(value: Any) -> Any:
+    """Convert date parameter, handling ISO strings.
+
+    Args:
+        value: date object or ISO format string
+
+    Returns:
+        date object for asyncpg
+    """
+    if isinstance(value, str):
+        return datetime.date.fromisoformat(value)
+    return value
+
+
+def _convert_time_param(value: Any) -> Any:
+    """Convert time parameter, handling ISO strings.
+
+    Args:
+        value: time object or ISO format string
+
+    Returns:
+        time object for asyncpg
+    """
+    if isinstance(value, str):
+        return datetime.time.fromisoformat(value)
+    return value
+
+
 asyncpg_statement_config = StatementConfig(
     dialect="postgres",
     parameter_config=ParameterStyleConfig(
@@ -38,7 +80,11 @@ asyncpg_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={datetime.datetime: lambda x: x, datetime.date: lambda x: x, datetime.time: lambda x: x},
+        type_coercion_map={
+            datetime.datetime: _convert_datetime_param,
+            datetime.date: _convert_date_param,
+            datetime.time: _convert_time_param,
+        },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
