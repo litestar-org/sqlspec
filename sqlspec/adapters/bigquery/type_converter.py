@@ -4,6 +4,7 @@ Provides specialized type handling for BigQuery, including UUID support
 for the native BigQuery driver.
 """
 
+from functools import lru_cache
 from typing import Any, Final, Optional
 from uuid import UUID
 
@@ -14,7 +15,6 @@ try:
 except ImportError:
     ScalarQueryParameter = None  # type: ignore[assignment,misc]
 
-# Enhanced BigQuery type mapping with UUID support
 BQ_TYPE_MAP: Final[dict[str, str]] = {
     "str": "STRING",
     "int": "INT64",
@@ -23,7 +23,7 @@ BQ_TYPE_MAP: Final[dict[str, str]] = {
     "datetime": "DATETIME",
     "date": "DATE",
     "time": "TIME",
-    "UUID": "STRING",  # UUID as STRING in BigQuery
+    "UUID": "STRING",
     "uuid": "STRING",
     "Decimal": "NUMERIC",
     "bytes": "BYTES",
@@ -31,15 +31,53 @@ BQ_TYPE_MAP: Final[dict[str, str]] = {
     "dict": "STRUCT",
 }
 
+BIGQUERY_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
+
 
 class BigQueryTypeConverter(BaseTypeConverter):
     """BigQuery-specific type conversion with UUID support.
 
     Extends the base TypeDetector with BigQuery-specific functionality
     including UUID parameter handling for the native BigQuery driver.
+    Includes per-instance LRU cache for improved performance.
     """
 
-    __slots__ = ()
+    __slots__ = ("_convert_cache",)
+
+    def __init__(self, cache_size: int = 5000) -> None:
+        """Initialize converter with per-instance conversion cache.
+
+        Args:
+            cache_size: Maximum number of string values to cache (default: 5000)
+        """
+        super().__init__()
+
+        @lru_cache(maxsize=cache_size)
+        def _cached_convert(value: str) -> Any:
+            if not value or not any(c in value for c in BIGQUERY_SPECIAL_CHARS):
+                return value
+            detected_type = self.detect_type(value)
+            if detected_type:
+                try:
+                    return self.convert_value(value, detected_type)
+                except Exception:
+                    return value
+            return value
+
+        self._convert_cache = _cached_convert
+
+    def convert_if_detected(self, value: Any) -> Any:
+        """Convert string if special type detected (cached).
+
+        Args:
+            value: Value to potentially convert
+
+        Returns:
+            Converted value or original value
+        """
+        if not isinstance(value, str):
+            return value
+        return self._convert_cache(value)
 
     def create_parameter(self, name: str, value: Any) -> Optional[Any]:
         """Create BigQuery parameter with proper type mapping.
@@ -63,7 +101,6 @@ class BigQueryTypeConverter(BaseTypeConverter):
                 uuid_obj = convert_uuid(value)
                 return ScalarQueryParameter(name, "STRING", str(uuid_obj))
 
-        # Handle other types
         param_type = BQ_TYPE_MAP.get(type(value).__name__, "STRING")
         return ScalarQueryParameter(name, param_type, value)
 
@@ -78,16 +115,8 @@ class BigQueryTypeConverter(BaseTypeConverter):
             Converted value appropriate for the column type.
         """
         if column_type == "STRING" and isinstance(value, str):
-            # Try to detect if this is a special type
-            detected_type = self.detect_type(value)
-            if detected_type:
-                try:
-                    return self.convert_value(value, detected_type)
-                except Exception:
-                    # If conversion fails, return original value
-                    return value
-
+            return self.convert_if_detected(value)
         return value
 
 
-__all__ = ("BQ_TYPE_MAP", "BigQueryTypeConverter")
+__all__ = ("BIGQUERY_SPECIAL_CHARS", "BQ_TYPE_MAP", "BigQueryTypeConverter")
