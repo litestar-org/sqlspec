@@ -246,10 +246,7 @@ class PsycopgSyncExceptionHandler:
         raise OperationalError(msg) from e
 
     def _raise_generic_error(self, e: Any, code: "Optional[str]") -> None:
-        if code:
-            msg = f"PostgreSQL database error [{code}]: {e}"
-        else:
-            msg = f"PostgreSQL database error: {e}"
+        msg = f"PostgreSQL database error [{code}]: {e}" if code else f"PostgreSQL database error: {e}"
         raise SQLSpecError(msg) from e
 
 
@@ -617,10 +614,7 @@ class PsycopgAsyncExceptionHandler:
         raise OperationalError(msg) from e
 
     def _raise_generic_error(self, e: Any, code: "Optional[str]") -> None:
-        if code:
-            msg = f"PostgreSQL database error [{code}]: {e}"
-        else:
-            msg = f"PostgreSQL database error: {e}"
+        msg = f"PostgreSQL database error [{code}]: {e}" if code else f"PostgreSQL database error: {e}"
         raise SQLSpecError(msg) from e
 
 

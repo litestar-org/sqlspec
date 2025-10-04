@@ -22,7 +22,6 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
-    OperationalError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,

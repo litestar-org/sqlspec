@@ -9,7 +9,6 @@ import datetime
 import decimal
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-from adbc_driver_manager.dbapi import DatabaseError, IntegrityError, OperationalError, ProgrammingError
 from sqlglot import exp
 
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
@@ -18,7 +17,19 @@ from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.exceptions import MissingDependencyError, SQLParsingError, SQLSpecError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    ConnectionError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    MissingDependencyError,
+    NotNullViolationError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
 from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 
@@ -342,7 +353,11 @@ class AdbcCursor:
 
 
 class AdbcExceptionHandler:
-    """Context manager for handling database exceptions."""
+    """Context manager for handling ADBC database exceptions.
+
+    ADBC propagates underlying database errors. Exception mapping
+    depends on the specific ADBC driver being used.
+    """
 
     __slots__ = ()
 
@@ -350,40 +365,118 @@ class AdbcExceptionHandler:
         return None
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        _ = exc_tb
         if exc_type is None:
             return
+        self._map_adbc_exception(exc_val)
 
-        try:
-            if issubclass(exc_type, IntegrityError):
-                e = exc_val
-                msg = f"Integrity constraint violation: {e}"
-                raise SQLSpecError(msg) from e
-            if issubclass(exc_type, ProgrammingError):
-                e = exc_val
-                error_msg = str(e).lower()
-                if "syntax" in error_msg or "parse" in error_msg:
-                    msg = f"SQL syntax error: {e}"
-                    raise SQLParsingError(msg) from e
-                msg = f"Programming error: {e}"
-                raise SQLSpecError(msg) from e
-            if issubclass(exc_type, OperationalError):
-                e = exc_val
-                msg = f"Operational error: {e}"
-                raise SQLSpecError(msg) from e
-            if issubclass(exc_type, DatabaseError):
-                e = exc_val
-                msg = f"Database error: {e}"
-                raise SQLSpecError(msg) from e
-        except ImportError:
-            pass
-        if issubclass(exc_type, Exception):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected database operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def _map_adbc_exception(self, e: Any) -> None:
+        """Map ADBC exception to SQLSpec exception.
+
+        ADBC drivers may expose SQLSTATE codes or driver-specific codes.
+
+        Args:
+            e: ADBC exception instance
+        """
+        sqlstate = getattr(e, "sqlstate", None)
+
+        if sqlstate:
+            self._map_sqlstate_exception(e, sqlstate)
+        else:
+            self._map_message_based_exception(e)
+
+    def _map_sqlstate_exception(self, e: Any, sqlstate: str) -> None:
+        """Map SQLSTATE code to exception.
+
+        Args:
+            e: Exception instance
+            sqlstate: SQLSTATE error code
+        """
+        if sqlstate == "23505":
+            self._raise_unique_violation(e)
+        elif sqlstate == "23503":
+            self._raise_foreign_key_violation(e)
+        elif sqlstate == "23502":
+            self._raise_not_null_violation(e)
+        elif sqlstate == "23514":
+            self._raise_check_violation(e)
+        elif sqlstate.startswith("23"):
+            self._raise_integrity_error(e)
+        elif sqlstate.startswith("42"):
+            self._raise_parsing_error(e)
+        elif sqlstate.startswith("08"):
+            self._raise_connection_error(e)
+        elif sqlstate.startswith("40"):
+            self._raise_transaction_error(e)
+        elif sqlstate.startswith("22"):
+            self._raise_data_error(e)
+        else:
+            self._raise_generic_error(e)
+
+    def _map_message_based_exception(self, e: Any) -> None:
+        """Map exception using message-based detection.
+
+        Args:
+            e: Exception instance
+        """
+        error_msg = str(e).lower()
+
+        if "unique" in error_msg or "duplicate" in error_msg:
+            self._raise_unique_violation(e)
+        elif "foreign key" in error_msg:
+            self._raise_foreign_key_violation(e)
+        elif "not null" in error_msg or "null value" in error_msg:
+            self._raise_not_null_violation(e)
+        elif "check constraint" in error_msg:
+            self._raise_check_violation(e)
+        elif "constraint" in error_msg:
+            self._raise_integrity_error(e)
+        elif "syntax" in error_msg:
+            self._raise_parsing_error(e)
+        elif "connection" in error_msg or "connect" in error_msg:
+            self._raise_connection_error(e)
+        else:
+            self._raise_generic_error(e)
+
+    def _raise_unique_violation(self, e: Any) -> None:
+        msg = f"ADBC unique constraint violation: {e}"
+        raise UniqueViolationError(msg) from e
+
+    def _raise_foreign_key_violation(self, e: Any) -> None:
+        msg = f"ADBC foreign key constraint violation: {e}"
+        raise ForeignKeyViolationError(msg) from e
+
+    def _raise_not_null_violation(self, e: Any) -> None:
+        msg = f"ADBC not-null constraint violation: {e}"
+        raise NotNullViolationError(msg) from e
+
+    def _raise_check_violation(self, e: Any) -> None:
+        msg = f"ADBC check constraint violation: {e}"
+        raise CheckViolationError(msg) from e
+
+    def _raise_integrity_error(self, e: Any) -> None:
+        msg = f"ADBC integrity constraint violation: {e}"
+        raise IntegrityError(msg) from e
+
+    def _raise_parsing_error(self, e: Any) -> None:
+        msg = f"ADBC SQL parsing error: {e}"
+        raise SQLParsingError(msg) from e
+
+    def _raise_connection_error(self, e: Any) -> None:
+        msg = f"ADBC connection error: {e}"
+        raise ConnectionError(msg) from e
+
+    def _raise_transaction_error(self, e: Any) -> None:
+        msg = f"ADBC transaction error: {e}"
+        raise TransactionError(msg) from e
+
+    def _raise_data_error(self, e: Any) -> None:
+        msg = f"ADBC data error: {e}"
+        raise DataError(msg) from e
+
+    def _raise_generic_error(self, e: Any) -> None:
+        msg = f"ADBC database error: {e}"
+        raise SQLSpecError(msg) from e
 
 
 class AdbcDriver(SyncDriverAdapterBase):

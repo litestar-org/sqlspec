@@ -13,7 +13,18 @@ from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DataError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotFoundError,
+    NotNullViolationError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    UniqueViolationError,
+)
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
@@ -84,8 +95,8 @@ class DuckDBCursor:
 class DuckDBExceptionHandler:
     """Context manager for handling DuckDB database exceptions.
 
-    Catches DuckDB-specific exceptions and converts them to appropriate
-    SQLSpec exception types for consistent error handling.
+    Uses exception type and message-based detection to map DuckDB errors
+    to specific SQLSpec exceptions for better error handling.
     """
 
     __slots__ = ()
@@ -94,41 +105,93 @@ class DuckDBExceptionHandler:
         return None
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        _ = exc_tb
         if exc_type is None:
             return
+        self._map_duckdb_exception(exc_type, exc_val)
 
-        if issubclass(exc_type, duckdb.IntegrityError):
-            e = exc_val
-            msg = f"DuckDB integrity constraint violation: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, duckdb.OperationalError):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "syntax" in error_msg or "parse" in error_msg:
-                msg = f"DuckDB SQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"DuckDB operational error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, duckdb.ProgrammingError):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "syntax" in error_msg or "parse" in error_msg:
-                msg = f"DuckDB SQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"DuckDB programming error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, duckdb.Error):
-            e = exc_val
-            msg = f"DuckDB error: {e}"
-            raise SQLSpecError(msg) from e
-        if issubclass(exc_type, Exception):
-            e = exc_val
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected database operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def _map_duckdb_exception(self, exc_type: Any, e: Any) -> None:
+        """Map DuckDB exception to SQLSpec exception.
+
+        Uses exception type and message-based detection.
+
+        Args:
+            exc_type: Exception type
+            e: Exception instance
+        """
+        error_msg = str(e).lower()
+        exc_name = exc_type.__name__ if hasattr(exc_type, "__name__") else str(exc_type)
+
+        if "constraintexception" in exc_name.lower():
+            self._handle_constraint_exception(e, error_msg)
+        elif "catalogexception" in exc_name.lower():
+            self._raise_not_found_error(e)
+        elif "parserexception" in exc_name.lower() or "binderexception" in exc_name.lower():
+            self._raise_parsing_error(e)
+        elif "ioexception" in exc_name.lower():
+            self._raise_operational_error(e)
+        elif "conversionexception" in exc_name.lower() or "type mismatch" in error_msg:
+            self._raise_data_error(e)
+        else:
+            self._raise_generic_error(e)
+
+    def _handle_constraint_exception(self, e: Any, error_msg: str) -> None:
+        """Handle constraint exceptions using message-based detection.
+
+        Args:
+            e: Exception instance
+            error_msg: Lowercase error message
+        """
+        if "unique" in error_msg or "duplicate" in error_msg:
+            self._raise_unique_violation(e)
+        elif "foreign key" in error_msg or "violates foreign key" in error_msg:
+            self._raise_foreign_key_violation(e)
+        elif "not null" in error_msg or "null value" in error_msg:
+            self._raise_not_null_violation(e)
+        elif "check constraint" in error_msg or "check condition" in error_msg:
+            self._raise_check_violation(e)
+        else:
+            self._raise_integrity_error(e)
+
+    def _raise_unique_violation(self, e: Any) -> None:
+        msg = f"DuckDB unique constraint violation: {e}"
+        raise UniqueViolationError(msg) from e
+
+    def _raise_foreign_key_violation(self, e: Any) -> None:
+        msg = f"DuckDB foreign key constraint violation: {e}"
+        raise ForeignKeyViolationError(msg) from e
+
+    def _raise_not_null_violation(self, e: Any) -> None:
+        msg = f"DuckDB not-null constraint violation: {e}"
+        raise NotNullViolationError(msg) from e
+
+    def _raise_check_violation(self, e: Any) -> None:
+        msg = f"DuckDB check constraint violation: {e}"
+        raise CheckViolationError(msg) from e
+
+    def _raise_integrity_error(self, e: Any) -> None:
+        msg = f"DuckDB integrity constraint violation: {e}"
+        raise IntegrityError(msg) from e
+
+    def _raise_not_found_error(self, e: Any) -> None:
+        msg = f"DuckDB catalog error: {e}"
+        raise NotFoundError(msg) from e
+
+    def _raise_parsing_error(self, e: Any) -> None:
+        msg = f"DuckDB SQL parsing error: {e}"
+        raise SQLParsingError(msg) from e
+
+    def _raise_operational_error(self, e: Any) -> None:
+        msg = f"DuckDB operational error: {e}"
+        raise OperationalError(msg) from e
+
+    def _raise_data_error(self, e: Any) -> None:
+        msg = f"DuckDB data error: {e}"
+        raise DataError(msg) from e
+
+    def _raise_generic_error(self, e: Any) -> None:
+        msg = f"DuckDB database error: {e}"
+        raise SQLSpecError(msg) from e
 
 
 class DuckDBDriver(SyncDriverAdapterBase):
