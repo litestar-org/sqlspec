@@ -20,6 +20,7 @@ Processing:
 """
 
 import re
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from decimal import Decimal
@@ -343,11 +344,16 @@ class ParameterValidator:
     compatibility with target dialects.
     """
 
-    __slots__ = ("_parameter_cache",)
+    __slots__ = ("_cache_max_size", "_parameter_cache")
 
-    def __init__(self) -> None:
-        """Initialize validator with parameter cache."""
-        self._parameter_cache: dict[str, list[ParameterInfo]] = {}
+    def __init__(self, cache_max_size: int = 5000) -> None:
+        """Initialize validator with bounded LRU cache.
+
+        Args:
+            cache_max_size: Maximum number of SQL strings to cache (default: 5000)
+        """
+        self._parameter_cache: OrderedDict[str, list[ParameterInfo]] = OrderedDict()
+        self._cache_max_size = cache_max_size
 
     def _extract_parameter_style(self, match: "re.Match[str]") -> "tuple[Optional[ParameterStyle], Optional[str]]":
         """Extract parameter style and name from regex match.
@@ -396,10 +402,13 @@ class ParameterValidator:
         """
         cached_result = self._parameter_cache.get(sql)
         if cached_result is not None:
+            self._parameter_cache.move_to_end(sql)
             return cached_result
 
         # PERF-OPT-PHASE-2A: Early exit for parameterless SQL
         if not any(c in sql for c in ("?", "%", ":", "@", "$")):
+            if len(self._parameter_cache) >= self._cache_max_size:
+                self._parameter_cache.popitem(last=False)
             self._parameter_cache[sql] = []
             return []
 
@@ -429,6 +438,9 @@ class ParameterValidator:
                     )
                 )
                 ordinal += 1
+
+        if len(self._parameter_cache) >= self._cache_max_size:
+            self._parameter_cache.popitem(last=False)
 
         self._parameter_cache[sql] = parameters
         return parameters
