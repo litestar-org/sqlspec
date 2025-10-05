@@ -233,6 +233,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                 statement = statement.strip()
                 if statement:
                     driver.execute(statement)
+            driver.commit()
         logger.debug("Created session table: %s", self._table_name)
 
     def _get_drop_table_sql(self) -> "list[str]":
@@ -267,7 +268,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         """
 
         with self._config.provide_session() as driver:
-            result = driver.select_one(sql, key)
+            result = driver.select_one_or_none(sql, key)
 
             if result is None:
                 return None
@@ -285,6 +286,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                 WHERE session_id = {p2_update}
                 """
                 driver.execute(update_sql, new_expires_at, key)
+                driver.commit()
 
             return bytes(data)
 
@@ -348,6 +350,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                     VALUES ({p1}, {p2}, {p3})
                     """
                     driver.execute(sql, key, data, expires_at)
+                driver.commit()
                 return
         else:
             sql = f"""
@@ -359,6 +362,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
         with self._config.provide_session() as driver:
             driver.execute(sql, key, data, expires_at)
+            driver.commit()
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.
@@ -380,6 +384,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
         with self._config.provide_session() as driver:
             driver.execute(sql, key)
+            driver.commit()
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -391,11 +396,12 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all using ADBC driver."""
+
         sql = f"DELETE FROM {self._table_name}"
 
         with self._config.provide_session() as driver:
             driver.execute(sql)
-        logger.debug("Deleted all sessions from table: %s", self._table_name)
+            driver.commit()
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
@@ -403,6 +409,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
     def _exists(self, key: str) -> bool:
         """Synchronous implementation of exists using ADBC driver."""
+
         p1 = self._get_param_placeholder(1)
         current_ts = self._get_current_timestamp_expr()
 
@@ -413,8 +420,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         """
 
         with self._config.provide_session() as driver:
-            result = driver.select_one(sql, key)
-            return result is not None
+            return bool(driver.select_one_or_none(sql, key) is not None)
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired.
@@ -485,12 +491,14 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
                 if count > 0:
                     driver.execute(delete_sql)
+                    driver.commit()
                     logger.debug("Cleaned up %d expired sessions", count)
 
                 return count
 
         with self._config.provide_session() as driver:
             exec_result = driver.execute(sql)
+            driver.commit()
             count = exec_result.rows_affected
             if count > 0:
                 logger.debug("Cleaned up %d expired sessions", count)

@@ -1,7 +1,7 @@
 """AsyncMy session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 logger = get_logger("adapters.asyncmy.litestar.store")
 
 __all__ = ("AsyncmyStore",)
+
+MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
 class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
@@ -64,7 +66,8 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             SQL statement to create the sessions table with proper indexes.
 
         Notes:
-            - Uses DATETIME for timestamps (MySQL doesn't have TIMESTAMPTZ)
+            - Uses DATETIME(6) for microsecond precision timestamps
+            - MySQL doesn't have TIMESTAMPTZ, so we store UTC as timezone-naive
             - LONGBLOB for large session data support (up to 4GB)
             - InnoDB engine for ACID compliance and proper transaction support
             - UTF8MB4 for full Unicode support (including emoji)
@@ -76,9 +79,9 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id VARCHAR(255) PRIMARY KEY,
             data LONGBLOB NOT NULL,
-            expires_at DATETIME,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            expires_at DATETIME(6),
+            created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+            updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
             INDEX idx_{self._table_name}_expires_at (expires_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
@@ -112,36 +115,44 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             Session data as bytes if found and not expired, None otherwise.
 
         Notes:
-            Uses NOW() for current time in MySQL.
+            Uses UTC_TIMESTAMP(6) for microsecond precision current time in MySQL.
             Compares expires_at as UTC datetime (timezone-naive in MySQL).
         """
+        import asyncmy
+
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = %s
-        AND (expires_at IS NULL OR expires_at > NOW())
+        AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP(6))
         """
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(sql, (key,))
-            row = await cursor.fetchone()
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+                await cursor.execute(sql, (key,))
+                row = await cursor.fetchone()
 
-            if row is None:
+                if row is None:
+                    return None
+
+                data_value, expires_at = row
+
+                if renew_for is not None and expires_at is not None:
+                    new_expires_at = self._calculate_expires_at(renew_for)
+                    if new_expires_at is not None:
+                        naive_expires_at = new_expires_at.replace(tzinfo=None)
+                        update_sql = f"""
+                            UPDATE {self._table_name}
+                            SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
+                            WHERE session_id = %s
+                            """
+                        await cursor.execute(update_sql, (naive_expires_at, key))
+                        await conn.commit()
+
+                return bytes(data_value)
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
-
-            data_value, expires_at = row
-
-            if renew_for is not None and expires_at is not None:
-                new_expires_at = self._calculate_expires_at(renew_for)
-                if new_expires_at is not None:
-                    naive_expires_at = new_expires_at.replace(tzinfo=None)
-                    update_sql = f"""
-                        UPDATE {self._table_name}
-                        SET expires_at = %s, updated_at = NOW()
-                        WHERE session_id = %s
-                        """
-                    await cursor.execute(update_sql, (naive_expires_at, key))
-
-            return bytes(data_value)
+            raise
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.
@@ -166,7 +177,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         ON DUPLICATE KEY UPDATE
             data = new.data,
             expires_at = new.expires_at,
-            updated_at = NOW()
+            updated_at = UTC_TIMESTAMP(6)
         """
 
         async with self._config.provide_connection() as conn, conn.cursor() as cursor:
@@ -186,14 +197,24 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
         async with self._config.provide_connection() as conn, conn.cursor() as cursor:
             await cursor.execute(sql, (key,))
+            await conn.commit()
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
+        import asyncmy
+
         sql = f"DELETE FROM {self._table_name}"
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(sql)
-        logger.debug("Deleted all sessions from table: %s", self._table_name)
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+                await cursor.execute(sql)
+                await conn.commit()
+            logger.debug("Deleted all sessions from table: %s", self._table_name)
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
+                return
+            raise
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired.
@@ -205,18 +226,25 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             True if the session exists and is not expired.
 
         Notes:
-            Uses NOW() for current time comparison.
+            Uses UTC_TIMESTAMP(6) for microsecond precision current time comparison.
         """
+        import asyncmy
+
         sql = f"""
         SELECT 1 FROM {self._table_name}
         WHERE session_id = %s
-        AND (expires_at IS NULL OR expires_at > NOW())
+        AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP(6))
         """
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(sql, (key,))
-            result = await cursor.fetchone()
-            return result is not None
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+                await cursor.execute(sql, (key,))
+                result = await cursor.fetchone()
+                return result is not None
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return False
+            raise
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires.
@@ -260,13 +288,14 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             Number of sessions deleted.
 
         Notes:
-            Uses NOW() for current time comparison.
+            Uses UTC_TIMESTAMP(6) for microsecond precision current time comparison.
             ROW_COUNT() returns the number of affected rows.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE expires_at <= NOW()"
+        sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
         async with self._config.provide_connection() as conn, conn.cursor() as cursor:
             await cursor.execute(sql)
+            await conn.commit()
             count: int = cursor.rowcount
             if count > 0:
                 logger.debug("Cleaned up %d expired sessions", count)

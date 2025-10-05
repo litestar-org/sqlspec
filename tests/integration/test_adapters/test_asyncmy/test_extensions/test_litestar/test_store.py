@@ -29,10 +29,16 @@ async def asyncmy_store(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyS
     try:
         await store.create_table()
         yield store
-        await store.delete_all()
+        try:
+            await store.delete_all()
+        except Exception:
+            pass
     finally:
-        if config.pool_instance:
-            await config.close_pool()
+        try:
+            if config.pool_instance:
+                await config.close_pool()
+        except Exception:
+            pass
 
 
 @pytest.mark.asyncio

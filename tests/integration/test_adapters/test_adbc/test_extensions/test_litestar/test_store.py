@@ -24,7 +24,10 @@ async def adbc_store(postgres_service: PostgresService) -> AsyncGenerator[ADBCSt
     store = ADBCStore(config, table_name="test_adbc_sessions")
     await store.create_table()
     yield store
-    await store.delete_all()
+    try:
+        await store.delete_all()
+    except Exception:
+        pass
 
 
 async def test_store_create_table(adbc_store: ADBCStore) -> None:
