@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 
 logger = get_logger("adapters.aiosqlite.litestar.store")
 
+SECONDS_PER_DAY = 86400.0
+JULIAN_EPOCH = 2440587.5
+
 __all__ = ("AioSQLiteStore",)
 
 
@@ -69,6 +72,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
             - Julian Day enables direct comparison with julianday('now')
             - Partial index WHERE expires_at IS NOT NULL reduces index size
             - This approach ensures the index is actually used by query optimizer
+            - Table name is internally controlled, not user input (S608 suppressed)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -97,9 +101,8 @@ class AioSQLiteStore(BaseSQLSpecStore):
             return None
 
         epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-        julian_epoch = 2440587.5
-        delta_days = (dt - epoch).total_seconds() / 86400.0
-        return julian_epoch + delta_days
+        delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
+        return JULIAN_EPOCH + delta_days
 
     def _julian_to_datetime(self, julian: "float | None") -> "datetime | None":
         """Convert Julian Day number back to datetime.
@@ -113,9 +116,8 @@ class AioSQLiteStore(BaseSQLSpecStore):
         if julian is None:
             return None
 
-        julian_epoch = 2440587.5
-        days_since_epoch = julian - julian_epoch
-        timestamp = days_since_epoch * 86400.0
+        days_since_epoch = julian - JULIAN_EPOCH
+        timestamp = days_since_epoch * SECONDS_PER_DAY
         return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
     async def create_table(self) -> None:
@@ -139,7 +141,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = ?
         AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
-        """
+        """  # noqa: S608
 
         async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             async with conn.execute(sql, (key,)) as cursor:
@@ -158,7 +160,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
                     UPDATE {self._table_name}
                     SET expires_at = ?
                     WHERE session_id = ?
-                    """
+                    """  # noqa: S608
                     await conn.execute(update_sql, (new_expires_at_julian, key))
                     await conn.commit()
 
@@ -182,7 +184,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         sql = f"""
         INSERT OR REPLACE INTO {self._table_name} (session_id, data, expires_at)
         VALUES (?, ?, ?)
-        """
+        """  # noqa: S608
 
         async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql, (key, data, expires_at_julian))
@@ -197,7 +199,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         Args:
             key: Session ID to delete.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
+        sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"  # noqa: S608
 
         async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql, (key,))
@@ -205,7 +207,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        sql = f"DELETE FROM {self._table_name}"
+        sql = f"DELETE FROM {self._table_name}"  # noqa: S608
 
         async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql)
@@ -225,12 +227,14 @@ class AioSQLiteStore(BaseSQLSpecStore):
         SELECT 1 FROM {self._table_name}
         WHERE session_id = ?
         AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
-        """
+        """  # noqa: S608
 
-        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
-            async with conn.execute(sql, (key,)) as cursor:
-                result = await cursor.fetchone()
-                return result is not None
+        async with (
+            cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn,
+            conn.execute(sql, (key,)) as cursor,
+        ):
+            result = await cursor.fetchone()
+            return result is not None
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires.
@@ -244,7 +248,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         sql = f"""
         SELECT expires_at FROM {self._table_name}
         WHERE session_id = ?
-        """
+        """  # noqa: S608
 
         async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             async with conn.execute(sql, (key,)) as cursor:
@@ -273,7 +277,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         Returns:
             Number of sessions deleted.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE julianday(expires_at) <= julianday('now')"
+        sql = f"DELETE FROM {self._table_name} WHERE julianday(expires_at) <= julianday('now')"  # noqa: S608
 
         async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             cursor = await conn.execute(sql)

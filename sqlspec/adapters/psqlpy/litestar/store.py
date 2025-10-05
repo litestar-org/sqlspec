@@ -1,4 +1,4 @@
-"""AsyncPG session store for Litestar integration."""
+"""Psqlpy session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, cast
@@ -9,35 +9,36 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
-    from sqlspec.adapters.asyncpg._types import AsyncpgConnection
-    from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+    from sqlspec.adapters.psqlpy._types import PsqlpyConnection
+    from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
-logger = get_logger("adapters.asyncpg.litestar.store")
+logger = get_logger("adapters.psqlpy.litestar.store")
 
-__all__ = ("AsyncPGStore",)
+__all__ = ("PsqlpyStore",)
 
 
-class AsyncPGStore(BaseSQLSpecStore):
-    """PostgreSQL session store using AsyncPG driver.
+class PsqlpyStore(BaseSQLSpecStore):
+    """PostgreSQL session store using Psqlpy driver.
 
     Implements server-side session storage for Litestar using PostgreSQL
-    via the AsyncPG driver. Provides efficient session management with:
-    - Native async PostgreSQL operations
+    via the Psqlpy driver (Rust-based async driver). Provides efficient
+    session management with:
+    - Native async PostgreSQL operations via Rust
     - UPSERT support using ON CONFLICT
     - Automatic expiration handling
     - Efficient cleanup of expired sessions
 
     Args:
-        config: AsyncpgConfig instance.
+        config: PsqlpyConfig instance.
         table_name: Name of the session table. Defaults to "sessions".
         cleanup_probability: Probability of running cleanup on set (0.0-1.0).
 
     Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.adapters.asyncpg.litestar.store import AsyncPGStore
+        from sqlspec.adapters.psqlpy import PsqlpyConfig
+        from sqlspec.adapters.psqlpy.litestar.store import PsqlpyStore
 
-        config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
-        store = AsyncPGStore(config)
+        config = PsqlpyConfig(pool_config={"dsn": "postgresql://..."})
+        store = PsqlpyStore(config)
         await store.create_table()
     """
 
@@ -45,14 +46,14 @@ class AsyncPGStore(BaseSQLSpecStore):
 
     def __init__(
         self,
-        config: "AsyncpgConfig",
+        config: "PsqlpyConfig",
         table_name: str = "sessions",
         cleanup_probability: float = 0.01,
     ) -> None:
-        """Initialize AsyncPG session store.
+        """Initialize Psqlpy session store.
 
         Args:
-            config: AsyncpgConfig instance.
+            config: PsqlpyConfig instance.
             table_name: Name of the session table.
             cleanup_probability: Probability of cleanup on set (0.0-1.0).
         """
@@ -92,8 +93,8 @@ class AsyncPGStore(BaseSQLSpecStore):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
-            await conn.execute(sql)
+        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+            await conn.execute_batch(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
@@ -114,13 +115,16 @@ class AsyncPGStore(BaseSQLSpecStore):
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = $1
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
-            row = await conn.fetchrow(sql, key)
+        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+            query_result = await conn.fetch(sql, [key])
+            rows = query_result.result()
 
-            if row is None:
+            if not rows:
                 return None
+
+            row = rows[0]
 
             if renew_for is not None and row["expires_at"] is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
@@ -129,8 +133,8 @@ class AsyncPGStore(BaseSQLSpecStore):
                     UPDATE {self._table_name}
                     SET expires_at = $1, updated_at = CURRENT_TIMESTAMP
                     WHERE session_id = $2
-                    """  # noqa: S608
-                    await conn.execute(update_sql, new_expires_at, key)
+                    """
+                    await conn.execute(update_sql, [new_expires_at, key])
 
             return bytes(row["data"])
 
@@ -157,10 +161,10 @@ class AsyncPGStore(BaseSQLSpecStore):
             data = EXCLUDED.data,
             expires_at = EXCLUDED.expires_at,
             updated_at = CURRENT_TIMESTAMP
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
-            await conn.execute(sql, key, data, expires_at)
+        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+            await conn.execute(sql, [key, data, expires_at])
 
         if self._should_cleanup():
             await self.delete_expired()
@@ -171,16 +175,16 @@ class AsyncPGStore(BaseSQLSpecStore):
         Args:
             key: Session ID to delete.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE session_id = $1"  # noqa: S608
+        sql = f"DELETE FROM {self._table_name} WHERE session_id = $1"
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
-            await conn.execute(sql, key)
+        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+            await conn.execute(sql, [key])
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        sql = f"DELETE FROM {self._table_name}"  # noqa: S608
+        sql = f"DELETE FROM {self._table_name}"
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
+        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql)
         logger.debug("Deleted all sessions from table: %s", self._table_name)
 
@@ -195,16 +199,18 @@ class AsyncPGStore(BaseSQLSpecStore):
 
         Notes:
             Uses CURRENT_TIMESTAMP for consistency with get() method.
+            Uses fetch() instead of fetch_val() to handle zero-row case.
         """
         sql = f"""
         SELECT 1 FROM {self._table_name}
         WHERE session_id = $1
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
-            result = await conn.fetchval(sql, key)
-            return result is not None
+        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+            query_result = await conn.fetch(sql, [key])
+            rows = query_result.result()
+            return len(rows) > 0
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires.
@@ -214,14 +220,23 @@ class AsyncPGStore(BaseSQLSpecStore):
 
         Returns:
             Seconds until expiration, or None if no expiry or key doesn't exist.
+
+        Notes:
+            Uses fetch() to handle the case where the key doesn't exist.
         """
         sql = f"""
         SELECT expires_at FROM {self._table_name}
         WHERE session_id = $1
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
-            expires_at = await conn.fetchval(sql, key)
+        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+            query_result = await conn.fetch(sql, [key])
+            rows = query_result.result()
+
+            if not rows:
+                return None
+
+            expires_at = rows[0]["expires_at"]
 
             if expires_at is None:
                 return None
@@ -241,14 +256,22 @@ class AsyncPGStore(BaseSQLSpecStore):
 
         Notes:
             Uses CURRENT_TIMESTAMP for consistency.
+            Uses RETURNING to get deleted row count since psqlpy QueryResult
+            doesn't expose command tags.
             For very large tables (10M+ rows), consider batching deletes
             to avoid holding locks too long.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"  # noqa: S608
+        sql = f"""
+        DELETE FROM {self._table_name}
+        WHERE expires_at <= CURRENT_TIMESTAMP
+        RETURNING session_id
+        """
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
-            result = await conn.execute(sql)
-            count = int(result.split()[-1])
+        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+            query_result = await conn.fetch(sql, [])
+            rows = query_result.result()
+            count = len(rows)
             if count > 0:
                 logger.debug("Cleaned up %d expired sessions", count)
             return count
+

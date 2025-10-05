@@ -1,4 +1,4 @@
-"""SQLite sync session store for Litestar integration."""
+"""Psycopg sync session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, cast
@@ -11,45 +11,42 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
-    from sqlspec.adapters.sqlite._types import SqliteConnection
-    from sqlspec.adapters.sqlite.config import SqliteConfig
+    from sqlspec.adapters.psycopg._types import PsycopgSyncConnection
+    from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
 
-logger = get_logger("adapters.sqlite.litestar.store")
+logger = get_logger("adapters.psycopg.litestar.store_sync")
 
-SECONDS_PER_DAY = 86400.0
-JULIAN_EPOCH = 2440587.5
-
-__all__ = ("SQLiteStore",)
+__all__ = ("PsycopgSyncStore",)
 
 
-class SQLiteStore(BaseSQLSpecStore):
-    """SQLite session store using synchronous SQLite driver.
+class PsycopgSyncStore(BaseSQLSpecStore):
+    """PostgreSQL session store using Psycopg sync driver.
 
-    Implements server-side session storage for Litestar using SQLite
-    via the synchronous sqlite3 driver. Uses Litestar's sync_to_thread
+    Implements server-side session storage for Litestar using PostgreSQL
+    via the synchronous Psycopg (psycopg3) driver. Uses Litestar's sync_to_thread
     utility to provide an async interface compatible with the Store protocol.
 
     Provides efficient session management with:
     - Sync operations wrapped for async compatibility
-    - INSERT OR REPLACE for UPSERT functionality
+    - UPSERT support using ON CONFLICT
     - Automatic expiration handling
     - Efficient cleanup of expired sessions
 
     Note:
-        For high-concurrency applications, consider using AioSQLiteStore instead,
+        For high-concurrency applications, consider using PsycopgAsyncStore instead,
         as it provides native async operations without threading overhead.
 
     Args:
-        config: SqliteConfig instance.
+        config: PsycopgSyncConfig instance.
         table_name: Name of the session table. Defaults to "sessions".
         cleanup_probability: Probability of running cleanup on set (0.0-1.0).
 
     Example:
-        from sqlspec.adapters.sqlite import SqliteConfig
-        from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
+        from sqlspec.adapters.psycopg import PsycopgSyncConfig
+        from sqlspec.adapters.psycopg.litestar.store_sync import PsycopgSyncStore
 
-        config = SqliteConfig(database=":memory:")
-        store = SQLiteStore(config)
+        config = PsycopgSyncConfig(pool_config={"conninfo": "postgresql://..."})
+        store = PsycopgSyncStore(config)
         await store.create_table()
     """
 
@@ -57,82 +54,60 @@ class SQLiteStore(BaseSQLSpecStore):
 
     def __init__(
         self,
-        config: "SqliteConfig",
+        config: "PsycopgSyncConfig",
         table_name: str = "sessions",
         cleanup_probability: float = 0.01,
     ) -> None:
-        """Initialize SQLite session store.
+        """Initialize Psycopg sync session store.
 
         Args:
-            config: SqliteConfig instance.
+            config: PsycopgSyncConfig instance.
             table_name: Name of the session table.
             cleanup_probability: Probability of cleanup on set (0.0-1.0).
         """
         super().__init__(config, table_name, cleanup_probability)
 
     def _get_create_table_sql(self) -> str:
-        """Get SQLite CREATE TABLE SQL.
+        """Get PostgreSQL CREATE TABLE SQL with optimized schema.
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
 
         Notes:
-            - Uses REAL type for expires_at (stores Julian Day number)
-            - Julian Day enables direct comparison with julianday('now')
-            - Partial index WHERE expires_at IS NOT NULL reduces index size
-            - This approach ensures the index is actually used by query optimizer
+            - Uses TIMESTAMPTZ for timezone-aware expiration timestamps
+            - Partial index WHERE expires_at IS NOT NULL reduces index size/maintenance
+            - FILLFACTOR 80 leaves space for HOT updates, reducing table bloat
+            - Audit columns (created_at, updated_at) help with debugging
+            - Table name is internally controlled, not user input (S608 suppressed)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id TEXT PRIMARY KEY,
-            data BLOB NOT NULL,
-            expires_at REAL
-        );
+            data BYTEA NOT NULL,
+            expires_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) WITH (fillfactor = 80);
+
         CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
         ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
+
+        ALTER TABLE {self._table_name} SET (
+            autovacuum_vacuum_scale_factor = 0.05,
+            autovacuum_analyze_scale_factor = 0.02
+        );
         """
-
-    def _datetime_to_julian(self, dt: "datetime | None") -> "float | None":
-        """Convert datetime to Julian Day number for SQLite storage.
-
-        Args:
-            dt: Datetime to convert (must be UTC-aware).
-
-        Returns:
-            Julian Day number as REAL, or None if dt is None.
-
-        Notes:
-            Julian Day number is days since November 24, 4714 BCE (proleptic Gregorian).
-            This enables direct comparison with julianday('now') in SQL queries.
-        """
-        if dt is None:
-            return None
-
-        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-        delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
-        return JULIAN_EPOCH + delta_days
-
-    def _julian_to_datetime(self, julian: "float | None") -> "datetime | None":
-        """Convert Julian Day number back to datetime.
-
-        Args:
-            julian: Julian Day number.
-
-        Returns:
-            UTC-aware datetime, or None if julian is None.
-        """
-        if julian is None:
-            return None
-
-        days_since_epoch = julian - JULIAN_EPOCH
-        timestamp = days_since_epoch * SECONDS_PER_DAY
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
     def _create_table_sync(self) -> None:
         """Synchronous implementation of create_table."""
         sql = self._get_create_table_sql()
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
-            conn.executescript(sql)
+        with cast("AbstractContextManager[PsycopgSyncConnection]", self._config.provide_connection()) as conn:
+            with conn.cursor() as cur:
+                for statement in sql.strip().split(";"):
+                    statement = statement.strip()
+                    if statement:
+                        cur.execute(statement)
+            conn.commit()
         logger.debug("Created session table: %s", self._table_name)
 
     async def create_table(self) -> None:
@@ -140,35 +115,37 @@ class SQLiteStore(BaseSQLSpecStore):
         await AsyncCallable(self._create_table_sync)()
 
     def _get_sync(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        """Synchronous implementation of get."""
+        """Synchronous implementation of get.
+
+        Notes:
+            Uses CURRENT_TIMESTAMP for SQL standard compliance.
+        """
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
-        WHERE session_id = ?
-        AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
+        WHERE session_id = %s
+        AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
-            cursor = conn.execute(sql, (key,))
-            row = cursor.fetchone()
+        with cast("AbstractContextManager[PsycopgSyncConnection]", self._config.provide_connection()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (key,))
+                row = cur.fetchone()
 
             if row is None:
                 return None
 
-            data, expires_at_julian = row
-
-            if renew_for is not None and expires_at_julian is not None:
+            if renew_for is not None and row["expires_at"] is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
-                new_expires_at_julian = self._datetime_to_julian(new_expires_at)
-                if new_expires_at_julian is not None:
+                if new_expires_at is not None:
                     update_sql = f"""
                     UPDATE {self._table_name}
-                    SET expires_at = ?
-                    WHERE session_id = ?
+                    SET expires_at = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE session_id = %s
                     """
-                    conn.execute(update_sql, (new_expires_at_julian, key))
+                    conn.execute(update_sql, (new_expires_at, key))
                     conn.commit()
 
-            return bytes(data)
+            return bytes(row["data"])
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -186,19 +163,23 @@ class SQLiteStore(BaseSQLSpecStore):
         """Synchronous implementation of set.
 
         Notes:
-            Stores expires_at as Julian Day number (REAL) for optimal index usage.
+            Uses EXCLUDED to reference the proposed insert values in ON CONFLICT.
         """
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
-        expires_at_julian = self._datetime_to_julian(expires_at)
 
         sql = f"""
-        INSERT OR REPLACE INTO {self._table_name} (session_id, data, expires_at)
-        VALUES (?, ?, ?)
+        INSERT INTO {self._table_name} (session_id, data, expires_at)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (session_id)
+        DO UPDATE SET
+            data = EXCLUDED.data,
+            expires_at = EXCLUDED.expires_at,
+            updated_at = CURRENT_TIMESTAMP
         """
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
-            conn.execute(sql, (key, data, expires_at_julian))
+        with cast("AbstractContextManager[PsycopgSyncConnection]", self._config.provide_connection()) as conn:
+            conn.execute(sql, (key, data, expires_at))
             conn.commit()
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
@@ -216,9 +197,9 @@ class SQLiteStore(BaseSQLSpecStore):
 
     def _delete_sync(self, key: str) -> None:
         """Synchronous implementation of delete."""
-        sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
+        sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
+        with cast("AbstractContextManager[PsycopgSyncConnection]", self._config.provide_connection()) as conn:
             conn.execute(sql, (key,))
             conn.commit()
 
@@ -234,7 +215,7 @@ class SQLiteStore(BaseSQLSpecStore):
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
+        with cast("AbstractContextManager[PsycopgSyncConnection]", self._config.provide_connection()) as conn:
             conn.execute(sql)
             conn.commit()
         logger.debug("Deleted all sessions from table: %s", self._table_name)
@@ -247,13 +228,16 @@ class SQLiteStore(BaseSQLSpecStore):
         """Synchronous implementation of exists."""
         sql = f"""
         SELECT 1 FROM {self._table_name}
-        WHERE session_id = ?
-        AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
+        WHERE session_id = %s
+        AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
-            cursor = conn.execute(sql, (key,))
-            result = cursor.fetchone()
+        with (
+            cast("AbstractContextManager[PsycopgSyncConnection]", self._config.provide_connection()) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(sql, (key,))
+            result = cur.fetchone()
             return result is not None
 
     async def exists(self, key: str) -> bool:
@@ -271,22 +255,18 @@ class SQLiteStore(BaseSQLSpecStore):
         """Synchronous implementation of expires_in."""
         sql = f"""
         SELECT expires_at FROM {self._table_name}
-        WHERE session_id = ?
+        WHERE session_id = %s
         """
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
-            cursor = conn.execute(sql, (key,))
-            row = cursor.fetchone()
+        with cast("AbstractContextManager[PsycopgSyncConnection]", self._config.provide_connection()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (key,))
+                row = cur.fetchone()
 
-            if row is None or row[0] is None:
+            if row is None or row["expires_at"] is None:
                 return None
 
-            expires_at_julian = row[0]
-            expires_at = self._julian_to_datetime(expires_at_julian)
-
-            if expires_at is None:
-                return None
-
+            expires_at = row["expires_at"]
             now = datetime.now(timezone.utc)
 
             if expires_at <= now:
@@ -308,12 +288,15 @@ class SQLiteStore(BaseSQLSpecStore):
 
     def _delete_expired_sync(self) -> int:
         """Synchronous implementation of delete_expired."""
-        sql = f"DELETE FROM {self._table_name} WHERE julianday(expires_at) <= julianday('now')"
+        sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
-            cursor = conn.execute(sql)
+        with (
+            cast("AbstractContextManager[PsycopgSyncConnection]", self._config.provide_connection()) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(sql)
             conn.commit()
-            count = cursor.rowcount
+            count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             if count > 0:
                 logger.debug("Cleaned up %d expired sessions", count)
             return count
