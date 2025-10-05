@@ -7,8 +7,10 @@ from sqlspec.extensions.litestar.plugin import (
     CommitMode,
     SQLSpecPlugin,
 )
+from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
 __all__ = (
+    "BaseSQLSpecStore",
     "DEFAULT_COMMIT_MODE",
     "DEFAULT_CONNECTION_KEY",
     "DEFAULT_POOL_KEY",

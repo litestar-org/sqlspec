@@ -62,7 +62,7 @@ class SqliteConnectionPool:
 
         if self._enable_optimizations:
             database = self._connection_parameters.get("database", ":memory:")
-            is_memory = database == ":memory:" or database.startswith("file::memory:")
+            is_memory = database == ":memory:" or "mode=memory" in database
 
             if not is_memory:
                 connection.execute("PRAGMA journal_mode = DELETE")
