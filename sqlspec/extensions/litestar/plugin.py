@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
 from litestar.di import Provide
 from litestar.plugins import CLIPlugin, InitPluginProtocol
 
-from sqlspec.base import SQLSpec as SQLSpecBase
+from sqlspec.base import SQLSpec
 from sqlspec.config import (
     AsyncConfigT,
     AsyncDatabaseConfig,
@@ -63,7 +63,7 @@ __all__ = (
     "DEFAULT_POOL_KEY",
     "DEFAULT_SESSION_KEY",
     "CommitMode",
-    "SQLSpec",
+    "SQLSpecPlugin",
 )
 
 
@@ -87,34 +87,34 @@ class _PluginConfigState:
     annotation: "type[DatabaseConfigProtocol[Any, Any, Any]]" = field(init=False)
 
 
-class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
+class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     """Litestar plugin for SQLSpec database integration."""
 
-    __slots__ = ("_plugin_configs",)
+    __slots__ = ("_plugin_configs", "_sqlspec")
 
-    def __init__(
-        self,
-        config: "SyncConfigT | AsyncConfigT | list[SyncConfigT | AsyncConfigT]",
-        *,
-        loader: "SQLFileLoader | None" = None,
-    ) -> None:
+    def __init__(self, sqlspec: SQLSpec, *, loader: "SQLFileLoader | None" = None) -> None:
         """Initialize SQLSpec plugin.
 
         Args:
-            config: Database configuration or list of configurations.
-            loader: Optional SQL file loader instance.
+            sqlspec: Pre-configured SQLSpec instance with registered database configs.
+            loader: Optional SQL file loader instance (SQLSpec may already have one).
         """
-        super().__init__(loader=loader)
-
-        configs = [config] if not isinstance(config, list) else config
+        self._sqlspec = sqlspec
 
         self._plugin_configs: list[_PluginConfigState] = []
-        for cfg in configs:
-            settings = self._extract_litestar_settings(cfg)
-            state = self._create_config_state(cfg, settings)
+        for cfg in self._sqlspec.configs.values():
+            config_union = cast(
+                "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
+                cfg,
+            )
+            settings = self._extract_litestar_settings(config_union)
+            state = self._create_config_state(config_union, settings)
             self._plugin_configs.append(state)
 
-    def _extract_litestar_settings(self, config: "SyncConfigT | AsyncConfigT") -> "dict[str, Any]":
+    def _extract_litestar_settings(
+        self,
+        config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
+    ) -> "dict[str, Any]":
         """Extract Litestar settings from config.extension_config."""
         litestar_config = config.extension_config.get("litestar", {})
 
@@ -137,7 +137,9 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
         }
 
     def _create_config_state(
-        self, config: "SyncConfigT | AsyncConfigT", settings: "dict[str, Any]"
+        self,
+        config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
+        settings: "dict[str, Any]",
     ) -> _PluginConfigState:
         """Create plugin state with handlers for the given configuration."""
         state = _PluginConfigState(
@@ -250,11 +252,7 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
         signature_namespace = {}
 
         for state in self._plugin_configs:
-            config_union = cast(
-                "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
-                state.config,
-            )
-            state.annotation = self.add_config(config_union)
+            state.annotation = type(state.config)
             app_config.signature_types.append(state.annotation)
             app_config.signature_types.append(state.config.connection_type)
             app_config.signature_types.append(state.config.driver_type)
@@ -342,7 +340,7 @@ class SQLSpec(SQLSpecBase, InitPluginProtocol, CLIPlugin):
         """
         if not isinstance(name, str):
             try:
-                return cast("DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", super().get_config(name))
+                return cast("DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", self._sqlspec.get_config(name))
             except (KeyError, AttributeError):
                 pass
 

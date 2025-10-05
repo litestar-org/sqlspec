@@ -161,6 +161,15 @@ class SQLSpec:
         logger.debug("Retrieved configuration: %s", self._get_config_name(name))
         return config
 
+    @property
+    def configs(self) -> "dict[type, DatabaseConfigProtocol[Any, Any, Any]]":
+        """Access the registry of database configurations.
+
+        Returns:
+            Dictionary mapping config types to config instances.
+        """
+        return self._configs
+
     @overload
     def get_connection(
         self,

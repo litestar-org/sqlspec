@@ -16,8 +16,9 @@ The `DuckDB` adapter is used to create a connection to the database.
 from litestar import Litestar, post
 from msgspec import Struct
 
+from sqlspec import SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.extensions.litestar import SQLSpec
+from sqlspec.extensions.litestar import SQLSpecPlugin
 
 
 class ChatMessage(Struct):
@@ -30,8 +31,9 @@ def duckllm_chat(db_session: DuckDBDriver, data: ChatMessage) -> ChatMessage:
     return db_session.to_schema(results or {"message": "No response from DuckLLM"}, schema_type=ChatMessage)
 
 
-sqlspec = SQLSpec(
-    config=DuckDBConfig(
+sql = SQLSpec()
+sql.add_config(
+    DuckDBConfig(
         driver_features={
             "extensions": [{"name": "open_prompt"}],
             "secrets": [
@@ -48,7 +50,8 @@ sqlspec = SQLSpec(
         }
     )
 )
-app = Litestar(route_handlers=[duckllm_chat], plugins=[sqlspec], debug=True)
+plugin = SQLSpecPlugin(sqlspec=sql)
+app = Litestar(route_handlers=[duckllm_chat], plugins=[plugin], debug=True)
 
 if __name__ == "__main__":
     import uvicorn

@@ -5,7 +5,7 @@ from sqlspec.extensions.litestar.plugin import (
     DEFAULT_POOL_KEY,
     DEFAULT_SESSION_KEY,
     CommitMode,
-    SQLSpec,
+    SQLSpecPlugin,
 )
 
 __all__ = (
@@ -14,6 +14,6 @@ __all__ = (
     "DEFAULT_POOL_KEY",
     "DEFAULT_SESSION_KEY",
     "CommitMode",
-    "SQLSpec",
+    "SQLSpecPlugin",
     "database_group",
 )

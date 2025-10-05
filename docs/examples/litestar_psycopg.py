@@ -15,29 +15,27 @@ The Psycopg database also demonstrates how to use the plugin loader and `secrets
 
 from litestar import Litestar, get
 
+from sqlspec import SQLSpec
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver
-from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
+from sqlspec.core.statement import SQL
+from sqlspec.extensions.litestar import SQLSpecPlugin
 
 
 @get("/")
 async def simple_psycopg(db_session: PsycopgAsyncDriver) -> dict[str, str]:
-    from sqlspec.core.statement import SQL
-
     result = await db_session.execute(SQL("SELECT 'Hello, world!' AS greeting"))
     return result.get_first() or {"greeting": "No result found"}
 
 
-sqlspec = SQLSpec(
-    config=[
-        DatabaseConfig(
-            config=PsycopgAsyncConfig(
-                pool_config={"conninfo": "postgres://app:app@localhost:15432/app", "min_size": 1, "max_size": 3}
-            ),
-            commit_mode="autocommit",
-        )
-    ]
+sql = SQLSpec()
+sql.add_config(
+    PsycopgAsyncConfig(
+        pool_config={"conninfo": "postgres://app:app@localhost:15432/app", "min_size": 1, "max_size": 3},
+        extension_config={"litestar": {"commit_mode": "autocommit"}},
+    )
 )
-app = Litestar(route_handlers=[simple_psycopg], plugins=[sqlspec])
+plugin = SQLSpecPlugin(sqlspec=sql)
+app = Litestar(route_handlers=[simple_psycopg], plugins=[plugin])
 
 if __name__ == "__main__":
     import os

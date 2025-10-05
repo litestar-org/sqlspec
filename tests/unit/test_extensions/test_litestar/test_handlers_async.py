@@ -1,6 +1,6 @@
 """Test async handlers for SQLSpec Litestar extension."""
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -192,7 +192,7 @@ async def test_async_pool_provider_returns_pool() -> None:
     state.get.return_value = mock_pool
     scope = cast("Scope", {})
 
-    result = await provider(state, scope)
+    result: Any = await provider(state, scope)
 
     assert result is mock_pool
     state.get.assert_called_once_with(pool_key)
@@ -231,6 +231,7 @@ async def test_async_connection_provider_creates_connection() -> None:
     state.get.return_value = mock_pool
     scope = cast("Scope", {})
 
+    connection: Any
     async for connection in provider(state, scope):
         assert connection is not None
         assert get_sqlspec_scope_state(scope, connection_key) is connection
@@ -266,6 +267,7 @@ async def test_async_session_provider_creates_session() -> None:
 
     mock_connection = AsyncMock()
 
+    session: Any
     async for session in provider(mock_connection):
         assert session is not None
         assert hasattr(session, "connection")
