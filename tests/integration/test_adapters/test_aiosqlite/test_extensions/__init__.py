@@ -1,0 +1,1 @@
+"""AioSQLite extension integration tests."""

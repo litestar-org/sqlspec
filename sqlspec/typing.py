@@ -1,7 +1,8 @@
+# ruff: noqa: PLC2701
 # pyright: ignore[reportAttributeAccessIssue]
 from collections.abc import Iterator, Mapping
 from functools import lru_cache
-from typing import TYPE_CHECKING, Annotated, Any, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, TypeAlias, _TypedDict  # pyright: ignore
 
 from typing_extensions import TypeVar
 
@@ -105,7 +106,9 @@ DictRow: TypeAlias = "dict[str, Any]"
 TupleRow: TypeAlias = "tuple[Any, ...]"
 """Type variable for TupleRow types."""
 
-SupportedSchemaModel: TypeAlias = "DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub"
+SupportedSchemaModel: TypeAlias = (
+    DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub | _TypedDict
+)
 """Type alias for pydantic or msgspec models.
 
 :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
@@ -147,7 +150,7 @@ A list or sequence of any of the following:
 
 """
 BulkModelDict: TypeAlias = (
-    "Sequence[dict[str, Any] | DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub] | Any"
+    "Sequence[dict[str, Any] | DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub ] | Any"
 )
 """Type alias for bulk model dictionaries.
 
