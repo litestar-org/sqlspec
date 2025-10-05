@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
-from pytest_databases.docker.oracle import Oracle23AIService
+from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig
 from sqlspec.adapters.oracledb.litestar.store import OracleAsyncStore
@@ -14,7 +14,7 @@ pytestmark = pytest.mark.xdist_group("oracle")
 
 
 @pytest.fixture
-async def oracle_store(oracle_23ai_service: Oracle23AIService) -> "AsyncGenerator[OracleAsyncStore, None]":
+async def oracle_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleAsyncStore, None]":
     """Create Oracle store with test database."""
     config = OracleAsyncConfig(
         pool_config={

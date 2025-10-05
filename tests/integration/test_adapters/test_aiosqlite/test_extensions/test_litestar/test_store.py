@@ -208,6 +208,7 @@ async def test_store_large_data(aiosqlite_store: AiosqliteStore) -> None:
     await aiosqlite_store.set("large_session", large_data)
 
     result = await aiosqlite_store.get("large_session")
+    assert result is not None
     assert result == large_data
     assert len(result) > 1024 * 1024
 
