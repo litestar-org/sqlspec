@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import AsyncGenerator
-from uuid import uuid4
 
 import pytest
 
@@ -16,8 +17,7 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:
     """Create an aiosqlite session with test table."""
 
-    unique_db = f"file:memdb{uuid4().hex}?mode=memory&cache=shared"
-    config = AiosqliteConfig(pool_config={"database": unique_db})
+    config = AiosqliteConfig()
 
     try:
         async with config.provide_session() as session:
@@ -49,8 +49,7 @@ async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:
 @pytest.fixture
 async def aiosqlite_config() -> AsyncGenerator[AiosqliteConfig, None]:
     """Provide AiosqliteConfig for connection tests."""
-    unique_db = f"file:memdb{uuid4().hex}?mode=memory&cache=shared"
-    config = AiosqliteConfig(pool_config={"database": unique_db})
+    config = AiosqliteConfig()
 
     try:
         yield config
@@ -61,9 +60,6 @@ async def aiosqlite_config() -> AsyncGenerator[AiosqliteConfig, None]:
 @pytest.fixture
 async def aiosqlite_config_file() -> AsyncGenerator[AiosqliteConfig, None]:
     """Provide AiosqliteConfig with temporary file database for concurrent access tests."""
-    import os
-    import tempfile
-
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
 

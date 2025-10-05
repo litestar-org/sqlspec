@@ -174,12 +174,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 console.print(f"[red]No config found for bind key: {bind_key}[/]")
                 sys.exit(1)
 
-        # Extract the actual config from DatabaseConfig wrapper if needed
-        from sqlspec.extensions.litestar.config import DatabaseConfig
-
-        if isinstance(config, DatabaseConfig):
-            config = config.config
-
         return cast("AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]", config)
 
     def get_configs_with_migrations(ctx: "click.Context", enabled_only: bool = False) -> "list[tuple[str, Any]]":
@@ -195,18 +189,13 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         configs = ctx.obj["configs"]
         migration_configs = []
 
-        from sqlspec.extensions.litestar.config import DatabaseConfig
-
         for config in configs:
-            # Extract the actual config from DatabaseConfig wrapper if needed
-            actual_config = config.config if isinstance(config, DatabaseConfig) else config
-
-            migration_config = actual_config.migration_config
+            migration_config = config.migration_config
             if migration_config:
                 enabled = migration_config.get("enabled", True)
                 if not enabled_only or enabled:
-                    config_name = actual_config.bind_key or str(type(actual_config).__name__)
-                    migration_configs.append((config_name, actual_config))
+                    config_name = config.bind_key or str(type(config).__name__)
+                    migration_configs.append((config_name, config))
 
         return migration_configs
 
@@ -506,7 +495,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         """Initialize the database migrations."""
         from rich.prompt import Confirm
 
-        from sqlspec.extensions.litestar.config import DatabaseConfig
         from sqlspec.migrations.commands import create_migration_commands
         from sqlspec.utils.sync_tools import run_
 
@@ -527,13 +515,11 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 )
 
                 for config in configs:
-                    # Extract the actual config from DatabaseConfig wrapper if needed
-                    actual_config = config.config if isinstance(config, DatabaseConfig) else config
-                    migration_config = getattr(actual_config, "migration_config", {})
+                    migration_config = getattr(config, "migration_config", {})
                     target_directory = (
                         migration_config.get("script_location", "migrations") if directory is None else directory
                     )
-                    migration_commands = create_migration_commands(config=actual_config)
+                    migration_commands = create_migration_commands(config=config)
                     await maybe_await(migration_commands.init(directory=cast("str", target_directory), package=package))
 
         run_(_init_sqlspec)()

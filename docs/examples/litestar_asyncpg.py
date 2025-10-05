@@ -24,9 +24,10 @@ from typing import Any
 
 from litestar import Litestar, get
 
-from sqlspec import SQL
+from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
-from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
+from sqlspec.core.statement import SQL
+from sqlspec.extensions.litestar import SQLSpecPlugin
 
 
 @get("/")
@@ -70,19 +71,17 @@ async def get_status() -> dict[str, str]:
 
 # Configure SQLSpec with AsyncPG
 # Note: Modify this DSN to match your database configuration
-sqlspec = SQLSpec(
-    config=[
-        DatabaseConfig(
-            config=AsyncpgConfig(
-                pool_config=AsyncpgPoolConfig(
-                    dsn="postgresql://postgres:postgres@localhost:5433/postgres", min_size=5, max_size=5
-                )
-            ),
-            commit_mode="autocommit",
-        )
-    ]
+sql = SQLSpec()
+sql.add_config(
+    AsyncpgConfig(
+        pool_config=AsyncpgPoolConfig(
+            dsn="postgresql://postgres:postgres@localhost:5433/postgres", min_size=5, max_size=5
+        ),
+        extension_config={"litestar": {"commit_mode": "autocommit"}},
+    )
 )
-app = Litestar(route_handlers=[hello_world, get_version, list_tables, get_status], plugins=[sqlspec], debug=True)
+plugin = SQLSpecPlugin(sqlspec=sql)
+app = Litestar(route_handlers=[hello_world, get_version, list_tables, get_status], plugins=[plugin], debug=True)
 
 if __name__ == "__main__":
     import os

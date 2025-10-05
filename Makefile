@@ -43,7 +43,7 @@ install-uv:                                         ## Install latest version of
 .PHONY: install
 install: destroy clean                              ## Install the project, dependencies, and pre-commit
 	@echo "${INFO} Starting fresh installation..."
-	@uv python pin 3.12 >/dev/null 2>&1
+	@uv python pin 3.10 >/dev/null 2>&1
 	@uv venv >/dev/null 2>&1
 	@uv sync --all-extras --dev
 	@echo "${OK} Installation complete! 🎉"
@@ -51,7 +51,7 @@ install: destroy clean                              ## Install the project, depe
 .PHONY: install-compiled
 install-compiled: destroy clean                  ## Install with mypyc compilation for performance
 	@echo "${INFO} Starting fresh installation with mypyc compilation..."
-	@uv python pin 3.12 >/dev/null 2>&1
+	@uv python pin 3.10 >/dev/null 2>&1
 	@uv venv >/dev/null 2>&1
 	@echo "${INFO} Installing in editable mode with mypyc compilation..."
 	@HATCH_BUILD_HOOKS_ENABLE=1 uv pip install -e .
