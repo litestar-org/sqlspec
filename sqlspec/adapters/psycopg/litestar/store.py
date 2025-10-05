@@ -32,7 +32,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
     Args:
         config: PsycopgAsyncConfig instance.
         table_name: Name of the session table. Defaults to "sessions".
-        cleanup_probability: Probability of running cleanup on set (0.0-1.0).
 
     Example:
         from sqlspec.adapters.psycopg import PsycopgAsyncConfig
@@ -45,17 +44,14 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
     __slots__ = ()
 
-    def __init__(
-        self, config: "PsycopgAsyncConfig", table_name: str = "litestar_session", cleanup_probability: float = 0.01
-    ) -> None:
+    def __init__(self, config: "PsycopgAsyncConfig", table_name: str = "litestar_session") -> None:
         """Initialize Psycopg async session store.
 
         Args:
             config: PsycopgAsyncConfig instance.
             table_name: Name of the session table.
-            cleanup_probability: Probability of cleanup on set (0.0-1.0).
         """
-        super().__init__(config, table_name, cleanup_probability)
+        super().__init__(config, table_name)
 
     def _get_create_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.
@@ -181,9 +177,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
             await conn.execute(sql.encode(), (key, data, expires_at))
             await conn.commit()
 
-        if self._should_cleanup():
-            await self.delete_expired()
-
     async def delete(self, key: str) -> None:
         """Delete a session by key.
 
@@ -305,7 +298,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
     Args:
         config: PsycopgSyncConfig instance.
         table_name: Name of the session table. Defaults to "litestar_session".
-        cleanup_probability: Probability of running cleanup on set (0.0-1.0).
 
     Example:
         from sqlspec.adapters.psycopg import PsycopgSyncConfig
@@ -318,17 +310,14 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
 
     __slots__ = ()
 
-    def __init__(
-        self, config: "PsycopgSyncConfig", table_name: str = "litestar_session", cleanup_probability: float = 0.01
-    ) -> None:
+    def __init__(self, config: "PsycopgSyncConfig", table_name: str = "litestar_session") -> None:
         """Initialize Psycopg sync session store.
 
         Args:
             config: PsycopgSyncConfig instance.
             table_name: Name of the session table.
-            cleanup_probability: Probability of cleanup on set (0.0-1.0).
         """
-        super().__init__(config, table_name, cleanup_probability)
+        super().__init__(config, table_name)
 
     def _get_create_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.
@@ -462,9 +451,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             expires_in: Time until expiration.
         """
         await async_(self._set)(key, value, expires_in)
-
-        if self._should_cleanup():
-            await self.delete_expired()
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""

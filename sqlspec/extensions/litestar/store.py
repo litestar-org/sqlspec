@@ -1,6 +1,5 @@
 """Base session store classes for Litestar integration."""
 
-import random
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
@@ -33,16 +32,13 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
     store implementations including:
     - Connection management via SQLSpec configs
     - Session expiration calculation
-    - Automatic cleanup of expired sessions
     - Table creation utilities
 
     Subclasses must implement dialect-specific SQL queries.
 
     Args:
         config: SQLSpec database configuration (async or sync).
-        table_name: Name of the session table. Defaults to "sessions".
-        cleanup_probability: Probability (0.0-1.0) of running cleanup on each set().
-            Defaults to 0.01 (1% chance). Set to 0 to disable automatic cleanup.
+        table_name: Name of the session table. Defaults to "litestar_session".
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -53,22 +49,18 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         await store.create_table()
     """
 
-    __slots__ = ("_cleanup_probability", "_config", "_table_name")
+    __slots__ = ("_config", "_table_name")
 
-    def __init__(
-        self, config: ConfigT, table_name: str = "litestar_session", cleanup_probability: float = 0.01
-    ) -> None:
+    def __init__(self, config: ConfigT, table_name: str = "litestar_session") -> None:
         """Initialize the session store.
 
         Args:
             config: SQLSpec database configuration.
             table_name: Name of the session table.
-            cleanup_probability: Probability of cleanup on set (0.0-1.0).
         """
         self._validate_table_name(table_name)
         self._config = config
         self._table_name = table_name
-        self._cleanup_probability = max(0.0, min(1.0, cleanup_probability))
 
     @property
     def config(self) -> ConfigT:
@@ -209,21 +201,6 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
             return None
 
         return datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
-
-    def _should_cleanup(self) -> bool:
-        """Determine if cleanup should run based on probability.
-
-        Returns:
-            True if cleanup should run this time.
-
-        Note:
-            Uses random.random() which is not cryptographically secure,
-            but is sufficient for probabilistic cleanup scheduling.
-        """
-        if self._cleanup_probability <= 0:
-            return False
-
-        return random.random() < self._cleanup_probability  # noqa: S311
 
     def _value_to_bytes(self, value: "str | bytes") -> bytes:
         """Convert value to bytes if needed.

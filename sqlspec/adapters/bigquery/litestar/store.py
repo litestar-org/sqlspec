@@ -39,7 +39,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
     Args:
         config: BigQueryConfig instance.
         table_name: Name of the session table. Defaults to "litestar_session".
-        cleanup_probability: Probability of running cleanup on set (0.0-1.0).
 
     Example:
         from sqlspec.adapters.bigquery import BigQueryConfig
@@ -52,17 +51,14 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
     __slots__ = ()
 
-    def __init__(
-        self, config: "BigQueryConfig", table_name: str = "litestar_session", cleanup_probability: float = 0.01
-    ) -> None:
+    def __init__(self, config: "BigQueryConfig", table_name: str = "litestar_session") -> None:
         """Initialize BigQuery session store.
 
         Args:
             config: BigQueryConfig instance.
             table_name: Name of the session table.
-            cleanup_probability: Probability of cleanup on set (0.0-1.0).
         """
-        super().__init__(config, table_name, cleanup_probability)
+        super().__init__(config, table_name)
 
     def _get_create_table_sql(self) -> str:
         """Get BigQuery CREATE TABLE SQL with optimized schema.
@@ -219,9 +215,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             expires_in: Time until expiration.
         """
         await async_(self._set)(key, value, expires_in)
-
-        if self._should_cleanup():
-            await self.delete_expired()
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""

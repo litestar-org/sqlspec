@@ -31,7 +31,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
     Args:
         config: OracleAsyncConfig instance.
         table_name: Name of the session table. Defaults to "litestar_session".
-        cleanup_probability: Probability of running cleanup on set (0.0-1.0).
         use_in_memory: Enable Oracle Database In-Memory Column Store for faster queries.
             Requires Oracle Database In-Memory license (paid feature). Defaults to False.
 
@@ -57,21 +56,16 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
     __slots__ = ("_use_in_memory",)
 
     def __init__(
-        self,
-        config: "OracleAsyncConfig",
-        table_name: str = "litestar_session",
-        cleanup_probability: float = 0.01,
-        use_in_memory: bool = False,
+        self, config: "OracleAsyncConfig", table_name: str = "litestar_session", use_in_memory: bool = False
     ) -> None:
         """Initialize Oracle session store.
 
         Args:
             config: OracleAsyncConfig instance.
             table_name: Name of the session table.
-            cleanup_probability: Probability of cleanup on set (0.0-1.0).
             use_in_memory: Enable In-Memory Column Store (requires license).
         """
-        super().__init__(config, table_name, cleanup_probability)
+        super().__init__(config, table_name)
         self._use_in_memory = use_in_memory
 
     def _get_create_table_sql(self) -> str:
@@ -275,9 +269,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                 await cursor.execute(sql, {"session_id": key, "data": data, "expires_at": expires_at})
                 await conn.commit()
 
-        if self._should_cleanup():
-            await self.delete_expired()
-
     async def delete(self, key: str) -> None:
         """Delete a session by key.
 
@@ -408,7 +399,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     Args:
         config: OracleSyncConfig instance.
         table_name: Name of the session table. Defaults to "litestar_session".
-        cleanup_probability: Probability of running cleanup on set (0.0-1.0).
         use_in_memory: Enable Oracle Database In-Memory Column Store for faster queries.
             Requires Oracle Database In-Memory license (paid feature). Defaults to False.
 
@@ -430,21 +420,16 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     __slots__ = ("_use_in_memory",)
 
     def __init__(
-        self,
-        config: "OracleSyncConfig",
-        table_name: str = "litestar_session",
-        cleanup_probability: float = 0.01,
-        use_in_memory: bool = False,
+        self, config: "OracleSyncConfig", table_name: str = "litestar_session", use_in_memory: bool = False
     ) -> None:
         """Initialize Oracle sync session store.
 
         Args:
             config: OracleSyncConfig instance.
             table_name: Name of the session table.
-            cleanup_probability: Probability of cleanup on set (0.0-1.0).
             use_in_memory: Enable In-Memory Column Store (requires license).
         """
-        super().__init__(config, table_name, cleanup_probability)
+        super().__init__(config, table_name)
         self._use_in_memory = use_in_memory
 
     def _get_create_table_sql(self) -> str:
@@ -656,9 +641,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             expires_in: Time until expiration.
         """
         await async_(self._set)(key, value, expires_in)
-
-        if self._should_cleanup():
-            await self.delete_expired()
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""

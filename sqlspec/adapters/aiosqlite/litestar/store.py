@@ -30,7 +30,6 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
     Args:
         config: AiosqliteConfig instance.
         table_name: Name of the session table. Defaults to "sessions".
-        cleanup_probability: Probability of running cleanup on set (0.0-1.0).
 
     Example:
         from sqlspec.adapters.aiosqlite import AiosqliteConfig
@@ -43,17 +42,14 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
     __slots__ = ()
 
-    def __init__(
-        self, config: "AiosqliteConfig", table_name: str = "litestar_session", cleanup_probability: float = 0.01
-    ) -> None:
+    def __init__(self, config: "AiosqliteConfig", table_name: str = "litestar_session") -> None:
         """Initialize AioSQLite session store.
 
         Args:
             config: AiosqliteConfig instance.
             table_name: Name of the session table.
-            cleanup_probability: Probability of cleanup on set (0.0-1.0).
         """
-        super().__init__(config, table_name, cleanup_probability)
+        super().__init__(config, table_name)
 
     def _get_create_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL.
@@ -191,9 +187,6 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         async with self._config.provide_connection() as conn:
             await conn.execute(sql, (key, data, expires_at_julian))
             await conn.commit()
-
-        if self._should_cleanup():
-            await self.delete_expired()
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
