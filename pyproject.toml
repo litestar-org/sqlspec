@@ -150,6 +150,7 @@ exclude = [
   "sqlspec/**/__init__.py",        # Init files (usually just imports)
   "sqlspec/protocols.py",          # Protocol definitions
   "sqlspec/builder/**/*.py",       # Builder (not performance critical)
+  "sqlspec/storage/_utils.py",     # Generic[T] incompatible with mypyc
 
 ]
 include = [
@@ -169,6 +170,13 @@ include = [
   "sqlspec/utils/type_guards.py",         # Type guard utilities
   "sqlspec/utils/fixtures.py",            # File fixture loading
   "sqlspec/utils/data_transformation.py", # Data transformation utilities
+
+  # === STORAGE LAYER ===
+  "sqlspec/storage/registry.py",
+  "sqlspec/storage/backends/base.py",
+  "sqlspec/storage/backends/obstore.py",
+  "sqlspec/storage/backends/fsspec.py",
+  "sqlspec/storage/backends/local.py",
 ]
 mypy-args = [
   "--ignore-missing-imports",

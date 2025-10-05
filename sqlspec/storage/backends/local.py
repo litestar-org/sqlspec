@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.storage._utils import AsyncIteratorWrapper, ensure_pyarrow
 from sqlspec.utils.sync_tools import async_
 
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
 __all__ = ("LocalStore",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class LocalStore:
     """Simple local file system storage backend.
 

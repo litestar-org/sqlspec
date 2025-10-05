@@ -3,6 +3,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.storage._utils import ensure_pyarrow, resolve_storage_path
 from sqlspec.typing import FSSPEC_INSTALLED
@@ -92,12 +94,15 @@ class _ArrowStreamer:
                 pass
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class FSSpecBackend:
     """Storage backend using fsspec.
 
     Implements ObjectStoreProtocol using fsspec for various protocols
     including HTTP, HTTPS, FTP, and cloud storage services.
     """
+
+    __slots__ = ("_fs_uri", "backend_type", "base_path", "fs", "protocol")
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         if not FSSPEC_INSTALLED:
