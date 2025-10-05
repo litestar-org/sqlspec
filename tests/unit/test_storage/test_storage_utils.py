@@ -1,12 +1,9 @@
 """Unit tests for storage utilities."""
 
-from typing import Any
-
 import pytest
-from typing_extensions import Self
 
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.storage._utils import AsyncIteratorWrapper, ensure_pyarrow, resolve_storage_path
+from sqlspec.storage._utils import ensure_pyarrow, resolve_storage_path
 from sqlspec.typing import PYARROW_INSTALLED
 
 
@@ -75,80 +72,3 @@ def test_resolve_storage_path_pathlib_input() -> None:
 
     result = resolve_storage_path(Path("data") / "file.txt", base_path="", protocol="file")
     assert result == "data/file.txt"
-
-
-@pytest.mark.asyncio
-async def test_async_iterator_wrapper_normal() -> None:
-    """Test AsyncIteratorWrapper with normal iteration."""
-    sync_iter = iter(range(5))
-    async_iter = AsyncIteratorWrapper(sync_iter)
-
-    results = [item async for item in async_iter]
-
-    assert results == [0, 1, 2, 3, 4]
-
-
-@pytest.mark.asyncio
-async def test_async_iterator_wrapper_empty() -> None:
-    """Test AsyncIteratorWrapper with empty iterator."""
-    sync_iter = iter([])  # type: ignore
-    async_iter = AsyncIteratorWrapper(sync_iter)
-
-    results = [item async for item in async_iter]
-
-    assert results == []
-
-
-@pytest.mark.asyncio
-async def test_async_iterator_wrapper_single_item() -> None:
-    """Test AsyncIteratorWrapper with single item."""
-    sync_iter = iter([42])
-    async_iter = AsyncIteratorWrapper(sync_iter)
-
-    results = [item async for item in async_iter]
-
-    assert results == [42]
-
-
-@pytest.mark.asyncio
-async def test_async_iterator_wrapper_type_preservation() -> None:
-    """Test AsyncIteratorWrapper preserves item types."""
-    data = [{"key": "value"}, [1, 2, 3], "string"]
-    sync_iter = iter(data)
-    async_iter = AsyncIteratorWrapper(sync_iter)
-
-    results = [item async for item in async_iter]
-
-    assert results == data
-    assert isinstance(results[0], dict)
-    assert isinstance(results[1], list)
-    assert isinstance(results[2], str)
-
-
-@pytest.mark.asyncio
-async def test_async_iterator_wrapper_aclose() -> None:
-    """Test AsyncIteratorWrapper aclose() method."""
-
-    class CloseableIterator:
-        def __init__(self, items: list) -> None:
-            self.items = iter(items)
-            self.closed = False
-
-        def __iter__(self) -> Self:
-            return self
-
-        def __next__(self) -> Any:
-            return next(self.items)
-
-        def close(self) -> None:
-            self.closed = True
-
-    closeable = CloseableIterator([1, 2, 3])
-    async_iter = AsyncIteratorWrapper(closeable)
-
-    result = await async_iter.__anext__()
-    assert result == 1
-    assert not closeable.closed
-
-    await async_iter.aclose()
-    assert closeable.closed

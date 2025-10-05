@@ -137,10 +137,17 @@ class ObStoreBackend:
                 from obstore.store import LocalStore
 
                 parsed = urlparse(uri)
-                path = parsed.path or "/"
-                # Create directory if it doesn't exist (ObStore LocalStore requires it)
-                PathlibPath(path).mkdir(parents=True, exist_ok=True)
-                self.store = LocalStore(path)
+                path_str = parsed.path or "/"
+                path_obj = PathlibPath(path_str)
+
+                # If path points to a file, use its parent as the base directory
+                if path_obj.is_file():
+                    path_str = str(path_obj.parent)
+                    path_obj = path_obj.parent
+                    # Update base_path to match the LocalStore root
+                    if not self.base_path:
+                        self.base_path = path_str
+                self.store = LocalStore(path_str, mkdir=True)
             else:
                 from obstore.store import from_url
 
@@ -165,15 +172,43 @@ class ObStoreBackend:
 
         return cls(uri=store_uri, **kwargs)
 
+    def _resolve_path_for_local_store(self, path: "str | Path") -> str:
+        """Resolve path for LocalStore which expects relative paths."""
+        from pathlib import Path as PathlibPath
+
+        path_obj = PathlibPath(str(path))
+
+        # If absolute and we have a base_path, try to make it relative
+        if path_obj.is_absolute() and self.base_path:
+            try:
+                return str(path_obj.relative_to(self.base_path))
+            except ValueError:
+                # Path is outside base_path - strip leading / as fallback
+                return str(path).lstrip("/")
+
+        # Relative path or no base_path - return as-is
+        return str(path)
+
     def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes using obstore."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        # For LocalStore (file protocol with base_path), use special resolution
+        if self.protocol == "file" and self.base_path:
+            resolved_path = self._resolve_path_for_local_store(path)
+        else:
+            # For cloud storage or file without base_path, use standard resolution
+            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+
         result = self.store.get(resolved_path)
         return cast("bytes", result.bytes().to_bytes())
 
     def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes using obstore."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        # For LocalStore (file protocol with base_path), use special resolution
+        if self.protocol == "file" and self.base_path:
+            resolved_path = self._resolve_path_for_local_store(path)
+        else:
+            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+
         self.store.put(resolved_path, data)
 
     def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:

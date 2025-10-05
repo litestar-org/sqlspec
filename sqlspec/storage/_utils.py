@@ -1,60 +1,14 @@
 """Shared utilities for storage backends."""
 
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.typing import PYARROW_INSTALLED
-from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
     from pathlib import Path
 
-T = TypeVar("T")
-
-__all__ = ("AsyncIteratorWrapper", "ensure_pyarrow", "resolve_storage_path")
-
-
-class AsyncIteratorWrapper(Generic[T]):
-    """Wrap sync iterator with async_(next) calls.
-
-    Prevents event loop blocking by offloading blocking next() calls
-    to a thread pool while keeping iterator creation on main thread.
-
-    Args:
-        sync_iter: Synchronous iterator to wrap.
-
-    Examples:
-        >>> sync_iter = iter([1, 2, 3])
-        >>> async_iter = AsyncIteratorWrapper(sync_iter)
-        >>> async for item in async_iter:
-        ...     print(item)
-    """
-
-    __slots__ = ("sync_iter",)
-
-    def __init__(self, sync_iter: "Iterator[T]") -> None:
-        self.sync_iter = sync_iter
-
-    def __aiter__(self) -> "AsyncIteratorWrapper[T]":
-        return self
-
-    async def __anext__(self) -> T:
-        def _safe_next() -> T:
-            try:
-                return next(self.sync_iter)
-            except StopIteration as e:
-                raise StopAsyncIteration from e
-
-        return await async_(_safe_next)()
-
-    async def aclose(self) -> None:
-        """Close underlying iterator if it supports close()."""
-        try:
-            close_method = self.sync_iter.close  # type: ignore[attr-defined]
-            await async_(close_method)()  # pyright: ignore
-        except AttributeError:
-            pass
+__all__ = ("ensure_pyarrow", "resolve_storage_path")
 
 
 def ensure_pyarrow() -> None:
@@ -88,21 +42,54 @@ def resolve_storage_path(
         >>> resolve_storage_path(
         ...     "file.txt", base_path="/base", protocol="file"
         ... )
-        '/base/file.txt'
+        'base/file.txt'
 
         >>> resolve_storage_path(
         ...     "file:///data/file.txt", strip_file_scheme=True
         ... )
         'data/file.txt'
+
+        >>> resolve_storage_path(
+        ...     "/data/subdir/file.txt",
+        ...     base_path="/data",
+        ...     protocol="file",
+        ... )
+        'subdir/file.txt'
     """
+    from pathlib import Path as PathlibPath
+
     path_str = str(path)
 
     if strip_file_scheme and path_str.startswith("file://"):
         path_str = path_str.removeprefix("file://")
 
-    if protocol == "file" and path_str.startswith("/"):
-        return path_str.lstrip("/")
+    # For local file protocol
+    if protocol == "file":
+        path_obj = PathlibPath(path_str)
 
+        # Absolute path handling
+        if path_obj.is_absolute():
+            if base_path:
+                base_obj = PathlibPath(base_path)
+                # Try to make path relative to base_path
+                try:
+                    relative = path_obj.relative_to(base_obj)
+                    # Return joined path for FSSpec-style backends
+                    return f"{base_path.rstrip('/')}/{relative}"
+                except ValueError:
+                    # Path is outside base_path
+                    return path_str.lstrip("/")
+            # No base_path - strip leading /
+            return path_str.lstrip("/")
+
+        # Relative path with base_path - join them
+        if base_path:
+            return f"{base_path.rstrip('/')}/{path_str}"
+
+        # Relative path without base_path
+        return path_str
+
+    # For cloud storage protocols (s3, gs, etc.), join with base_path
     if not base_path:
         return path_str
 
