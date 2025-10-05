@@ -80,9 +80,12 @@ class _AsyncArrowIterator:
 
     async def aclose(self) -> None:
         """Close underlying file iterator."""
-
-        if self._current_file_iterator is not None and hasattr(self._current_file_iterator, "close"):
-            await async_(self._current_file_iterator.close)()  # pyright: ignore
+        if self._current_file_iterator is not None:
+            try:
+                close_method = self._current_file_iterator.close  # type: ignore[attr-defined]
+                await async_(close_method)()
+            except AttributeError:
+                pass
 
 
 DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_timeout": "60s"}

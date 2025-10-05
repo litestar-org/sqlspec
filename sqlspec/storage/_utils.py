@@ -50,8 +50,11 @@ class AsyncIteratorWrapper(Generic[T]):
 
     async def aclose(self) -> None:
         """Close underlying iterator if it supports close()."""
-        if hasattr(self.sync_iter, "close"):
-            await async_(self.sync_iter.close)()  # pyright: ignore
+        try:
+            close_method = self.sync_iter.close  # type: ignore[attr-defined]
+            await async_(close_method)()
+        except AttributeError:
+            pass
 
 
 def ensure_pyarrow() -> None:

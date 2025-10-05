@@ -84,8 +84,12 @@ class _ArrowStreamer:
 
     async def aclose(self) -> None:
         """Close underlying batch iterator."""
-        if self.batch_iterator is not None and hasattr(self.batch_iterator, "close"):
-            await async_(self.batch_iterator.close)()  # pyright: ignore
+        if self.batch_iterator is not None:
+            try:
+                close_method = self.batch_iterator.close  # type: ignore[attr-defined]
+                await async_(close_method)()
+            except AttributeError:
+                pass
 
 
 class FSSpecBackend:
