@@ -23,6 +23,27 @@ if TYPE_CHECKING:
 __all__ = ("LocalStore",)
 
 
+class _LocalArrowIterator:
+    """Async iterator for LocalStore Arrow streaming."""
+
+    __slots__ = ("_sync_iter",)
+
+    def __init__(self, sync_iter: "Iterator[ArrowRecordBatch]") -> None:
+        self._sync_iter = sync_iter
+
+    def __aiter__(self) -> "_LocalArrowIterator":
+        return self
+
+    async def __anext__(self) -> "ArrowRecordBatch":
+        def _safe_next() -> "ArrowRecordBatch":
+            try:
+                return next(self._sync_iter)
+            except StopIteration as e:
+                raise StopAsyncIteration from e
+
+        return await async_(_safe_next)()
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class LocalStore:
     """Simple local file system storage backend.
@@ -309,27 +330,6 @@ class LocalStore:
         Returns:
             Arrow record batches from matching files.
         """
-
-        class _LocalArrowIterator:
-            """Async iterator for LocalStore Arrow streaming."""
-
-            __slots__ = ("_sync_iter",)
-
-            def __init__(self, sync_iter: Iterator["ArrowRecordBatch"]) -> None:
-                self._sync_iter = sync_iter
-
-            def __aiter__(self) -> "_LocalArrowIterator":
-                return self
-
-            async def __anext__(self) -> "ArrowRecordBatch":
-                def _safe_next() -> "ArrowRecordBatch":
-                    try:
-                        return next(self._sync_iter)
-                    except StopIteration as e:
-                        raise StopAsyncIteration from e
-
-                return await async_(_safe_next)()
-
         return _LocalArrowIterator(self.stream_arrow(pattern, **kwargs))
 
     async def sign_async(self, path: "str | Path", expires_in: int = 3600, for_upload: bool = False) -> str:
