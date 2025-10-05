@@ -85,6 +85,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         statement_config: "StatementConfig | None" = None,
         driver_features: "AsyncpgDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize AsyncPG configuration.
 
@@ -95,6 +96,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             statement_config: Statement configuration override
             driver_features: Driver features configuration (TypedDict or dict)
             bind_key: Optional unique identifier for this configuration
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
         features_dict: dict[str, Any] = dict(driver_features) if driver_features else {}
 
@@ -109,6 +111,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             statement_config=statement_config or asyncpg_statement_config,
             driver_features=features_dict,
             bind_key=bind_key,
+            extension_config=extension_config,
         )
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":

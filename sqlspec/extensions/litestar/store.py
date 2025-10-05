@@ -1,23 +1,29 @@
 """Base session store classes for Litestar integration."""
 
 import random
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Final, Generic, TypeVar
 
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from types import TracebackType
 
-    from sqlspec.config import DatabaseConfigProtocol
+
+ConfigT = TypeVar("ConfigT")
+
 
 logger = get_logger("extensions.litestar.store")
 
 __all__ = ("BaseSQLSpecStore",)
 
+VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+MAX_TABLE_NAME_LENGTH: Final = 63
 
-class BaseSQLSpecStore(ABC):
+
+class BaseSQLSpecStore(ABC, Generic[ConfigT]):
     """Base class for SQLSpec-backed Litestar session stores.
 
     Implements the litestar.stores.base.Store protocol for server-side session
@@ -40,20 +46,17 @@ class BaseSQLSpecStore(ABC):
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.adapters.asyncpg.litestar.store import AsyncPGStore
+        from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
 
         config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
-        store = AsyncPGStore(config)
+        store = AsyncpgStore(config)
         await store.create_table()
     """
 
     __slots__ = ("_cleanup_probability", "_config", "_table_name")
 
     def __init__(
-        self,
-        config: "DatabaseConfigProtocol[Any, Any, Any]",
-        table_name: str = "sessions",
-        cleanup_probability: float = 0.01,
+        self, config: ConfigT, table_name: str = "litestar_session", cleanup_probability: float = 0.01
     ) -> None:
         """Initialize the session store.
 
@@ -62,12 +65,13 @@ class BaseSQLSpecStore(ABC):
             table_name: Name of the session table.
             cleanup_probability: Probability of cleanup on set (0.0-1.0).
         """
+        self._validate_table_name(table_name)
         self._config = config
         self._table_name = table_name
         self._cleanup_probability = max(0.0, min(1.0, cleanup_probability))
 
     @property
-    def config(self) -> "DatabaseConfigProtocol[Any, Any, Any]":
+    def config(self) -> ConfigT:
         """Return the database configuration."""
         return self._config
 
@@ -163,17 +167,29 @@ class BaseSQLSpecStore(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def _get_drop_table_sql(self) -> "list[str]":
+        """Get the DROP TABLE SQL statements for this database dialect.
+
+        Returns:
+            List of SQL statements to drop the table and all indexes.
+            Order matters: drop indexes before table.
+
+        Notes:
+            Should use IF EXISTS or dialect-specific error handling
+            to allow idempotent migrations.
+        """
+        raise NotImplementedError
+
     async def __aenter__(self) -> "BaseSQLSpecStore":
         """Enter context manager."""
         return self
 
     async def __aexit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: "TracebackType | None",
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> None:
         """Exit context manager."""
+        return
 
     def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
         """Calculate expiration timestamp from expires_in.
@@ -221,3 +237,31 @@ class BaseSQLSpecStore(ABC):
         if isinstance(value, str):
             return value.encode("utf-8")
         return value
+
+    @staticmethod
+    def _validate_table_name(table_name: str) -> None:
+        """Validate table name for SQL safety.
+
+        Args:
+            table_name: Table name to validate.
+
+        Raises:
+            ValueError: If table name is invalid.
+
+        Notes:
+            - Must start with letter or underscore
+            - Can only contain letters, numbers, and underscores
+            - Maximum length is 63 characters (PostgreSQL limit)
+            - Prevents SQL injection in table names
+        """
+        if not table_name:
+            msg = "Table name cannot be empty"
+            raise ValueError(msg)
+
+        if len(table_name) > MAX_TABLE_NAME_LENGTH:
+            msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
+            raise ValueError(msg)
+
+        if not VALID_TABLE_NAME_PATTERN.match(table_name):
+            msg = f"Invalid table name: {table_name!r}. Must start with letter/underscore and contain only alphanumeric characters and underscores"
+            raise ValueError(msg)

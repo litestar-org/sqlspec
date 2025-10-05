@@ -72,6 +72,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize Asyncmy configuration.
 
@@ -82,6 +83,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             statement_config: Statement configuration override
             driver_features: Driver feature configuration
             bind_key: Optional unique identifier for this configuration
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -103,6 +105,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             statement_config=statement_config,
             driver_features=driver_features or {},
             bind_key=bind_key,
+            extension_config=extension_config,
         )
 
     async def _create_pool(self) -> "AsyncmyPool":  # pyright: ignore

@@ -20,6 +20,7 @@ target/
 .claude/
 .cursor/
 .zed/
+.gemini/
 
 # files
 **/*.so

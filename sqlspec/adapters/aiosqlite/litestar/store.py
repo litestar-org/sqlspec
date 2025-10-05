@@ -1,15 +1,12 @@
 """AioSQLite session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from contextlib import AbstractAsyncContextManager
-
-    from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 
 logger = get_logger("adapters.aiosqlite.litestar.store")
@@ -17,10 +14,10 @@ logger = get_logger("adapters.aiosqlite.litestar.store")
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
 
-__all__ = ("AioSQLiteStore",)
+__all__ = ("AiosqliteStore",)
 
 
-class AioSQLiteStore(BaseSQLSpecStore):
+class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
     """SQLite session store using AioSQLite driver.
 
     Implements server-side session storage for Litestar using SQLite
@@ -37,20 +34,17 @@ class AioSQLiteStore(BaseSQLSpecStore):
 
     Example:
         from sqlspec.adapters.aiosqlite import AiosqliteConfig
-        from sqlspec.adapters.aiosqlite.litestar.store import AioSQLiteStore
+        from sqlspec.adapters.aiosqlite.litestar.store import AiosqliteStore
 
         config = AiosqliteConfig(database=":memory:")
-        store = AioSQLiteStore(config)
+        store = AiosqliteStore(config)
         await store.create_table()
     """
 
     __slots__ = ()
 
     def __init__(
-        self,
-        config: "AiosqliteConfig",
-        table_name: str = "sessions",
-        cleanup_probability: float = 0.01,
+        self, config: "AiosqliteConfig", table_name: str = "litestar_session", cleanup_probability: float = 0.01
     ) -> None:
         """Initialize AioSQLite session store.
 
@@ -83,6 +77,14 @@ class AioSQLiteStore(BaseSQLSpecStore):
         CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
         ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
         """
+
+    def _get_drop_table_sql(self) -> "list[str]":
+        """Get SQLite DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop indexes and table.
+        """
+        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
 
     def _datetime_to_julian(self, dt: "datetime | None") -> "float | None":
         """Convert datetime to Julian Day number for SQLite storage.
@@ -123,7 +125,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.executescript(sql)
         logger.debug("Created session table: %s", self._table_name)
 
@@ -141,9 +143,9 @@ class AioSQLiteStore(BaseSQLSpecStore):
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = ?
         AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             async with conn.execute(sql, (key,)) as cursor:
                 row = await cursor.fetchone()
 
@@ -160,7 +162,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
                     UPDATE {self._table_name}
                     SET expires_at = ?
                     WHERE session_id = ?
-                    """  # noqa: S608
+                    """
                     await conn.execute(update_sql, (new_expires_at_julian, key))
                     await conn.commit()
 
@@ -184,9 +186,9 @@ class AioSQLiteStore(BaseSQLSpecStore):
         sql = f"""
         INSERT OR REPLACE INTO {self._table_name} (session_id, data, expires_at)
         VALUES (?, ?, ?)
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, (key, data, expires_at_julian))
             await conn.commit()
 
@@ -199,17 +201,17 @@ class AioSQLiteStore(BaseSQLSpecStore):
         Args:
             key: Session ID to delete.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"  # noqa: S608
+        sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
 
-        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, (key,))
             await conn.commit()
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        sql = f"DELETE FROM {self._table_name}"  # noqa: S608
+        sql = f"DELETE FROM {self._table_name}"
 
-        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql)
             await conn.commit()
         logger.debug("Deleted all sessions from table: %s", self._table_name)
@@ -227,12 +229,9 @@ class AioSQLiteStore(BaseSQLSpecStore):
         SELECT 1 FROM {self._table_name}
         WHERE session_id = ?
         AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
-        """  # noqa: S608
+        """
 
-        async with (
-            cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn,
-            conn.execute(sql, (key,)) as cursor,
-        ):
+        async with self._config.provide_connection() as conn, conn.execute(sql, (key,)) as cursor:
             result = await cursor.fetchone()
             return result is not None
 
@@ -248,9 +247,9 @@ class AioSQLiteStore(BaseSQLSpecStore):
         sql = f"""
         SELECT expires_at FROM {self._table_name}
         WHERE session_id = ?
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             async with conn.execute(sql, (key,)) as cursor:
                 row = await cursor.fetchone()
 
@@ -277,9 +276,9 @@ class AioSQLiteStore(BaseSQLSpecStore):
         Returns:
             Number of sessions deleted.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE julianday(expires_at) <= julianday('now')"  # noqa: S608
+        sql = f"DELETE FROM {self._table_name} WHERE julianday(expires_at) <= julianday('now')"
 
-        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             cursor = await conn.execute(sql)
             await conn.commit()
             count = cursor.rowcount

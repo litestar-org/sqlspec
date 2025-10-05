@@ -1,5 +1,5 @@
 """Oracle Litestar integration exports."""
 
-from sqlspec.adapters.oracledb.litestar.store import OracleAsyncStore
+from sqlspec.adapters.oracledb.litestar.store import OracleAsyncStore, OracleSyncStore
 
-__all__ = ("OracleAsyncStore",)
+__all__ = ("OracleAsyncStore", "OracleSyncStore")

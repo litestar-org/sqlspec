@@ -1,17 +1,13 @@
 """SQLite sync session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, cast
-
-from litestar.utils.sync import AsyncCallable
+from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from contextlib import AbstractContextManager
-
-    from sqlspec.adapters.sqlite._types import SqliteConnection
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
 logger = get_logger("adapters.sqlite.litestar.store")
@@ -22,7 +18,7 @@ JULIAN_EPOCH = 2440587.5
 __all__ = ("SQLiteStore",)
 
 
-class SQLiteStore(BaseSQLSpecStore):
+class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
     """SQLite session store using synchronous SQLite driver.
 
     Implements server-side session storage for Litestar using SQLite
@@ -34,10 +30,6 @@ class SQLiteStore(BaseSQLSpecStore):
     - INSERT OR REPLACE for UPSERT functionality
     - Automatic expiration handling
     - Efficient cleanup of expired sessions
-
-    Note:
-        For high-concurrency applications, consider using AioSQLiteStore instead,
-        as it provides native async operations without threading overhead.
 
     Args:
         config: SqliteConfig instance.
@@ -56,10 +48,7 @@ class SQLiteStore(BaseSQLSpecStore):
     __slots__ = ()
 
     def __init__(
-        self,
-        config: "SqliteConfig",
-        table_name: str = "sessions",
-        cleanup_probability: float = 0.01,
+        self, config: "SqliteConfig", table_name: str = "litestar_session", cleanup_probability: float = 0.01
     ) -> None:
         """Initialize SQLite session store.
 
@@ -91,6 +80,14 @@ class SQLiteStore(BaseSQLSpecStore):
         CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
         ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
         """
+
+    def _get_drop_table_sql(self) -> "list[str]":
+        """Get SQLite DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop indexes and table.
+        """
+        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
 
     def _datetime_to_julian(self, dt: "datetime | None") -> "float | None":
         """Convert datetime to Julian Day number for SQLite storage.
@@ -128,18 +125,18 @@ class SQLiteStore(BaseSQLSpecStore):
         timestamp = days_since_epoch * SECONDS_PER_DAY
         return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
-    def _create_table_sync(self) -> None:
+    def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
         sql = self._get_create_table_sql()
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
+        with self._config.provide_connection() as conn:
             conn.executescript(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
-        await AsyncCallable(self._create_table_sync)()
+        await async_(self._create_table)()
 
-    def _get_sync(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+    def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Synchronous implementation of get."""
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -147,7 +144,7 @@ class SQLiteStore(BaseSQLSpecStore):
         AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
         """
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
+        with self._config.provide_connection() as conn:
             cursor = conn.execute(sql, (key,))
             row = cursor.fetchone()
 
@@ -180,9 +177,9 @@ class SQLiteStore(BaseSQLSpecStore):
         Returns:
             Session data as bytes if found and not expired, None otherwise.
         """
-        return await AsyncCallable(self._get_sync)(key, renew_for)
+        return await async_(self._get)(key, renew_for)
 
-    def _set_sync(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+    def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Synchronous implementation of set.
 
         Notes:
@@ -197,7 +194,7 @@ class SQLiteStore(BaseSQLSpecStore):
         VALUES (?, ?, ?)
         """
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
+        with self._config.provide_connection() as conn:
             conn.execute(sql, (key, data, expires_at_julian))
             conn.commit()
 
@@ -209,16 +206,16 @@ class SQLiteStore(BaseSQLSpecStore):
             value: Session data.
             expires_in: Time until expiration.
         """
-        await AsyncCallable(self._set_sync)(key, value, expires_in)
+        await async_(self._set)(key, value, expires_in)
 
         if self._should_cleanup():
             await self.delete_expired()
 
-    def _delete_sync(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
+        with self._config.provide_connection() as conn:
             conn.execute(sql, (key,))
             conn.commit()
 
@@ -228,22 +225,22 @@ class SQLiteStore(BaseSQLSpecStore):
         Args:
             key: Session ID to delete.
         """
-        await AsyncCallable(self._delete_sync)(key)
+        await async_(self._delete)(key)
 
-    def _delete_all_sync(self) -> None:
+    def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
+        with self._config.provide_connection() as conn:
             conn.execute(sql)
             conn.commit()
         logger.debug("Deleted all sessions from table: %s", self._table_name)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        await AsyncCallable(self._delete_all_sync)()
+        await async_(self._delete_all)()
 
-    def _exists_sync(self, key: str) -> bool:
+    def _exists(self, key: str) -> bool:
         """Synchronous implementation of exists."""
         sql = f"""
         SELECT 1 FROM {self._table_name}
@@ -251,7 +248,7 @@ class SQLiteStore(BaseSQLSpecStore):
         AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
         """
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
+        with self._config.provide_connection() as conn:
             cursor = conn.execute(sql, (key,))
             result = cursor.fetchone()
             return result is not None
@@ -265,16 +262,16 @@ class SQLiteStore(BaseSQLSpecStore):
         Returns:
             True if the session exists and is not expired.
         """
-        return await AsyncCallable(self._exists_sync)(key)
+        return await async_(self._exists)(key)
 
-    def _expires_in_sync(self, key: str) -> "int | None":
+    def _expires_in(self, key: str) -> "int | None":
         """Synchronous implementation of expires_in."""
         sql = f"""
         SELECT expires_at FROM {self._table_name}
         WHERE session_id = ?
         """
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
+        with self._config.provide_connection() as conn:
             cursor = conn.execute(sql, (key,))
             row = cursor.fetchone()
 
@@ -304,13 +301,13 @@ class SQLiteStore(BaseSQLSpecStore):
         Returns:
             Seconds until expiration, or None if no expiry or key doesn't exist.
         """
-        return await AsyncCallable(self._expires_in_sync)(key)
+        return await async_(self._expires_in)(key)
 
-    def _delete_expired_sync(self) -> int:
+    def _delete_expired(self) -> int:
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE julianday(expires_at) <= julianday('now')"
 
-        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
+        with self._config.provide_connection() as conn:
             cursor = conn.execute(sql)
             conn.commit()
             count = cursor.rowcount
@@ -324,4 +321,4 @@ class SQLiteStore(BaseSQLSpecStore):
         Returns:
             Number of sessions deleted.
         """
-        return await AsyncCallable(self._delete_expired_sync)()
+        return await async_(self._delete_expired)()

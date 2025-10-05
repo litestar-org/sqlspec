@@ -1,15 +1,12 @@
 """Psqlpy session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from contextlib import AbstractAsyncContextManager
-
-    from sqlspec.adapters.psqlpy._types import PsqlpyConnection
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
 logger = get_logger("adapters.psqlpy.litestar.store")
@@ -17,7 +14,7 @@ logger = get_logger("adapters.psqlpy.litestar.store")
 __all__ = ("PsqlpyStore",)
 
 
-class PsqlpyStore(BaseSQLSpecStore):
+class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
     """PostgreSQL session store using Psqlpy driver.
 
     Implements server-side session storage for Litestar using PostgreSQL
@@ -45,10 +42,7 @@ class PsqlpyStore(BaseSQLSpecStore):
     __slots__ = ()
 
     def __init__(
-        self,
-        config: "PsqlpyConfig",
-        table_name: str = "sessions",
-        cleanup_probability: float = 0.01,
+        self, config: "PsqlpyConfig", table_name: str = "litestar_session", cleanup_probability: float = 0.01
     ) -> None:
         """Initialize Psqlpy session store.
 
@@ -90,10 +84,18 @@ class PsqlpyStore(BaseSQLSpecStore):
         );
         """
 
+    def _get_drop_table_sql(self) -> "list[str]":
+        """Get PostgreSQL DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop indexes and table.
+        """
+        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
+
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute_batch(sql)
         logger.debug("Created session table: %s", self._table_name)
 
@@ -117,7 +119,7 @@ class PsqlpyStore(BaseSQLSpecStore):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             query_result = await conn.fetch(sql, [key])
             rows = query_result.result()
 
@@ -163,7 +165,7 @@ class PsqlpyStore(BaseSQLSpecStore):
             updated_at = CURRENT_TIMESTAMP
         """
 
-        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, [key, data, expires_at])
 
         if self._should_cleanup():
@@ -177,14 +179,14 @@ class PsqlpyStore(BaseSQLSpecStore):
         """
         sql = f"DELETE FROM {self._table_name} WHERE session_id = $1"
 
-        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, [key])
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
         sql = f"DELETE FROM {self._table_name}"
 
-        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql)
         logger.debug("Deleted all sessions from table: %s", self._table_name)
 
@@ -207,7 +209,7 @@ class PsqlpyStore(BaseSQLSpecStore):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             query_result = await conn.fetch(sql, [key])
             rows = query_result.result()
             return len(rows) > 0
@@ -229,7 +231,7 @@ class PsqlpyStore(BaseSQLSpecStore):
         WHERE session_id = $1
         """
 
-        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             query_result = await conn.fetch(sql, [key])
             rows = query_result.result()
 
@@ -267,11 +269,10 @@ class PsqlpyStore(BaseSQLSpecStore):
         RETURNING session_id
         """
 
-        async with cast("AbstractAsyncContextManager[PsqlpyConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             query_result = await conn.fetch(sql, [])
             rows = query_result.result()
             count = len(rows)
             if count > 0:
                 logger.debug("Cleaned up %d expired sessions", count)
             return count
-

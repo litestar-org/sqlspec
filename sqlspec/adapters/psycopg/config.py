@@ -3,7 +3,7 @@
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -84,11 +84,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         self,
         *,
         pool_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
-        pool_instance: Optional["ConnectionPool"] = None,
+        pool_instance: "ConnectionPool | None" = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize Psycopg synchronous configuration.
 
@@ -99,6 +100,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -112,6 +114,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             statement_config=statement_config or psycopg_statement_config,
             driver_features=driver_features or {},
             bind_key=bind_key,
+            extension_config=extension_config,
         )
 
     def _create_pool(self) -> "ConnectionPool":
@@ -274,6 +277,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
@@ -284,6 +288,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -297,6 +302,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             statement_config=statement_config or psycopg_statement_config,
             driver_features=driver_features or {},
             bind_key=bind_key,
+            extension_config=extension_config,
         )
 
     async def _create_pool(self) -> "AsyncConnectionPool":

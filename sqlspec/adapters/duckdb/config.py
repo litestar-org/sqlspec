@@ -150,8 +150,19 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         statement_config: "StatementConfig | None" = None,
         driver_features: "DuckDBDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
-        """Initialize DuckDB configuration."""
+        """Initialize DuckDB configuration.
+
+        Args:
+            pool_config: Pool configuration parameters
+            pool_instance: Pre-created pool instance
+            migration_config: Migration configuration
+            statement_config: Statement configuration override
+            driver_features: DuckDB-specific driver features
+            bind_key: Optional unique identifier for this configuration
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+        """
         if pool_config is None:
             pool_config = {}
         if "database" not in pool_config:
@@ -167,6 +178,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             migration_config=migration_config,
             statement_config=statement_config or duckdb_statement_config,
             driver_features=cast("dict[str, Any]", driver_features),
+            extension_config=extension_config,
         )
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":

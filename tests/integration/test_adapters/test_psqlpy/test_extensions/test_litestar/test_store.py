@@ -1,9 +1,11 @@
 """Integration tests for Psqlpy session store."""
 
 import asyncio
+from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
+from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.adapters.psqlpy.litestar.store import PsqlpyStore
@@ -12,7 +14,7 @@ pytestmark = [pytest.mark.psqlpy, pytest.mark.integration]
 
 
 @pytest.fixture
-async def psqlpy_store(postgres_service):
+async def psqlpy_store(postgres_service: PostgresService) -> "AsyncGenerator[PsqlpyStore, None]":
     """Create Psqlpy store with test database."""
     config = PsqlpyConfig(
         pool_config={
@@ -34,13 +36,13 @@ async def psqlpy_store(postgres_service):
 
 
 @pytest.mark.asyncio
-async def test_store_create_table(psqlpy_store):
+async def test_store_create_table(psqlpy_store: PsqlpyStore) -> None:
     """Test table creation."""
     assert psqlpy_store.table_name == "test_psqlpy_sessions"
 
 
 @pytest.mark.asyncio
-async def test_store_set_and_get(psqlpy_store):
+async def test_store_set_and_get(psqlpy_store: PsqlpyStore) -> None:
     """Test basic set and get operations."""
     test_data = b"test session data"
     await psqlpy_store.set("session_123", test_data)
@@ -50,14 +52,14 @@ async def test_store_set_and_get(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_get_nonexistent(psqlpy_store):
+async def test_store_get_nonexistent(psqlpy_store: PsqlpyStore) -> None:
     """Test getting a non-existent session returns None."""
     result = await psqlpy_store.get("nonexistent")
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_store_set_with_string_value(psqlpy_store):
+async def test_store_set_with_string_value(psqlpy_store: PsqlpyStore) -> None:
     """Test setting a string value (should be converted to bytes)."""
     await psqlpy_store.set("session_str", "string data")
 
@@ -66,7 +68,7 @@ async def test_store_set_with_string_value(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_delete(psqlpy_store):
+async def test_store_delete(psqlpy_store: PsqlpyStore) -> None:
     """Test delete operation."""
     await psqlpy_store.set("session_to_delete", b"data")
 
@@ -79,13 +81,13 @@ async def test_store_delete(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_delete_nonexistent(psqlpy_store):
+async def test_store_delete_nonexistent(psqlpy_store: PsqlpyStore) -> None:
     """Test deleting a non-existent session is a no-op."""
     await psqlpy_store.delete("nonexistent")
 
 
 @pytest.mark.asyncio
-async def test_store_expiration_with_int(psqlpy_store):
+async def test_store_expiration_with_int(psqlpy_store: PsqlpyStore) -> None:
     """Test session expiration with integer seconds."""
     await psqlpy_store.set("expiring_session", b"data", expires_in=1)
 
@@ -99,7 +101,7 @@ async def test_store_expiration_with_int(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_expiration_with_timedelta(psqlpy_store):
+async def test_store_expiration_with_timedelta(psqlpy_store: PsqlpyStore) -> None:
     """Test session expiration with timedelta."""
     await psqlpy_store.set("expiring_session", b"data", expires_in=timedelta(seconds=1))
 
@@ -112,7 +114,7 @@ async def test_store_expiration_with_timedelta(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_no_expiration(psqlpy_store):
+async def test_store_no_expiration(psqlpy_store: PsqlpyStore) -> None:
     """Test session without expiration persists."""
     await psqlpy_store.set("permanent_session", b"data")
 
@@ -123,7 +125,7 @@ async def test_store_no_expiration(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_expires_in(psqlpy_store):
+async def test_store_expires_in(psqlpy_store: PsqlpyStore) -> None:
     """Test expires_in returns correct time."""
     await psqlpy_store.set("timed_session", b"data", expires_in=10)
 
@@ -133,7 +135,7 @@ async def test_store_expires_in(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_expires_in_expired(psqlpy_store):
+async def test_store_expires_in_expired(psqlpy_store: PsqlpyStore) -> None:
     """Test expires_in returns 0 for expired session."""
     await psqlpy_store.set("expired_session", b"data", expires_in=1)
 
@@ -144,7 +146,7 @@ async def test_store_expires_in_expired(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_cleanup(psqlpy_store):
+async def test_store_cleanup(psqlpy_store: PsqlpyStore) -> None:
     """Test delete_expired removes only expired sessions."""
     await psqlpy_store.set("active_session", b"data", expires_in=60)
     await psqlpy_store.set("expired_session_1", b"data", expires_in=1)
@@ -163,7 +165,7 @@ async def test_store_cleanup(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_upsert(psqlpy_store):
+async def test_store_upsert(psqlpy_store: PsqlpyStore) -> None:
     """Test updating existing session (UPSERT)."""
     await psqlpy_store.set("session_upsert", b"original data")
 
@@ -177,7 +179,7 @@ async def test_store_upsert(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_upsert_with_expiration_change(psqlpy_store):
+async def test_store_upsert_with_expiration_change(psqlpy_store: PsqlpyStore) -> None:
     """Test updating session expiration."""
     await psqlpy_store.set("session_exp", b"data", expires_in=60)
 
@@ -193,7 +195,7 @@ async def test_store_upsert_with_expiration_change(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_renew_for(psqlpy_store):
+async def test_store_renew_for(psqlpy_store: PsqlpyStore) -> None:
     """Test renewing session expiration on get."""
     await psqlpy_store.set("session_renew", b"data", expires_in=5)
 
@@ -212,19 +214,20 @@ async def test_store_renew_for(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_large_data(psqlpy_store):
+async def test_store_large_data(psqlpy_store: PsqlpyStore) -> None:
     """Test storing large session data (>1MB)."""
     large_data = b"x" * (1024 * 1024 + 100)
 
     await psqlpy_store.set("large_session", large_data)
 
     result = await psqlpy_store.get("large_session")
+    assert result is not None
     assert result == large_data
     assert len(result) > 1024 * 1024
 
 
 @pytest.mark.asyncio
-async def test_store_delete_all(psqlpy_store):
+async def test_store_delete_all(psqlpy_store: PsqlpyStore) -> None:
     """Test delete_all removes all sessions."""
     await psqlpy_store.set("session1", b"data1")
     await psqlpy_store.set("session2", b"data2")
@@ -242,7 +245,7 @@ async def test_store_delete_all(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_exists(psqlpy_store):
+async def test_store_exists(psqlpy_store: PsqlpyStore) -> None:
     """Test exists method."""
     assert not await psqlpy_store.exists("test_session")
 
@@ -252,7 +255,7 @@ async def test_store_exists(psqlpy_store):
 
 
 @pytest.mark.asyncio
-async def test_store_context_manager(psqlpy_store):
+async def test_store_context_manager(psqlpy_store: PsqlpyStore) -> None:
     """Test store can be used as async context manager."""
     async with psqlpy_store:
         await psqlpy_store.set("ctx_session", b"data")

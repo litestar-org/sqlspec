@@ -95,6 +95,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
@@ -105,6 +106,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
 
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -119,6 +121,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             statement_config=statement_config,
             driver_features=driver_features or {},
             bind_key=bind_key,
+            extension_config=extension_config,
         )
 
     def _create_pool(self) -> "OracleSyncConnectionPool":
@@ -224,6 +227,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 
@@ -234,6 +238,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
 
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -248,6 +253,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             statement_config=statement_config or oracledb_statement_config,
             driver_features=driver_features or {},
             bind_key=bind_key,
+            extension_config=extension_config,
         )
 
     async def _create_pool(self) -> "OracleAsyncConnectionPool":

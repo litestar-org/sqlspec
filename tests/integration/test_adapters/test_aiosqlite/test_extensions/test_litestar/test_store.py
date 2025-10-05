@@ -1,34 +1,35 @@
 """Integration tests for AioSQLite session store."""
 
 import asyncio
+from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.adapters.aiosqlite.litestar.store import AioSQLiteStore
+from sqlspec.adapters.aiosqlite.litestar.store import AiosqliteStore
 
 pytestmark = [pytest.mark.aiosqlite, pytest.mark.integration]
 
 
 @pytest.fixture
-async def aiosqlite_store():
+async def aiosqlite_store() -> "AsyncGenerator[AiosqliteStore, None]":
     """Create AioSQLite store with in-memory database."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
-    store = AioSQLiteStore(config, table_name="test_sessions")
+    store = AiosqliteStore(config, table_name="test_sessions")
     await store.create_table()
     yield store
     await store.delete_all()
 
 
 @pytest.mark.asyncio
-async def test_store_create_table(aiosqlite_store):
+async def test_store_create_table(aiosqlite_store: AiosqliteStore) -> None:
     """Test table creation."""
     assert aiosqlite_store.table_name == "test_sessions"
 
 
 @pytest.mark.asyncio
-async def test_store_set_and_get(aiosqlite_store):
+async def test_store_set_and_get(aiosqlite_store: AiosqliteStore) -> None:
     """Test basic set and get operations."""
     test_data = b"test session data"
     await aiosqlite_store.set("session_123", test_data)
@@ -38,14 +39,14 @@ async def test_store_set_and_get(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_get_nonexistent(aiosqlite_store):
+async def test_store_get_nonexistent(aiosqlite_store: AiosqliteStore) -> None:
     """Test getting a non-existent session returns None."""
     result = await aiosqlite_store.get("nonexistent")
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_store_set_with_string_value(aiosqlite_store):
+async def test_store_set_with_string_value(aiosqlite_store: AiosqliteStore) -> None:
     """Test setting a string value (should be converted to bytes)."""
     await aiosqlite_store.set("session_str", "string data")
 
@@ -54,7 +55,7 @@ async def test_store_set_with_string_value(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_delete(aiosqlite_store):
+async def test_store_delete(aiosqlite_store: AiosqliteStore) -> None:
     """Test delete operation."""
     await aiosqlite_store.set("session_to_delete", b"data")
 
@@ -67,13 +68,13 @@ async def test_store_delete(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_delete_nonexistent(aiosqlite_store):
+async def test_store_delete_nonexistent(aiosqlite_store: AiosqliteStore) -> None:
     """Test deleting a non-existent session is a no-op."""
     await aiosqlite_store.delete("nonexistent")
 
 
 @pytest.mark.asyncio
-async def test_store_expiration_with_int(aiosqlite_store):
+async def test_store_expiration_with_int(aiosqlite_store: AiosqliteStore) -> None:
     """Test session expiration with integer seconds."""
     await aiosqlite_store.set("expiring_session", b"data", expires_in=1)
 
@@ -87,7 +88,7 @@ async def test_store_expiration_with_int(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_expiration_with_timedelta(aiosqlite_store):
+async def test_store_expiration_with_timedelta(aiosqlite_store: AiosqliteStore) -> None:
     """Test session expiration with timedelta."""
     await aiosqlite_store.set("expiring_session", b"data", expires_in=timedelta(seconds=1))
 
@@ -100,7 +101,7 @@ async def test_store_expiration_with_timedelta(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_no_expiration(aiosqlite_store):
+async def test_store_no_expiration(aiosqlite_store: AiosqliteStore) -> None:
     """Test session without expiration persists."""
     await aiosqlite_store.set("permanent_session", b"data")
 
@@ -111,7 +112,7 @@ async def test_store_no_expiration(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_expires_in(aiosqlite_store):
+async def test_store_expires_in(aiosqlite_store: AiosqliteStore) -> None:
     """Test expires_in returns correct time."""
     await aiosqlite_store.set("timed_session", b"data", expires_in=10)
 
@@ -121,7 +122,7 @@ async def test_store_expires_in(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_expires_in_expired(aiosqlite_store):
+async def test_store_expires_in_expired(aiosqlite_store: AiosqliteStore) -> None:
     """Test expires_in returns 0 for expired session."""
     await aiosqlite_store.set("expired_session", b"data", expires_in=1)
 
@@ -132,7 +133,7 @@ async def test_store_expires_in_expired(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_cleanup(aiosqlite_store):
+async def test_store_cleanup(aiosqlite_store: AiosqliteStore) -> None:
     """Test delete_expired removes only expired sessions."""
     await aiosqlite_store.set("active_session", b"data", expires_in=60)
     await aiosqlite_store.set("expired_session_1", b"data", expires_in=1)
@@ -151,7 +152,7 @@ async def test_store_cleanup(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_upsert(aiosqlite_store):
+async def test_store_upsert(aiosqlite_store: AiosqliteStore) -> None:
     """Test updating existing session (UPSERT)."""
     await aiosqlite_store.set("session_upsert", b"original data")
 
@@ -165,7 +166,7 @@ async def test_store_upsert(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_upsert_with_expiration_change(aiosqlite_store):
+async def test_store_upsert_with_expiration_change(aiosqlite_store: AiosqliteStore) -> None:
     """Test updating session expiration."""
     await aiosqlite_store.set("session_exp", b"data", expires_in=60)
 
@@ -181,7 +182,7 @@ async def test_store_upsert_with_expiration_change(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_renew_for(aiosqlite_store):
+async def test_store_renew_for(aiosqlite_store: AiosqliteStore) -> None:
     """Test renewing session expiration on get."""
     await aiosqlite_store.set("session_renew", b"data", expires_in=5)
 
@@ -200,7 +201,7 @@ async def test_store_renew_for(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_large_data(aiosqlite_store):
+async def test_store_large_data(aiosqlite_store: AiosqliteStore) -> None:
     """Test storing large session data (>1MB)."""
     large_data = b"x" * (1024 * 1024 + 100)
 
@@ -212,7 +213,7 @@ async def test_store_large_data(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_delete_all(aiosqlite_store):
+async def test_store_delete_all(aiosqlite_store: AiosqliteStore) -> None:
     """Test delete_all removes all sessions."""
     await aiosqlite_store.set("session1", b"data1")
     await aiosqlite_store.set("session2", b"data2")
@@ -230,7 +231,7 @@ async def test_store_delete_all(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_exists(aiosqlite_store):
+async def test_store_exists(aiosqlite_store: AiosqliteStore) -> None:
     """Test exists method."""
     assert not await aiosqlite_store.exists("test_session")
 
@@ -240,7 +241,7 @@ async def test_store_exists(aiosqlite_store):
 
 
 @pytest.mark.asyncio
-async def test_store_context_manager(aiosqlite_store):
+async def test_store_context_manager(aiosqlite_store: AiosqliteStore) -> None:
     """Test store can be used as async context manager."""
     async with aiosqlite_store:
         await aiosqlite_store.set("ctx_session", b"data")

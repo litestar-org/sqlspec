@@ -1,23 +1,20 @@
 """AsyncPG session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from contextlib import AbstractAsyncContextManager
-
-    from sqlspec.adapters.asyncpg._types import AsyncpgConnection
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 
 logger = get_logger("adapters.asyncpg.litestar.store")
 
-__all__ = ("AsyncPGStore",)
+__all__ = ("AsyncpgStore",)
 
 
-class AsyncPGStore(BaseSQLSpecStore):
+class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
     """PostgreSQL session store using AsyncPG driver.
 
     Implements server-side session storage for Litestar using PostgreSQL
@@ -34,20 +31,17 @@ class AsyncPGStore(BaseSQLSpecStore):
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.adapters.asyncpg.litestar.store import AsyncPGStore
+        from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
 
         config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
-        store = AsyncPGStore(config)
+        store = AsyncpgStore(config)
         await store.create_table()
     """
 
     __slots__ = ()
 
     def __init__(
-        self,
-        config: "AsyncpgConfig",
-        table_name: str = "sessions",
-        cleanup_probability: float = 0.01,
+        self, config: "AsyncpgConfig", table_name: str = "litestar_session", cleanup_probability: float = 0.01
     ) -> None:
         """Initialize AsyncPG session store.
 
@@ -89,10 +83,18 @@ class AsyncPGStore(BaseSQLSpecStore):
         );
         """
 
+    def _get_drop_table_sql(self) -> "list[str]":
+        """Get PostgreSQL DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop indexes and table.
+        """
+        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
+
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql)
         logger.debug("Created session table: %s", self._table_name)
 
@@ -114,9 +116,9 @@ class AsyncPGStore(BaseSQLSpecStore):
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = $1
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             row = await conn.fetchrow(sql, key)
 
             if row is None:
@@ -129,7 +131,7 @@ class AsyncPGStore(BaseSQLSpecStore):
                     UPDATE {self._table_name}
                     SET expires_at = $1, updated_at = CURRENT_TIMESTAMP
                     WHERE session_id = $2
-                    """  # noqa: S608
+                    """
                     await conn.execute(update_sql, new_expires_at, key)
 
             return bytes(row["data"])
@@ -157,9 +159,9 @@ class AsyncPGStore(BaseSQLSpecStore):
             data = EXCLUDED.data,
             expires_at = EXCLUDED.expires_at,
             updated_at = CURRENT_TIMESTAMP
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, key, data, expires_at)
 
         if self._should_cleanup():
@@ -171,16 +173,16 @@ class AsyncPGStore(BaseSQLSpecStore):
         Args:
             key: Session ID to delete.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE session_id = $1"  # noqa: S608
+        sql = f"DELETE FROM {self._table_name} WHERE session_id = $1"
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, key)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        sql = f"DELETE FROM {self._table_name}"  # noqa: S608
+        sql = f"DELETE FROM {self._table_name}"
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql)
         logger.debug("Deleted all sessions from table: %s", self._table_name)
 
@@ -200,9 +202,9 @@ class AsyncPGStore(BaseSQLSpecStore):
         SELECT 1 FROM {self._table_name}
         WHERE session_id = $1
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             result = await conn.fetchval(sql, key)
             return result is not None
 
@@ -218,9 +220,9 @@ class AsyncPGStore(BaseSQLSpecStore):
         sql = f"""
         SELECT expires_at FROM {self._table_name}
         WHERE session_id = $1
-        """  # noqa: S608
+        """
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             expires_at = await conn.fetchval(sql, key)
 
             if expires_at is None:
@@ -244,9 +246,9 @@ class AsyncPGStore(BaseSQLSpecStore):
             For very large tables (10M+ rows), consider batching deletes
             to avoid holding locks too long.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"  # noqa: S608
+        sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
-        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
+        async with self._config.provide_connection() as conn:
             result = await conn.execute(sql)
             count = int(result.split()[-1])
             if count > 0:

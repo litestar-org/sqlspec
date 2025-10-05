@@ -1,18 +1,20 @@
 """Integration tests for Psycopg sync session store."""
 
 import asyncio
+from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
+from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
-from sqlspec.adapters.psycopg.litestar.store_sync import PsycopgSyncStore
+from sqlspec.adapters.psycopg.litestar.store import PsycopgSyncStore
 
 pytestmark = [pytest.mark.psycopg, pytest.mark.integration]
 
 
 @pytest.fixture
-async def psycopg_sync_store(postgres_service):
+async def psycopg_sync_store(postgres_service: PostgresService) -> AsyncGenerator[PsycopgSyncStore, None]:
     """Create Psycopg sync store with test database."""
     config = PsycopgSyncConfig(
         pool_config={
@@ -37,13 +39,13 @@ async def psycopg_sync_store(postgres_service):
 
 
 @pytest.mark.asyncio
-async def test_store_create_table(psycopg_sync_store):
+async def test_store_create_table(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test table creation."""
     assert psycopg_sync_store.table_name == "test_psycopg_sync_sessions"
 
 
 @pytest.mark.asyncio
-async def test_store_set_and_get(psycopg_sync_store):
+async def test_store_set_and_get(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test basic set and get operations."""
     test_data = b"test session data"
     await psycopg_sync_store.set("session_123", test_data)
@@ -53,14 +55,14 @@ async def test_store_set_and_get(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_get_nonexistent(psycopg_sync_store):
+async def test_store_get_nonexistent(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test getting a non-existent session returns None."""
     result = await psycopg_sync_store.get("nonexistent")
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_store_set_with_string_value(psycopg_sync_store):
+async def test_store_set_with_string_value(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test setting a string value (should be converted to bytes)."""
     await psycopg_sync_store.set("session_str", "string data")
 
@@ -69,7 +71,7 @@ async def test_store_set_with_string_value(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_delete(psycopg_sync_store):
+async def test_store_delete(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test delete operation."""
     await psycopg_sync_store.set("session_to_delete", b"data")
 
@@ -82,13 +84,13 @@ async def test_store_delete(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_delete_nonexistent(psycopg_sync_store):
+async def test_store_delete_nonexistent(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test deleting a non-existent session is a no-op."""
     await psycopg_sync_store.delete("nonexistent")
 
 
 @pytest.mark.asyncio
-async def test_store_expiration_with_int(psycopg_sync_store):
+async def test_store_expiration_with_int(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test session expiration with integer seconds."""
     await psycopg_sync_store.set("expiring_session", b"data", expires_in=1)
 
@@ -102,7 +104,7 @@ async def test_store_expiration_with_int(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_expiration_with_timedelta(psycopg_sync_store):
+async def test_store_expiration_with_timedelta(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test session expiration with timedelta."""
     await psycopg_sync_store.set("expiring_session", b"data", expires_in=timedelta(seconds=1))
 
@@ -115,7 +117,7 @@ async def test_store_expiration_with_timedelta(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_no_expiration(psycopg_sync_store):
+async def test_store_no_expiration(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test session without expiration persists."""
     await psycopg_sync_store.set("permanent_session", b"data")
 
@@ -126,7 +128,7 @@ async def test_store_no_expiration(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_expires_in(psycopg_sync_store):
+async def test_store_expires_in(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test expires_in returns correct time."""
     await psycopg_sync_store.set("timed_session", b"data", expires_in=10)
 
@@ -136,7 +138,7 @@ async def test_store_expires_in(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_expires_in_expired(psycopg_sync_store):
+async def test_store_expires_in_expired(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test expires_in returns 0 for expired session."""
     await psycopg_sync_store.set("expired_session", b"data", expires_in=1)
 
@@ -147,7 +149,7 @@ async def test_store_expires_in_expired(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_cleanup(psycopg_sync_store):
+async def test_store_cleanup(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test delete_expired removes only expired sessions."""
     await psycopg_sync_store.set("active_session", b"data", expires_in=60)
     await psycopg_sync_store.set("expired_session_1", b"data", expires_in=1)
@@ -166,7 +168,7 @@ async def test_store_cleanup(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_upsert(psycopg_sync_store):
+async def test_store_upsert(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test updating existing session (UPSERT)."""
     await psycopg_sync_store.set("session_upsert", b"original data")
 
@@ -180,7 +182,7 @@ async def test_store_upsert(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_upsert_with_expiration_change(psycopg_sync_store):
+async def test_store_upsert_with_expiration_change(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test updating session expiration."""
     await psycopg_sync_store.set("session_exp", b"data", expires_in=60)
 
@@ -196,7 +198,7 @@ async def test_store_upsert_with_expiration_change(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_renew_for(psycopg_sync_store):
+async def test_store_renew_for(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test renewing session expiration on get."""
     await psycopg_sync_store.set("session_renew", b"data", expires_in=5)
 
@@ -215,19 +217,20 @@ async def test_store_renew_for(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_large_data(psycopg_sync_store):
+async def test_store_large_data(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test storing large session data (>1MB)."""
     large_data = b"x" * (1024 * 1024 + 100)
 
     await psycopg_sync_store.set("large_session", large_data)
 
     result = await psycopg_sync_store.get("large_session")
+    assert result is not None
     assert result == large_data
     assert len(result) > 1024 * 1024
 
 
 @pytest.mark.asyncio
-async def test_store_delete_all(psycopg_sync_store):
+async def test_store_delete_all(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test delete_all removes all sessions."""
     await psycopg_sync_store.set("session1", b"data1")
     await psycopg_sync_store.set("session2", b"data2")
@@ -245,7 +248,7 @@ async def test_store_delete_all(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_exists(psycopg_sync_store):
+async def test_store_exists(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test exists method."""
     assert not await psycopg_sync_store.exists("test_session")
 
@@ -255,7 +258,7 @@ async def test_store_exists(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_store_context_manager(psycopg_sync_store):
+async def test_store_context_manager(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test store can be used as async context manager."""
     async with psycopg_sync_store:
         await psycopg_sync_store.set("ctx_session", b"data")
@@ -265,7 +268,7 @@ async def test_store_context_manager(psycopg_sync_store):
 
 
 @pytest.mark.asyncio
-async def test_sync_to_thread_concurrency(psycopg_sync_store):
+async def test_sync_to_thread_concurrency(psycopg_sync_store: PsycopgSyncStore) -> None:
     """Test concurrent access via sync_to_thread wrapper.
 
     PostgreSQL handles concurrent writes well, so we test concurrent

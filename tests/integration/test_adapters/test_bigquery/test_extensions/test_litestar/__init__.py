@@ -1,0 +1,1 @@
+"""BigQuery Litestar integration tests."""
