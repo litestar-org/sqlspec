@@ -1,6 +1,7 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Test DuckDB connection configuration."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -238,16 +239,17 @@ def test_multiple_concurrent_connections() -> None:
             pass
 
 
-def test_config_with_pool_config_parameter() -> None:
+def test_config_with_pool_config_parameter(tmp_path: Path) -> None:
     """Test that DuckDBConfig correctly accepts pool_config parameter."""
 
-    pool_config = {"database": "test.duckdb", "memory_limit": "256MB", "threads": 4}
+    db_path = tmp_path / "test.duckdb"
+    pool_config = {"database": str(db_path), "memory_limit": "256MB", "threads": 4}
 
     config = DuckDBConfig(pool_config=pool_config)
 
     try:
         connection_config = config._get_connection_config_dict()
-        assert connection_config["database"] == "test.duckdb"
+        assert connection_config["database"] == str(db_path)
         assert connection_config["memory_limit"] == "256MB"
         assert connection_config["threads"] == 4
 
@@ -314,11 +316,12 @@ def test_config_default_database_shared() -> None:
         config._close_pool()
 
 
-def test_config_consistency_with_other_adapters() -> None:
+def test_config_consistency_with_other_adapters(tmp_path: Path) -> None:
     """Test that DuckDB config behaves consistently with SQLite/aiosqlite."""
 
+    db_path = tmp_path / "consistency_test.duckdb"
     pool_config = {
-        "database": "consistency_test.duckdb",
+        "database": str(db_path),
         "memory_limit": "512MB",
         "threads": 2,
         "pool_min_size": 1,
@@ -329,7 +332,7 @@ def test_config_consistency_with_other_adapters() -> None:
 
     try:
         connection_config = config._get_connection_config_dict()
-        assert connection_config["database"] == "consistency_test.duckdb"
+        assert connection_config["database"] == str(db_path)
         assert connection_config["memory_limit"] == "512MB"
         assert connection_config["threads"] == 2
 

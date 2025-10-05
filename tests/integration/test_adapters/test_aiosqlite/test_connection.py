@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
@@ -89,10 +91,7 @@ async def test_connection_with_transactions(aiosqlite_config: AiosqliteConfig) -
 
 async def test_connection_context_manager_cleanup() -> None:
     """Test proper cleanup of connection context manager."""
-    from uuid import uuid4
-
-    unique_db = f"file:memdb{uuid4().hex}?mode=memory&cache=shared"
-    config = AiosqliteConfig(pool_config={"database": unique_db})
+    config = AiosqliteConfig()
 
     driver_ref = None
     try:
@@ -113,10 +112,7 @@ async def test_connection_context_manager_cleanup() -> None:
 
 async def test_provide_connection_direct() -> None:
     """Test direct connection provision without session wrapper."""
-    from uuid import uuid4
-
-    unique_db = f"file:memdb{uuid4().hex}?mode=memory&cache=shared"
-    config = AiosqliteConfig(pool_config={"database": unique_db})
+    config = AiosqliteConfig()
 
     try:
         if hasattr(config, "provide_connection"):
@@ -134,22 +130,18 @@ async def test_provide_connection_direct() -> None:
         await config.close_pool()
 
 
-async def test_config_with_pool_config() -> None:
+async def test_config_with_pool_config(tmp_path: Path) -> None:
     """Test that AiosqliteConfig correctly accepts pool_config parameter."""
     from uuid import uuid4
 
-    pool_config = {
-        "database": f"file:test_{uuid4().hex}.db?mode=memory&cache=shared",
-        "timeout": 10.0,
-        "isolation_level": None,
-        "check_same_thread": False,
-    }
+    db_path = tmp_path / f"test_{uuid4().hex}.db"
+    pool_config = {"database": str(db_path), "timeout": 10.0, "isolation_level": None, "check_same_thread": False}
 
     config = AiosqliteConfig(pool_config=pool_config)
 
     try:
         connection_config = config._get_connection_config_dict()
-        assert "test_" in connection_config["database"]
+        assert connection_config["database"] == str(db_path)
         assert connection_config["timeout"] == 10.0
         assert connection_config["isolation_level"] is None
 
@@ -165,20 +157,20 @@ async def test_config_with_pool_config() -> None:
         await config.close_pool()
 
 
-async def test_config_with_kwargs_override() -> None:
+async def test_config_with_kwargs_override(tmp_path: Path) -> None:
     """Test that kwargs properly override pool_config values."""
     from uuid import uuid4
 
     pool_config = {"database": "base.db", "timeout": 5.0}
 
-    unique_db = f"file:override_{uuid4().hex}.db?mode=memory&cache=shared"
+    db_path = tmp_path / f"override_{uuid4().hex}.db"
     # Override pool_config with specific test values
-    test_pool_config = {**pool_config, "database": unique_db, "timeout": 15.0}
+    test_pool_config = {**pool_config, "database": str(db_path), "timeout": 15.0}
     config = AiosqliteConfig(pool_config=test_pool_config)
 
     try:
         connection_config = config._get_connection_config_dict()
-        assert connection_config["database"] == unique_db
+        assert connection_config["database"] == str(db_path)
         assert connection_config["timeout"] == 15.0
 
         async with config.provide_session() as driver:
@@ -228,16 +220,17 @@ async def test_config_default_database() -> None:
         await config.close_pool()
 
 
-async def test_config_parameter_preservation() -> None:
+async def test_config_parameter_preservation(tmp_path: Path) -> None:
     """Test that aiosqlite config properly preserves parameters."""
 
-    pool_config = {"database": "parameter_test.db", "isolation_level": None, "cached_statements": 100}
+    db_path = tmp_path / "parameter_test.db"
+    pool_config = {"database": str(db_path), "isolation_level": None, "cached_statements": 100}
 
     config = AiosqliteConfig(pool_config=pool_config)
 
     try:
         connection_config = config._get_connection_config_dict()
-        assert connection_config["database"] == "parameter_test.db"
+        assert connection_config["database"] == str(db_path)
         assert connection_config["isolation_level"] is None
         assert connection_config["cached_statements"] == 100
 

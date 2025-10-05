@@ -1,5 +1,6 @@
 """SQLite database configuration with thread-local connections."""
 
+import logging
 import uuid
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
@@ -10,6 +11,8 @@ from sqlspec.adapters.sqlite._types import SqliteConnection
 from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, sqlite_statement_config
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.config import SyncDatabaseConfig
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -64,6 +67,15 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         if "database" not in pool_config or pool_config["database"] == ":memory:":
             pool_config["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=private"
             pool_config["uri"] = True
+        elif "database" in pool_config:
+            database_path = str(pool_config["database"])
+            if database_path.startswith("file:") and not pool_config.get("uri"):
+                logger.debug(
+                    "Database URI detected (%s) but uri=True not set. "
+                    "Auto-enabling URI mode to prevent physical file creation.",
+                    database_path,
+                )
+                pool_config["uri"] = True
 
         super().__init__(
             bind_key=bind_key,

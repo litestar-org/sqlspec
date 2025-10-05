@@ -79,6 +79,15 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         if "database" not in config_dict or config_dict["database"] == ":memory:":
             config_dict["database"] = "file::memory:?cache=shared"
             config_dict["uri"] = True
+        elif "database" in config_dict:
+            database_path = str(config_dict["database"])
+            if database_path.startswith("file:") and not config_dict.get("uri"):
+                logger.debug(
+                    "Database URI detected (%s) but uri=True not set. "
+                    "Auto-enabling URI mode to prevent physical file creation.",
+                    database_path,
+                )
+                config_dict["uri"] = True
 
         super().__init__(
             pool_config=config_dict,
