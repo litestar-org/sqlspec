@@ -5,6 +5,7 @@ from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar.constants import HTTP_DISCONNECT, HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
+from litestar.params import Dependency
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import (
@@ -12,7 +13,6 @@ from sqlspec.extensions.litestar._utils import (
     get_sqlspec_scope_state,
     set_sqlspec_scope_state,
 )
-from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Coroutine
@@ -21,24 +21,27 @@ if TYPE_CHECKING:
     from litestar.datastructures.state import State
     from litestar.types import Message, Scope
 
-    from sqlspec.config import DatabaseConfigProtocol, DriverT
+    from sqlspec.config import AsyncConfigT, DriverT
     from sqlspec.typing import ConnectionT, PoolT
 
 SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
 
 __all__ = (
     "SESSION_TERMINUS_ASGI_EVENTS",
-    "autocommit_handler_maker",
-    "connection_provider_maker",
-    "lifespan_handler_maker",
-    "manual_handler_maker",
-    "pool_provider_maker",
-    "session_provider_maker",
+    "async_autocommit_handler_maker",
+    "async_connection_provider_maker",
+    "async_lifespan_handler_maker",
+    "async_manual_handler_maker",
+    "async_pool_provider_maker",
+    "async_session_provider_maker",
 )
 
 
-def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
-    """Create handler for manual connection management.
+def async_manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
+    """Create handler for manual connection management with async connections.
+
+    This handler is optimized for async database drivers and uses direct await calls
+    without ensure_async_() wrapper overhead.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
@@ -48,7 +51,7 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
     """
 
     async def handler(message: "Message", scope: "Scope") -> None:
-        """Handle closing and cleaning up connections before sending the response.
+        """Handle closing and cleaning up async connections before sending the response.
 
         Args:
             message: ASGI Message.
@@ -56,20 +59,22 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
         """
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
         if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-            if hasattr(connection, "close") and callable(connection.close):
-                await ensure_async_(connection.close)()
+            await connection.close()
             delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
 
 
-def autocommit_handler_maker(
+def async_autocommit_handler_maker(
     connection_scope_key: str,
     commit_on_redirect: bool = False,
     extra_commit_statuses: "set[int] | None" = None,
     extra_rollback_statuses: "set[int] | None" = None,
 ) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
-    """Create handler for automatic transaction commit/rollback based on response status.
+    """Create handler for automatic transaction commit/rollback for async connections.
+
+    This handler is optimized for async database drivers and uses direct await calls
+    without ensure_async_() wrapper overhead.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
@@ -96,7 +101,7 @@ def autocommit_handler_maker(
     commit_range = range(200, 400 if commit_on_redirect else 300)
 
     async def handler(message: "Message", scope: "Scope") -> None:
-        """Handle commit/rollback, closing and cleaning up connections before sending.
+        """Handle commit/rollback, closing and cleaning up async connections before sending.
 
         Args:
             message: ASGI Message.
@@ -108,26 +113,27 @@ def autocommit_handler_maker(
                 if (message["status"] in commit_range or message["status"] in extra_commit_statuses) and message[
                     "status"
                 ] not in extra_rollback_statuses:
-                    if hasattr(connection, "commit") and callable(connection.commit):
-                        await ensure_async_(connection.commit)()
-                elif hasattr(connection, "rollback") and callable(connection.rollback):
-                    await ensure_async_(connection.rollback)()
+                    await connection.commit()
+                else:
+                    await connection.rollback()
         finally:
             if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-                if hasattr(connection, "close") and callable(connection.close):
-                    await ensure_async_(connection.close)()
+                await connection.close()
                 delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
 
 
-def lifespan_handler_maker(
-    config: "DatabaseConfigProtocol[Any, Any, Any]", pool_key: str
+def async_lifespan_handler_maker(
+    config: "AsyncConfigT", pool_key: str
 ) -> "Callable[[Litestar], AbstractAsyncContextManager[None]]":
-    """Create lifespan handler for managing database connection pool lifecycle.
+    """Create lifespan handler for managing async database connection pool lifecycle.
+
+    This handler is optimized for async database drivers and uses direct await calls
+    without ensure_async_() wrapper overhead.
 
     Args:
-        config: The database configuration object.
+        config: The async database configuration object.
         pool_key: The key under which the connection pool will be stored in `app.state`.
 
     Returns:
@@ -136,7 +142,7 @@ def lifespan_handler_maker(
 
     @contextlib.asynccontextmanager
     async def lifespan_handler(app: "Litestar") -> "AsyncGenerator[None, None]":
-        """Manage database pool lifecycle for the application.
+        """Manage async database pool lifecycle for the application.
 
         Args:
             app: The Litestar application instance.
@@ -144,14 +150,14 @@ def lifespan_handler_maker(
         Yields:
             Control to application during pool lifetime.
         """
-        db_pool = await ensure_async_(config.create_pool)()
+        db_pool = await config.create_pool()
         app.state.update({pool_key: db_pool})
         try:
             yield
         finally:
             app.state.pop(pool_key, None)
             try:
-                await ensure_async_(config.close_pool)()
+                await config.close_pool()
             except Exception as e:
                 if app.logger:
                     app.logger.warning("Error closing database pool for %s. Error: %s", pool_key, e)
@@ -159,13 +165,11 @@ def lifespan_handler_maker(
     return lifespan_handler
 
 
-def pool_provider_maker(
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", pool_key: str
-) -> "Callable[[State, Scope], Awaitable[PoolT]]":
-    """Create provider for injecting the application-level database pool.
+def async_pool_provider_maker(config: "AsyncConfigT", pool_key: str) -> "Callable[[State, Scope], Awaitable[PoolT]]":
+    """Create provider for injecting the application-level async database pool.
 
     Args:
-        config: The database configuration object.
+        config: The async database configuration object.
         pool_key: The key used to store the connection pool in `app.state`.
 
     Returns:
@@ -173,7 +177,7 @@ def pool_provider_maker(
     """
 
     async def provide_pool(state: "State", scope: "Scope") -> "PoolT":
-        """Provide the database pool from application state.
+        """Provide the async database pool from application state.
 
         Args:
             state: The Litestar application State object.
@@ -196,13 +200,15 @@ def pool_provider_maker(
     return provide_pool
 
 
-def connection_provider_maker(
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", pool_key: str, connection_key: str
+def async_connection_provider_maker(
+    config: "AsyncConfigT", pool_key: str, connection_key: str
 ) -> "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]":
-    """Create provider for database connections with proper lifecycle management.
+    """Create provider for async database connections with proper lifecycle management.
+
+    This provider is optimized for async database drivers and avoids ensure_async_() overhead.
 
     Args:
-        config: The database configuration object.
+        config: The async database configuration object.
         pool_key: The key used to retrieve the connection pool from `app.state`.
         connection_key: The key used to store the connection in the ASGI scope.
 
@@ -219,7 +225,7 @@ def connection_provider_maker(
 
         if not isinstance(connection_cm, AbstractAsyncContextManager):
             conn_instance: ConnectionT
-            if hasattr(connection_cm, "__await__"):
+            if inspect.isawaitable(connection_cm):
                 conn_instance = await cast("Awaitable[ConnectionT]", connection_cm)
             else:
                 conn_instance = cast("ConnectionT", connection_cm)
@@ -238,13 +244,13 @@ def connection_provider_maker(
     return provide_connection
 
 
-def session_provider_maker(
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", connection_dependency_key: str
+def async_session_provider_maker(
+    config: "AsyncConfigT", connection_dependency_key: str
 ) -> "Callable[[Any], AsyncGenerator[DriverT, None]]":
-    """Create provider for database driver sessions.
+    """Create provider for async database driver sessions.
 
     Args:
-        config: The database configuration object.
+        config: The async database configuration object.
         connection_dependency_key: The key used for connection dependency injection.
 
     Returns:
@@ -255,8 +261,6 @@ def session_provider_maker(
         yield cast("DriverT", config.driver_type(connection=args[0] if args else kwargs.get(connection_dependency_key)))  # pyright: ignore
 
     conn_type_annotation = config.connection_type
-
-    from litestar.params import Dependency
 
     db_conn_param = inspect.Parameter(
         name=connection_dependency_key,
@@ -272,7 +276,7 @@ def session_provider_maker(
 
     provide_session.__signature__ = provider_signature  # type: ignore[attr-defined]
 
-    if not hasattr(provide_session, "__annotations__") or provide_session.__annotations__ is None:
+    if provide_session.__annotations__ is None:
         provide_session.__annotations__ = {}
 
     provide_session.__annotations__[connection_dependency_key] = conn_type_annotation
