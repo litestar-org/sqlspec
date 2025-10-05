@@ -83,7 +83,7 @@ class _AsyncArrowIterator:
         if self._current_file_iterator is not None:
             try:
                 close_method = self._current_file_iterator.close  # type: ignore[attr-defined]
-                await async_(close_method)()
+                await async_(close_method)()  # pyright: ignore
             except AttributeError:
                 pass
 
@@ -100,7 +100,17 @@ class ObStoreBackend:
     local filesystem, and HTTP endpoints.
     """
 
-    __slots__ = ("_path_cache", "backend_type", "base_path", "protocol", "store", "store_options", "store_uri")
+    __slots__ = (
+        "_is_local_store",
+        "_local_store_root",
+        "_path_cache",
+        "backend_type",
+        "base_path",
+        "protocol",
+        "store",
+        "store_options",
+        "store_uri",
+    )
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         """Initialize obstore backend.
@@ -124,6 +134,8 @@ class ObStoreBackend:
             self.store_options = kwargs
             self.store: Any
             self._path_cache: dict[str, str] = {}
+            self._is_local_store = False
+            self._local_store_root = ""
             self.protocol = uri.split("://", 1)[0] if "://" in uri else "file"
             self.backend_type = "obstore"
 
@@ -136,18 +148,26 @@ class ObStoreBackend:
 
                 from obstore.store import LocalStore
 
+                # Parse URI to extract path
+                # Note: urlparse splits on '#', so we need to reconstruct the full path
                 parsed = urlparse(uri)
                 path_str = parsed.path or "/"
+                # Append fragment if present (handles paths with '#' character)
+                if parsed.fragment:
+                    path_str = f"{path_str}#{parsed.fragment}"
                 path_obj = PathlibPath(path_str)
 
                 # If path points to a file, use its parent as the base directory
                 if path_obj.is_file():
                     path_str = str(path_obj.parent)
-                    path_obj = path_obj.parent
-                    # Update base_path to match the LocalStore root
-                    if not self.base_path:
-                        self.base_path = path_str
-                self.store = LocalStore(path_str, mkdir=True)
+
+                # If base_path provided via kwargs, use it as LocalStore root
+                # Otherwise use the URI path
+                local_store_root = self.base_path or path_str
+
+                self._is_local_store = True
+                self._local_store_root = local_store_root
+                self.store = LocalStore(local_store_root, mkdir=True)
             else:
                 from obstore.store import from_url
 
@@ -173,29 +193,29 @@ class ObStoreBackend:
         return cls(uri=store_uri, **kwargs)
 
     def _resolve_path_for_local_store(self, path: "str | Path") -> str:
-        """Resolve path for LocalStore which expects relative paths."""
+        """Resolve path for LocalStore which expects relative paths from its root."""
         from pathlib import Path as PathlibPath
 
         path_obj = PathlibPath(str(path))
 
-        # If absolute and we have a base_path, try to make it relative
-        if path_obj.is_absolute() and self.base_path:
+        # If absolute path, try to make it relative to LocalStore root
+        if path_obj.is_absolute() and self._local_store_root:
             try:
-                return str(path_obj.relative_to(self.base_path))
+                return str(path_obj.relative_to(self._local_store_root))
             except ValueError:
-                # Path is outside base_path - strip leading / as fallback
+                # Path is outside LocalStore root - strip leading / as fallback
                 return str(path).lstrip("/")
 
-        # Relative path or no base_path - return as-is
+        # Relative path - return as-is (already relative to LocalStore root)
         return str(path)
 
     def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes using obstore."""
-        # For LocalStore (file protocol with base_path), use special resolution
-        if self.protocol == "file" and self.base_path:
+        # For LocalStore, use special path resolution (relative to LocalStore root)
+        if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
-            # For cloud storage or file without base_path, use standard resolution
+            # For cloud storage, use standard resolution
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         result = self.store.get(resolved_path)
@@ -203,8 +223,8 @@ class ObStoreBackend:
 
     def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes using obstore."""
-        # For LocalStore (file protocol with base_path), use special resolution
-        if self.protocol == "file" and self.base_path:
+        # For LocalStore, use special path resolution (relative to LocalStore root)
+        if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
@@ -411,14 +431,24 @@ class ObStoreBackend:
 
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes from storage asynchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        # For LocalStore (file protocol with base_path), use special resolution
+        if self._is_local_store:
+            resolved_path = self._resolve_path_for_local_store(path)
+        else:
+            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+
         result = await self.store.get_async(resolved_path)
         bytes_obj = await result.bytes_async()
         return bytes_obj.to_bytes()  # type: ignore[no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
 
     async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes to storage asynchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        # For LocalStore (file protocol with base_path), use special resolution
+        if self._is_local_store:
+            resolved_path = self._resolve_path_for_local_store(path)
+        else:
+            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+
         await self.store.put_async(resolved_path, data)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:  # pyright: ignore[reportUnusedParameter]
@@ -451,7 +481,12 @@ class ObStoreBackend:
 
     async def exists_async(self, path: "str | Path", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Check if object exists in storage asynchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        # For LocalStore (file protocol with base_path), use special resolution
+        if self._is_local_store:
+            resolved_path = self._resolve_path_for_local_store(path)
+        else:
+            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+
         try:
             await self.store.head_async(resolved_path)
         except Exception:
@@ -460,24 +495,46 @@ class ObStoreBackend:
 
     async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Delete object from storage asynchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        # For LocalStore (file protocol with base_path), use special resolution
+        if self._is_local_store:
+            resolved_path = self._resolve_path_for_local_store(path)
+        else:
+            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+
         await self.store.delete_async(resolved_path)
 
     async def copy_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Copy object in storage asynchronously."""
-        source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
-        dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
+        # For LocalStore (file protocol with base_path), use special resolution
+        if self._is_local_store:
+            source_path = self._resolve_path_for_local_store(source)
+            dest_path = self._resolve_path_for_local_store(destination)
+        else:
+            source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
+            dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
+
         await self.store.copy_async(source_path, dest_path)
 
     async def move_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Move object in storage asynchronously."""
-        source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
-        dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
+        # For LocalStore (file protocol with base_path), use special resolution
+        if self._is_local_store:
+            source_path = self._resolve_path_for_local_store(source)
+            dest_path = self._resolve_path_for_local_store(destination)
+        else:
+            source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
+            dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
+
         await self.store.rename_async(source_path, dest_path)
 
     async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
         """Get object metadata from storage asynchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        # For LocalStore (file protocol with base_path), use special resolution
+        if self._is_local_store:
+            resolved_path = self._resolve_path_for_local_store(path)
+        else:
+            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+
         result: dict[str, Any] = {}
         try:
             metadata = await self.store.head_async(resolved_path)

@@ -331,6 +331,7 @@ def test_obstore_s3_listing_operations(obstore_s3_backend: "ObjectStoreProtocol"
 def test_registry_uri_resolution_local(tmp_path: Path) -> None:
     """Test storage registry URI resolution for local files."""
     from sqlspec.storage.backends.local import LocalStore
+    from sqlspec.storage.backends.obstore import ObStoreBackend
 
     # Test file URI resolution
     test_file = tmp_path / "registry_test.txt"
@@ -339,7 +340,8 @@ def test_registry_uri_resolution_local(tmp_path: Path) -> None:
     # Test file:// URI
     file_uri = f"file://{test_file}"
     backend = storage_registry.get(file_uri)
-    assert isinstance(backend, LocalStore)
+    # Registry prefers obstore for file:// URIs when available, otherwise LocalStore
+    assert isinstance(backend, (ObStoreBackend, LocalStore))
 
     content = backend.read_text("registry_test.txt")
     assert content == TEST_TEXT_CONTENT
@@ -349,13 +351,15 @@ def test_registry_uri_resolution_local(tmp_path: Path) -> None:
 def test_registry_path_resolution(tmp_path: Path) -> None:
     """Test storage registry resolution for raw paths."""
     from sqlspec.storage.backends.local import LocalStore
+    from sqlspec.storage.backends.obstore import ObStoreBackend
 
     # Test Path object resolution
     test_file = tmp_path / "path_test.txt"
     test_file.write_text(TEST_TEXT_CONTENT)
 
     backend = storage_registry.get(tmp_path)
-    assert isinstance(backend, LocalStore)
+    # Registry prefers obstore for local paths when available, otherwise LocalStore
+    assert isinstance(backend, (ObStoreBackend, LocalStore))
 
     content = backend.read_text("path_test.txt")
     assert content == TEST_TEXT_CONTENT
@@ -395,6 +399,7 @@ def test_registry_alias_registration(
 ) -> None:
     """Test storage registry alias registration and usage."""
     from sqlspec.storage.backends.local import LocalStore
+    from sqlspec.storage.backends.obstore import ObStoreBackend
 
     # Clear registry to avoid test interference
     storage_registry.clear()
@@ -405,7 +410,8 @@ def test_registry_alias_registration(
 
         # Test local alias
         backend = storage_registry.get("test-local")
-        assert isinstance(backend, LocalStore)
+        # Registry prefers obstore for local paths when available, otherwise LocalStore
+        assert isinstance(backend, (ObStoreBackend, LocalStore))
 
         # Create test data
         backend.write_text("alias_test.txt", TEST_TEXT_CONTENT)
@@ -459,17 +465,15 @@ def fsspec_s3_backend_optional(minio_service: "MinioService", minio_default_buck
 
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    return FSSpecBackend.from_config(
-        {
-            "protocol": "s3",
-            "fs_config": {
-                "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-                "key": minio_service.access_key,
-                "secret": minio_service.secret_key,
-            },
-            "base_path": minio_default_bucket_name,
-        }
-    )
+    return FSSpecBackend.from_config({
+        "protocol": "s3",
+        "fs_config": {
+            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
+            "key": minio_service.access_key,
+            "secret": minio_service.secret_key,
+        },
+        "base_path": minio_default_bucket_name,
+    })
 
 
 @pytest.fixture
@@ -559,17 +563,15 @@ def test_fsspec_s3_error_handling(minio_service: "MinioService", minio_default_b
     """Test FSSpec S3 backend error handling."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    backend = FSSpecBackend.from_config(
-        {
-            "protocol": "s3",
-            "fs_config": {
-                "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-                "key": minio_service.access_key,
-                "secret": minio_service.secret_key,
-            },
-            "base_path": minio_default_bucket_name,
-        }
-    )
+    backend = FSSpecBackend.from_config({
+        "protocol": "s3",
+        "fs_config": {
+            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
+            "key": minio_service.access_key,
+            "secret": minio_service.secret_key,
+        },
+        "base_path": minio_default_bucket_name,
+    })
 
     # Test reading nonexistent file
     with pytest.raises(FileNotFoundError):
@@ -652,14 +654,16 @@ def test_registry_backend_fallback_order(
 ) -> None:
     """Test that registry follows correct backend fallback order."""
     from sqlspec.storage.backends.local import LocalStore
+    from sqlspec.storage.backends.obstore import ObStoreBackend
 
     storage_registry.clear()
 
     try:
-        # Test local file resolution (should always use LocalStore)
+        # Test local file resolution (prefers ObStore > FSSpec > LocalStore)
         local_uri = f"file://{tmp_path}"
         local_backend = storage_registry.get(local_uri)
-        assert isinstance(local_backend, LocalStore)
+        # Should get ObStore if available, else FSSpec, else LocalStore
+        assert isinstance(local_backend, (ObStoreBackend, LocalStore))
 
         # Test S3 resolution (should prefer ObStore > FSSpec if available)
         s3_uri = f"s3://{minio_default_bucket_name}"
@@ -722,17 +726,15 @@ def test_fsspec_s3_arrow_operations(minio_service: "MinioService", minio_default
     """Test FSSpec S3 backend Arrow operations if pyarrow is available."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    backend = FSSpecBackend.from_config(
-        {
-            "protocol": "s3",
-            "fs_config": {
-                "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-                "key": minio_service.access_key,
-                "secret": minio_service.secret_key,
-            },
-            "base_path": minio_default_bucket_name,
-        }
-    )
+    backend = FSSpecBackend.from_config({
+        "protocol": "s3",
+        "fs_config": {
+            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
+            "key": minio_service.access_key,
+            "secret": minio_service.secret_key,
+        },
+        "base_path": minio_default_bucket_name,
+    })
 
     import pyarrow as pa
 
@@ -845,17 +847,15 @@ def test_fsspec_s3_metadata_operations(minio_service: "MinioService", minio_defa
     """Test FSSpec S3 backend metadata operations."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    backend = FSSpecBackend.from_config(
-        {
-            "protocol": "s3",
-            "fs_config": {
-                "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-                "key": minio_service.access_key,
-                "secret": minio_service.secret_key,
-            },
-            "base_path": minio_default_bucket_name,
-        }
-    )
+    backend = FSSpecBackend.from_config({
+        "protocol": "s3",
+        "fs_config": {
+            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
+            "key": minio_service.access_key,
+            "secret": minio_service.secret_key,
+        },
+        "base_path": minio_default_bucket_name,
+    })
 
     # Test S3 metadata
     test_path = "s3_metadata_test.txt"
