@@ -15,10 +15,11 @@ The DuckDB database also demonstrates how to use the plugin loader and `secrets`
 
 from litestar import Litestar, get
 
+from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.core.statement import SQL
-from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
+from sqlspec.extensions.litestar import SQLSpecPlugin
 
 
 @get("/test", sync_to_thread=True)
@@ -35,22 +36,19 @@ async def simple_sqlite(db_session: AiosqliteDriver) -> dict[str, str]:
     return {"greeting": greeting["greeting"] if greeting is not None else "hi"}
 
 
-sqlspec = SQLSpec(
-    config=[
-        DatabaseConfig(config=AiosqliteConfig(), commit_mode="autocommit"),
-        DatabaseConfig(
-            config=DuckDBConfig(
-                driver_features={
-                    "extensions": [{"name": "vss", "force_install": True}],
-                    "secrets": [{"secret_type": "s3", "name": "s3_secret", "value": {"key_id": "abcd"}}],
-                }
-            ),
-            connection_key="etl_connection",
-            session_key="etl_session",
-        ),
-    ]
+sql = SQLSpec()
+sql.add_config(AiosqliteConfig(extension_config={"litestar": {"commit_mode": "autocommit"}}))
+sql.add_config(
+    DuckDBConfig(
+        driver_features={
+            "extensions": [{"name": "vss", "force_install": True}],
+            "secrets": [{"secret_type": "s3", "name": "s3_secret", "value": {"key_id": "abcd"}}],
+        },
+        extension_config={"litestar": {"connection_key": "etl_connection", "session_key": "etl_session"}},
+    )
 )
-app = Litestar(route_handlers=[simple_sqlite, simple_select], plugins=[sqlspec])
+plugin = SQLSpecPlugin(sqlspec=sql)
+app = Litestar(route_handlers=[simple_sqlite, simple_select], plugins=[plugin])
 
 if __name__ == "__main__":
     import os

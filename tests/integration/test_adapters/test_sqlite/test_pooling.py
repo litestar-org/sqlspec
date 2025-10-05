@@ -1,6 +1,8 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Integration tests for SQLite connection pooling."""
 
+from pathlib import Path
+
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -211,16 +213,17 @@ def test_pool_transaction_rollback(sqlite_config_shared_memory: SqliteConfig) ->
         config.close_pool()
 
 
-def test_config_with_pool_config_parameter() -> None:
+def test_config_with_pool_config_parameter(tmp_path: Path) -> None:
     """Test that SqliteConfig correctly accepts pool_config parameter."""
 
-    pool_config = {"database": "test.sqlite", "timeout": 10.0, "check_same_thread": False}
+    db_path = tmp_path / "test.sqlite"
+    pool_config = {"database": str(db_path), "timeout": 10.0, "check_same_thread": False}
 
     config = SqliteConfig(pool_config=pool_config)
 
     try:
         connection_config = config._get_connection_config_dict()
-        assert connection_config["database"] == "test.sqlite"
+        assert connection_config["database"] == str(db_path)
         assert connection_config["timeout"] == 10.0
         assert connection_config["check_same_thread"] is False
 

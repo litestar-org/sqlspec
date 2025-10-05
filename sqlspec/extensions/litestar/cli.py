@@ -15,10 +15,10 @@ except ImportError:
 if TYPE_CHECKING:
     from litestar import Litestar
 
-    from sqlspec.extensions.litestar.plugin import SQLSpec
+    from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
 
 
-def get_database_migration_plugin(app: "Litestar") -> "SQLSpec":
+def get_database_migration_plugin(app: "Litestar") -> "SQLSpecPlugin":
     """Retrieve the SQLSpec plugin from the Litestar application's plugins.
 
     Args:
@@ -31,10 +31,10 @@ def get_database_migration_plugin(app: "Litestar") -> "SQLSpec":
         ImproperConfigurationError: If the SQLSpec plugin is not found
     """
     from sqlspec.exceptions import ImproperConfigurationError
-    from sqlspec.extensions.litestar.plugin import SQLSpec
+    from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
 
     with suppress(KeyError):
-        return app.plugins.get(SQLSpec)
+        return app.plugins.get(SQLSpecPlugin)
     msg = "Failed to initialize database migrations. The required SQLSpec plugin is missing."
     raise ImproperConfigurationError(msg)
 

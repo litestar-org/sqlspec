@@ -1,7 +1,6 @@
 """Exception handling integration tests for aiosqlite adapter."""
 
 from collections.abc import AsyncGenerator
-from uuid import uuid4
 
 import pytest
 
@@ -20,8 +19,7 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 @pytest.fixture
 async def aiosqlite_exception_session() -> AsyncGenerator[AiosqliteDriver, None]:
     """Create an aiosqlite session for exception testing."""
-    unique_db = f"file:memdb{uuid4().hex}?mode=memory&cache=shared"
-    config = AiosqliteConfig(pool_config={"database": unique_db})
+    config = AiosqliteConfig()
 
     try:
         async with config.provide_session() as session:

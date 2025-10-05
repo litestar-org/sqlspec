@@ -5,6 +5,7 @@ from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar.constants import HTTP_DISCONNECT, HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
+from litestar.params import Dependency
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import (
@@ -37,11 +38,14 @@ __all__ = (
 )
 
 
-def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
+def manual_handler_maker(
+    connection_scope_key: str, is_async: bool = False
+) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
     """Create handler for manual connection management.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
+        is_async: Whether the database driver is async (uses direct await) or sync (uses ensure_async_).
 
     Returns:
         The handler callable.
@@ -56,7 +60,9 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
         """
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
         if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-            if hasattr(connection, "close") and callable(connection.close):
+            if is_async:
+                await connection.close()
+            else:
                 await ensure_async_(connection.close)()
             delete_sqlspec_scope_state(scope, connection_scope_key)
 
@@ -65,6 +71,7 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
 
 def autocommit_handler_maker(
     connection_scope_key: str,
+    is_async: bool = False,
     commit_on_redirect: bool = False,
     extra_commit_statuses: "set[int] | None" = None,
     extra_rollback_statuses: "set[int] | None" = None,
@@ -73,6 +80,7 @@ def autocommit_handler_maker(
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
+        is_async: Whether the database driver is async (uses direct await) or sync (uses ensure_async_).
         commit_on_redirect: Issue a commit when the response status is a redirect (3XX).
         extra_commit_statuses: A set of additional status codes that trigger a commit.
         extra_rollback_statuses: A set of additional status codes that trigger a rollback.
@@ -108,13 +116,19 @@ def autocommit_handler_maker(
                 if (message["status"] in commit_range or message["status"] in extra_commit_statuses) and message[
                     "status"
                 ] not in extra_rollback_statuses:
-                    if hasattr(connection, "commit") and callable(connection.commit):
+                    if is_async:
+                        await connection.commit()
+                    else:
                         await ensure_async_(connection.commit)()
-                elif hasattr(connection, "rollback") and callable(connection.rollback):
+                elif is_async:
+                    await connection.rollback()
+                else:
                     await ensure_async_(connection.rollback)()
         finally:
             if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-                if hasattr(connection, "close") and callable(connection.close):
+                if is_async:
+                    await connection.close()
+                else:
                     await ensure_async_(connection.close)()
                 delete_sqlspec_scope_state(scope, connection_scope_key)
 
@@ -144,14 +158,23 @@ def lifespan_handler_maker(
         Yields:
             Control to application during pool lifetime.
         """
-        db_pool = await ensure_async_(config.create_pool)()
+        db_pool: Any
+        if config.is_async:
+            db_pool = await config.create_pool()
+        else:
+            db_pool = await ensure_async_(config.create_pool)()
         app.state.update({pool_key: db_pool})
         try:
             yield
         finally:
             app.state.pop(pool_key, None)
             try:
-                await ensure_async_(config.close_pool)()
+                if config.is_async:
+                    close_result = config.close_pool()
+                    if close_result is not None:
+                        await close_result
+                else:
+                    await ensure_async_(config.close_pool)()
             except Exception as e:
                 if app.logger:
                     app.logger.warning("Error closing database pool for %s. Error: %s", pool_key, e)
@@ -215,11 +238,11 @@ def connection_provider_maker(
             msg = f"Database pool with key '{pool_key}' not found. Cannot create a connection."
             raise ImproperConfigurationError(msg)
 
-        connection_cm = config.provide_connection(db_pool)
+        connection_cm: Any = config.provide_connection(db_pool)
 
         if not isinstance(connection_cm, AbstractAsyncContextManager):
             conn_instance: ConnectionT
-            if hasattr(connection_cm, "__await__"):
+            if inspect.isawaitable(connection_cm):
                 conn_instance = await cast("Awaitable[ConnectionT]", connection_cm)
             else:
                 conn_instance = cast("ConnectionT", connection_cm)
@@ -256,8 +279,6 @@ def session_provider_maker(
 
     conn_type_annotation = config.connection_type
 
-    from litestar.params import Dependency
-
     db_conn_param = inspect.Parameter(
         name=connection_dependency_key,
         kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -272,7 +293,7 @@ def session_provider_maker(
 
     provide_session.__signature__ = provider_signature  # type: ignore[attr-defined]
 
-    if not hasattr(provide_session, "__annotations__") or provide_session.__annotations__ is None:
+    if provide_session.__annotations__ is None:
         provide_session.__annotations__ = {}
 
     provide_session.__annotations__[connection_dependency_key] = conn_type_annotation

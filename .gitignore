@@ -62,5 +62,5 @@ benchmarks/
 .crush
 CRUSH.md
 *.md
-!README.md
-!CONTRIBUTING.md
+!./README.md
+!./CONTRIBUTING.md

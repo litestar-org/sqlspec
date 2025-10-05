@@ -8,8 +8,9 @@ This examples hows how to get the raw connection object from the SQLSpec plugin.
 from aiosqlite import Connection
 from litestar import Litestar, get
 
+from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.extensions.litestar import SQLSpec
+from sqlspec.extensions.litestar import SQLSpecPlugin
 
 
 @get("/")
@@ -23,5 +24,7 @@ async def simple_sqlite(db_connection: Connection) -> dict[str, str]:
     return {"greeting": next(iter(result))[0]}
 
 
-sqlspec = SQLSpec(config=AiosqliteConfig())
-app = Litestar(route_handlers=[simple_sqlite], plugins=[sqlspec])
+sql = SQLSpec()
+sql.add_config(AiosqliteConfig())
+plugin = SQLSpecPlugin(sqlspec=sql)
+app = Litestar(route_handlers=[simple_sqlite], plugins=[plugin])
