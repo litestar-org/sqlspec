@@ -10,8 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
 
-from sqlspec.exceptions import MissingDependencyError
-from sqlspec.typing import PYARROW_INSTALLED
+from sqlspec.storage._utils import ensure_pyarrow
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -67,13 +66,15 @@ class LocalStore:
         self.protocol = "file"
         self.backend_type = "local"
 
-    def _ensure_pyarrow(self) -> None:
-        """Ensure PyArrow is available for Arrow operations."""
-        if not PYARROW_INSTALLED:
-            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
-
     def _resolve_path(self, path: "str | Path") -> Path:
-        """Resolve path relative to base_path."""
+        """Resolve path relative to base_path.
+
+        Args:
+            path: Path to resolve (absolute or relative).
+
+        Returns:
+            Resolved Path object.
+        """
         p = Path(path)
         if p.is_absolute():
             return p
@@ -208,14 +209,14 @@ class LocalStore:
 
     def read_arrow(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from file."""
-        self._ensure_pyarrow()
+        ensure_pyarrow()
         import pyarrow.parquet as pq
 
         return pq.read_table(str(self._resolve_path(path)))
 
     def write_arrow(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to file."""
-        self._ensure_pyarrow()
+        ensure_pyarrow()
         import pyarrow.parquet as pq
 
         resolved = self._resolve_path(path)
@@ -228,8 +229,7 @@ class LocalStore:
         Yields:
             Arrow record batches from matching files.
         """
-        if not PYARROW_INSTALLED:
-            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
+        ensure_pyarrow()
         import pyarrow.parquet as pq
 
         files = self.glob(pattern)

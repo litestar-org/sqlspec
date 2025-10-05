@@ -15,25 +15,11 @@ from mypy_extensions import mypyc_attr
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
+from sqlspec.utils.type_guards import is_local_path
 
 __all__ = ("StorageRegistry", "storage_registry")
 
 logger = logging.getLogger(__name__)
-
-
-def _is_local_uri(uri: str) -> bool:
-    """Check if URI represents a local filesystem path."""
-    if "://" in uri and not uri.startswith("file://"):
-        return False
-    windows_drive_min_length = 3
-    return (
-        Path(uri).exists()
-        or Path(uri).is_absolute()
-        or uri.startswith(("~", ".", "/"))
-        or (len(uri) >= windows_drive_min_length and uri[1:3] == ":\\")
-        or "/" in uri
-    )
-
 
 SCHEME_REGEX: Final = re.compile(r"([a-zA-Z0-9+.-]+)://")
 
@@ -131,11 +117,15 @@ class StorageRegistry:
         if isinstance(uri_or_alias, Path):
             uri_or_alias = f"file://{uri_or_alias.resolve()}"
 
-        cache_key = (uri_or_alias, self._make_hashable(kwargs)) if kwargs else uri_or_alias
+        # Include backend in cache key to ensure different backends for same URI are cached separately
+        cache_params = dict(kwargs)
+        if backend:
+            cache_params["__backend__"] = backend
+        cache_key = (uri_or_alias, self._make_hashable(cache_params)) if cache_params else uri_or_alias
         if cache_key in self._instances:
             return self._instances[cache_key]
         scheme = self._get_scheme(uri_or_alias)
-        if not scheme and _is_local_uri(uri_or_alias):
+        if not scheme and is_local_path(uri_or_alias):
             scheme = "file"
             uri_or_alias = f"file://{uri_or_alias}"
 
@@ -153,54 +143,104 @@ class StorageRegistry:
         return instance
 
     def _resolve_from_uri(self, uri: str, *, backend_override: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
-        """Resolve backend from URI with optional backend override."""
+        """Resolve backend from URI with optional backend override.
+
+        Backend selection priority for local files (file:// or bare paths):
+        1. obstore (if installed) - provides async I/O performance
+        2. fsspec (if installed) - async wrapper fallback
+        3. local (always available) - zero-dependency sync backend
+
+        For cloud storage, prefer obstore over fsspec when available.
+
+        Args:
+            uri: Storage URI to resolve.
+            backend_override: Force specific backend type.
+            **kwargs: Additional backend configuration.
+
+        Returns:
+            Configured backend instance.
+
+        Raises:
+            MissingDependencyError: No backend available for URI scheme.
+        """
         if backend_override:
             return self._create_backend(backend_override, uri, **kwargs)
+
         scheme = self._get_scheme(uri)
 
-        # For local files, prefer LocalStore first
+        # NEW: Prefer obstore for local files when available
         if scheme in {None, "file"}:
+            # Try obstore first for async performance
+            if OBSTORE_INSTALLED:
+                try:
+                    return self._create_backend("obstore", uri, **kwargs)
+                except (ValueError, ImportError, NotImplementedError):
+                    pass
+
+            # Fallback to fsspec if available
+            if FSSPEC_INSTALLED:
+                try:
+                    return self._create_backend("fsspec", uri, **kwargs)
+                except (ValueError, ImportError, NotImplementedError):
+                    pass
+
+            # Final fallback: local zero-dependency backend
             return self._create_backend("local", uri, **kwargs)
 
-        # Try ObStore first if available and appropriate
+        # For cloud schemes, prefer obstore over fsspec
         if scheme not in FSSPEC_ONLY_SCHEMES and OBSTORE_INSTALLED:
             try:
                 return self._create_backend("obstore", uri, **kwargs)
             except (ValueError, ImportError, NotImplementedError):
                 pass
 
-        # Try FSSpec if available
+        # Try fsspec if available
         if FSSPEC_INSTALLED:
             try:
                 return self._create_backend("fsspec", uri, **kwargs)
             except (ValueError, ImportError, NotImplementedError):
                 pass
 
-        # For cloud schemes without backends, provide helpful error
+        # No backend available
         msg = f"No backend available for URI scheme '{scheme}'. Install obstore or fsspec for cloud storage support."
         raise MissingDependencyError(msg)
 
     def _determine_backend_class(self, uri: str) -> type[ObjectStoreProtocol]:
-        """Determine the backend class for a URI based on availability."""
+        """Determine the backend class for a URI based on availability.
+
+        Args:
+            uri: Storage URI to analyze.
+
+        Returns:
+            Backend class type to use.
+
+        Raises:
+            MissingDependencyError: No backend available for URI scheme.
+        """
         scheme = self._get_scheme(uri)
 
-        # For local files, always use LocalStore
+        # NEW: For local files, prefer obstore > fsspec > local
         if scheme in {None, "file"}:
+            if OBSTORE_INSTALLED:
+                return self._get_backend_class("obstore")
+            if FSSPEC_INSTALLED:
+                return self._get_backend_class("fsspec")
             return self._get_backend_class("local")
 
         # FSSpec-only schemes require FSSpec
-        if scheme in FSSPEC_ONLY_SCHEMES and FSSPEC_INSTALLED:
+        if scheme in FSSPEC_ONLY_SCHEMES:
+            if not FSSPEC_INSTALLED:
+                msg = f"Scheme '{scheme}' requires fsspec. Install with: pip install fsspec"
+                raise MissingDependencyError(msg)
             return self._get_backend_class("fsspec")
 
-        # Prefer ObStore for cloud storage if available
+        # For cloud schemes, prefer obstore
         if OBSTORE_INSTALLED:
             return self._get_backend_class("obstore")
 
-        # Fall back to FSSpec if available
         if FSSPEC_INSTALLED:
             return self._get_backend_class("fsspec")
 
-        # For cloud schemes without backends, provide helpful error
         msg = f"No backend available for URI scheme '{scheme}'. Install obstore or fsspec for cloud storage support."
         raise MissingDependencyError(msg)
 

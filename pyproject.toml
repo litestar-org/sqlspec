@@ -105,6 +105,7 @@ test = [
   "requests",
   "anyio",
   "coverage>=7.6.1",
+  "covdefaults",
   "pytest>=8.0.0",
   "pytest-asyncio>=0.23.8",
   "pytest-cov>=5.0.0",

@@ -102,6 +102,7 @@ __all__ = (
     "is_indexable_row",
     "is_iterable_parameters",
     "is_limit_offset_filter",
+    "is_local_path",
     "is_msgspec_struct",
     "is_msgspec_struct_with_field",
     "is_msgspec_struct_without_field",
@@ -122,6 +123,7 @@ __all__ = (
     "is_typed_dict",
     "is_typed_parameter",
     "schema_dump",
+    "supports_arrow_native",
     "supports_limit",
     "supports_offset",
     "supports_order_by",
@@ -1255,3 +1257,79 @@ def has_expression_and_parameters(obj: Any) -> bool:
         True if the object has both attributes, False otherwise
     """
     return hasattr(obj, "expression") and hasattr(obj, "parameters")
+
+
+WINDOWS_DRIVE_PATTERN_LENGTH = 3
+
+
+def is_local_path(uri: str) -> bool:
+    r"""Check if URI represents a local filesystem path.
+
+    Detects local paths including:
+    - file:// URIs
+    - Absolute paths (Unix: /, Windows: C:\\)
+    - Relative paths (., .., ~)
+
+    Args:
+        uri: URI or path string to check.
+
+    Returns:
+        True if uri is a local path, False for remote URIs.
+
+    Examples:
+        >>> is_local_path("file:///data/file.txt")
+        True
+        >>> is_local_path("/absolute/path")
+        True
+        >>> is_local_path("s3://bucket/key")
+        False
+    """
+    if not uri:
+        return False
+
+    if "://" in uri and not uri.startswith("file://"):
+        return False
+
+    if uri.startswith("file://"):
+        return True
+
+    if uri.startswith("/"):
+        return True
+
+    if uri.startswith((".", "~")):
+        return True
+
+    if len(uri) >= WINDOWS_DRIVE_PATTERN_LENGTH and uri[1:3] == ":\\":
+        return True
+
+    return "/" in uri or "\\" in uri
+
+
+def supports_arrow_native(backend: Any) -> bool:
+    """Check if storage backend supports native Arrow operations.
+
+    Some storage backends (like certain obstore stores) have native
+    Arrow read/write support, which is faster than going through bytes.
+
+    Args:
+        backend: Storage backend instance to check.
+
+    Returns:
+        True if backend has native read_arrow/write_arrow methods.
+
+    Examples:
+        >>> from sqlspec.storage.backends.obstore import ObStoreBackend
+        >>> backend = ObStoreBackend("file:///tmp")
+        >>> supports_arrow_native(backend)
+        False
+    """
+    from sqlspec.protocols import ObjectStoreProtocol
+
+    if not isinstance(backend, ObjectStoreProtocol):
+        return False
+
+    try:
+        store = backend.store  # type: ignore[attr-defined]
+        return callable(getattr(store, "read_arrow", None))
+    except AttributeError:
+        return False

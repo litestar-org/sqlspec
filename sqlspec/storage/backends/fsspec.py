@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
+from sqlspec.storage._utils import ensure_pyarrow, resolve_storage_path
+from sqlspec.typing import FSSPEC_INSTALLED
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -61,7 +62,8 @@ class FSSpecBackend:
     """
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
-        self._ensure_fsspec()
+        if not FSSPEC_INSTALLED:
+            raise MissingDependencyError(package="fsspec", install_package="fsspec")
 
         base_path = kwargs.pop("base_path", "")
         self.base_path = base_path.rstrip("/") if base_path else ""
@@ -93,48 +95,19 @@ class FSSpecBackend:
 
         return cls(uri=uri, **kwargs)
 
-    def _ensure_fsspec(self) -> None:
-        """Ensure fsspec is available for operations."""
-        if not FSSPEC_INSTALLED:
-            raise MissingDependencyError(package="fsspec", install_package="fsspec")
-
-    def _ensure_pyarrow(self) -> None:
-        """Ensure PyArrow is available for Arrow operations."""
-        if not PYARROW_INSTALLED:
-            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
-
-    def _resolve_path(self, path: str | Path) -> str:
-        """Resolve path relative to base_path."""
-        path_str = str(path)
-        if self.base_path:
-            clean_base = self.base_path.rstrip("/")
-            clean_path = path_str.lstrip("/")
-            return f"{clean_base}/{clean_path}"
-        if self.protocol == "s3" and "://" in self._fs_uri:
-            # For S3, we need to include the bucket from the URI
-            # Extract bucket and path from URI like s3://bucket/path
-            uri_parts = self._fs_uri.split("://", 1)[1]  # Remove s3://
-            if "/" in uri_parts:
-                # URI has bucket and base path
-                return f"{uri_parts.rstrip('/')}/{path_str.lstrip('/')}"
-            # URI has only bucket
-            return f"{uri_parts}/{path_str.lstrip('/')}"
-        return path_str
-
     @property
     def base_uri(self) -> str:
         return self._fs_uri
 
     def read_bytes(self, path: str | Path, **kwargs: Any) -> bytes:
         """Read bytes from an object."""
-        resolved_path = self._resolve_path(path)
+        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         return self.fs.cat(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore
 
     def write_bytes(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
         """Write bytes to an object."""
-        resolved_path = self._resolve_path(path)
+        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
 
-        # Only create directories for local file systems, not for cloud storage
         if self.protocol == "file":
             parent_dir = str(Path(resolved_path).parent)
             if parent_dir and not self.fs.exists(parent_dir):
@@ -154,73 +127,74 @@ class FSSpecBackend:
 
     def exists(self, path: str | Path, **kwargs: Any) -> bool:
         """Check if an object exists."""
-        resolved_path = self._resolve_path(path)
+        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         return self.fs.exists(resolved_path, **kwargs)  # type: ignore[no-any-return]
 
     def delete(self, path: str | Path, **kwargs: Any) -> None:
         """Delete an object."""
-        resolved_path = self._resolve_path(path)
+        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         self.fs.rm(resolved_path, **kwargs)
 
     def copy(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Copy an object."""
-        source_path = self._resolve_path(source)
-        dest_path = self._resolve_path(destination)
+        source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=False)
+        dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=False)
         self.fs.copy(source_path, dest_path, **kwargs)
 
     def move(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Move an object."""
-        source_path = self._resolve_path(source)
-        dest_path = self._resolve_path(destination)
+        source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=False)
+        dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=False)
         self.fs.mv(source_path, dest_path, **kwargs)
 
     def read_arrow(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
         """Read an Arrow table from storage."""
-        if not PYARROW_INSTALLED:
-            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
+        ensure_pyarrow()
         import pyarrow.parquet as pq
 
-        resolved_path = self._resolve_path(path)
+        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
             return pq.read_table(f)
 
     def write_arrow(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
         """Write an Arrow table to storage."""
-        if not PYARROW_INSTALLED:
-            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
+        ensure_pyarrow()
         import pyarrow.parquet as pq
 
-        resolved_path = self._resolve_path(path)
+        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         with self.fs.open(resolved_path, mode="wb") as f:
             pq.write_table(table, f, **kwargs)  # pyright: ignore
 
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects with optional prefix."""
-        resolved_prefix = self._resolve_path(prefix)
+        resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=False)
         if recursive:
             return sorted(self.fs.find(resolved_prefix, **kwargs))
         return sorted(self.fs.ls(resolved_prefix, detail=False, **kwargs))
 
     def glob(self, pattern: str, **kwargs: Any) -> list[str]:
         """Find objects matching a glob pattern."""
-        resolved_pattern = self._resolve_path(pattern)
+        resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=False)
         return sorted(self.fs.glob(resolved_pattern, **kwargs))  # pyright: ignore
 
     def is_object(self, path: str | Path) -> bool:
         """Check if path points to an object."""
-        resolved_path = self._resolve_path(path)
+        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         return self.fs.exists(resolved_path) and not self.fs.isdir(resolved_path)
 
     def is_path(self, path: str | Path) -> bool:
         """Check if path points to a prefix (directory-like)."""
-        resolved_path = self._resolve_path(path)
+        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         return self.fs.isdir(resolved_path)  # type: ignore[no-any-return]
 
     def get_metadata(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:
         """Get object metadata."""
+        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         try:
-            resolved_path = self._resolve_path(path)
             info = self.fs.info(resolved_path, **kwargs)
+        except FileNotFoundError:
+            return {"path": resolved_path, "exists": False}
+        else:
             if isinstance(info, dict):
                 return {
                     "path": resolved_path,
@@ -229,20 +203,17 @@ class FSSpecBackend:
                     "last_modified": info.get("mtime"),
                     "type": info.get("type", "file"),
                 }
-
-        except FileNotFoundError:
-            return {"path": self._resolve_path(path), "exists": False}
-        return {
-            "path": resolved_path,
-            "exists": True,
-            "size": info.size,
-            "last_modified": info.mtime,
-            "type": info.type,
-        }
+            return {
+                "path": resolved_path,
+                "exists": True,
+                "size": info.size,
+                "last_modified": info.mtime,
+                "type": info.type,
+            }
 
     def sign(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL for the file."""
-        resolved_path = self._resolve_path(path)
+        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         return f"{self._fs_uri}{resolved_path}"
 
     def _stream_file_batches(self, obj_path: str | Path) -> "Iterator[ArrowRecordBatch]":
@@ -253,8 +224,7 @@ class FSSpecBackend:
             yield from parquet_file.iter_batches()
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
-        self._ensure_fsspec()
-        self._ensure_pyarrow()
+        ensure_pyarrow()
 
         for obj_path in self.glob(pattern, **kwargs):
             yield from self._stream_file_batches(obj_path)
@@ -277,7 +247,7 @@ class FSSpecBackend:
         Returns:
             AsyncIterator of Arrow record batches
         """
-        self._ensure_pyarrow()
+        ensure_pyarrow()
 
         return _ArrowStreamer(self, pattern, **kwargs)
 
