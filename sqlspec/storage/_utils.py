@@ -52,7 +52,7 @@ class AsyncIteratorWrapper(Generic[T]):
         """Close underlying iterator if it supports close()."""
         try:
             close_method = self.sync_iter.close  # type: ignore[attr-defined]
-            await async_(close_method)()
+            await async_(close_method)()  # pyright: ignore
         except AttributeError:
             pass
 
