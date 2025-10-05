@@ -109,14 +109,29 @@ class FSSpecBackend:
             raise MissingDependencyError(package="fsspec", install_package="fsspec")
 
         base_path = kwargs.pop("base_path", "")
-        self.base_path = base_path.rstrip("/") if base_path else ""
 
         if "://" in uri:
             self.protocol = uri.split("://", maxsplit=1)[0]
             self._fs_uri = uri
+
+            # For S3/cloud URIs, extract bucket/path from URI as base_path
+            if self.protocol in {"s3", "gs", "az", "gcs"}:
+                from urllib.parse import urlparse
+
+                parsed = urlparse(uri)
+                # Combine netloc (bucket) and path for base_path
+                if parsed.netloc:
+                    uri_base_path = parsed.netloc
+                    if parsed.path and parsed.path != "/":
+                        uri_base_path = f"{uri_base_path}{parsed.path}"
+                    # Only use URI base_path if no explicit base_path provided
+                    if not base_path:
+                        base_path = uri_base_path
         else:
             self.protocol = uri
             self._fs_uri = f"{uri}://"
+
+        self.base_path = base_path.rstrip("/") if base_path else ""
 
         import fsspec
 
