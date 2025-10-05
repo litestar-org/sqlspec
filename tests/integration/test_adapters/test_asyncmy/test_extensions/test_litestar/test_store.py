@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
-from pytest_databases.docker.mysql import MySqlService
+from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 from sqlspec.adapters.asyncmy.litestar.store import AsyncmyStore
@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.asyncmy, pytest.mark.integration]
 
 
 @pytest.fixture
-async def asyncmy_store(mysql_service: MySqlService) -> "AsyncGenerator[AsyncmyStore, None]":
+async def asyncmy_store(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyStore, None]":
     """Create AsyncMy store with test database."""
     config = AsyncmyConfig(
         pool_config={
