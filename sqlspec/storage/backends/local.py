@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
 
-from sqlspec.exceptions import MissingDependencyError
-from sqlspec.typing import PYARROW_INSTALLED
+from mypy_extensions import mypyc_attr
+
+from sqlspec.storage._utils import ensure_pyarrow
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -22,6 +23,28 @@ if TYPE_CHECKING:
 __all__ = ("LocalStore",)
 
 
+class _LocalArrowIterator:
+    """Async iterator for LocalStore Arrow streaming."""
+
+    __slots__ = ("_sync_iter",)
+
+    def __init__(self, sync_iter: "Iterator[ArrowRecordBatch]") -> None:
+        self._sync_iter = sync_iter
+
+    def __aiter__(self) -> "_LocalArrowIterator":
+        return self
+
+    async def __anext__(self) -> "ArrowRecordBatch":
+        def _safe_next() -> "ArrowRecordBatch":
+            try:
+                return next(self._sync_iter)
+            except StopIteration as e:
+                raise StopAsyncIteration from e
+
+        return await async_(_safe_next)()
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
 class LocalStore:
     """Simple local file system storage backend.
 
@@ -67,13 +90,15 @@ class LocalStore:
         self.protocol = "file"
         self.backend_type = "local"
 
-    def _ensure_pyarrow(self) -> None:
-        """Ensure PyArrow is available for Arrow operations."""
-        if not PYARROW_INSTALLED:
-            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
-
     def _resolve_path(self, path: "str | Path") -> Path:
-        """Resolve path relative to base_path."""
+        """Resolve path relative to base_path.
+
+        Args:
+            path: Path to resolve (absolute or relative).
+
+        Returns:
+            Resolved Path object.
+        """
         p = Path(path)
         if p.is_absolute():
             return p
@@ -208,19 +233,19 @@ class LocalStore:
 
     def read_arrow(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from file."""
-        self._ensure_pyarrow()
+        ensure_pyarrow()
         import pyarrow.parquet as pq
 
-        return pq.read_table(str(self._resolve_path(path)))
+        return pq.read_table(str(self._resolve_path(path)))  # pyright: ignore
 
     def write_arrow(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to file."""
-        self._ensure_pyarrow()
+        ensure_pyarrow()
         import pyarrow.parquet as pq
 
         resolved = self._resolve_path(path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        pq.write_table(table, str(resolved))
+        pq.write_table(table, str(resolved))  # pyright: ignore
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from files matching pattern.
@@ -228,15 +253,14 @@ class LocalStore:
         Yields:
             Arrow record batches from matching files.
         """
-        if not PYARROW_INSTALLED:
-            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
+        ensure_pyarrow()
         import pyarrow.parquet as pq
 
         files = self.glob(pattern)
         for file_path in files:
             resolved = self._resolve_path(file_path)
             parquet_file = pq.ParquetFile(str(resolved))
-            yield from parquet_file.iter_batches()
+            yield from parquet_file.iter_batches()  # pyright: ignore
 
     def sign(self, path: "str | Path", expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL (returns file:// URI for local files)."""
@@ -294,14 +318,19 @@ class LocalStore:
         await async_(self.write_arrow)(path, table, **kwargs)
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
-        """Stream Arrow record batches asynchronously."""
+        """Stream Arrow record batches asynchronously.
 
-        # Convert sync iterator to async
-        async def _stream() -> AsyncIterator["ArrowRecordBatch"]:
-            for batch in self.stream_arrow(pattern, **kwargs):
-                yield batch
+        Offloads blocking file I/O operations to thread pool for
+        non-blocking event loop execution.
 
-        return _stream()
+        Args:
+            pattern: Glob pattern to match files.
+            **kwargs: Additional arguments passed to stream_arrow().
+
+        Returns:
+            Arrow record batches from matching files.
+        """
+        return _LocalArrowIterator(self.stream_arrow(pattern, **kwargs))
 
     async def sign_async(self, path: "str | Path", expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL asynchronously (returns file:// URI for local files)."""
