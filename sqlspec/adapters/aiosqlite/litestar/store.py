@@ -1,12 +1,15 @@
 """AioSQLite session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
+    from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 
 logger = get_logger("adapters.aiosqlite.litestar.store")
@@ -118,7 +121,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             await conn.executescript(sql)
         logger.debug("Created session table: %s", self._table_name)
 
@@ -138,7 +141,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
         """
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             async with conn.execute(sql, (key,)) as cursor:
                 row = await cursor.fetchone()
 
@@ -181,7 +184,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         VALUES (?, ?, ?)
         """
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql, (key, data, expires_at_julian))
             await conn.commit()
 
@@ -196,7 +199,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         """
         sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql, (key,))
             await conn.commit()
 
@@ -204,7 +207,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         """Delete all sessions from the store."""
         sql = f"DELETE FROM {self._table_name}"
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql)
             await conn.commit()
         logger.debug("Deleted all sessions from table: %s", self._table_name)
@@ -224,7 +227,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
         """
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             async with conn.execute(sql, (key,)) as cursor:
                 result = await cursor.fetchone()
                 return result is not None
@@ -243,7 +246,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         WHERE session_id = ?
         """
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             async with conn.execute(sql, (key,)) as cursor:
                 row = await cursor.fetchone()
 
@@ -272,7 +275,7 @@ class AioSQLiteStore(BaseSQLSpecStore):
         """
         sql = f"DELETE FROM {self._table_name} WHERE julianday(expires_at) <= julianday('now')"
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AiosqliteConnection]", self._config.provide_connection()) as conn:
             cursor = await conn.execute(sql)
             await conn.commit()
             count = cursor.rowcount

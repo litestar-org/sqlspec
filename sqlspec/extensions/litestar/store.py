@@ -3,7 +3,7 @@
 import random
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.utils.logging import get_logger
 

@@ -1,12 +1,15 @@
 """AsyncPG session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
+    from sqlspec.adapters.asyncpg._types import AsyncpgConnection
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 
 logger = get_logger("adapters.asyncpg.litestar.store")
@@ -88,7 +91,7 @@ class AsyncPGStore(BaseSQLSpecStore):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql)
         logger.debug("Created session table: %s", self._table_name)
 
@@ -112,7 +115,7 @@ class AsyncPGStore(BaseSQLSpecStore):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
             row = await conn.fetchrow(sql, key)
 
             if row is None:
@@ -155,7 +158,7 @@ class AsyncPGStore(BaseSQLSpecStore):
             updated_at = CURRENT_TIMESTAMP
         """
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql, key, data, expires_at)
 
         if self._should_cleanup():
@@ -169,14 +172,14 @@ class AsyncPGStore(BaseSQLSpecStore):
         """
         sql = f"DELETE FROM {self._table_name} WHERE session_id = $1"
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql, key)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
         sql = f"DELETE FROM {self._table_name}"
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
             await conn.execute(sql)
         logger.debug("Deleted all sessions from table: %s", self._table_name)
 
@@ -198,7 +201,7 @@ class AsyncPGStore(BaseSQLSpecStore):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
             result = await conn.fetchval(sql, key)
             return result is not None
 
@@ -216,7 +219,7 @@ class AsyncPGStore(BaseSQLSpecStore):
         WHERE session_id = $1
         """
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
             expires_at = await conn.fetchval(sql, key)
 
             if expires_at is None:
@@ -242,7 +245,7 @@ class AsyncPGStore(BaseSQLSpecStore):
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
-        async with self._config.provide_connection() as conn:
+        async with cast("AbstractAsyncContextManager[AsyncpgConnection]", self._config.provide_connection()) as conn:
             result = await conn.execute(sql)
             count = int(result.split()[-1])
             if count > 0:

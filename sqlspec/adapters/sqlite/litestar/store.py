@@ -1,7 +1,7 @@
 """SQLite sync session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from litestar.utils.sync import AsyncCallable
 
@@ -9,6 +9,9 @@ from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
+    from sqlspec.adapters.sqlite._types import SqliteConnection
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
 logger = get_logger("adapters.sqlite.litestar.store")
@@ -127,7 +130,7 @@ class SQLiteStore(BaseSQLSpecStore):
     def _create_table_sync(self) -> None:
         """Synchronous implementation of create_table."""
         sql = self._get_create_table_sql()
-        with self._config.provide_connection() as conn:
+        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
             conn.executescript(sql)
         logger.debug("Created session table: %s", self._table_name)
 
@@ -143,7 +146,7 @@ class SQLiteStore(BaseSQLSpecStore):
         AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
         """
 
-        with self._config.provide_connection() as conn:
+        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
             cursor = conn.execute(sql, (key,))
             row = cursor.fetchone()
 
@@ -193,7 +196,7 @@ class SQLiteStore(BaseSQLSpecStore):
         VALUES (?, ?, ?)
         """
 
-        with self._config.provide_connection() as conn:
+        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
             conn.execute(sql, (key, data, expires_at_julian))
             conn.commit()
 
@@ -214,7 +217,7 @@ class SQLiteStore(BaseSQLSpecStore):
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
 
-        with self._config.provide_connection() as conn:
+        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
             conn.execute(sql, (key,))
             conn.commit()
 
@@ -230,7 +233,7 @@ class SQLiteStore(BaseSQLSpecStore):
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._config.provide_connection() as conn:
+        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
             conn.execute(sql)
             conn.commit()
         logger.debug("Deleted all sessions from table: %s", self._table_name)
@@ -247,7 +250,7 @@ class SQLiteStore(BaseSQLSpecStore):
         AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
         """
 
-        with self._config.provide_connection() as conn:
+        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
             cursor = conn.execute(sql, (key,))
             result = cursor.fetchone()
             return result is not None
@@ -270,7 +273,7 @@ class SQLiteStore(BaseSQLSpecStore):
         WHERE session_id = ?
         """
 
-        with self._config.provide_connection() as conn:
+        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
             cursor = conn.execute(sql, (key,))
             row = cursor.fetchone()
 
@@ -306,7 +309,7 @@ class SQLiteStore(BaseSQLSpecStore):
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE julianday(expires_at) <= julianday('now')"
 
-        with self._config.provide_connection() as conn:
+        with cast("AbstractContextManager[SqliteConnection]", self._config.provide_connection()) as conn:
             cursor = conn.execute(sql)
             conn.commit()
             count = cursor.rowcount
