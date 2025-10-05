@@ -7,7 +7,7 @@ import hashlib
 import operator
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Generic, Optional, TypeVar, cast
+from typing import Any, Generic, TypeVar, cast
 
 from sqlspec._sql import sql
 from sqlspec.builder import Delete, Insert, Select
@@ -141,9 +141,9 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
     def __init__(
         self,
         migrations_path: Path,
-        extension_migrations: "Optional[dict[str, Path]]" = None,
-        context: "Optional[Any]" = None,
-        extension_configs: "Optional[dict[str, dict[str, Any]]]" = None,
+        extension_migrations: "dict[str, Path] | None" = None,
+        context: "Any | None" = None,
+        extension_configs: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize the migration runner.
 
@@ -156,11 +156,11 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         self.migrations_path = migrations_path
         self.extension_migrations = extension_migrations or {}
         self.loader = SQLFileLoader()
-        self.project_root: Optional[Path] = None
+        self.project_root: Path | None = None
         self.context = context
         self.extension_configs = extension_configs or {}
 
-    def _extract_version(self, filename: str) -> Optional[str]:
+    def _extract_version(self, filename: str) -> str | None:
         """Extract version from filename.
 
         Args:
@@ -302,7 +302,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             "loader": loader,
         }
 
-    def _get_migration_sql(self, migration: "dict[str, Any]", direction: str) -> "Optional[list[str]]":
+    def _get_migration_sql(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction.
 
         Args:

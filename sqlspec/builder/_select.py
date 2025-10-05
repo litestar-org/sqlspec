@@ -5,7 +5,7 @@ parameter binding and validation.
 """
 
 import re
-from typing import Any, Callable, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -25,6 +25,9 @@ from sqlspec.builder.mixins import (
 )
 from sqlspec.core.result import SQLResult
 from sqlspec.exceptions import SQLBuilderError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 __all__ = ("Select",)
 
@@ -59,7 +62,7 @@ class Select(
     """
 
     __slots__ = ("_hints", "_with_parts")
-    _expression: Optional[exp.Expression]
+    _expression: exp.Expression | None
 
     def __init__(self, *columns: str, **kwargs: Any) -> None:
         """Initialize SELECT with optional columns.
@@ -74,7 +77,7 @@ class Select(
         """
         super().__init__(**kwargs)
 
-        self._with_parts: dict[str, Union[exp.CTE, Select]] = {}
+        self._with_parts: dict[str, exp.CTE | Select] = {}
         self._hints: list[dict[str, object]] = []
 
         self._initialize_expression()
@@ -98,12 +101,7 @@ class Select(
         return self._expression
 
     def with_hint(
-        self,
-        hint: "str",
-        *,
-        location: "str" = "statement",
-        table: "Optional[str]" = None,
-        dialect: "Optional[str]" = None,
+        self, hint: "str", *, location: "str" = "statement", table: "str | None" = None, dialect: "str | None" = None
     ) -> "Self":
         """Attach an optimizer or dialect-specific hint to the query.
 
@@ -139,7 +137,7 @@ class Select(
                 def parse_hint_safely(hint: Any) -> exp.Expression:
                     try:
                         hint_str = str(hint)
-                        hint_expr: Optional[exp.Expression] = exp.maybe_parse(hint_str, dialect=self.dialect_name)
+                        hint_expr: exp.Expression | None = exp.maybe_parse(hint_str, dialect=self.dialect_name)
                         return hint_expr or exp.Anonymous(this=hint_str)
                     except Exception:
                         return exp.Anonymous(this=str(hint))
@@ -195,7 +193,7 @@ class Select(
             raise SQLBuilderError(msg)
 
     def for_update(
-        self, *, skip_locked: bool = False, nowait: bool = False, of: "Optional[Union[str, list[str]]]" = None
+        self, *, skip_locked: bool = False, nowait: bool = False, of: "str | list[str] | None" = None
     ) -> "Self":
         """Add FOR UPDATE clause to SELECT statement for row-level locking.
 
@@ -233,7 +231,7 @@ class Select(
         return self
 
     def for_share(
-        self, *, skip_locked: bool = False, nowait: bool = False, of: "Optional[Union[str, list[str]]]" = None
+        self, *, skip_locked: bool = False, nowait: bool = False, of: "str | list[str] | None" = None
     ) -> "Self":
         """Add FOR SHARE clause for shared row-level locking.
 

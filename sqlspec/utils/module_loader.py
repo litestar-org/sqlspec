@@ -7,7 +7,7 @@ Used for loading modules from dotted paths and converting module paths to filesy
 import importlib
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 __all__ = ("import_string", "module_to_os_path")
 
@@ -46,7 +46,7 @@ def import_string(dotted_path: str) -> "Any":
         The imported object.
     """
 
-    def _raise_import_error(msg: str, exc: "Optional[Exception]" = None) -> None:
+    def _raise_import_error(msg: str, exc: "Exception | None" = None) -> None:
         if exc is not None:
             raise ImportError(msg) from exc
         raise ImportError(msg)

@@ -5,7 +5,7 @@ for the native BigQuery driver.
 """
 
 from functools import lru_cache
-from typing import Any, Final, Optional
+from typing import Any, Final
 from uuid import UUID
 
 from sqlspec.core.type_conversion import BaseTypeConverter, convert_uuid
@@ -79,7 +79,7 @@ class BigQueryTypeConverter(BaseTypeConverter):
             return value
         return self._convert_cache(value)
 
-    def create_parameter(self, name: str, value: Any) -> Optional[Any]:
+    def create_parameter(self, name: str, value: Any) -> Any | None:
         """Create BigQuery parameter with proper type mapping.
 
         Args:

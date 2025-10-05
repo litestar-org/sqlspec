@@ -9,7 +9,7 @@ import datetime
 import enum
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Final, Literal, Optional, Protocol, Union, overload
+from typing import Any, Final, Literal, Protocol, overload
 
 from sqlspec.typing import MSGSPEC_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED, BaseModel
 
@@ -43,7 +43,7 @@ class JSONSerializer(Protocol):
     Users can implement this protocol to create custom serializers.
     """
 
-    def encode(self, data: Any, *, as_bytes: bool = False) -> Union[str, bytes]:
+    def encode(self, data: Any, *, as_bytes: bool = False) -> str | bytes:
         """Encode data to JSON.
 
         Args:
@@ -55,7 +55,7 @@ class JSONSerializer(Protocol):
         """
         ...
 
-    def decode(self, data: Union[str, bytes], *, decode_bytes: bool = True) -> Any:
+    def decode(self, data: str | bytes, *, decode_bytes: bool = True) -> Any:
         """Decode from JSON.
 
         Args:
@@ -74,12 +74,12 @@ class BaseJSONSerializer(ABC):
     __slots__ = ()
 
     @abstractmethod
-    def encode(self, data: Any, *, as_bytes: bool = False) -> Union[str, bytes]:
+    def encode(self, data: Any, *, as_bytes: bool = False) -> str | bytes:
         """Encode data to JSON."""
         ...
 
     @abstractmethod
-    def decode(self, data: Union[str, bytes], *, decode_bytes: bool = True) -> Any:
+    def decode(self, data: str | bytes, *, decode_bytes: bool = True) -> Any:
         """Decode from JSON."""
         ...
 
@@ -96,7 +96,7 @@ class MsgspecSerializer(BaseJSONSerializer):
         self._encoder: Final[Encoder] = Encoder(enc_hook=_type_to_string)
         self._decoder: Final[Decoder] = Decoder()
 
-    def encode(self, data: Any, *, as_bytes: bool = False) -> Union[str, bytes]:
+    def encode(self, data: Any, *, as_bytes: bool = False) -> str | bytes:
         """Encode data using msgspec."""
         try:
             if as_bytes:
@@ -107,7 +107,7 @@ class MsgspecSerializer(BaseJSONSerializer):
                 return OrjsonSerializer().encode(data, as_bytes=as_bytes)
             return StandardLibSerializer().encode(data, as_bytes=as_bytes)
 
-    def decode(self, data: Union[str, bytes], *, decode_bytes: bool = True) -> Any:
+    def decode(self, data: str | bytes, *, decode_bytes: bool = True) -> Any:
         """Decode data using msgspec."""
         if isinstance(data, bytes):
             if decode_bytes:
@@ -132,7 +132,7 @@ class OrjsonSerializer(BaseJSONSerializer):
 
     __slots__ = ()
 
-    def encode(self, data: Any, *, as_bytes: bool = False) -> Union[str, bytes]:
+    def encode(self, data: Any, *, as_bytes: bool = False) -> str | bytes:
         """Encode data using orjson."""
         from orjson import (
             OPT_NAIVE_UTC,  # pyright: ignore[reportUnknownVariableType]
@@ -146,7 +146,7 @@ class OrjsonSerializer(BaseJSONSerializer):
         )
         return result if as_bytes else result.decode("utf-8")
 
-    def decode(self, data: Union[str, bytes], *, decode_bytes: bool = True) -> Any:
+    def decode(self, data: str | bytes, *, decode_bytes: bool = True) -> Any:
         """Decode data using orjson."""
         from orjson import loads as _orjson_loads  # pyright: ignore[reportMissingImports]
 
@@ -162,12 +162,12 @@ class StandardLibSerializer(BaseJSONSerializer):
 
     __slots__ = ()
 
-    def encode(self, data: Any, *, as_bytes: bool = False) -> Union[str, bytes]:
+    def encode(self, data: Any, *, as_bytes: bool = False) -> str | bytes:
         """Encode data using standard library json."""
         json_str = json.dumps(data, default=_type_to_string)
         return json_str.encode("utf-8") if as_bytes else json_str
 
-    def decode(self, data: Union[str, bytes], *, decode_bytes: bool = True) -> Any:
+    def decode(self, data: str | bytes, *, decode_bytes: bool = True) -> Any:
         """Decode data using standard library json."""
         if isinstance(data, bytes):
             if decode_bytes:
@@ -176,7 +176,7 @@ class StandardLibSerializer(BaseJSONSerializer):
         return json.loads(data)
 
 
-_default_serializer: Optional[JSONSerializer] = None
+_default_serializer: JSONSerializer | None = None
 
 
 def get_default_serializer() -> JSONSerializer:
@@ -213,7 +213,7 @@ def encode_json(data: Any, *, as_bytes: Literal[False] = ...) -> str: ...  # pra
 def encode_json(data: Any, *, as_bytes: Literal[True]) -> bytes: ...  # pragma: no cover
 
 
-def encode_json(data: Any, *, as_bytes: bool = False) -> Union[str, bytes]:
+def encode_json(data: Any, *, as_bytes: bool = False) -> str | bytes:
     """Encode to JSON, optionally returning bytes for optimal performance.
 
     Args:
@@ -226,7 +226,7 @@ def encode_json(data: Any, *, as_bytes: bool = False) -> Union[str, bytes]:
     return get_default_serializer().encode(data, as_bytes=as_bytes)
 
 
-def decode_json(data: Union[str, bytes], *, decode_bytes: bool = True) -> Any:
+def decode_json(data: str | bytes, *, decode_bytes: bool = True) -> Any:
     """Decode from JSON string or bytes efficiently.
 
     Args:

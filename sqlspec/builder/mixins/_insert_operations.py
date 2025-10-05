@@ -6,7 +6,7 @@ INTO clauses, VALUES clauses, and INSERT FROM SELECT operations.
 """
 
 from collections.abc import Sequence
-from typing import Any, Optional, TypeVar, Union
+from typing import Any, TypeVar
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -27,7 +27,7 @@ class InsertIntoClauseMixin:
     __slots__ = ()
 
     # Type annotations for PyRight - these will be provided by the base class
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
     def into(self, table: str) -> Self:
@@ -63,12 +63,12 @@ class InsertValuesMixin:
     __slots__ = ()
 
     # Type annotations for PyRight - these will be provided by the base class
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
     _columns: Any  # Provided by QueryBuilder
 
-    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
@@ -78,7 +78,7 @@ class InsertValuesMixin:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
-    def columns(self, *columns: Union[str, exp.Expression]) -> Self:
+    def columns(self, *columns: str | exp.Expression) -> Self:
         """Set the columns for the INSERT statement and synchronize the _columns attribute on the builder."""
         current_expr = self.get_expression()
         if current_expr is None:
@@ -232,12 +232,12 @@ class InsertFromSelectMixin:
     __slots__ = ()
 
     # Type annotations for PyRight - these will be provided by the base class
-    def get_expression(self) -> Optional[exp.Expression]: ...
+    def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
     _table: Any  # Provided by QueryBuilder
 
-    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+    def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
         """Add parameter - provided by QueryBuilder."""
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)

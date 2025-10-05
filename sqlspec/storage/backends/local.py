@@ -7,7 +7,7 @@ No external dependencies like fsspec or obstore required.
 import shutil
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
 
 from sqlspec.exceptions import MissingDependencyError
@@ -62,7 +62,7 @@ class LocalStore:
         elif self.base_path.is_file():
             # If base_path points to a file, use its parent as the base directory
             self.base_path = self.base_path.parent
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         self.protocol = "file"
         self.backend_type = "local"
@@ -72,29 +72,29 @@ class LocalStore:
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
 
-    def _resolve_path(self, path: "Union[str, Path]") -> Path:
+    def _resolve_path(self, path: "str | Path") -> Path:
         """Resolve path relative to base_path."""
         p = Path(path)
         if p.is_absolute():
             return p
         return self.base_path / p
 
-    def read_bytes(self, path: "Union[str, Path]", **kwargs: Any) -> bytes:
+    def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from file."""
         resolved = self._resolve_path(path)
         return resolved.read_bytes()
 
-    def write_bytes(self, path: "Union[str, Path]", data: bytes, **kwargs: Any) -> None:
+    def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
         """Write bytes to file."""
         resolved = self._resolve_path(path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_bytes(data)
 
-    def read_text(self, path: "Union[str, Path]", encoding: str = "utf-8", **kwargs: Any) -> str:
+    def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from file."""
         return self._resolve_path(path).read_text(encoding=encoding)
 
-    def write_text(self, path: "Union[str, Path]", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to file."""
         resolved = self._resolve_path(path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -131,11 +131,11 @@ class LocalStore:
 
         return sorted(files)
 
-    def exists(self, path: "Union[str, Path]", **kwargs: Any) -> bool:
+    def exists(self, path: "str | Path", **kwargs: Any) -> bool:
         """Check if file exists."""
         return self._resolve_path(path).exists()
 
-    def delete(self, path: "Union[str, Path]", **kwargs: Any) -> None:
+    def delete(self, path: "str | Path", **kwargs: Any) -> None:
         """Delete file or directory."""
         resolved = self._resolve_path(path)
         if resolved.is_dir():
@@ -143,7 +143,7 @@ class LocalStore:
         elif resolved.exists():
             resolved.unlink()
 
-    def copy(self, source: "Union[str, Path]", destination: "Union[str, Path]", **kwargs: Any) -> None:
+    def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy file or directory."""
         src = self._resolve_path(source)
         dst = self._resolve_path(destination)
@@ -154,7 +154,7 @@ class LocalStore:
         else:
             shutil.copy2(src, dst)
 
-    def move(self, source: "Union[str, Path]", destination: "Union[str, Path]", **kwargs: Any) -> None:
+    def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Move file or directory."""
         src = self._resolve_path(source)
         dst = self._resolve_path(destination)
@@ -182,7 +182,7 @@ class LocalStore:
 
         return sorted(results)
 
-    def get_metadata(self, path: "Union[str, Path]", **kwargs: Any) -> dict[str, Any]:
+    def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:
         """Get file metadata."""
         resolved = self._resolve_path(path)
         if not resolved.exists():
@@ -198,22 +198,22 @@ class LocalStore:
             "path": str(resolved),
         }
 
-    def is_object(self, path: "Union[str, Path]") -> bool:
+    def is_object(self, path: "str | Path") -> bool:
         """Check if path points to a file."""
         return self._resolve_path(path).is_file()
 
-    def is_path(self, path: "Union[str, Path]") -> bool:
+    def is_path(self, path: "str | Path") -> bool:
         """Check if path points to a directory."""
         return self._resolve_path(path).is_dir()
 
-    def read_arrow(self, path: "Union[str, Path]", **kwargs: Any) -> "ArrowTable":
+    def read_arrow(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from file."""
         self._ensure_pyarrow()
         import pyarrow.parquet as pq
 
         return pq.read_table(str(self._resolve_path(path)))
 
-    def write_arrow(self, path: "Union[str, Path]", table: "ArrowTable", **kwargs: Any) -> None:
+    def write_arrow(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to file."""
         self._ensure_pyarrow()
         import pyarrow.parquet as pq
@@ -238,28 +238,26 @@ class LocalStore:
             parquet_file = pq.ParquetFile(str(resolved))
             yield from parquet_file.iter_batches()
 
-    def sign(self, path: "Union[str, Path]", expires_in: int = 3600, for_upload: bool = False) -> str:
+    def sign(self, path: "str | Path", expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL (returns file:// URI for local files)."""
         # For local files, just return a file:// URI
         # No actual signing needed for local files
         return self._resolve_path(path).as_uri()
 
     # Async methods using sync_tools.async_
-    async def read_bytes_async(self, path: "Union[str, Path]", **kwargs: Any) -> bytes:
+    async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from file asynchronously."""
         return await async_(self.read_bytes)(path, **kwargs)
 
-    async def write_bytes_async(self, path: "Union[str, Path]", data: bytes, **kwargs: Any) -> None:
+    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
         """Write bytes to file asynchronously."""
         await async_(self.write_bytes)(path, data, **kwargs)
 
-    async def read_text_async(self, path: "Union[str, Path]", encoding: str = "utf-8", **kwargs: Any) -> str:
+    async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from file asynchronously."""
         return await async_(self.read_text)(path, encoding, **kwargs)
 
-    async def write_text_async(
-        self, path: "Union[str, Path]", data: str, encoding: str = "utf-8", **kwargs: Any
-    ) -> None:
+    async def write_text_async(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to file asynchronously."""
         await async_(self.write_text)(path, data, encoding, **kwargs)
 
@@ -267,31 +265,31 @@ class LocalStore:
         """List objects asynchronously."""
         return await async_(self.list_objects)(prefix, recursive, **kwargs)
 
-    async def exists_async(self, path: "Union[str, Path]", **kwargs: Any) -> bool:
+    async def exists_async(self, path: "str | Path", **kwargs: Any) -> bool:
         """Check if file exists asynchronously."""
         return await async_(self.exists)(path, **kwargs)
 
-    async def delete_async(self, path: "Union[str, Path]", **kwargs: Any) -> None:
+    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:
         """Delete file asynchronously."""
         await async_(self.delete)(path, **kwargs)
 
-    async def copy_async(self, source: "Union[str, Path]", destination: "Union[str, Path]", **kwargs: Any) -> None:
+    async def copy_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy file asynchronously."""
         await async_(self.copy)(source, destination, **kwargs)
 
-    async def move_async(self, source: "Union[str, Path]", destination: "Union[str, Path]", **kwargs: Any) -> None:
+    async def move_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Move file asynchronously."""
         await async_(self.move)(source, destination, **kwargs)
 
-    async def get_metadata_async(self, path: "Union[str, Path]", **kwargs: Any) -> dict[str, Any]:
+    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:
         """Get file metadata asynchronously."""
         return await async_(self.get_metadata)(path, **kwargs)
 
-    async def read_arrow_async(self, path: "Union[str, Path]", **kwargs: Any) -> "ArrowTable":
+    async def read_arrow_async(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table asynchronously."""
         return await async_(self.read_arrow)(path, **kwargs)
 
-    async def write_arrow_async(self, path: "Union[str, Path]", table: "ArrowTable", **kwargs: Any) -> None:
+    async def write_arrow_async(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table asynchronously."""
         await async_(self.write_arrow)(path, table, **kwargs)
 
@@ -305,6 +303,6 @@ class LocalStore:
 
         return _stream()
 
-    async def sign_async(self, path: "Union[str, Path]", expires_in: int = 3600, for_upload: bool = False) -> str:
+    async def sign_async(self, path: "str | Path", expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL asynchronously (returns file:// URI for local files)."""
         return await async_(self.sign)(path, expires_in, for_upload)

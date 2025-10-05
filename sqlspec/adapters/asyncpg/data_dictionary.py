@@ -1,12 +1,14 @@
 """PostgreSQL-specific data dictionary for metadata queries via asyncpg."""
 
 import re
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 
 logger = get_logger("adapters.asyncpg.data_dictionary")
@@ -20,7 +22,7 @@ __all__ = ("PostgresAsyncDataDictionary",)
 class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "Optional[VersionInfo]":
+    async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 
         Args:

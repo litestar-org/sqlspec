@@ -4,7 +4,7 @@
 Provides mixins for JOIN operations in SELECT statements.
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Union, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -28,13 +28,13 @@ class JoinClauseMixin:
     __slots__ = ()
 
     # Type annotation for PyRight - this will be provided by the base class
-    _expression: Optional[exp.Expression]
+    _expression: exp.Expression | None
 
     def join(
         self,
-        table: Union[str, exp.Expression, Any],
-        on: Optional[Union[str, exp.Expression, "SQL"]] = None,
-        alias: Optional[str] = None,
+        table: str | exp.Expression | Any,
+        on: Union[str, exp.Expression, "SQL"] | None = None,
+        alias: str | None = None,
         join_type: str = "INNER",
         lateral: bool = False,
     ) -> Self:
@@ -67,7 +67,7 @@ class JoinClauseMixin:
             raise SQLBuilderError(msg)
 
     def _parse_table_expression(
-        self, table: Union[str, exp.Expression, Any], alias: Optional[str], builder: "SQLBuilderProtocol"
+        self, table: str | exp.Expression | Any, alias: str | None, builder: "SQLBuilderProtocol"
     ) -> exp.Expression:
         """Parse table parameter into a SQLGlot expression."""
         if isinstance(table, str):
@@ -79,7 +79,7 @@ class JoinClauseMixin:
         return cast("exp.Expression", table)
 
     def _handle_query_builder_table(
-        self, table: Any, alias: Optional[str], builder: "SQLBuilderProtocol"
+        self, table: Any, alias: str | None, builder: "SQLBuilderProtocol"
     ) -> exp.Expression:
         """Handle table parameters that are query builders."""
         if hasattr(table, "_expression") and table._expression is not None:
@@ -91,8 +91,8 @@ class JoinClauseMixin:
         return exp.alias_(subquery_exp, alias) if alias else subquery_exp
 
     def _parse_on_condition(
-        self, on: Optional[Union[str, exp.Expression, "SQL"]], builder: "SQLBuilderProtocol"
-    ) -> Optional[exp.Expression]:
+        self, on: Union[str, exp.Expression, "SQL"] | None, builder: "SQLBuilderProtocol"
+    ) -> exp.Expression | None:
         """Parse ON condition into a SQLGlot expression."""
         if on is None:
             return None
@@ -119,7 +119,7 @@ class JoinClauseMixin:
         return parsed_expr if parsed_expr is not None else exp.condition(str(on.sql))
 
     def _create_join_expression(
-        self, table_expr: exp.Expression, on_expr: Optional[exp.Expression], join_type: str
+        self, table_expr: exp.Expression, on_expr: exp.Expression | None, join_type: str
     ) -> exp.Join:
         """Create the appropriate JOIN expression based on join type."""
         join_type_upper = join_type.upper()
@@ -153,26 +153,26 @@ class JoinClauseMixin:
             join_expr.set("kind", "LATERAL")
 
     def inner_join(
-        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression, "SQL"], alias: Optional[str] = None
+        self, table: str | exp.Expression | Any, on: Union[str, exp.Expression, "SQL"], alias: str | None = None
     ) -> Self:
         return self.join(table, on, alias, "INNER")
 
     def left_join(
-        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression, "SQL"], alias: Optional[str] = None
+        self, table: str | exp.Expression | Any, on: Union[str, exp.Expression, "SQL"], alias: str | None = None
     ) -> Self:
         return self.join(table, on, alias, "LEFT")
 
     def right_join(
-        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression, "SQL"], alias: Optional[str] = None
+        self, table: str | exp.Expression | Any, on: Union[str, exp.Expression, "SQL"], alias: str | None = None
     ) -> Self:
         return self.join(table, on, alias, "RIGHT")
 
     def full_join(
-        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression, "SQL"], alias: Optional[str] = None
+        self, table: str | exp.Expression | Any, on: Union[str, exp.Expression, "SQL"], alias: str | None = None
     ) -> Self:
         return self.join(table, on, alias, "FULL")
 
-    def cross_join(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
+    def cross_join(self, table: str | exp.Expression | Any, alias: str | None = None) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
@@ -199,9 +199,9 @@ class JoinClauseMixin:
 
     def lateral_join(
         self,
-        table: Union[str, exp.Expression, Any],
-        on: Optional[Union[str, exp.Expression, "SQL"]] = None,
-        alias: Optional[str] = None,
+        table: str | exp.Expression | Any,
+        on: Union[str, exp.Expression, "SQL"] | None = None,
+        alias: str | None = None,
     ) -> Self:
         """Create a LATERAL JOIN.
 
@@ -226,9 +226,9 @@ class JoinClauseMixin:
 
     def left_lateral_join(
         self,
-        table: Union[str, exp.Expression, Any],
-        on: Optional[Union[str, exp.Expression, "SQL"]] = None,
-        alias: Optional[str] = None,
+        table: str | exp.Expression | Any,
+        on: Union[str, exp.Expression, "SQL"] | None = None,
+        alias: str | None = None,
     ) -> Self:
         """Create a LEFT LATERAL JOIN.
 
@@ -242,7 +242,7 @@ class JoinClauseMixin:
         """
         return self.join(table, on=on, alias=alias, join_type="LEFT", lateral=True)
 
-    def cross_lateral_join(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
+    def cross_lateral_join(self, table: str | exp.Expression | Any, alias: str | None = None) -> Self:
         """Create a CROSS LATERAL JOIN (no ON condition).
 
         Args:
@@ -290,11 +290,11 @@ class JoinBuilder:
         """
         self._join_type = join_type.upper()
         self._lateral = lateral
-        self._table: Optional[Union[str, exp.Expression]] = None
-        self._condition: Optional[exp.Expression] = None
-        self._alias: Optional[str] = None
+        self._table: str | exp.Expression | None = None
+        self._condition: exp.Expression | None = None
+        self._alias: str | None = None
 
-    def __call__(self, table: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def __call__(self, table: str | exp.Expression, alias: str | None = None) -> Self:
         """Set the table to join.
 
         Args:
@@ -308,7 +308,7 @@ class JoinBuilder:
         self._alias = alias
         return self
 
-    def on(self, condition: Union[str, exp.Expression]) -> exp.Expression:
+    def on(self, condition: str | exp.Expression) -> exp.Expression:
         """Set the join condition and build the JOIN expression.
 
         Args:
@@ -324,7 +324,7 @@ class JoinBuilder:
         # Parse the condition
         condition_expr: exp.Expression
         if isinstance(condition, str):
-            parsed: Optional[exp.Expression] = exp.maybe_parse(condition)
+            parsed: exp.Expression | None = exp.maybe_parse(condition)
             condition_expr = parsed or exp.condition(condition)
         else:
             condition_expr = condition

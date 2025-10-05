@@ -5,7 +5,7 @@ Tests numpy array handling, msgspec deserialization, and type conversion functio
 Uses function-based pytest approach as per CLAUDE.md requirements.
 """
 
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import Mock, patch
 
 import msgspec
@@ -30,7 +30,7 @@ class SampleMsgspecStruct(msgspec.Struct):
 
     name: str
     embedding: "list[float]"
-    metadata: "Optional[dict[str, Any]]" = None
+    metadata: "dict[str, Any] | None" = None
 
 
 class SampleMsgspecStructWithIntList(msgspec.Struct):
@@ -45,7 +45,7 @@ class SampleTypedDict(TypedDict):
 
     name: str
     age: int
-    optional_field: "Optional[str]"
+    optional_field: "str | None"
 
 
 # Test _is_list_type_target function

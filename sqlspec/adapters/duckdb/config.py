@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -116,7 +116,7 @@ class DuckDBDriverFeatures(TypedDict, total=False):
     """List of extensions to install/load on connection creation."""
     secrets: NotRequired[Sequence[DuckDBSecretConfig]]
     """List of secrets to create for AI/API integrations."""
-    on_connection_create: NotRequired["Callable[[DuckDBConnection], Optional[DuckDBConnection]]"]
+    on_connection_create: NotRequired["Callable[[DuckDBConnection], DuckDBConnection | None]"]
     """Callback executed when connection is created."""
 
 
@@ -144,12 +144,12 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     def __init__(
         self,
         *,
-        pool_config: "Optional[Union[DuckDBPoolParams, dict[str, Any]]]" = None,
-        pool_instance: "Optional[DuckDBConnectionPool]" = None,
-        migration_config: Optional[dict[str, Any]] = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[Union[DuckDBDriverFeatures, dict[str, Any]]]" = None,
-        bind_key: "Optional[str]" = None,
+        pool_config: "DuckDBPoolParams | dict[str, Any] | None" = None,
+        pool_instance: "DuckDBConnectionPool | None" = None,
+        migration_config: dict[str, Any] | None = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "DuckDBDriverFeatures | dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         """Initialize DuckDB configuration."""
         if pool_config is None:
@@ -247,7 +247,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
     @contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "Generator[DuckDBDriver, None, None]":
         """Provide a DuckDB driver session context manager.
 

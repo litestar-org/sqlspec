@@ -198,7 +198,9 @@ async def test_migration_commands_async_revision_delegation(async_config: Aiosql
 
 def test_migration_commands_factory_returns_sync_for_sync_config(sync_config: SqliteConfig) -> None:
     """Test that sync config returns SyncMigrationCommands from factory."""
-    commands = create_migration_commands(sync_config)
+    commands: SyncMigrationCommands[SqliteConfig] | AsyncMigrationCommands[AiosqliteConfig] = create_migration_commands(
+        sync_config
+    )
 
     # Should return a SyncMigrationCommands instance
     assert isinstance(commands, SyncMigrationCommands)
@@ -270,7 +272,9 @@ async def test_migration_commands_error_propagation(async_config: AiosqliteConfi
 def test_migration_commands_sync_parameter_forwarding(sync_config: SqliteConfig) -> None:
     """Test that all parameters are properly forwarded to sync implementations."""
     with patch.object(SyncMigrationCommands, "upgrade") as mock_upgrade:
-        commands = create_migration_commands(sync_config)
+        commands: SyncMigrationCommands[SqliteConfig] | AsyncMigrationCommands[AiosqliteConfig] = (
+            create_migration_commands(sync_config)
+        )
 
         # Test with various parameter combinations
         commands.upgrade()

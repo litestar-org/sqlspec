@@ -1,8 +1,8 @@
 """Test fixtures and configuration for ADBC integration tests."""
 
 import functools
-from collections.abc import Generator
-from typing import Any, Callable, TypeVar, cast
+from collections.abc import Callable, Generator
+from typing import Any, TypeVar, cast
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService

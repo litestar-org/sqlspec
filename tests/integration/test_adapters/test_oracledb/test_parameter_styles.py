@@ -1,6 +1,6 @@
 """Test Oracle parameter style conversion."""
 
-from typing import Any, Union
+from typing import Any
 
 import pytest
 
@@ -9,7 +9,7 @@ from sqlspec.core.result import SQLResult
 
 pytestmark = pytest.mark.xdist_group("oracle")
 
-OracleParamData = Union[tuple[Any, ...], list[Any], dict[str, Any]]
+OracleParamData = tuple[Any, ...] | list[Any] | dict[str, Any]
 
 
 @pytest.mark.parametrize(

@@ -16,13 +16,12 @@ MySQL, SQLite, DuckDB, and BigQuery.
 import re
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from enum import Enum
 from re import Pattern
-from typing import Any, Callable, Final, Optional, Union, cast
+from typing import Any, Final, TypeAlias, cast
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import TypeAlias
 
 from sqlspec.core.cache import CacheKey, UnifiedCache
 from sqlspec.utils.logging import get_logger
@@ -98,9 +97,9 @@ class Token:
         return f"Token({self.type.value}, {self.value!r}, {self.line}:{self.column})"
 
 
-TokenHandler: TypeAlias = Callable[[str, int, int, int], Optional[Token]]
-TokenPattern: TypeAlias = Union[str, TokenHandler]
-CompiledTokenPattern: TypeAlias = Union[Pattern[str], TokenHandler]
+TokenHandler: TypeAlias = Callable[[str, int, int, int], Token | None]
+TokenPattern: TypeAlias = str | TokenHandler
+CompiledTokenPattern: TypeAlias = Pattern[str] | TokenHandler
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -111,13 +110,13 @@ class DialectConfig(ABC):
 
     def __init__(self) -> None:
         """Initialize dialect configuration."""
-        self._name: Optional[str] = None
-        self._block_starters: Optional[set[str]] = None
-        self._block_enders: Optional[set[str]] = None
-        self._statement_terminators: Optional[set[str]] = None
-        self._batch_separators: Optional[set[str]] = None
-        self._special_terminators: Optional[dict[str, Callable[[list[Token], int], bool]]] = None
-        self._max_nesting_depth: Optional[int] = None
+        self._name: str | None = None
+        self._block_starters: set[str] | None = None
+        self._block_enders: set[str] | None = None
+        self._statement_terminators: set[str] | None = None
+        self._batch_separators: set[str] | None = None
+        self._special_terminators: dict[str, Callable[[list[Token], int], bool]] | None = None
+        self._max_nesting_depth: int | None = None
 
     @property
     @abstractmethod
@@ -436,7 +435,7 @@ class PostgreSQLDialectConfig(DialectConfig):
         return [(TokenType.STRING_LITERAL, self._handle_dollar_quoted_string)]
 
     @staticmethod
-    def _handle_dollar_quoted_string(text: str, position: int, line: int, column: int) -> Optional[Token]:
+    def _handle_dollar_quoted_string(text: str, position: int, line: int, column: int) -> Token | None:
         """Handle PostgreSQL dollar-quoted string literals.
 
         Parses dollar-quoted strings in the format $tag$content$tag$
@@ -613,8 +612,8 @@ class BigQueryDialectConfig(DialectConfig):
         return self._statement_terminators
 
 
-_pattern_cache: Optional[UnifiedCache] = None
-_result_cache: Optional[UnifiedCache] = None
+_pattern_cache: UnifiedCache | None = None
+_result_cache: UnifiedCache | None = None
 _cache_lock = threading.Lock()
 
 
@@ -878,7 +877,7 @@ class StatementSplitter:
         return False
 
 
-def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_terminator: bool = False) -> list[str]:
+def split_sql_script(script: str, dialect: str | None = None, strip_trailing_terminator: bool = False) -> list[str]:
     """Split SQL script into individual statements.
 
     Args:

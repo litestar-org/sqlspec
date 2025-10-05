@@ -1,7 +1,7 @@
-from typing import Any, Optional, Union
+from typing import Any
 
 
-def format_placeholder(field_name: str, style: str, dialect: Optional[str] = None) -> str:
+def format_placeholder(field_name: str, style: str, dialect: str | None = None) -> str:
     """Format a placeholder in SQL based on the parameter style.
 
     Args:
@@ -25,7 +25,7 @@ def format_placeholder(field_name: str, style: str, dialect: Optional[str] = Non
     return f"%({field_name})s"
 
 
-def format_sql(sql_template: str, field_names: list[str], style: str, dialect: Optional[str] = None) -> str:
+def format_sql(sql_template: str, field_names: list[str], style: str, dialect: str | None = None) -> str:
     """Format a SQL string by replacing template placeholders with dialect/style-specific placeholders.
 
     This function can handle multiple placeholders in a single SQL string.
@@ -55,8 +55,8 @@ def format_sql(sql_template: str, field_names: list[str], style: str, dialect: O
 
 
 def format_sql_parameters(
-    sql_template: str, param_fields: list[str], style: str, dialect: Optional[str] = None
-) -> tuple[str, Union[tuple[Any, ...], dict[str, Any]]]:
+    sql_template: str, param_fields: list[str], style: str, dialect: str | None = None
+) -> tuple[str, tuple[Any, ...] | dict[str, Any]]:
     """Format SQL template and create the appropriate parameter object based on style.
 
     Args:
@@ -71,14 +71,14 @@ def format_sql_parameters(
     formatted_sql = format_sql(sql_template, param_fields, style, dialect)
 
     # Return appropriate empty parameter container based on style
-    empty_parameters: Union[tuple[Any, ...], dict[str, Any]] = () if style == "tuple_binds" else {}
+    empty_parameters: tuple[Any, ...] | dict[str, Any] = () if style == "tuple_binds" else {}
 
     return formatted_sql, empty_parameters
 
 
 def create_tuple_or_dict_parameters(
     values: list[Any], field_names: list[str], style: str
-) -> Union[tuple[Any, ...], dict[str, Any]]:
+) -> tuple[Any, ...] | dict[str, Any]:
     """Create the appropriate parameter object based on values and style.
 
     Args:

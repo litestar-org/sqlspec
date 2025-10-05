@@ -9,7 +9,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import unquote, urlparse
 
 from sqlspec.core.cache import get_cache, get_cache_config
@@ -95,7 +95,7 @@ class NamedStatement:
 
     __slots__ = ("dialect", "name", "sql", "start_line")
 
-    def __init__(self, name: str, sql: str, dialect: "Optional[str]" = None, start_line: int = 0) -> None:
+    def __init__(self, name: str, sql: str, dialect: "str | None" = None, start_line: int = 0) -> None:
         self.name = name
         self.sql = sql
         self.dialect = dialect
@@ -112,11 +112,7 @@ class SQLFile:
     __slots__ = ("checksum", "content", "loaded_at", "metadata", "path")
 
     def __init__(
-        self,
-        content: str,
-        path: str,
-        metadata: "Optional[dict[str, Any]]" = None,
-        loaded_at: "Optional[datetime]" = None,
+        self, content: str, path: str, metadata: "dict[str, Any] | None" = None, loaded_at: "datetime | None" = None
     ) -> None:
         """Initialize SQLFile.
 
@@ -163,7 +159,7 @@ class SQLFileLoader:
 
     __slots__ = ("_files", "_queries", "_query_to_file", "encoding", "storage_registry")
 
-    def __init__(self, *, encoding: str = "utf-8", storage_registry: "Optional[StorageRegistry]" = None) -> None:
+    def __init__(self, *, encoding: str = "utf-8", storage_registry: "StorageRegistry | None" = None) -> None:
         """Initialize the SQL file loader.
 
         Args:
@@ -188,7 +184,7 @@ class SQLFileLoader:
         """
         raise SQLFileNotFoundError(path)
 
-    def _generate_file_cache_key(self, path: Union[str, Path]) -> str:
+    def _generate_file_cache_key(self, path: str | Path) -> str:
         """Generate cache key for a file path.
 
         Args:
@@ -201,7 +197,7 @@ class SQLFileLoader:
         path_hash = hashlib.md5(path_str.encode(), usedforsecurity=False).hexdigest()
         return f"file:{path_hash[:16]}"
 
-    def _calculate_file_checksum(self, path: Union[str, Path]) -> str:
+    def _calculate_file_checksum(self, path: str | Path) -> str:
         """Calculate checksum for file content validation.
 
         Args:
@@ -218,7 +214,7 @@ class SQLFileLoader:
         except Exception as e:
             raise SQLFileParseError(str(path), str(path), e) from e
 
-    def _is_file_unchanged(self, path: Union[str, Path], cached_file: CachedSQLFile) -> bool:
+    def _is_file_unchanged(self, path: str | Path, cached_file: CachedSQLFile) -> bool:
         """Check if file has changed since caching.
 
         Args:
@@ -235,7 +231,7 @@ class SQLFileLoader:
         else:
             return current_checksum == cached_file.sql_file.checksum
 
-    def _read_file_content(self, path: Union[str, Path]) -> str:
+    def _read_file_content(self, path: str | Path) -> str:
         """Read file content using storage backend.
 
         Args:
@@ -349,7 +345,7 @@ class SQLFileLoader:
 
         return statements
 
-    def load_sql(self, *paths: Union[str, Path]) -> None:
+    def load_sql(self, *paths: str | Path) -> None:
         """Load SQL files and parse named queries.
 
         Args:
@@ -420,7 +416,7 @@ class SQLFileLoader:
             self._load_single_file(file_path, ".".join(namespace_parts) if namespace_parts else None)
         return len(sql_files)
 
-    def _load_single_file(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
+    def _load_single_file(self, file_path: str | Path, namespace: str | None) -> None:
         """Load a single SQL file with optional namespace.
 
         Args:
@@ -476,7 +472,7 @@ class SQLFileLoader:
             cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_statements=file_statements)
             cache.put("file", cache_key_str, cached_file_data)
 
-    def _load_file_without_cache(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
+    def _load_file_without_cache(self, file_path: str | Path, namespace: str | None) -> None:
         """Load a single SQL file without using cache.
 
         Args:
@@ -503,7 +499,7 @@ class SQLFileLoader:
             self._queries[namespaced_name] = statement
             self._query_to_file[namespaced_name] = path_str
 
-    def add_named_sql(self, name: str, sql: str, dialect: "Optional[str]" = None) -> None:
+    def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
         """Add a named SQL query directly without loading from a file.
 
         Args:
@@ -529,7 +525,7 @@ class SQLFileLoader:
         self._queries[normalized_name] = statement
         self._query_to_file[normalized_name] = "<directly added>"
 
-    def get_file(self, path: Union[str, Path]) -> "Optional[SQLFile]":
+    def get_file(self, path: str | Path) -> "SQLFile | None":
         """Get a loaded SQLFile object by path.
 
         Args:
@@ -540,7 +536,7 @@ class SQLFileLoader:
         """
         return self._files.get(str(path))
 
-    def get_file_for_query(self, name: str) -> "Optional[SQLFile]":
+    def get_file_for_query(self, name: str) -> "SQLFile | None":
         """Get the SQLFile object containing a query.
 
         Args:

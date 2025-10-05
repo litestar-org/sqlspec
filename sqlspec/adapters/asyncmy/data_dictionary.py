@@ -1,12 +1,14 @@
 """MySQL-specific data dictionary for metadata queries via asyncmy."""
 
 import re
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
 
 logger = get_logger("adapters.asyncmy.data_dictionary")
@@ -20,7 +22,7 @@ __all__ = ("MySQLAsyncDataDictionary",)
 class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
     """MySQL-specific async data dictionary."""
 
-    async def get_version(self, driver: AsyncDriverAdapterBase) -> "Optional[VersionInfo]":
+    async def get_version(self, driver: AsyncDriverAdapterBase) -> "VersionInfo | None":
         """Get MySQL database version information.
 
         Args:

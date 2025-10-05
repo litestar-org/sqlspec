@@ -10,7 +10,7 @@ Classes:
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
@@ -52,8 +52,8 @@ class StatementResult(ABC):
         statement: "SQL",
         data: Any = None,
         rows_affected: int = 0,
-        last_inserted_id: Optional[Union[int, str]] = None,
-        execution_time: Optional[float] = None,
+        last_inserted_id: int | str | None = None,
+        execution_time: float | None = None,
         metadata: Optional["dict[str, Any]"] = None,
     ) -> None:
         """Initialize statement result.
@@ -164,19 +164,19 @@ class SQLResult(StatementResult):
     def __init__(
         self,
         statement: "SQL",
-        data: Optional[list[dict[str, Any]]] = None,
+        data: list[dict[str, Any]] | None = None,
         rows_affected: int = 0,
-        last_inserted_id: Optional[Union[int, str]] = None,
-        execution_time: Optional[float] = None,
+        last_inserted_id: int | str | None = None,
+        execution_time: float | None = None,
         metadata: Optional["dict[str, Any]"] = None,
-        error: Optional[Exception] = None,
+        error: Exception | None = None,
         operation_type: OperationType = "SELECT",
-        operation_index: Optional[int] = None,
-        parameters: Optional[Any] = None,
+        operation_index: int | None = None,
+        parameters: Any | None = None,
         column_names: Optional["list[str]"] = None,
-        total_count: Optional[int] = None,
+        total_count: int | None = None,
         has_more: bool = False,
-        inserted_ids: Optional["list[Union[int, str]]"] = None,
+        inserted_ids: Optional["list[int | str]"] = None,
         statement_results: Optional["list[SQLResult]"] = None,
         errors: Optional["list[str]"] = None,
         total_statements: int = 0,
@@ -348,7 +348,7 @@ class SQLResult(StatementResult):
         """
         return len(self.column_names) if self.column_names else 0
 
-    def get_first(self) -> "Optional[dict[str, Any]]":
+    def get_first(self) -> "dict[str, Any] | None":
         """Get the first row from the result, if any.
 
         Returns:
@@ -465,7 +465,7 @@ class SQLResult(StatementResult):
 
         return cast("dict[str, Any]", self.data[0])
 
-    def one_or_none(self) -> "Optional[dict[str, Any]]":
+    def one_or_none(self) -> "dict[str, Any] | None":
         """Return at most one row.
 
         Returns:
@@ -527,8 +527,8 @@ class ArrowResult(StatementResult):
         statement: "SQL",
         data: Any,
         rows_affected: int = 0,
-        last_inserted_id: Optional[Union[int, str]] = None,
-        execution_time: Optional[float] = None,
+        last_inserted_id: int | str | None = None,
+        execution_time: float | None = None,
         metadata: Optional["dict[str, Any]"] = None,
         schema: Optional["dict[str, Any]"] = None,
     ) -> None:
@@ -627,10 +627,10 @@ class ArrowResult(StatementResult):
 
 def create_sql_result(
     statement: "SQL",
-    data: Optional[list[dict[str, Any]]] = None,
+    data: list[dict[str, Any]] | None = None,
     rows_affected: int = 0,
-    last_inserted_id: Optional[Union[int, str]] = None,
-    execution_time: Optional[float] = None,
+    last_inserted_id: int | str | None = None,
+    execution_time: float | None = None,
     metadata: Optional["dict[str, Any]"] = None,
     **kwargs: Any,
 ) -> SQLResult:
@@ -663,8 +663,8 @@ def create_arrow_result(
     statement: "SQL",
     data: Any,
     rows_affected: int = 0,
-    last_inserted_id: Optional[Union[int, str]] = None,
-    execution_time: Optional[float] = None,
+    last_inserted_id: int | str | None = None,
+    execution_time: float | None = None,
     metadata: Optional["dict[str, Any]"] = None,
     schema: Optional["dict[str, Any]"] = None,
 ) -> ArrowResult:

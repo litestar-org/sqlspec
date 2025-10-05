@@ -10,7 +10,7 @@ import types
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Final, Optional
+from typing import Any, Final
 
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 
@@ -166,9 +166,7 @@ class PythonFileLoader(BaseMigrationLoader):
 
     __slots__ = ("context", "migrations_dir", "project_root")
 
-    def __init__(
-        self, migrations_dir: Path, project_root: "Optional[Path]" = None, context: "Optional[Any]" = None
-    ) -> None:
+    def __init__(self, migrations_dir: Path, project_root: "Path | None" = None, context: "Any | None" = None) -> None:
         """Initialize Python file loader.
 
         Args:
@@ -396,7 +394,7 @@ class PythonFileLoader(BaseMigrationLoader):
 
 
 def get_migration_loader(
-    file_path: Path, migrations_dir: Path, project_root: "Optional[Path]" = None, context: "Optional[Any]" = None
+    file_path: Path, migrations_dir: Path, project_root: "Path | None" = None, context: "Any | None" = None
 ) -> BaseMigrationLoader:
     """Factory function to get appropriate loader for migration file.
 

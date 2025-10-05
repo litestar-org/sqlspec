@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, Optional, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -32,17 +33,17 @@ __all__ = (
     "SyncDatabaseConfig",
 )
 
-AsyncConfigT = TypeVar("AsyncConfigT", bound="Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]]")
-SyncConfigT = TypeVar("SyncConfigT", bound="Union[SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]")
+AsyncConfigT = TypeVar("AsyncConfigT", bound="AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]")
+SyncConfigT = TypeVar("SyncConfigT", bound="SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]")
 ConfigT = TypeVar(
     "ConfigT",
-    bound="Union[Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]], SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]",
+    bound="AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]",
 )
 
 # Define TypeVars for Generic classes
 ConnectionT = TypeVar("ConnectionT")
 PoolT = TypeVar("PoolT")
-DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]")
+DriverT = TypeVar("DriverT", bound="SyncDriverAdapterBase | AsyncDriverAdapterBase")
 
 logger = get_logger("config")
 
@@ -97,7 +98,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     )
 
     _migration_loader: "SQLFileLoader"
-    _migration_commands: "Union[SyncMigrationCommands, AsyncMigrationCommands]"
+    _migration_commands: "SyncMigrationCommands | AsyncMigrationCommands"
     driver_type: "ClassVar[type[Any]]"
     connection_type: "ClassVar[type[Any]]"
     is_async: "ClassVar[bool]" = False
@@ -106,10 +107,10 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_native_arrow_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
-    bind_key: "Optional[str]"
+    bind_key: "str | None"
     statement_config: "StatementConfig"
-    pool_instance: "Optional[PoolT]"
-    migration_config: "Union[dict[str, Any], MigrationConfig]"
+    pool_instance: "PoolT | None"
+    migration_config: "dict[str, Any] | MigrationConfig"
 
     def __hash__(self) -> int:
         return id(self)
@@ -124,38 +125,38 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         return f"{type(self).__name__}({parts})"
 
     @abstractmethod
-    def create_connection(self) -> "Union[ConnectionT, Awaitable[ConnectionT]]":
+    def create_connection(self) -> "ConnectionT | Awaitable[ConnectionT]":
         """Create and return a new database connection."""
         raise NotImplementedError
 
     @abstractmethod
     def provide_connection(
         self, *args: Any, **kwargs: Any
-    ) -> "Union[AbstractContextManager[ConnectionT], AbstractAsyncContextManager[ConnectionT]]":
+    ) -> "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]":
         """Provide a database connection context manager."""
         raise NotImplementedError
 
     @abstractmethod
     def provide_session(
         self, *args: Any, **kwargs: Any
-    ) -> "Union[AbstractContextManager[DriverT], AbstractAsyncContextManager[DriverT]]":
+    ) -> "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]":
         """Provide a database session context manager."""
         raise NotImplementedError
 
     @abstractmethod
-    def create_pool(self) -> "Union[PoolT, Awaitable[PoolT]]":
+    def create_pool(self) -> "PoolT | Awaitable[PoolT]":
         """Create and return connection pool."""
         raise NotImplementedError
 
     @abstractmethod
-    def close_pool(self) -> "Optional[Awaitable[None]]":
+    def close_pool(self) -> "Awaitable[None] | None":
         """Terminate the connection pool."""
         raise NotImplementedError
 
     @abstractmethod
     def provide_pool(
         self, *args: Any, **kwargs: Any
-    ) -> "Union[PoolT, Awaitable[PoolT], AbstractContextManager[PoolT], AbstractAsyncContextManager[PoolT]]":
+    ) -> "PoolT | Awaitable[PoolT] | AbstractContextManager[PoolT] | AbstractAsyncContextManager[PoolT]":
         """Provide pool instance."""
         raise NotImplementedError
 
@@ -181,7 +182,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         from sqlspec.migrations.commands import create_migration_commands
 
         self._migration_loader = SQLFileLoader()
-        self._migration_commands = create_migration_commands(self)  # type: ignore[arg-type]
+        self._migration_commands = create_migration_commands(self)  # pyright: ignore
 
     def _ensure_migration_loader(self) -> "SQLFileLoader":
         """Get the migration SQL loader and auto-load files if needed.
@@ -202,7 +203,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         return self._migration_loader
 
-    def _ensure_migration_commands(self) -> "Union[SyncMigrationCommands, AsyncMigrationCommands]":
+    def _ensure_migration_commands(self) -> "SyncMigrationCommands | AsyncMigrationCommands":
         """Get the migration commands instance.
 
         Returns:
@@ -221,7 +222,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """
         return self._ensure_migration_loader()
 
-    def load_migration_sql_files(self, *paths: "Union[str, Path]") -> None:
+    def load_migration_sql_files(self, *paths: "str | Path") -> None:
         """Load additional migration SQL files from specified paths.
 
         Args:
@@ -237,7 +238,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             else:
                 logger.warning("Migration path does not exist: %s", path_obj)
 
-    def get_migration_commands(self) -> "Union[SyncMigrationCommands, AsyncMigrationCommands]":
+    def get_migration_commands(self) -> "SyncMigrationCommands | AsyncMigrationCommands":
         """Get migration commands for this configuration.
 
         Returns:
@@ -265,7 +266,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         await cast("AsyncMigrationCommands", commands).downgrade(revision)
 
-    async def get_current_migration(self, verbose: bool = False) -> "Optional[str]":
+    async def get_current_migration(self, verbose: bool = False) -> "str | None":
         """Get the current migration version.
 
         Args:
@@ -289,7 +290,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         await cast("AsyncMigrationCommands", commands).revision(message, file_type)
 
-    async def init_migrations(self, directory: "Optional[str]" = None, package: bool = True) -> None:
+    async def init_migrations(self, directory: "str | None" = None, package: bool = True) -> None:
         """Initialize migration directory structure.
 
         Args:
@@ -317,16 +318,16 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     def __init__(
         self,
         *,
-        connection_config: Optional[dict[str, Any]] = None,
-        migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        connection_config: dict[str, Any] | None = None,
+        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
+        self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
         if statement_config is None:
@@ -347,7 +348,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         raise NotImplementedError
 
     def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractContextManager[DriverT]":
         """Provide a database session context manager."""
         raise NotImplementedError
@@ -373,16 +374,16 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     def __init__(
         self,
         *,
-        connection_config: "Optional[dict[str, Any]]" = None,
-        migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        connection_config: "dict[str, Any] | None" = None,
+        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
+        self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
         if statement_config is None:
@@ -403,7 +404,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         raise NotImplementedError
 
     def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[DriverT]":
         """Provide a database session context manager."""
         raise NotImplementedError
@@ -429,17 +430,17 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     def __init__(
         self,
         *,
-        pool_config: "Optional[dict[str, Any]]" = None,
-        pool_instance: "Optional[PoolT]" = None,
-        migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        pool_config: "dict[str, Any] | None" = None,
+        pool_instance: "PoolT | None" = None,
+        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
+        self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
         if statement_config is None:
@@ -481,7 +482,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         raise NotImplementedError
 
     def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractContextManager[DriverT]":
         """Provide a database session context manager."""
         raise NotImplementedError
@@ -508,17 +509,17 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     def __init__(
         self,
         *,
-        pool_config: "Optional[dict[str, Any]]" = None,
-        pool_instance: "Optional[PoolT]" = None,
-        migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        pool_config: "dict[str, Any] | None" = None,
+        pool_instance: "PoolT | None" = None,
+        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
+        self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
         if statement_config is None:
@@ -562,7 +563,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         raise NotImplementedError
 
     def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[DriverT]":
         """Provide a database session context manager."""
         raise NotImplementedError

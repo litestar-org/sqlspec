@@ -3,12 +3,13 @@ import inspect
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from click import Group
 
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+    from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 __all__ = ("add_migration_commands", "get_sqlspec_group")
 
@@ -89,7 +90,7 @@ def get_sqlspec_group() -> "Group":
     return sqlspec_group
 
 
-def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
+def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     """Add migration commands to the database group.
 
     Args:
@@ -147,8 +148,8 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     )
 
     def get_config_by_bind_key(
-        ctx: "click.Context", bind_key: Optional[str]
-    ) -> "Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]":
+        ctx: "click.Context", bind_key: str | None
+    ) -> "AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]":
         """Get the SQLSpec config for the specified bind key.
 
         Args:
@@ -179,7 +180,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         if isinstance(config, DatabaseConfig):
             config = config.config
 
-        return cast("Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]", config)
+        return cast("AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]", config)
 
     def get_configs_with_migrations(ctx: "click.Context", enabled_only: bool = False) -> "list[tuple[str, Any]]":
         """Get all configurations that have migrations enabled.
@@ -237,12 +238,12 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
 
     def process_multiple_configs(
         ctx: "click.Context",
-        bind_key: Optional[str],
+        bind_key: str | None,
         include: "tuple[str, ...]",
         exclude: "tuple[str, ...]",
         dry_run: bool,
         operation_name: str,
-    ) -> "Optional[list[tuple[str, Any]]]":
+    ) -> "list[tuple[str, Any]] | None":
         """Process configuration selection for multi-config operations.
 
         Args:
@@ -290,7 +291,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     @include_option
     @exclude_option
     def show_database_revision(  # pyright: ignore[reportUnusedFunction]
-        bind_key: Optional[str], verbose: bool, include: "tuple[str, ...]", exclude: "tuple[str, ...]"
+        bind_key: str | None, verbose: bool, include: "tuple[str, ...]", exclude: "tuple[str, ...]"
     ) -> None:
         """Show current database revision."""
         from sqlspec.migrations.commands import create_migration_commands
@@ -318,7 +319,9 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 for config_name, config in configs_to_process:
                     console.print(f"\n[blue]Configuration: {config_name}[/]")
                     try:
-                        migration_commands = create_migration_commands(config=config)
+                        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
+                            create_migration_commands(config=config)
+                        )
                         await maybe_await(migration_commands.current(verbose=verbose))
                     except Exception as e:
                         console.print(f"[red]✗ Failed to get current revision for {config_name}: {e}[/]")
@@ -338,7 +341,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     @dry_run_option
     @click.argument("revision", type=str, default="-1")
     def downgrade_database(  # pyright: ignore[reportUnusedFunction]
-        bind_key: Optional[str],
+        bind_key: str | None,
         revision: str,
         no_prompt: bool,
         include: "tuple[str, ...]",
@@ -379,7 +382,9 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 for config_name, config in configs_to_process:
                     console.print(f"[blue]Downgrading configuration: {config_name}[/]")
                     try:
-                        migration_commands = create_migration_commands(config=config)
+                        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
+                            create_migration_commands(config=config)
+                        )
                         await maybe_await(migration_commands.downgrade(revision=revision))
                         console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
                     except Exception as e:
@@ -408,7 +413,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     @execution_mode_option
     @click.argument("revision", type=str, default="head")
     def upgrade_database(  # pyright: ignore[reportUnusedFunction]
-        bind_key: Optional[str],
+        bind_key: str | None,
         revision: str,
         no_prompt: bool,
         include: "tuple[str, ...]",
@@ -449,7 +454,9 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
                 for config_name, config in configs_to_process:
                     console.print(f"[blue]Upgrading configuration: {config_name}[/]")
                     try:
-                        migration_commands = create_migration_commands(config=config)
+                        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
+                            create_migration_commands(config=config)
+                        )
                         await maybe_await(migration_commands.upgrade(revision=revision))
                         console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
                     except Exception as e:
@@ -474,7 +481,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     @database_group.command(help="Stamp the revision table with the given revision")
     @click.argument("revision", type=str)
     @bind_key_option
-    def stamp(bind_key: Optional[str], revision: str) -> None:  # pyright: ignore[reportUnusedFunction]
+    def stamp(bind_key: str | None, revision: str) -> None:  # pyright: ignore[reportUnusedFunction]
         """Stamp the revision table with the given revision."""
         from sqlspec.migrations.commands import create_migration_commands
         from sqlspec.utils.sync_tools import run_
@@ -494,7 +501,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     @click.option("--package", is_flag=True, default=True, help="Create `__init__.py` for created folder")
     @no_prompt_option
     def init_sqlspec(  # pyright: ignore[reportUnusedFunction]
-        bind_key: Optional[str], directory: Optional[str], package: bool, no_prompt: bool
+        bind_key: str | None, directory: str | None, package: bool, no_prompt: bool
     ) -> None:
         """Initialize the database migrations."""
         from rich.prompt import Confirm
@@ -536,7 +543,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     @click.option("-m", "--message", default=None, help="Revision message")
     @no_prompt_option
     def create_revision(  # pyright: ignore[reportUnusedFunction]
-        bind_key: Optional[str], message: Optional[str], no_prompt: bool
+        bind_key: str | None, message: str | None, no_prompt: bool
     ) -> None:
         """Create a new database revision."""
         from rich.prompt import Prompt
@@ -562,7 +569,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
 
     @database_group.command(name="show-config", help="Show all configurations with migrations enabled.")
     @bind_key_option
-    def show_config(bind_key: Optional[str] = None) -> None:  # pyright: ignore[reportUnusedFunction]
+    def show_config(bind_key: str | None = None) -> None:  # pyright: ignore[reportUnusedFunction]
         """Show and display all configurations with migrations enabled."""
         from rich.table import Table
 

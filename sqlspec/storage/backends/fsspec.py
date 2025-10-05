@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
@@ -22,8 +22,8 @@ class _ArrowStreamer:
         self.backend = backend
         self.pattern = pattern
         self.kwargs = kwargs
-        self.paths_iterator: Optional[Iterator[str]] = None
-        self.batch_iterator: Optional[Iterator[ArrowRecordBatch]] = None
+        self.paths_iterator: Iterator[str] | None = None
+        self.batch_iterator: Iterator[ArrowRecordBatch] | None = None
 
     def __aiter__(self) -> "_ArrowStreamer":
         return self
@@ -103,7 +103,7 @@ class FSSpecBackend:
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
 
-    def _resolve_path(self, path: Union[str, Path]) -> str:
+    def _resolve_path(self, path: str | Path) -> str:
         """Resolve path relative to base_path."""
         path_str = str(path)
         if self.base_path:
@@ -125,12 +125,12 @@ class FSSpecBackend:
     def base_uri(self) -> str:
         return self._fs_uri
 
-    def read_bytes(self, path: Union[str, Path], **kwargs: Any) -> bytes:
+    def read_bytes(self, path: str | Path, **kwargs: Any) -> bytes:
         """Read bytes from an object."""
         resolved_path = self._resolve_path(path)
         return self.fs.cat(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore
 
-    def write_bytes(self, path: Union[str, Path], data: bytes, **kwargs: Any) -> None:
+    def write_bytes(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
         """Write bytes to an object."""
         resolved_path = self._resolve_path(path)
 
@@ -143,38 +143,38 @@ class FSSpecBackend:
         with self.fs.open(resolved_path, mode="wb", **kwargs) as f:
             f.write(data)  # pyright: ignore
 
-    def read_text(self, path: Union[str, Path], encoding: str = "utf-8", **kwargs: Any) -> str:
+    def read_text(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from an object."""
         data = self.read_bytes(path, **kwargs)
         return data.decode(encoding)
 
-    def write_text(self, path: Union[str, Path], data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to an object."""
         self.write_bytes(path, data.encode(encoding), **kwargs)
 
-    def exists(self, path: Union[str, Path], **kwargs: Any) -> bool:
+    def exists(self, path: str | Path, **kwargs: Any) -> bool:
         """Check if an object exists."""
         resolved_path = self._resolve_path(path)
         return self.fs.exists(resolved_path, **kwargs)  # type: ignore[no-any-return]
 
-    def delete(self, path: Union[str, Path], **kwargs: Any) -> None:
+    def delete(self, path: str | Path, **kwargs: Any) -> None:
         """Delete an object."""
         resolved_path = self._resolve_path(path)
         self.fs.rm(resolved_path, **kwargs)
 
-    def copy(self, source: Union[str, Path], destination: Union[str, Path], **kwargs: Any) -> None:
+    def copy(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Copy an object."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         self.fs.copy(source_path, dest_path, **kwargs)
 
-    def move(self, source: Union[str, Path], destination: Union[str, Path], **kwargs: Any) -> None:
+    def move(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Move an object."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         self.fs.mv(source_path, dest_path, **kwargs)
 
-    def read_arrow(self, path: Union[str, Path], **kwargs: Any) -> "ArrowTable":
+    def read_arrow(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
         """Read an Arrow table from storage."""
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
@@ -184,7 +184,7 @@ class FSSpecBackend:
         with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
             return pq.read_table(f)
 
-    def write_arrow(self, path: Union[str, Path], table: "ArrowTable", **kwargs: Any) -> None:
+    def write_arrow(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
         """Write an Arrow table to storage."""
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
@@ -206,17 +206,17 @@ class FSSpecBackend:
         resolved_pattern = self._resolve_path(pattern)
         return sorted(self.fs.glob(resolved_pattern, **kwargs))  # pyright: ignore
 
-    def is_object(self, path: Union[str, Path]) -> bool:
+    def is_object(self, path: str | Path) -> bool:
         """Check if path points to an object."""
         resolved_path = self._resolve_path(path)
         return self.fs.exists(resolved_path) and not self.fs.isdir(resolved_path)
 
-    def is_path(self, path: Union[str, Path]) -> bool:
+    def is_path(self, path: str | Path) -> bool:
         """Check if path points to a prefix (directory-like)."""
         resolved_path = self._resolve_path(path)
         return self.fs.isdir(resolved_path)  # type: ignore[no-any-return]
 
-    def get_metadata(self, path: Union[str, Path], **kwargs: Any) -> dict[str, Any]:
+    def get_metadata(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:
         """Get object metadata."""
         try:
             resolved_path = self._resolve_path(path)
@@ -245,7 +245,7 @@ class FSSpecBackend:
         resolved_path = self._resolve_path(path)
         return f"{self._fs_uri}{resolved_path}"
 
-    def _stream_file_batches(self, obj_path: Union[str, Path]) -> "Iterator[ArrowRecordBatch]":
+    def _stream_file_batches(self, obj_path: str | Path) -> "Iterator[ArrowRecordBatch]":
         import pyarrow.parquet as pq
 
         with self.fs.open(obj_path, mode="rb") as f:
@@ -259,11 +259,11 @@ class FSSpecBackend:
         for obj_path in self.glob(pattern, **kwargs):
             yield from self._stream_file_batches(obj_path)
 
-    async def read_bytes_async(self, path: Union[str, Path], **kwargs: Any) -> bytes:
+    async def read_bytes_async(self, path: str | Path, **kwargs: Any) -> bytes:
         """Read bytes from storage asynchronously."""
         return await async_(self.read_bytes)(path, **kwargs)
 
-    async def write_bytes_async(self, path: Union[str, Path], data: bytes, **kwargs: Any) -> None:
+    async def write_bytes_async(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
         """Write bytes to storage asynchronously."""
         return await async_(self.write_bytes)(path, data, **kwargs)
 
@@ -281,11 +281,11 @@ class FSSpecBackend:
 
         return _ArrowStreamer(self, pattern, **kwargs)
 
-    async def read_text_async(self, path: Union[str, Path], encoding: str = "utf-8", **kwargs: Any) -> str:
+    async def read_text_async(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage asynchronously."""
         return await async_(self.read_text)(path, encoding, **kwargs)
 
-    async def write_text_async(self, path: Union[str, Path], data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    async def write_text_async(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to storage asynchronously."""
         await async_(self.write_text)(path, data, encoding, **kwargs)
 
@@ -293,23 +293,23 @@ class FSSpecBackend:
         """List objects in storage asynchronously."""
         return await async_(self.list_objects)(prefix, recursive, **kwargs)
 
-    async def exists_async(self, path: Union[str, Path], **kwargs: Any) -> bool:
+    async def exists_async(self, path: str | Path, **kwargs: Any) -> bool:
         """Check if object exists in storage asynchronously."""
         return await async_(self.exists)(path, **kwargs)
 
-    async def delete_async(self, path: Union[str, Path], **kwargs: Any) -> None:
+    async def delete_async(self, path: str | Path, **kwargs: Any) -> None:
         """Delete object from storage asynchronously."""
         await async_(self.delete)(path, **kwargs)
 
-    async def copy_async(self, source: Union[str, Path], destination: Union[str, Path], **kwargs: Any) -> None:
+    async def copy_async(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Copy object in storage asynchronously."""
         await async_(self.copy)(source, destination, **kwargs)
 
-    async def move_async(self, source: Union[str, Path], destination: Union[str, Path], **kwargs: Any) -> None:
+    async def move_async(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Move object in storage asynchronously."""
         await async_(self.move)(source, destination, **kwargs)
 
-    async def get_metadata_async(self, path: Union[str, Path], **kwargs: Any) -> dict[str, Any]:
+    async def get_metadata_async(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:
         """Get object metadata from storage asynchronously."""
         return await async_(self.get_metadata)(path, **kwargs)
 
@@ -317,10 +317,10 @@ class FSSpecBackend:
         """Generate a signed URL asynchronously."""
         return await async_(self.sign)(path, expires_in, for_upload)
 
-    async def read_arrow_async(self, path: Union[str, Path], **kwargs: Any) -> "ArrowTable":
+    async def read_arrow_async(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from storage asynchronously."""
         return await async_(self.read_arrow)(path, **kwargs)
 
-    async def write_arrow_async(self, path: Union[str, Path], table: "ArrowTable", **kwargs: Any) -> None:
+    async def write_arrow_async(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously."""
         await async_(self.write_arrow)(path, table, **kwargs)

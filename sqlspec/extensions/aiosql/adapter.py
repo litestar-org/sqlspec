@@ -8,7 +8,7 @@ from files using aiosql while using SQLSpec's features for execution and type ma
 import logging
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
@@ -34,7 +34,7 @@ class AsyncCursorLike:
             return list(self.result.data)
         return []
 
-    async def fetchone(self) -> Optional[Any]:
+    async def fetchone(self) -> Any | None:
         rows = await self.fetchall()
         return rows[0] if rows else None
 
@@ -48,7 +48,7 @@ class CursorLike:
             return list(self.result.data)
         return []
 
-    def fetchone(self) -> Optional[Any]:
+    def fetchone(self) -> Any | None:
         rows = self.fetchall()
         return rows[0] if rows else None
 
@@ -59,7 +59,7 @@ def _check_aiosql_available() -> None:
         raise MissingDependencyError(msg, "aiosql")
 
 
-def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
+def _normalize_dialect(dialect: "str | Any | None") -> str:
     """Normalize dialect name for SQLGlot compatibility.
 
     Args:
@@ -94,7 +94,7 @@ def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
 class _AiosqlAdapterBase:
     """Base adapter class providing common functionality for aiosql integration."""
 
-    def __init__(self, driver: "Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]") -> None:
+    def __init__(self, driver: "SyncDriverAdapterBase | AsyncDriverAdapterBase") -> None:
         """Initialize the base adapter.
 
         Args:
@@ -152,7 +152,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         super().__init__(driver)
 
     def select(
-        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Optional[Any] = None
+        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Any | None = None
     ) -> Generator[Any, None, None]:
         """Execute a SELECT query and return results as generator.
 
@@ -182,8 +182,8 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
             yield from result.data
 
     def select_one(
-        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Optional[Any] = None
-    ) -> Optional[dict[str, Any]]:
+        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Any | None = None
+    ) -> dict[str, Any] | None:
         """Execute a SELECT query and return first result.
 
         Args:
@@ -209,10 +209,10 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         result = cast("SQLResult", self.driver.execute(self._create_sql_object(sql, parameters), connection=conn))
 
         if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
-            return cast("Optional[dict[str, Any]]", result.data[0])
+            return cast("dict[str, Any] | None", result.data[0])
         return None
 
-    def select_value(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
+    def select_value(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Any | None:
         """Execute a SELECT query and return first value of first row.
 
         Args:
@@ -285,7 +285,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
 
         return result.rows_affected if hasattr(result, "rows_affected") else 0
 
-    def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
+    def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Any | None:
         """Execute INSERT with RETURNING and return result.
 
         Args:
@@ -318,7 +318,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
         super().__init__(driver)
 
     async def select(
-        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Optional[Any] = None
+        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Any | None = None
     ) -> list[Any]:
         """Execute a SELECT query and return results as list.
 
@@ -349,8 +349,8 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
         return []
 
     async def select_one(
-        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Optional[Any] = None
-    ) -> Optional[Any]:
+        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Any | None = None
+    ) -> Any | None:
         """Execute a SELECT query and return first result.
 
         Args:
@@ -379,7 +379,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             return result.data[0]
         return None
 
-    async def select_value(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
+    async def select_value(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Any | None:
         """Execute a SELECT query and return first value of first row.
 
         Args:
@@ -446,7 +446,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
         """
         await self.driver.execute_many(self._create_sql_object(sql), parameters=parameters, connection=conn)  # type: ignore[misc]
 
-    async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
+    async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Any | None:
         """Execute INSERT with RETURNING and return result.
 
         Args:

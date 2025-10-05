@@ -21,12 +21,12 @@ Processing:
 
 import re
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from functools import singledispatch
-from typing import Any, Callable, Optional
+from typing import Any
 
 from mypy_extensions import mypyc_attr
 
@@ -108,7 +108,7 @@ class TypedParameter:
 
     __slots__ = ("_hash", "original_type", "semantic_name", "value")
 
-    def __init__(self, value: Any, original_type: Optional[type] = None, semantic_name: Optional[str] = None) -> None:
+    def __init__(self, value: Any, original_type: type | None = None, semantic_name: str | None = None) -> None:
         """Initialize typed parameter wrapper.
 
         Args:
@@ -119,7 +119,7 @@ class TypedParameter:
         self.value = value
         self.original_type = original_type or type(value)
         self.semantic_name = semantic_name
-        self._hash: Optional[int] = None
+        self._hash: int | None = None
 
     def __hash__(self) -> int:
         """Cached hash value."""
@@ -145,7 +145,7 @@ class TypedParameter:
 
 
 @singledispatch
-def _wrap_parameter_by_type(value: Any, semantic_name: Optional[str] = None) -> Any:
+def _wrap_parameter_by_type(value: Any, semantic_name: str | None = None) -> Any:
     """Type-specific parameter wrapping using singledispatch.
 
     Args:
@@ -159,31 +159,31 @@ def _wrap_parameter_by_type(value: Any, semantic_name: Optional[str] = None) -> 
 
 
 @_wrap_parameter_by_type.register
-def _(value: bool, semantic_name: Optional[str] = None) -> TypedParameter:
+def _(value: bool, semantic_name: str | None = None) -> TypedParameter:
     """Wrap boolean values to prevent SQLGlot parsing issues."""
     return TypedParameter(value, bool, semantic_name)
 
 
 @_wrap_parameter_by_type.register
-def _(value: Decimal, semantic_name: Optional[str] = None) -> TypedParameter:
+def _(value: Decimal, semantic_name: str | None = None) -> TypedParameter:
     """Wrap Decimal values to preserve precision."""
     return TypedParameter(value, Decimal, semantic_name)
 
 
 @_wrap_parameter_by_type.register
-def _(value: datetime, semantic_name: Optional[str] = None) -> TypedParameter:
+def _(value: datetime, semantic_name: str | None = None) -> TypedParameter:
     """Wrap datetime values for database-specific formatting."""
     return TypedParameter(value, datetime, semantic_name)
 
 
 @_wrap_parameter_by_type.register
-def _(value: date, semantic_name: Optional[str] = None) -> TypedParameter:
+def _(value: date, semantic_name: str | None = None) -> TypedParameter:
     """Wrap date values for database-specific formatting."""
     return TypedParameter(value, date, semantic_name)
 
 
 @_wrap_parameter_by_type.register
-def _(value: bytes, semantic_name: Optional[str] = None) -> TypedParameter:
+def _(value: bytes, semantic_name: str | None = None) -> TypedParameter:
     """Wrap bytes values to prevent string conversion issues in ADBC/Arrow."""
     return TypedParameter(value, bytes, semantic_name)
 
@@ -205,7 +205,7 @@ class ParameterInfo:
     __slots__ = ("name", "ordinal", "placeholder_text", "position", "style")
 
     def __init__(
-        self, name: Optional[str], style: ParameterStyle, position: int, ordinal: int, placeholder_text: str
+        self, name: str | None, style: ParameterStyle, position: int, ordinal: int, placeholder_text: str
     ) -> None:
         """Initialize parameter information.
 
@@ -266,17 +266,17 @@ class ParameterStyleConfig:
     def __init__(
         self,
         default_parameter_style: ParameterStyle,
-        supported_parameter_styles: Optional[set[ParameterStyle]] = None,
-        supported_execution_parameter_styles: Optional[set[ParameterStyle]] = None,
-        default_execution_parameter_style: Optional[ParameterStyle] = None,
-        type_coercion_map: Optional[dict[type, Callable[[Any], Any]]] = None,
+        supported_parameter_styles: set[ParameterStyle] | None = None,
+        supported_execution_parameter_styles: set[ParameterStyle] | None = None,
+        default_execution_parameter_style: ParameterStyle | None = None,
+        type_coercion_map: dict[type, Callable[[Any], Any]] | None = None,
         has_native_list_expansion: bool = False,
         needs_static_script_compilation: bool = False,
         allow_mixed_parameter_styles: bool = False,
         preserve_parameter_format: bool = True,
         preserve_original_params_for_many: bool = False,
-        output_transformer: Optional[Callable[[str, Any], tuple[str, Any]]] = None,
-        ast_transformer: Optional[Callable[[Any, Any], tuple[Any, Any]]] = None,
+        output_transformer: Callable[[str, Any], tuple[str, Any]] | None = None,
+        ast_transformer: Callable[[Any, Any], tuple[Any, Any]] | None = None,
     ) -> None:
         """Initialize parameter style configuration.
 
@@ -355,7 +355,7 @@ class ParameterValidator:
         self._parameter_cache: OrderedDict[str, list[ParameterInfo]] = OrderedDict()
         self._cache_max_size = cache_max_size
 
-    def _extract_parameter_style(self, match: "re.Match[str]") -> "tuple[Optional[ParameterStyle], Optional[str]]":
+    def _extract_parameter_style(self, match: "re.Match[str]") -> "tuple[ParameterStyle | None, str | None]":
         """Extract parameter style and name from regex match.
 
         Args:
@@ -444,7 +444,7 @@ class ParameterValidator:
         self._parameter_cache[sql] = parameters
         return parameters
 
-    def get_sqlglot_incompatible_styles(self, dialect: Optional[str] = None) -> "set[ParameterStyle]":
+    def get_sqlglot_incompatible_styles(self, dialect: str | None = None) -> "set[ParameterStyle]":
         """Get parameter styles incompatible with SQLGlot for dialect.
 
         Args:
@@ -507,7 +507,7 @@ class ParameterConverter:
             ParameterStyle.POSITIONAL_PYFORMAT: lambda _: "%s",
         }
 
-    def normalize_sql_for_parsing(self, sql: str, dialect: Optional[str] = None) -> "tuple[str, list[ParameterInfo]]":
+    def normalize_sql_for_parsing(self, sql: str, dialect: str | None = None) -> "tuple[str, list[ParameterInfo]]":
         """Convert SQL to parsable format.
 
         Takes raw SQL with potentially incompatible parameter styles and converts
@@ -1019,7 +1019,7 @@ class ParameterProcessor:
         return self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)
 
     def _generate_processor_cache_key(
-        self, sql: str, parameters: Any, config: ParameterStyleConfig, is_many: bool, dialect: "Optional[str]"
+        self, sql: str, parameters: Any, config: ParameterStyleConfig, is_many: bool, dialect: "str | None"
     ) -> str:
         """Generate optimized cache key for parameter processing.
 
@@ -1048,12 +1048,7 @@ class ParameterProcessor:
         return f"{sql}:{param_fingerprint}:{config.default_parameter_style}:{is_many}:{dialect}"
 
     def process(
-        self,
-        sql: str,
-        parameters: Any,
-        config: ParameterStyleConfig,
-        dialect: Optional[str] = None,
-        is_many: bool = False,
+        self, sql: str, parameters: Any, config: ParameterStyleConfig, dialect: str | None = None, is_many: bool = False
     ) -> "tuple[str, Any]":
         """Process parameters through the complete pipeline.
 
@@ -1127,7 +1122,7 @@ class ParameterProcessor:
         return processed_sql, processed_parameters
 
     def get_sqlglot_compatible_sql(
-        self, sql: str, parameters: Any, config: ParameterStyleConfig, dialect: Optional[str] = None
+        self, sql: str, parameters: Any, config: ParameterStyleConfig, dialect: str | None = None
     ) -> "tuple[str, Any]":
         """Get SQL normalized for parsing only (Phase 1 only).
 
@@ -1184,7 +1179,7 @@ class ParameterProcessor:
 
         return True
 
-    def _needs_sqlglot_normalization(self, param_info: "list[ParameterInfo]", dialect: Optional[str] = None) -> bool:
+    def _needs_sqlglot_normalization(self, param_info: "list[ParameterInfo]", dialect: str | None = None) -> bool:
         """Check if SQLGlot normalization is needed for this SQL."""
         incompatible_styles = self._validator.get_sqlglot_incompatible_styles(dialect)
         return any(p.style in incompatible_styles for p in param_info)
@@ -1297,7 +1292,7 @@ def is_iterable_parameters(obj: Any) -> bool:
     )
 
 
-def wrap_with_type(value: Any, semantic_name: Optional[str] = None) -> Any:
+def wrap_with_type(value: Any, semantic_name: str | None = None) -> Any:
     """Public API for type wrapping.
 
     Args:

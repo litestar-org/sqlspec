@@ -23,11 +23,11 @@ from abc import ABC, abstractmethod
 from collections import abc
 from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias
 
 import sqlglot
 from sqlglot import exp
-from typing_extensions import TypeAlias, TypeVar
+from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
     from sqlglot.expressions import Condition
@@ -125,7 +125,7 @@ class BeforeAfterFilter(StatementFilter):
 
     __slots__ = ("_after", "_before", "_field_name")
 
-    def __init__(self, field_name: str, before: Optional[datetime] = None, after: Optional[datetime] = None) -> None:
+    def __init__(self, field_name: str, before: datetime | None = None, after: datetime | None = None) -> None:
         self._field_name = field_name
         self._before = before
         self._after = after
@@ -135,11 +135,11 @@ class BeforeAfterFilter(StatementFilter):
         return self._field_name
 
     @property
-    def before(self) -> Optional[datetime]:
+    def before(self) -> datetime | None:
         return self._before
 
     @property
-    def after(self) -> Optional[datetime]:
+    def after(self) -> datetime | None:
         return self._after
 
     def get_param_names(self) -> list[str]:
@@ -206,7 +206,7 @@ class OnBeforeAfterFilter(StatementFilter):
     __slots__ = ("_field_name", "_on_or_after", "_on_or_before")
 
     def __init__(
-        self, field_name: str, on_or_before: Optional[datetime] = None, on_or_after: Optional[datetime] = None
+        self, field_name: str, on_or_before: datetime | None = None, on_or_after: datetime | None = None
     ) -> None:
         self._field_name = field_name
         self._on_or_before = on_or_before
@@ -217,11 +217,11 @@ class OnBeforeAfterFilter(StatementFilter):
         return self._field_name
 
     @property
-    def on_or_before(self) -> Optional[datetime]:
+    def on_or_before(self) -> datetime | None:
         return self._on_or_before
 
     @property
-    def on_or_after(self) -> Optional[datetime]:
+    def on_or_after(self) -> datetime | None:
         return self._on_or_after
 
     def get_param_names(self) -> list[str]:
@@ -298,7 +298,7 @@ class InCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_field_name", "_values")
 
-    def __init__(self, field_name: str, values: Optional[abc.Collection[T]] = None) -> None:
+    def __init__(self, field_name: str, values: abc.Collection[T] | None = None) -> None:
         self._field_name = field_name
         self._values = values
 
@@ -307,7 +307,7 @@ class InCollectionFilter(InAnyFilter[T]):
         return self._field_name
 
     @property
-    def values(self) -> Optional[abc.Collection[T]]:
+    def values(self) -> abc.Collection[T] | None:
         return self._values
 
     def get_param_names(self) -> list[str]:
@@ -340,7 +340,7 @@ class InCollectionFilter(InAnyFilter[T]):
 
         result = statement.where(exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
 
-        for resolved_name, value in zip(resolved_names, self.values):
+        for resolved_name, value in zip(resolved_names, self.values, strict=False):
             result = result.add_named_parameter(resolved_name, value)
         return result
 
@@ -358,7 +358,7 @@ class NotInCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_field_name", "_values")
 
-    def __init__(self, field_name: str, values: Optional[abc.Collection[T]] = None) -> None:
+    def __init__(self, field_name: str, values: abc.Collection[T] | None = None) -> None:
         self._field_name = field_name
         self._values = values
 
@@ -367,7 +367,7 @@ class NotInCollectionFilter(InAnyFilter[T]):
         return self._field_name
 
     @property
-    def values(self) -> Optional[abc.Collection[T]]:
+    def values(self) -> abc.Collection[T] | None:
         return self._values
 
     def get_param_names(self) -> list[str]:
@@ -400,7 +400,7 @@ class NotInCollectionFilter(InAnyFilter[T]):
             exp.Not(this=exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
         )
 
-        for resolved_name, value in zip(resolved_names, self.values):
+        for resolved_name, value in zip(resolved_names, self.values, strict=False):
             result = result.add_named_parameter(resolved_name, value)
         return result
 
@@ -418,7 +418,7 @@ class AnyCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_field_name", "_values")
 
-    def __init__(self, field_name: str, values: Optional[abc.Collection[T]] = None) -> None:
+    def __init__(self, field_name: str, values: abc.Collection[T] | None = None) -> None:
         self._field_name = field_name
         self._values = values
 
@@ -427,7 +427,7 @@ class AnyCollectionFilter(InAnyFilter[T]):
         return self._field_name
 
     @property
-    def values(self) -> Optional[abc.Collection[T]]:
+    def values(self) -> abc.Collection[T] | None:
         return self._values
 
     def get_param_names(self) -> list[str]:
@@ -461,7 +461,7 @@ class AnyCollectionFilter(InAnyFilter[T]):
         array_expr = exp.Array(expressions=placeholder_expressions)
         result = statement.where(exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr)))
 
-        for resolved_name, value in zip(resolved_names, self.values):
+        for resolved_name, value in zip(resolved_names, self.values, strict=False):
             result = result.add_named_parameter(resolved_name, value)
         return result
 
@@ -479,7 +479,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_field_name", "_values")
 
-    def __init__(self, field_name: str, values: Optional[abc.Collection[T]] = None) -> None:
+    def __init__(self, field_name: str, values: abc.Collection[T] | None = None) -> None:
         self._field_name = field_name
         self._values = values
 
@@ -488,7 +488,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         return self._field_name
 
     @property
-    def values(self) -> Optional[abc.Collection[T]]:
+    def values(self) -> abc.Collection[T] | None:
         return self._values
 
     def get_param_names(self) -> list[str]:
@@ -520,7 +520,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         condition = exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr))
         result = statement.where(exp.Not(this=condition))
 
-        for resolved_name, value in zip(resolved_names, self.values):
+        for resolved_name, value in zip(resolved_names, self.values, strict=False):
             result = result.add_named_parameter(resolved_name, value)
         return result
 
@@ -650,13 +650,13 @@ class SearchFilter(StatementFilter):
 
     __slots__ = ("_field_name", "_ignore_case", "_value")
 
-    def __init__(self, field_name: Union[str, set[str]], value: str, ignore_case: Optional[bool] = False) -> None:
+    def __init__(self, field_name: str | set[str], value: str, ignore_case: bool | None = False) -> None:
         self._field_name = field_name
         self._value = value
         self._ignore_case = ignore_case
 
     @property
-    def field_name(self) -> Union[str, set[str]]:
+    def field_name(self) -> str | set[str]:
         return self._field_name
 
     @property
@@ -664,10 +664,10 @@ class SearchFilter(StatementFilter):
         return self._value
 
     @property
-    def ignore_case(self) -> Optional[bool]:
+    def ignore_case(self) -> bool | None:
         return self._ignore_case
 
-    def get_param_name(self) -> Optional[str]:
+    def get_param_name(self) -> str | None:
         """Get parameter name without storing it."""
         if not self.value:
             return None
@@ -726,7 +726,7 @@ class NotInSearchFilter(SearchFilter):
     Constructs WHERE field_name NOT LIKE '%value%' clauses.
     """
 
-    def get_param_name(self) -> Optional[str]:
+    def get_param_name(self) -> str | None:
         """Get parameter name without storing it."""
         if not self.value:
             return None
@@ -817,18 +817,18 @@ def apply_filter(statement: "SQL", filter_obj: StatementFilter) -> "SQL":
     return filter_obj.append_to_statement(statement)
 
 
-FilterTypes: TypeAlias = Union[
-    BeforeAfterFilter,
-    OnBeforeAfterFilter,
-    InCollectionFilter[Any],
-    LimitOffsetFilter,
-    OrderByFilter,
-    SearchFilter,
-    NotInCollectionFilter[Any],
-    NotInSearchFilter,
-    AnyCollectionFilter[Any],
-    NotAnyCollectionFilter[Any],
-]
+FilterTypes: TypeAlias = (
+    BeforeAfterFilter
+    | OnBeforeAfterFilter
+    | InCollectionFilter[Any]
+    | LimitOffsetFilter
+    | OrderByFilter
+    | SearchFilter
+    | NotInCollectionFilter[Any]
+    | NotInSearchFilter
+    | AnyCollectionFilter[Any]
+    | NotAnyCollectionFilter[Any]
+)
 
 
 def create_filters(filters: "list[StatementFilter]") -> tuple["StatementFilter", ...]:

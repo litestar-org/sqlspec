@@ -1,7 +1,7 @@
 """Asynchronous driver protocol implementation."""
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Optional, TypeVar, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Final, NoReturn, TypeVar, cast, overload
 
 from sqlspec.core import SQL, Statement
 from sqlspec.driver._common import CommonDriverAttributesMixin, DataDictionaryMixin, ExecutionResult, VersionInfo
@@ -96,7 +96,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         """Commit the current transaction on the current connection."""
 
     @abstractmethod
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
+    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
         """Hook for database-specific special operations (e.g., PostgreSQL COPY, bulk operations).
 
         This method is called first in dispatch_statement_execution() to allow drivers to handle
@@ -169,10 +169,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
 
     async def execute(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder]",
+        statement: "SQL | Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        statement_config: "Optional[StatementConfig]" = None,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
@@ -183,11 +183,11 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
 
     async def execute_many(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder]",
+        statement: "SQL | Statement | QueryBuilder",
         /,
         parameters: "Sequence[StatementParameters]",
-        *filters: "Union[StatementParameters, StatementFilter]",
-        statement_config: "Optional[StatementConfig]" = None,
+        *filters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute statement multiple times with different parameters.
@@ -206,10 +206,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
 
     async def execute_script(
         self,
-        statement: "Union[str, SQL]",
+        statement: "str | SQL",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        statement_config: "Optional[StatementConfig]" = None,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a multi-statement script.
@@ -225,34 +225,34 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
     @overload
     async def select_one(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[ModelDTOT]",
-        statement_config: "Optional[StatementConfig]" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "ModelDTOT": ...
 
     @overload
     async def select_one(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        *parameters: "StatementParameters | StatementFilter",
         schema_type: None = None,
-        statement_config: "Optional[StatementConfig]" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
 
     async def select_one(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[ModelDTOT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "Union[dict[str, Any], ModelDTOT]":
+    ) -> "dict[str, Any] | ModelDTOT":
         """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
@@ -270,34 +270,34 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
     @overload
     async def select_one_or_none(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[ModelDTOT]",
-        statement_config: "Optional[StatementConfig]" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "Optional[ModelDTOT]": ...
+    ) -> "ModelDTOT | None": ...
 
     @overload
     async def select_one_or_none(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        *parameters: "StatementParameters | StatementFilter",
         schema_type: None = None,
-        statement_config: "Optional[StatementConfig]" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
+    ) -> "dict[str, Any] | None": ...
 
     async def select_one_or_none(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[ModelDTOT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+    ) -> "dict[str, Any] | ModelDTOT | None":
         """Execute a select statement and return at most one row.
 
         Returns None if no rows are found.
@@ -312,53 +312,53 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             self._raise_expected_at_most_one_row(data_len)
         first_row = data[0]
         return cast(
-            "Optional[Union[dict[str, Any], ModelDTOT]]",
+            "dict[str, Any] | ModelDTOT | None",
             self.to_schema(first_row, schema_type=schema_type) if schema_type else first_row,
         )
 
     @overload
     async def select(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[ModelDTOT]",
-        statement_config: "Optional[StatementConfig]" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "list[ModelDTOT]": ...
 
     @overload
     async def select(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        *parameters: "StatementParameters | StatementFilter",
         schema_type: None = None,
-        statement_config: "Optional[StatementConfig]" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "list[dict[str, Any]]": ...
 
     async def select(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[ModelDTOT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "Union[list[dict[str, Any]], list[ModelDTOT]]":
+    ) -> "list[dict[str, Any]] | list[ModelDTOT]":
         """Execute a select statement and return all rows."""
         result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         return cast(
-            "Union[list[dict[str, Any]], list[ModelDTOT]]", self.to_schema(result.get_data(), schema_type=schema_type)
+            "list[dict[str, Any]] | list[ModelDTOT]", self.to_schema(result.get_data(), schema_type=schema_type)
         )
 
     async def select_value(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        statement_config: "Optional[StatementConfig]" = None,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> Any:
         """Execute a select statement and return a single scalar value.
@@ -386,10 +386,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
 
     async def select_value_or_none(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        statement_config: "Optional[StatementConfig]" = None,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> Any:
         """Execute a select statement and return a single scalar value or None.
@@ -418,34 +418,34 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
     @overload
     async def select_with_total(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[ModelDTOT]",
-        statement_config: "Optional[StatementConfig]" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "tuple[list[ModelDTOT], int]": ...
 
     @overload
     async def select_with_total(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        *parameters: "StatementParameters | StatementFilter",
         schema_type: None = None,
-        statement_config: "Optional[StatementConfig]" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
 
     async def select_with_total(
         self,
-        statement: "Union[Statement, QueryBuilder]",
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[ModelDTOT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "tuple[Union[list[dict[str, Any]], list[ModelDTOT]], int]":
+    ) -> "tuple[list[dict[str, Any]] | list[ModelDTOT], int]":
         """Execute a select statement and return both the data and total count.
 
         This method is designed for pagination scenarios where you need both
@@ -504,7 +504,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
     """Base class for asynchronous data dictionary implementations."""
 
     @abstractmethod
-    async def get_version(self, driver: "AsyncDriverAdapterBase") -> "Optional[VersionInfo]":
+    async def get_version(self, driver: "AsyncDriverAdapterBase") -> "VersionInfo | None":
         """Get database version information.
 
         Args:
@@ -538,7 +538,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
             Database-specific type name
         """
 
-    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "Optional[str]" = None) -> "list[str]":
+    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
         """Get list of tables in schema.
 
         Args:
@@ -552,7 +552,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
         return []
 
     async def get_columns(
-        self, driver: "AsyncDriverAdapterBase", table: str, schema: "Optional[str]" = None
+        self, driver: "AsyncDriverAdapterBase", table: str, schema: "str | None" = None
     ) -> "list[dict[str, Any]]":
         """Get column information for a table.
 
@@ -568,7 +568,7 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
         return []
 
     async def get_indexes(
-        self, driver: "AsyncDriverAdapterBase", table: str, schema: "Optional[str]" = None
+        self, driver: "AsyncDriverAdapterBase", table: str, schema: "str | None" = None
     ) -> "list[dict[str, Any]]":
         """Get index information for a table.
 

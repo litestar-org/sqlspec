@@ -2,7 +2,7 @@
 
 import uuid
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -23,9 +23,9 @@ class SqliteConnectionParams(TypedDict, total=False):
     database: NotRequired[str]
     timeout: NotRequired[float]
     detect_types: NotRequired[int]
-    isolation_level: "NotRequired[Optional[str]]"
+    isolation_level: "NotRequired[str | None]"
     check_same_thread: NotRequired[bool]
-    factory: "NotRequired[Optional[type[SqliteConnection]]]"
+    factory: "NotRequired[type[SqliteConnection] | None]"
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
 
@@ -42,12 +42,12 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     def __init__(
         self,
         *,
-        pool_config: "Optional[Union[SqliteConnectionParams, dict[str, Any]]]" = None,
-        pool_instance: "Optional[SqliteConnectionPool]" = None,
-        migration_config: "Optional[dict[str, Any]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        bind_key: "Optional[str]" = None,
+        pool_config: "SqliteConnectionParams | dict[str, Any] | None" = None,
+        pool_instance: "SqliteConnectionPool | None" = None,
+        migration_config: "dict[str, Any] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+        bind_key: "str | None" = None,
     ) -> None:
         """Initialize SQLite configuration.
 
@@ -113,7 +113,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
 
     @contextmanager
     def provide_session(
-        self, *args: "Any", statement_config: "Optional[StatementConfig]" = None, **kwargs: "Any"
+        self, *args: "Any", statement_config: "StatementConfig | None" = None, **kwargs: "Any"
     ) -> "Generator[SqliteDriver, None, None]":
         """Provide a SQLite driver session.
 

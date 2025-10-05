@@ -8,7 +8,7 @@ SQLSpec provides StructuredFormatter for JSON-formatted logs if desired.
 import logging
 from contextvars import ContextVar
 from logging import LogRecord
-from typing import Any, Optional
+from typing import Any
 
 from sqlspec._serialization import encode_json
 
@@ -22,10 +22,10 @@ __all__ = (
     "suppress_erroneous_sqlglot_log_messages",
 )
 
-correlation_id_var: "ContextVar[Optional[str]]" = ContextVar("correlation_id", default=None)
+correlation_id_var: "ContextVar[str | None]" = ContextVar("correlation_id", default=None)
 
 
-def set_correlation_id(correlation_id: "Optional[str]") -> None:
+def set_correlation_id(correlation_id: "str | None") -> None:
     """Set the correlation ID for the current context.
 
     Args:
@@ -34,7 +34,7 @@ def set_correlation_id(correlation_id: "Optional[str]") -> None:
     correlation_id_var.set(correlation_id)
 
 
-def get_correlation_id() -> "Optional[str]":
+def get_correlation_id() -> "str | None":
     """Get the current correlation ID.
 
     Returns:
@@ -114,7 +114,7 @@ class SqlglotCommandFallbackFilter(logging.Filter):
         return "Falling back to parsing as a 'Command'" not in record.getMessage()
 
 
-def get_logger(name: "Optional[str]" = None) -> logging.Logger:
+def get_logger(name: "str | None" = None) -> logging.Logger:
     """Get a logger instance with standardized configuration.
 
     Args:

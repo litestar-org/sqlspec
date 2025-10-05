@@ -7,7 +7,7 @@ backward compatibility.
 
 import re
 from functools import lru_cache
-from typing import Any, Final, Optional
+from typing import Any, Final
 
 from sqlspec.core.type_conversion import BaseTypeConverter
 
@@ -62,7 +62,7 @@ class PostgreSQLTypeConverter(BaseTypeConverter):
             return value
         return self._convert_cache(value)
 
-    def detect_type(self, value: str) -> Optional[str]:
+    def detect_type(self, value: str) -> str | None:
         """Detect types including PostgreSQL-specific types.
 
         Args:

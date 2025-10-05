@@ -4,7 +4,7 @@ Re-exports common JSON encoding and decoding functions from the core
 serialization module for convenient access.
 """
 
-from typing import Any, Literal, Union, overload
+from typing import Any, Literal, overload
 
 from sqlspec._serialization import decode_json, encode_json
 
@@ -17,7 +17,7 @@ def to_json(data: Any, *, as_bytes: Literal[False] = ...) -> str: ...
 def to_json(data: Any, *, as_bytes: Literal[True]) -> bytes: ...
 
 
-def to_json(data: Any, *, as_bytes: bool = False) -> Union[str, bytes]:
+def to_json(data: Any, *, as_bytes: bool = False) -> str | bytes:
     """Encode data to JSON string or bytes.
 
     Args:
@@ -40,7 +40,7 @@ def from_json(data: str) -> Any: ...
 def from_json(data: bytes, *, decode_bytes: bool = ...) -> Any: ...
 
 
-def from_json(data: Union[str, bytes], *, decode_bytes: bool = True) -> Any:
+def from_json(data: str | bytes, *, decode_bytes: bool = True) -> Any:
     """Decode JSON string or bytes to Python object.
 
     Args:

@@ -4,7 +4,7 @@ Provides a fluent interface for building SQL UPDATE queries with
 parameter binding and validation.
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -70,9 +70,9 @@ class Update(
     """
 
     __slots__ = ("_table",)
-    _expression: Optional[exp.Expression]
+    _expression: exp.Expression | None
 
-    def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
+    def __init__(self, table: str | None = None, **kwargs: Any) -> None:
         """Initialize UPDATE with optional table.
 
         Args:
@@ -100,9 +100,9 @@ class Update(
 
     def join(
         self,
-        table: "Union[str, exp.Expression, Select]",
-        on: "Union[str, exp.Expression]",
-        alias: "Optional[str]" = None,
+        table: "str | exp.Expression | Select",
+        on: "str | exp.Expression",
+        alias: "str | None" = None,
         join_type: str = "INNER",
     ) -> "Self":
         """Add JOIN clause to the UPDATE statement.

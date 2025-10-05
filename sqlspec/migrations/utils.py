@@ -6,7 +6,7 @@ This module provides helper functions for migration operations.
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase
@@ -114,7 +114,7 @@ def get_author() -> str:
     return os.environ.get("USER", "unknown")
 
 
-async def drop_all(engine: "AsyncDriverAdapterBase", version_table_name: str, metadata: Optional[Any] = None) -> None:
+async def drop_all(engine: "AsyncDriverAdapterBase", version_table_name: str, metadata: Any | None = None) -> None:
     """Drop all tables from the database.
 
     Args:

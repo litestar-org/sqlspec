@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
@@ -13,7 +13,7 @@ from sqlspec.extensions.litestar.handlers import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable
+    from collections.abc import AsyncGenerator, Awaitable, Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from litestar import Litestar
@@ -45,13 +45,13 @@ __all__ = (
 
 @dataclass
 class DatabaseConfig:
-    config: "Union[SyncConfigT, AsyncConfigT]" = field()  # type: ignore[valid-type]   # pyright: ignore[reportGeneralTypeIssues]
+    config: "SyncConfigT | AsyncConfigT" = field()  # type: ignore[valid-type]   # pyright: ignore[reportGeneralTypeIssues]
     connection_key: str = field(default=DEFAULT_CONNECTION_KEY)
     pool_key: str = field(default=DEFAULT_POOL_KEY)
     session_key: str = field(default=DEFAULT_SESSION_KEY)
     commit_mode: "CommitMode" = field(default=DEFAULT_COMMIT_MODE)
-    extra_commit_statuses: "Optional[set[int]]" = field(default=None)
-    extra_rollback_statuses: "Optional[set[int]]" = field(default=None)
+    extra_commit_statuses: "set[int] | None" = field(default=None)
+    extra_rollback_statuses: "set[int] | None" = field(default=None)
     enable_correlation_middleware: bool = field(default=True)
     connection_provider: "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]" = field(  # pyright: ignore[reportGeneralTypeIssues]
         init=False, repr=False, hash=False
@@ -62,7 +62,7 @@ class DatabaseConfig:
     lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]]" = field(
         init=False, repr=False, hash=False
     )
-    annotation: "type[Union[SyncConfigT, AsyncConfigT]]" = field(init=False, repr=False, hash=False)  # type: ignore[valid-type]   # pyright: ignore[reportGeneralTypeIssues]
+    annotation: "type[SyncConfigT | AsyncConfigT]" = field(init=False, repr=False, hash=False)  # type: ignore[valid-type]   # pyright: ignore[reportGeneralTypeIssues]
 
     def __post_init__(self) -> None:
         if not self.config.supports_connection_pooling and self.pool_key == DEFAULT_POOL_KEY:  # type: ignore[union-attr,unused-ignore]
@@ -95,9 +95,7 @@ class DatabaseConfig:
             config=self.config, connection_dependency_key=self.connection_key
         )
 
-    def get_request_session(
-        self, state: "State", scope: "Scope"
-    ) -> "Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]":
+    def get_request_session(self, state: "State", scope: "Scope") -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
         """Get a session instance from the current request.
 
         This method provides access to the database session that has been added to the request
@@ -121,7 +119,7 @@ class DatabaseConfig:
         # Try to get existing session from scope
         session = get_sqlspec_scope_state(scope, session_scope_key)
         if session is not None:
-            return cast("Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]", session)
+            return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
 
         # Get connection from scope state
         connection = get_sqlspec_scope_state(scope, self.connection_key)
@@ -137,7 +135,7 @@ class DatabaseConfig:
         # Store session in scope for future use
         set_sqlspec_scope_state(scope, session_scope_key, session)
 
-        return cast("Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]", session)
+        return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
 
     def get_request_connection(self, state: "State", scope: "Scope") -> "Any":
         """Get a connection instance from the current request.
