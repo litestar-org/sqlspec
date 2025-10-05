@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -58,9 +60,6 @@ async def aiosqlite_config() -> AsyncGenerator[AiosqliteConfig, None]:
 @pytest.fixture
 async def aiosqlite_config_file() -> AsyncGenerator[AiosqliteConfig, None]:
     """Provide AiosqliteConfig with temporary file database for concurrent access tests."""
-    import os
-    import tempfile
-
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
 

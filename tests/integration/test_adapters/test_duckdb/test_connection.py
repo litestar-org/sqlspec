@@ -1,8 +1,12 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Test DuckDB connection configuration."""
 
+import os
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -14,7 +18,6 @@ pytestmark = pytest.mark.xdist_group("duckdb")
 
 def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     """Create a DuckDB config with permissive SQL settings."""
-    import uuid
 
     connection_config = kwargs.pop("connection_config", {})
 
@@ -36,7 +39,7 @@ def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
 
     if "database" not in connection_config:
         # Use a unique memory database identifier to avoid configuration conflicts
-        connection_config["database"] = f":memory:{uuid.uuid4().hex}"
+        connection_config["database"] = f":memory:{uuid4().hex}"
 
     kwargs["pool_config"] = connection_config
     return DuckDBConfig(**kwargs)
@@ -146,9 +149,6 @@ def test_connection_with_hook() -> None:
 
 def test_connection_read_only_mode() -> None:
     """Test DuckDB connection in read-only mode."""
-    import os
-    import tempfile
-    import time
 
     temp_fd, temp_db_path = tempfile.mkstemp(suffix=".duckdb")
     os.close(temp_fd)

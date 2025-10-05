@@ -270,7 +270,6 @@ async def test_async_session_provider_creates_session() -> None:
     session: Any
     async for session in provider(mock_connection):
         assert session is not None
-        assert hasattr(session, "connection")
         assert session.connection is mock_connection
 
 

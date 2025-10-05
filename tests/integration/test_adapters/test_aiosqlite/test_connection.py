@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -115,9 +116,8 @@ async def test_provide_connection_direct() -> None:
     config = AiosqliteConfig()
 
     try:
-        if hasattr(config, "provide_connection"):
-            async with config.provide_connection() as conn:
-                assert conn is not None
+        async with config.provide_connection() as conn:
+            assert conn is not None
 
         async with config.provide_session() as driver:
             assert driver.connection is not None
@@ -132,7 +132,6 @@ async def test_provide_connection_direct() -> None:
 
 async def test_config_with_pool_config(tmp_path: Path) -> None:
     """Test that AiosqliteConfig correctly accepts pool_config parameter."""
-    from uuid import uuid4
 
     db_path = tmp_path / f"test_{uuid4().hex}.db"
     pool_config = {"database": str(db_path), "timeout": 10.0, "isolation_level": None, "check_same_thread": False}
@@ -159,7 +158,6 @@ async def test_config_with_pool_config(tmp_path: Path) -> None:
 
 async def test_config_with_kwargs_override(tmp_path: Path) -> None:
     """Test that kwargs properly override pool_config values."""
-    from uuid import uuid4
 
     pool_config = {"database": "base.db", "timeout": 5.0}
 
