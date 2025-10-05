@@ -1,4 +1,4 @@
-"""Test async handlers for SQLSpec Litestar extension."""
+"""Test handlers for SQLSpec Litestar extension."""
 
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -9,13 +9,13 @@ from litestar.constants import HTTP_RESPONSE_START
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
-from sqlspec.extensions.litestar.handlers_async import (
-    async_autocommit_handler_maker,
-    async_connection_provider_maker,
-    async_lifespan_handler_maker,
-    async_manual_handler_maker,
-    async_pool_provider_maker,
-    async_session_provider_maker,
+from sqlspec.extensions.litestar.handlers import (
+    autocommit_handler_maker,
+    connection_provider_maker,
+    lifespan_handler_maker,
+    manual_handler_maker,
+    pool_provider_maker,
+    session_provider_maker,
 )
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 async def test_async_manual_handler_closes_connection() -> None:
     """Test async manual handler closes connection on terminus event."""
     connection_key = "test_connection"
-    handler = async_manual_handler_maker(connection_key)
+    handler = manual_handler_maker(connection_key, is_async=True)
 
     mock_connection = AsyncMock()
     mock_connection.close = AsyncMock()
@@ -46,7 +46,7 @@ async def test_async_manual_handler_closes_connection() -> None:
 async def test_async_manual_handler_ignores_non_terminus_events() -> None:
     """Test async manual handler ignores non-terminus events."""
     connection_key = "test_connection"
-    handler = async_manual_handler_maker(connection_key)
+    handler = manual_handler_maker(connection_key, is_async=True)
 
     mock_connection = AsyncMock()
     mock_connection.close = AsyncMock()
@@ -66,7 +66,7 @@ async def test_async_manual_handler_ignores_non_terminus_events() -> None:
 async def test_async_autocommit_handler_commits_on_success() -> None:
     """Test async autocommit handler commits on 2xx status."""
     connection_key = "test_connection"
-    handler = async_autocommit_handler_maker(connection_key)
+    handler = autocommit_handler_maker(connection_key, is_async=True)
 
     mock_connection = AsyncMock()
     mock_connection.commit = AsyncMock()
@@ -89,7 +89,7 @@ async def test_async_autocommit_handler_commits_on_success() -> None:
 async def test_async_autocommit_handler_rolls_back_on_error() -> None:
     """Test async autocommit handler rolls back on 4xx/5xx status."""
     connection_key = "test_connection"
-    handler = async_autocommit_handler_maker(connection_key)
+    handler = autocommit_handler_maker(connection_key, is_async=True)
 
     mock_connection = AsyncMock()
     mock_connection.commit = AsyncMock()
@@ -112,7 +112,7 @@ async def test_async_autocommit_handler_rolls_back_on_error() -> None:
 async def test_async_autocommit_handler_with_redirect_commit() -> None:
     """Test async autocommit handler commits on 3xx when enabled."""
     connection_key = "test_connection"
-    handler = async_autocommit_handler_maker(connection_key, commit_on_redirect=True)
+    handler = autocommit_handler_maker(connection_key, is_async=True, commit_on_redirect=True)
 
     mock_connection = AsyncMock()
     mock_connection.commit = AsyncMock()
@@ -133,7 +133,7 @@ async def test_async_autocommit_handler_with_redirect_commit() -> None:
 async def test_async_autocommit_handler_extra_commit_statuses() -> None:
     """Test async autocommit handler uses extra commit statuses."""
     connection_key = "test_connection"
-    handler = async_autocommit_handler_maker(connection_key, extra_commit_statuses={418})
+    handler = autocommit_handler_maker(connection_key, is_async=True, extra_commit_statuses={418})
 
     mock_connection = AsyncMock()
     mock_connection.commit = AsyncMock()
@@ -154,7 +154,7 @@ async def test_async_autocommit_handler_extra_commit_statuses() -> None:
 async def test_async_autocommit_handler_raises_on_conflicting_statuses() -> None:
     """Test async autocommit handler raises error when status sets overlap."""
     with pytest.raises(ImproperConfigurationError) as exc_info:
-        async_autocommit_handler_maker("test", extra_commit_statuses={418}, extra_rollback_statuses={418})
+        autocommit_handler_maker("test", is_async=True, extra_commit_statuses={418}, extra_rollback_statuses={418})
 
     assert "must not share" in str(exc_info.value)
 
@@ -165,7 +165,7 @@ async def test_async_lifespan_handler_creates_and_closes_pool() -> None:
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
     pool_key = "test_pool"
 
-    handler = async_lifespan_handler_maker(config, pool_key)
+    handler = lifespan_handler_maker(config, pool_key)
 
     mock_app = MagicMock()
     mock_app.state = {}
@@ -185,7 +185,7 @@ async def test_async_pool_provider_returns_pool() -> None:
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
     pool_key = "test_pool"
 
-    provider = async_pool_provider_maker(config, pool_key)
+    provider = pool_provider_maker(config, pool_key)
 
     mock_pool = MagicMock()
     state = MagicMock()
@@ -204,7 +204,7 @@ async def test_async_pool_provider_raises_when_pool_missing() -> None:
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
     pool_key = "test_pool"
 
-    provider = async_pool_provider_maker(config, pool_key)
+    provider = pool_provider_maker(config, pool_key)
 
     state = MagicMock()
     state.get.return_value = None
@@ -224,7 +224,7 @@ async def test_async_connection_provider_creates_connection() -> None:
     pool_key = "test_pool"
     connection_key = "test_connection"
 
-    provider = async_connection_provider_maker(config, pool_key, connection_key)
+    provider = connection_provider_maker(config, pool_key, connection_key)
 
     mock_pool = await config.create_pool()
     state = MagicMock()
@@ -244,7 +244,7 @@ async def test_async_connection_provider_raises_when_pool_missing() -> None:
     pool_key = "test_pool"
     connection_key = "test_connection"
 
-    provider = async_connection_provider_maker(config, pool_key, connection_key)
+    provider = connection_provider_maker(config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = None
@@ -263,7 +263,7 @@ async def test_async_session_provider_creates_session() -> None:
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
     connection_key = "test_connection"
 
-    provider = async_session_provider_maker(config, connection_key)
+    provider = session_provider_maker(config, connection_key)
 
     mock_connection = AsyncMock()
 
@@ -274,19 +274,18 @@ async def test_async_session_provider_creates_session() -> None:
         assert session.connection is mock_connection
 
 
-def test_async_handlers_have_no_ensure_async_usage() -> None:
-    """Test that async handlers module does not import or use ensure_async_."""
+def test_handlers_conditionally_use_ensure_async() -> None:
+    """Test that unified handlers module imports ensure_async_ and uses it conditionally."""
     from pathlib import Path
 
-    from sqlspec.extensions.litestar import handlers_async
+    from sqlspec.extensions.litestar import handlers
 
-    source = handlers_async.__file__
+    source = handlers.__file__
     assert source is not None
 
     content = Path(source).read_text()
 
-    assert "from sqlspec.utils.sync_tools import ensure_async_" not in content
-    assert "await ensure_async_(" not in content, "async handlers should not call ensure_async_()"
-    assert "ensure_async_(" not in content or content.count("ensure_async_") == content.count(
-        "without ensure_async_()"
-    ) + content.count("avoids ensure_async_()")
+    assert "from sqlspec.utils.sync_tools import ensure_async_" in content
+    assert "if is_async:" in content, "handlers should check is_async flag"
+    assert "await connection.close()" in content, "async path should use direct await"
+    assert "await ensure_async_(connection.close)()" in content, "sync path should use ensure_async_"

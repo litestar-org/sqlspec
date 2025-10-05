@@ -17,15 +17,7 @@ from sqlspec.config import (
 )
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
-from sqlspec.extensions.litestar.handlers_async import (
-    async_autocommit_handler_maker,
-    async_connection_provider_maker,
-    async_lifespan_handler_maker,
-    async_manual_handler_maker,
-    async_pool_provider_maker,
-    async_session_provider_maker,
-)
-from sqlspec.extensions.litestar.handlers_sync import (
+from sqlspec.extensions.litestar.handlers import (
     autocommit_handler_maker,
     connection_provider_maker,
     lifespan_handler_maker,
@@ -79,9 +71,9 @@ class _PluginConfigState:
     extra_commit_statuses: "set[int] | None"
     extra_rollback_statuses: "set[int] | None"
     enable_correlation_middleware: bool
-    connection_provider: "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]" = field(init=False)
+    connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]]" = field(init=False)
     pool_provider: "Callable[[State, Scope], Any]" = field(init=False)
-    session_provider: "Callable[..., AsyncGenerator[DriverT, None]]" = field(init=False)
+    session_provider: "Callable[..., AsyncGenerator[Any, None]]" = field(init=False)
     before_send_handler: "BeforeMessageSendHookHandler" = field(init=False)
     lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]]" = field(init=False)
     annotation: "type[DatabaseConfigProtocol[Any, Any, Any]]" = field(init=False)
@@ -157,50 +149,24 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         return state
 
     def _setup_handlers(self, state: _PluginConfigState) -> None:
-        """Setup handlers for the plugin state based on config type."""
+        """Setup handlers for the plugin state."""
         connection_key = state.connection_key
         pool_key = state.pool_key
         commit_mode = state.commit_mode
+        config = state.config
+        is_async = config.is_async
 
-        if state.config.is_async:
-            self._setup_async_handlers(state, connection_key, pool_key, commit_mode)
-        else:
-            self._setup_sync_handlers(state, connection_key, pool_key, commit_mode)
-
-    def _setup_async_handlers(
-        self, state: _PluginConfigState, connection_key: str, pool_key: str, commit_mode: CommitMode
-    ) -> None:
-        """Setup async handlers for the plugin state."""
-        config = cast("AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]", state.config)
-        state.connection_provider = async_connection_provider_maker(config, pool_key, connection_key)
-        state.pool_provider = async_pool_provider_maker(config, pool_key)
-        state.session_provider = async_session_provider_maker(config, connection_key)
-        state.lifespan_handler = async_lifespan_handler_maker(config, pool_key)
-
-        if commit_mode == "manual":
-            state.before_send_handler = async_manual_handler_maker(connection_key)
-        else:
-            commit_on_redirect = commit_mode == "autocommit_include_redirect"
-            state.before_send_handler = async_autocommit_handler_maker(
-                connection_key, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
-            )
-
-    def _setup_sync_handlers(
-        self, state: _PluginConfigState, connection_key: str, pool_key: str, commit_mode: CommitMode
-    ) -> None:
-        """Setup sync handlers for the plugin state."""
-        config = cast("SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]", state.config)
         state.connection_provider = connection_provider_maker(config, pool_key, connection_key)
         state.pool_provider = pool_provider_maker(config, pool_key)
         state.session_provider = session_provider_maker(config, connection_key)
         state.lifespan_handler = lifespan_handler_maker(config, pool_key)
 
         if commit_mode == "manual":
-            state.before_send_handler = manual_handler_maker(connection_key)
+            state.before_send_handler = manual_handler_maker(connection_key, is_async)
         else:
             commit_on_redirect = commit_mode == "autocommit_include_redirect"
             state.before_send_handler = autocommit_handler_maker(
-                connection_key, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
+                connection_key, is_async, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
             )
 
     @property
@@ -245,11 +211,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             app_config.state.sqlspec = self
 
         app_config.on_startup.append(store_sqlspec_in_state)
-        app_config.signature_types.extend(
-            [SQLSpec, ConnectionT, PoolT, DriverT, DatabaseConfigProtocol, SyncConfigT, AsyncConfigT]
-        )
+        app_config.signature_types.extend([SQLSpec, DatabaseConfigProtocol, SyncConfigT, AsyncConfigT])
 
-        signature_namespace = {}
+        signature_namespace = {"ConnectionT": ConnectionT, "PoolT": PoolT, "DriverT": DriverT}
 
         for state in self._plugin_configs:
             state.annotation = type(state.config)
@@ -257,7 +221,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             app_config.signature_types.append(state.config.connection_type)
             app_config.signature_types.append(state.config.driver_type)
 
-            signature_namespace.update(state.config.get_signature_namespace())
+            signature_namespace.update(state.config.get_signature_namespace())  # type: ignore[arg-type]
 
             app_config.before_send.append(state.before_send_handler)
             app_config.lifespan.append(state.lifespan_handler)
@@ -316,17 +280,23 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         raise KeyError(msg)
 
     @overload
-    def get_config(self, name: "type[SyncConfigT]") -> "SyncConfigT": ...
+    def get_config(
+        self, name: "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]"
+    ) -> "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]": ...
 
     @overload
-    def get_config(self, name: "type[AsyncConfigT]") -> "AsyncConfigT": ...
+    def get_config(
+        self, name: "type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]"
+    ) -> "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]": ...
 
     @overload
-    def get_config(self, name: str) -> "SyncConfigT | AsyncConfigT": ...
+    def get_config(
+        self, name: str
+    ) -> "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]": ...
 
     def get_config(
-        self, name: "type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]] | str | Any"
-    ) -> "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]":
+        self, name: "type[DatabaseConfigProtocol[Any, Any, Any]] | str | Any"
+    ) -> "DatabaseConfigProtocol[Any, Any, Any]":
         """Get a configuration instance by name.
 
         Args:
@@ -338,20 +308,14 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             The configuration instance for the specified name.
         """
-        if not isinstance(name, str):
-            try:
-                return cast("DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", self._sqlspec.get_config(name))
-            except (KeyError, AttributeError):
-                pass
-
         if isinstance(name, str):
             for state in self._plugin_configs:
                 if name in {state.connection_key, state.pool_key, state.session_key}:
-                    return cast("DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", state.config)
+                    return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
 
         for state in self._plugin_configs:
             if name in (state.config, state.annotation):
-                return cast("DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", state.config)
+                return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
 
         msg = f"No database configuration found for name '{name}'. Available keys: {self._get_available_keys()}"
         raise KeyError(msg)
@@ -419,7 +383,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
     def provide_request_connection(
         self, key: "str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]", state: "State", scope: "Scope"
-    ) -> Any:
+    ) -> "Any":
         """Provide a database connection for the specified configuration key from request scope.
 
         Args:
@@ -435,7 +399,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if connection is None:
             self._raise_missing_connection(plugin_state.connection_key)
 
-        return cast("Any", connection)
+        return connection
 
     def _get_plugin_state(
         self, key: "str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]"
