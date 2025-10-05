@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
 
-from sqlspec.storage._utils import ensure_pyarrow
+from sqlspec.storage._utils import AsyncIteratorWrapper, ensure_pyarrow
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -294,14 +294,20 @@ class LocalStore:
         await async_(self.write_arrow)(path, table, **kwargs)
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
-        """Stream Arrow record batches asynchronously."""
+        """Stream Arrow record batches asynchronously.
 
-        # Convert sync iterator to async
-        async def _stream() -> AsyncIterator["ArrowRecordBatch"]:
-            for batch in self.stream_arrow(pattern, **kwargs):
-                yield batch
+        Offloads blocking file I/O operations to thread pool for
+        non-blocking event loop execution.
 
-        return _stream()
+        Args:
+            pattern: Glob pattern to match files.
+            **kwargs: Additional arguments passed to stream_arrow().
+
+        Returns:
+            Arrow record batches from matching files.
+        """
+
+        return AsyncIteratorWrapper(self.stream_arrow(pattern, **kwargs))
 
     async def sign_async(self, path: "str | Path", expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL asynchronously (returns file:// URI for local files)."""

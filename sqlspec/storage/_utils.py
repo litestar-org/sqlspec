@@ -1,14 +1,57 @@
 """Shared utilities for storage backends."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.typing import PYARROW_INSTALLED
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
-__all__ = ("ensure_pyarrow", "resolve_storage_path")
+T = TypeVar("T")
+
+__all__ = ("AsyncIteratorWrapper", "ensure_pyarrow", "resolve_storage_path")
+
+
+class AsyncIteratorWrapper(Generic[T]):
+    """Wrap sync iterator with async_(next) calls.
+
+    Prevents event loop blocking by offloading blocking next() calls
+    to a thread pool while keeping iterator creation on main thread.
+
+    Args:
+        sync_iter: Synchronous iterator to wrap.
+
+    Examples:
+        >>> sync_iter = iter([1, 2, 3])
+        >>> async_iter = AsyncIteratorWrapper(sync_iter)
+        >>> async for item in async_iter:
+        ...     print(item)
+    """
+
+    __slots__ = ("sync_iter",)
+
+    def __init__(self, sync_iter: "Iterator[T]") -> None:
+        self.sync_iter = sync_iter
+
+    def __aiter__(self) -> "AsyncIteratorWrapper[T]":
+        return self
+
+    async def __anext__(self) -> T:
+        def _safe_next() -> T:
+            try:
+                return next(self.sync_iter)
+            except StopIteration as e:
+                raise StopAsyncIteration from e
+
+        return await async_(_safe_next)()
+
+    async def aclose(self) -> None:
+        """Close underlying iterator if it supports close()."""
+        if hasattr(self.sync_iter, "close"):
+            await async_(self.sync_iter.close)()  # pyright: ignore
 
 
 def ensure_pyarrow() -> None:

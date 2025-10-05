@@ -19,39 +19,73 @@ logger = logging.getLogger(__name__)
 
 
 class _ArrowStreamer:
+    """Async iterator for streaming Arrow batches from FSSpec backend.
+
+    Uses async_() to offload blocking operations to thread pool,
+    preventing event loop blocking during file I/O and iteration.
+
+    CRITICAL: Creates generators on main thread, offloads only next() calls.
+    """
+
+    __slots__ = ("_initialized", "backend", "batch_iterator", "kwargs", "paths_iterator", "pattern")
+
     def __init__(self, backend: "FSSpecBackend", pattern: str, **kwargs: Any) -> None:
         self.backend = backend
         self.pattern = pattern
         self.kwargs = kwargs
         self.paths_iterator: Iterator[str] | None = None
         self.batch_iterator: Iterator[ArrowRecordBatch] | None = None
+        self._initialized = False
 
     def __aiter__(self) -> "_ArrowStreamer":
         return self
 
     async def _initialize(self) -> None:
-        """Initialize paths iterator."""
-        if self.paths_iterator is None:
+        """Initialize paths iterator asynchronously."""
+        if not self._initialized:
             paths = await async_(self.backend.glob)(self.pattern, **self.kwargs)
             self.paths_iterator = iter(paths)
+            self._initialized = True
 
     async def __anext__(self) -> "ArrowRecordBatch":
+        """Get next Arrow batch asynchronously.
+
+        Iterative state machine that avoids recursion and blocking calls.
+
+        Returns:
+            Arrow record batches from matching files.
+
+        Raises:
+            StopAsyncIteration: When no more batches available.
+        """
         await self._initialize()
 
-        if self.batch_iterator:
-            try:
-                return next(self.batch_iterator)
-            except StopIteration:
-                self.batch_iterator = None
+        while True:
+            if self.batch_iterator is not None:
 
-        if self.paths_iterator:
+                def _safe_next_batch() -> "ArrowRecordBatch":
+                    try:
+                        return next(self.batch_iterator)  # type: ignore[arg-type]
+                    except StopIteration as e:
+                        raise StopAsyncIteration from e
+
+                try:
+                    return await async_(_safe_next_batch)()
+                except StopAsyncIteration:
+                    self.batch_iterator = None
+                    continue
+
             try:
-                path = next(self.paths_iterator)
-                self.batch_iterator = await async_(self.backend._stream_file_batches)(path)
-                return await self.__anext__()
-            except StopIteration:
-                raise StopAsyncIteration
-        raise StopAsyncIteration
+                path = next(self.paths_iterator)  # type: ignore[arg-type]
+            except StopIteration as e:
+                raise StopAsyncIteration from e
+
+            self.batch_iterator = self.backend._stream_file_batches(path)
+
+    async def aclose(self) -> None:
+        """Close underlying batch iterator."""
+        if self.batch_iterator is not None and hasattr(self.batch_iterator, "close"):
+            await async_(self.batch_iterator.close)()  # pyright: ignore
 
 
 class FSSpecBackend:

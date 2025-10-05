@@ -5,10 +5,13 @@ and local file storage.
 """
 
 import fnmatch
+import io
 import logging
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
+
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -25,7 +28,14 @@ logger = logging.getLogger(__name__)
 
 
 class _AsyncArrowIterator:
-    """Helper class to work around mypyc's lack of async generator support."""
+    """Helper class to work around mypyc's lack of async generator support.
+
+    Uses hybrid async/sync pattern:
+    - Native async I/O for network operations (S3, GCS, Azure)
+    - Thread pool for CPU-bound PyArrow parsing
+    """
+
+    __slots__ = ("_current_file_iterator", "_files_iterator", "backend", "kwargs", "pattern")
 
     def __init__(self, backend: "ObStoreBackend", pattern: str, **kwargs: Any) -> None:
         self.backend = backend
@@ -38,24 +48,41 @@ class _AsyncArrowIterator:
         return self
 
     async def __anext__(self) -> ArrowRecordBatch:
+        import pyarrow.parquet as pq
+
         if self._files_iterator is None:
             files = self.backend.glob(self.pattern, **self.kwargs)
             self._files_iterator = iter(files)
 
         while True:
             if self._current_file_iterator is not None:
+
+                def _safe_next_batch() -> ArrowRecordBatch:
+                    try:
+                        return next(self._current_file_iterator)  # type: ignore[arg-type]
+                    except StopIteration as e:
+                        raise StopAsyncIteration from e
+
                 try:
-                    return next(self._current_file_iterator)
-                except StopIteration:
+                    return await async_(_safe_next_batch)()
+                except StopAsyncIteration:
                     self._current_file_iterator = None
+                    continue
 
             try:
                 next_file = next(self._files_iterator)
-                # Stream from this file
-                file_batches = self.backend.stream_arrow(next_file)
-                self._current_file_iterator = iter(file_batches)
-            except StopIteration:
-                raise StopAsyncIteration
+            except StopIteration as e:
+                raise StopAsyncIteration from e
+
+            data = await self.backend.read_bytes_async(next_file)
+            parquet_file = pq.ParquetFile(io.BytesIO(data))
+            self._current_file_iterator = parquet_file.iter_batches()
+
+    async def aclose(self) -> None:
+        """Close underlying file iterator."""
+
+        if self._current_file_iterator is not None and hasattr(self._current_file_iterator, "close"):
+            await async_(self._current_file_iterator.close)()  # pyright: ignore
 
 
 DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_timeout": "60s"}
