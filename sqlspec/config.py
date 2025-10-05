@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, cast
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -26,6 +26,7 @@ __all__ = (
     "DatabaseConfigProtocol",
     "DriverT",
     "LifecycleConfig",
+    "LitestarConfig",
     "MigrationConfig",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
@@ -82,6 +83,34 @@ class MigrationConfig(TypedDict, total=False):
 
     enabled: NotRequired[bool]
     """Whether this configuration should be included in CLI operations. Defaults to True."""
+
+
+class LitestarConfig(TypedDict, total=False):
+    """Configuration options for Litestar SQLSpec plugin.
+
+    All fields are optional with sensible defaults.
+    """
+
+    connection_key: NotRequired[str]
+    """Key for storing connection in ASGI scope. Default: 'db_connection'"""
+
+    pool_key: NotRequired[str]
+    """Key for storing connection pool in application state. Default: 'db_pool'"""
+
+    session_key: NotRequired[str]
+    """Key for storing session in ASGI scope. Default: 'db_session'"""
+
+    commit_mode: NotRequired[Literal["manual", "autocommit", "autocommit_include_redirect"]]
+    """Transaction commit mode. Default: 'manual'"""
+
+    enable_correlation_middleware: NotRequired[bool]
+    """Enable request correlation ID middleware. Default: True"""
+
+    extra_commit_statuses: NotRequired[set[int]]
+    """Additional HTTP status codes that trigger commit. Default: set()"""
+
+    extra_rollback_statuses: NotRequired[set[int]]
+    """Additional HTTP status codes that trigger rollback. Default: set()"""
 
 
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
@@ -310,7 +339,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for sync database configurations that do not implement a pool."""
 
-    __slots__ = ("connection_config",)
+    __slots__ = ("connection_config", "extension_config")
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
@@ -323,10 +352,12 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
+        self.extension_config: dict[str, dict[str, Any]] = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -366,7 +397,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for async database configurations that do not implement a pool."""
 
-    __slots__ = ("connection_config",)
+    __slots__ = ("connection_config", "extension_config")
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = False
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
@@ -379,10 +410,12 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
+        self.extension_config: dict[str, dict[str, Any]] = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -422,7 +455,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for sync database configurations with connection pooling."""
 
-    __slots__ = ("pool_config",)
+    __slots__ = ("extension_config", "pool_config")
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
@@ -436,10 +469,12 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
+        self.extension_config: dict[str, dict[str, Any]] = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -501,7 +536,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for async database configurations with connection pooling."""
 
-    __slots__ = ("pool_config",)
+    __slots__ = ("extension_config", "pool_config")
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
@@ -515,10 +550,12 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
+        self.extension_config: dict[str, dict[str, Any]] = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 

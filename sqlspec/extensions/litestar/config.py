@@ -65,6 +65,23 @@ class DatabaseConfig:
     annotation: "type[SyncConfigT | AsyncConfigT]" = field(init=False, repr=False, hash=False)  # type: ignore[valid-type]   # pyright: ignore[reportGeneralTypeIssues]
 
     def __post_init__(self) -> None:
+        litestar_config = self.config.extension_config.get("litestar", {})  # type: ignore[union-attr]
+
+        if self.connection_key == DEFAULT_CONNECTION_KEY and "connection_key" in litestar_config:
+            self.connection_key = litestar_config["connection_key"]
+        if self.pool_key == DEFAULT_POOL_KEY and "pool_key" in litestar_config:
+            self.pool_key = litestar_config["pool_key"]
+        if self.session_key == DEFAULT_SESSION_KEY and "session_key" in litestar_config:
+            self.session_key = litestar_config["session_key"]
+        if self.commit_mode == DEFAULT_COMMIT_MODE and "commit_mode" in litestar_config:
+            self.commit_mode = litestar_config["commit_mode"]
+        if self.extra_commit_statuses is None and "extra_commit_statuses" in litestar_config:
+            self.extra_commit_statuses = litestar_config["extra_commit_statuses"]
+        if self.extra_rollback_statuses is None and "extra_rollback_statuses" in litestar_config:
+            self.extra_rollback_statuses = litestar_config["extra_rollback_statuses"]
+        if "enable_correlation_middleware" in litestar_config:
+            self.enable_correlation_middleware = litestar_config["enable_correlation_middleware"]
+
         if not self.config.supports_connection_pooling and self.pool_key == DEFAULT_POOL_KEY:  # type: ignore[union-attr,unused-ignore]
             self.pool_key = f"_{self.pool_key}_{id(self.config)}"
         if self.commit_mode == "manual":
