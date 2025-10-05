@@ -1,4 +1,3 @@
-# ruff: noqa: PLC2701
 # pyright: ignore[reportAttributeAccessIssue]
 from collections.abc import Iterator, Mapping
 from functools import lru_cache
