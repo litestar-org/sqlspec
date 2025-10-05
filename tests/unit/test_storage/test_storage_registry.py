@@ -7,26 +7,28 @@ from pathlib import Path
 import pytest
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
-from sqlspec.storage.registry import StorageRegistry, _is_local_uri
+from sqlspec.storage.registry import StorageRegistry
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
+from sqlspec.utils.type_guards import is_local_path
 
 
-def test_is_local_uri() -> None:
-    """Test _is_local_uri type guard function."""
-    # Absolute paths
-    assert _is_local_uri("/absolute/path")
-    assert _is_local_uri("C:\\Windows\\path")
+def test_is_local_path_type_guard() -> None:
+    """Test is_local_path type guard function."""
+    assert is_local_path("file:///absolute/path")
+    assert is_local_path("file://C:/Windows/path")
 
-    # Relative paths
-    assert _is_local_uri("./relative/path")
-    assert _is_local_uri("../parent/path")
-    assert _is_local_uri("~/home/path")
-    assert _is_local_uri("relative/path")
+    assert is_local_path("/absolute/path")
+    assert is_local_path("C:\\Windows\\path")
 
-    # URIs should return False
-    assert not _is_local_uri("s3://bucket/key")
-    assert not _is_local_uri("https://example.com")
-    assert not _is_local_uri("gs://bucket")
+    assert is_local_path("./relative/path")
+    assert is_local_path("../parent/path")
+    assert is_local_path("~/home/path")
+    assert is_local_path("relative/path")
+
+    assert not is_local_path("s3://bucket/key")
+    assert not is_local_path("https://example.com")
+    assert not is_local_path("gs://bucket")
+    assert not is_local_path("")
 
 
 def test_registry_init() -> None:
@@ -45,17 +47,53 @@ def test_register_alias() -> None:
 
 
 def test_get_local_backend() -> None:
-    """Test getting local backend."""
+    """Test getting local backend (when explicitly requested)."""
     with tempfile.TemporaryDirectory() as temp_dir:
         registry = StorageRegistry()
 
-        # Test direct path
-        backend = registry.get(temp_dir)
+        # Force local backend with override
+        backend = registry.get(temp_dir, backend="local")
         assert backend.backend_type == "local"
 
-        # Test file:// URI
-        backend = registry.get(f"file://{temp_dir}")
+        # Force local backend for file:// URI
+        backend = registry.get(f"file://{temp_dir}", backend="local")
         assert backend.backend_type == "local"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
+def test_get_local_backend_prefers_obstore() -> None:
+    """Test that local paths prefer obstore when available."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        registry = StorageRegistry()
+
+        # Without backend override, should get obstore for file://
+        backend = registry.get(f"file://{temp_dir}")
+        assert backend.backend_type == "obstore"
+
+        # Direct path should also prefer obstore
+        backend = registry.get(temp_dir)
+        assert backend.backend_type == "obstore"
+
+        # Can still force local backend with override
+        backend = registry.get(f"file://{temp_dir}", backend="local")
+        assert backend.backend_type == "local"
+
+
+def test_get_local_backend_fallback_priority() -> None:
+    """Test backend fallback priority for local paths."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        registry = StorageRegistry()
+
+        # Get whatever backend is available
+        backend = registry.get(f"file://{temp_dir}")
+
+        # Should be one of: obstore > fsspec > local (in that priority order)
+        if OBSTORE_INSTALLED:
+            assert backend.backend_type == "obstore"
+        elif FSSPEC_INSTALLED:
+            assert backend.backend_type == "fsspec"
+        else:
+            assert backend.backend_type == "local"
 
 
 def test_get_alias() -> None:
@@ -65,7 +103,8 @@ def test_get_alias() -> None:
         registry.register_alias("my_store", f"file://{temp_dir}")
 
         backend = registry.get("my_store")
-        assert backend.backend_type == "local"
+        # Backend type depends on what's installed
+        assert backend.backend_type in ("obstore", "fsspec", "local")
 
 
 def test_get_with_backend_override() -> None:
@@ -222,7 +261,8 @@ def test_path_object_conversion() -> None:
         path_obj = Path(temp_dir)
 
         backend = registry.get(path_obj)
-        assert backend.backend_type == "local"
+        # Backend type depends on what's installed (obstore > fsspec > local)
+        assert backend.backend_type in ("obstore", "fsspec", "local")
 
 
 def test_cloud_storage_without_backends() -> None:

@@ -20,8 +20,8 @@ target/
 .claude/
 .cursor/
 .zed/
-.gemini/
-
+.gemini
+.coverage*
 # files
 **/*.so
 **/*.sqlite

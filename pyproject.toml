@@ -105,6 +105,7 @@ test = [
   "requests",
   "anyio",
   "coverage>=7.6.1",
+  "covdefaults",
   "pytest>=8.0.0",
   "pytest-asyncio>=0.23.8",
   "pytest-cov>=5.0.0",
@@ -168,6 +169,14 @@ include = [
   "sqlspec/utils/type_guards.py",         # Type guard utilities
   "sqlspec/utils/fixtures.py",            # File fixture loading
   "sqlspec/utils/data_transformation.py", # Data transformation utilities
+
+  # === STORAGE LAYER ===
+  "sqlspec/storage/_utils.py",
+  "sqlspec/storage/registry.py",
+  "sqlspec/storage/backends/base.py",
+  "sqlspec/storage/backends/obstore.py",
+  "sqlspec/storage/backends/fsspec.py",
+  "sqlspec/storage/backends/local.py",
 ]
 mypy-args = [
   "--ignore-missing-imports",

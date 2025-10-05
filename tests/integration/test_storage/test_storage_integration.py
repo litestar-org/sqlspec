@@ -49,7 +49,7 @@ def fsspec_s3_backend(minio_service: "MinioService", minio_default_bucket_name: 
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     return FSSpecBackend(
-        uri=f"s3://{minio_default_bucket_name}",
+        uri=f"s3://{minio_default_bucket_name}/",
         endpoint_url=f"http://{minio_service.endpoint}",
         key=minio_service.access_key,
         secret=minio_service.secret_key,
@@ -331,6 +331,7 @@ def test_obstore_s3_listing_operations(obstore_s3_backend: "ObjectStoreProtocol"
 def test_registry_uri_resolution_local(tmp_path: Path) -> None:
     """Test storage registry URI resolution for local files."""
     from sqlspec.storage.backends.local import LocalStore
+    from sqlspec.storage.backends.obstore import ObStoreBackend
 
     # Test file URI resolution
     test_file = tmp_path / "registry_test.txt"
@@ -339,7 +340,8 @@ def test_registry_uri_resolution_local(tmp_path: Path) -> None:
     # Test file:// URI
     file_uri = f"file://{test_file}"
     backend = storage_registry.get(file_uri)
-    assert isinstance(backend, LocalStore)
+    # Registry prefers obstore for file:// URIs when available, otherwise LocalStore
+    assert isinstance(backend, (ObStoreBackend, LocalStore))
 
     content = backend.read_text("registry_test.txt")
     assert content == TEST_TEXT_CONTENT
@@ -349,13 +351,15 @@ def test_registry_uri_resolution_local(tmp_path: Path) -> None:
 def test_registry_path_resolution(tmp_path: Path) -> None:
     """Test storage registry resolution for raw paths."""
     from sqlspec.storage.backends.local import LocalStore
+    from sqlspec.storage.backends.obstore import ObStoreBackend
 
     # Test Path object resolution
     test_file = tmp_path / "path_test.txt"
     test_file.write_text(TEST_TEXT_CONTENT)
 
     backend = storage_registry.get(tmp_path)
-    assert isinstance(backend, LocalStore)
+    # Registry prefers obstore for local paths when available, otherwise LocalStore
+    assert isinstance(backend, (ObStoreBackend, LocalStore))
 
     content = backend.read_text("path_test.txt")
     assert content == TEST_TEXT_CONTENT
@@ -367,7 +371,7 @@ def test_registry_s3_fsspec_resolution(minio_service: "MinioService", minio_defa
     """Test storage registry S3 resolution with FSSpec backend."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    s3_uri = f"s3://{minio_default_bucket_name}/registry_test"
+    s3_uri = f"s3://{minio_default_bucket_name}/registry_test/"
 
     backend = storage_registry.get(
         s3_uri,
@@ -395,6 +399,7 @@ def test_registry_alias_registration(
 ) -> None:
     """Test storage registry alias registration and usage."""
     from sqlspec.storage.backends.local import LocalStore
+    from sqlspec.storage.backends.obstore import ObStoreBackend
 
     # Clear registry to avoid test interference
     storage_registry.clear()
@@ -405,7 +410,8 @@ def test_registry_alias_registration(
 
         # Test local alias
         backend = storage_registry.get("test-local")
-        assert isinstance(backend, LocalStore)
+        # Registry prefers obstore for local paths when available, otherwise LocalStore
+        assert isinstance(backend, (ObStoreBackend, LocalStore))
 
         # Create test data
         backend.write_text("alias_test.txt", TEST_TEXT_CONTENT)
@@ -418,7 +424,7 @@ def test_registry_alias_registration(
 
             storage_registry.register_alias(
                 "test-s3",
-                uri=f"s3://{minio_default_bucket_name}",
+                uri=f"s3://{minio_default_bucket_name}/",
                 backend="fsspec",
                 endpoint_url=f"http://{minio_service.endpoint}",
                 key=minio_service.access_key,
@@ -652,14 +658,16 @@ def test_registry_backend_fallback_order(
 ) -> None:
     """Test that registry follows correct backend fallback order."""
     from sqlspec.storage.backends.local import LocalStore
+    from sqlspec.storage.backends.obstore import ObStoreBackend
 
     storage_registry.clear()
 
     try:
-        # Test local file resolution (should always use LocalStore)
+        # Test local file resolution (prefers ObStore > FSSpec > LocalStore)
         local_uri = f"file://{tmp_path}"
         local_backend = storage_registry.get(local_uri)
-        assert isinstance(local_backend, LocalStore)
+        # Should get ObStore if available, else FSSpec, else LocalStore
+        assert isinstance(local_backend, (ObStoreBackend, LocalStore))
 
         # Test S3 resolution (should prefer ObStore > FSSpec if available)
         s3_uri = f"s3://{minio_default_bucket_name}"
