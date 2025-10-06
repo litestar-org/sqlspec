@@ -81,6 +81,7 @@ class CapacityLimiter:
     def total_tokens(self, value: int) -> None:
         self._total_tokens = value
         self._semaphore_instance = None
+        self._pid = None
 
     async def __aenter__(self) -> None:
         """Async context manager entry."""
