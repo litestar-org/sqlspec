@@ -1,0 +1,1 @@
+"""BigQuery ADK integration tests."""

@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Any
 
 from psycopg import errors
+from psycopg import sql as pg_sql
 from psycopg.types.json import Jsonb
 
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
@@ -188,13 +189,13 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             Uses CURRENT_TIMESTAMP for create_time and update_time.
             State is wrapped with Jsonb() for PostgreSQL type safety.
         """
-        sql = f"""
-        INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """
+        query = pg_sql.SQL("""
+        INSERT INTO {table} (id, app_name, user_id, state, create_time, update_time)
+        VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """).format(table=pg_sql.Identifier(self._session_table))
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(sql, (session_id, app_name, user_id, Jsonb(state)))
+            await cur.execute(query, (session_id, app_name, user_id, Jsonb(state)))
 
         return await self.get_session(session_id)  # type: ignore[return-value]
 
@@ -211,15 +212,15 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             PostgreSQL returns datetime objects for TIMESTAMPTZ columns.
             JSONB is automatically deserialized by psycopg to Python dict.
         """
-        sql = f"""
+        query = pg_sql.SQL("""
         SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE id = $1
-        """
+        FROM {table}
+        WHERE id = %s
+        """).format(table=pg_sql.Identifier(self._session_table))
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor() as cur:
-                await cur.execute(sql, (session_id,))
+                await cur.execute(query, (session_id,))
                 row = await cur.fetchone()
 
                 if row is None:
@@ -248,14 +249,14 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             Uses CURRENT_TIMESTAMP for update_time.
             State is wrapped with Jsonb() for PostgreSQL type safety.
         """
-        sql = f"""
-        UPDATE {self._session_table}
-        SET state = $1, update_time = CURRENT_TIMESTAMP
-        WHERE id = $2
-        """
+        query = pg_sql.SQL("""
+        UPDATE {table}
+        SET state = %s, update_time = CURRENT_TIMESTAMP
+        WHERE id = %s
+        """).format(table=pg_sql.Identifier(self._session_table))
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(sql, (Jsonb(state), session_id))
+            await cur.execute(query, (Jsonb(state), session_id))
 
     async def delete_session(self, session_id: str) -> None:
         """Delete session and all associated events (cascade).
@@ -266,10 +267,10 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         Notes:
             Foreign key constraint ensures events are cascade-deleted.
         """
-        sql = f"DELETE FROM {self._session_table} WHERE id = $1"
+        query = pg_sql.SQL("DELETE FROM {table} WHERE id = %s").format(table=pg_sql.Identifier(self._session_table))
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(sql, (session_id,))
+            await cur.execute(query, (session_id,))
 
     async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """List all sessions for a user in an app.
@@ -284,16 +285,16 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         Notes:
             Uses composite index on (app_name, user_id).
         """
-        sql = f"""
+        query = pg_sql.SQL("""
         SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE app_name = $1 AND user_id = $2
+        FROM {table}
+        WHERE app_name = %s AND user_id = %s
         ORDER BY update_time DESC
-        """
+        """).format(table=pg_sql.Identifier(self._session_table))
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor() as cur:
-                await cur.execute(sql, (app_name, user_id))
+                await cur.execute(query, (app_name, user_id))
                 rows = await cur.fetchall()
 
                 return [
@@ -324,20 +325,20 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         grounding_metadata_json = event_record.get("grounding_metadata")
         custom_metadata_json = event_record.get("custom_metadata")
 
-        sql = f"""
-        INSERT INTO {self._events_table} (
+        query = pg_sql.SQL("""
+        INSERT INTO {table} (
             id, session_id, app_name, user_id, invocation_id, author, actions,
             long_running_tool_ids_json, branch, timestamp, content,
             grounding_metadata, custom_metadata, partial, turn_complete,
             interrupted, error_code, error_message
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
-        """
+        """).format(table=pg_sql.Identifier(self._events_table))
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(
-                sql,
+                query,
                 (
                     event_record["id"],
                     event_record["session_id"],
@@ -378,31 +379,35 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             JSONB fields are automatically deserialized by psycopg.
             BYTEA actions are converted to bytes.
         """
-        where_clauses = ["session_id = $1"]
+        where_clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
 
         if after_timestamp is not None:
-            where_clauses.append(f"timestamp > ${len(params) + 1}")
+            where_clauses.append("timestamp > %s")
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT ${len(params) + 1}" if limit else ""
+        limit_clause = " LIMIT %s" if limit else ""
         if limit:
             params.append(limit)
 
-        sql = f"""
+        query = pg_sql.SQL("""
         SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
                long_running_tool_ids_json, branch, timestamp, content,
                grounding_metadata, custom_metadata, partial, turn_complete,
                interrupted, error_code, error_message
-        FROM {self._events_table}
+        FROM {table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
-        """
+        """).format(
+            table=pg_sql.Identifier(self._events_table),
+            where_clause=pg_sql.SQL(where_clause),
+            limit_clause=pg_sql.SQL(limit_clause),
+        )
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor() as cur:
-                await cur.execute(sql, tuple(params))
+                await cur.execute(query, tuple(params))
                 rows = await cur.fetchall()
 
                 return [
@@ -583,9 +588,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             cur.execute(self._get_create_events_table_sql())
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
-    def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
-    ) -> SessionRecord:
+    def create_session(self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]") -> SessionRecord:
         """Create a new session.
 
         Args:
@@ -601,13 +604,13 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             Uses CURRENT_TIMESTAMP for create_time and update_time.
             State is wrapped with Jsonb() for PostgreSQL type safety.
         """
-        sql = f"""
-        INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """
+        query = pg_sql.SQL("""
+        INSERT INTO {table} (id, app_name, user_id, state, create_time, update_time)
+        VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """).format(table=pg_sql.Identifier(self._session_table))
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql, (session_id, app_name, user_id, Jsonb(state)))
+            cur.execute(query, (session_id, app_name, user_id, Jsonb(state)))
 
         return self.get_session(session_id)  # type: ignore[return-value]
 
@@ -624,15 +627,15 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             PostgreSQL returns datetime objects for TIMESTAMPTZ columns.
             JSONB is automatically deserialized by psycopg to Python dict.
         """
-        sql = f"""
+        query = pg_sql.SQL("""
         SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE id = $1
-        """
+        FROM {table}
+        WHERE id = %s
+        """).format(table=pg_sql.Identifier(self._session_table))
 
         try:
             with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(sql, (session_id,))
+                cur.execute(query, (session_id,))
                 row = cur.fetchone()
 
                 if row is None:
@@ -661,14 +664,14 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             Uses CURRENT_TIMESTAMP for update_time.
             State is wrapped with Jsonb() for PostgreSQL type safety.
         """
-        sql = f"""
-        UPDATE {self._session_table}
-        SET state = $1, update_time = CURRENT_TIMESTAMP
-        WHERE id = $2
-        """
+        query = pg_sql.SQL("""
+        UPDATE {table}
+        SET state = %s, update_time = CURRENT_TIMESTAMP
+        WHERE id = %s
+        """).format(table=pg_sql.Identifier(self._session_table))
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql, (Jsonb(state), session_id))
+            cur.execute(query, (Jsonb(state), session_id))
 
     def delete_session(self, session_id: str) -> None:
         """Delete session and all associated events (cascade).
@@ -679,10 +682,10 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         Notes:
             Foreign key constraint ensures events are cascade-deleted.
         """
-        sql = f"DELETE FROM {self._session_table} WHERE id = $1"
+        query = pg_sql.SQL("DELETE FROM {table} WHERE id = %s").format(table=pg_sql.Identifier(self._session_table))
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql, (session_id,))
+            cur.execute(query, (session_id,))
 
     def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """List all sessions for a user in an app.
@@ -697,16 +700,16 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         Notes:
             Uses composite index on (app_name, user_id).
         """
-        sql = f"""
+        query = pg_sql.SQL("""
         SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE app_name = $1 AND user_id = $2
+        FROM {table}
+        WHERE app_name = %s AND user_id = %s
         ORDER BY update_time DESC
-        """
+        """).format(table=pg_sql.Identifier(self._session_table))
 
         try:
             with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(sql, (app_name, user_id))
+                cur.execute(query, (app_name, user_id))
                 rows = cur.fetchall()
 
                 return [
@@ -761,24 +764,24 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         custom_metadata = kwargs.get("custom_metadata")
         custom_metadata_json = Jsonb(custom_metadata) if custom_metadata is not None else None
 
-        sql = f"""
-        INSERT INTO {self._events_table} (
+        query = pg_sql.SQL("""
+        INSERT INTO {table} (
             id, session_id, app_name, user_id, invocation_id, author, actions,
             long_running_tool_ids_json, branch, timestamp, content,
             grounding_metadata, custom_metadata, partial, turn_complete,
             interrupted, error_code, error_message
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, CURRENT_TIMESTAMP), $11, $12, $13, $14, $15, $16, $17, $18
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP), %s, %s, %s, %s, %s, %s, %s, %s
         )
         RETURNING id, session_id, app_name, user_id, invocation_id, author, actions,
                   long_running_tool_ids_json, branch, timestamp, content,
                   grounding_metadata, custom_metadata, partial, turn_complete,
                   interrupted, error_code, error_message
-        """
+        """).format(table=pg_sql.Identifier(self._events_table))
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(
-                sql,
+                query,
                 (
                     event_id,
                     session_id,
@@ -841,19 +844,19 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             JSONB fields are automatically deserialized by psycopg.
             BYTEA actions are converted to bytes.
         """
-        sql = f"""
+        query = pg_sql.SQL("""
         SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
                long_running_tool_ids_json, branch, timestamp, content,
                grounding_metadata, custom_metadata, partial, turn_complete,
                interrupted, error_code, error_message
-        FROM {self._events_table}
-        WHERE session_id = $1
+        FROM {table}
+        WHERE session_id = %s
         ORDER BY timestamp ASC
-        """
+        """).format(table=pg_sql.Identifier(self._events_table))
 
         try:
             with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(sql, (session_id,))
+                cur.execute(query, (session_id,))
                 rows = cur.fetchall()
 
                 return [

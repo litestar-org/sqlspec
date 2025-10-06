@@ -27,13 +27,7 @@ __all__ = ("main", "run_adk_example")
 async def run_adk_example() -> None:
     """Demonstrate Google ADK session storage with MySQL."""
     config = AsyncmyConfig(
-        pool_config={
-            "host": "localhost",
-            "port": 3306,
-            "user": "root",
-            "password": "root",
-            "database": "sqlspec_dev",
-        }
+        pool_config={"host": "localhost", "port": 3306, "user": "root", "password": "root", "database": "sqlspec_dev"}
     )
 
     store = AsyncmyADKStore(config)
@@ -143,7 +137,9 @@ def main() -> None:
     except Exception as e:
         print(f"\n❌ Example failed: {e}")
         print("\nMake sure MySQL is running with:")
-        print("  docker run -d --name mysql-dev -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=sqlspec_dev -p 3306:3306 mysql:8")
+        print(
+            "  docker run -d --name mysql-dev -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=sqlspec_dev -p 3306:3306 mysql:8"
+        )
         print("\nOr use make infra-up if configured in Makefile")
 
 

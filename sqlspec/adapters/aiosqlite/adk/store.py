@@ -392,8 +392,12 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
 
         content_json = to_json(event_record.get("content")) if event_record.get("content") else None
-        grounding_metadata_json = to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
-        custom_metadata_json = to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
+        grounding_metadata_json = (
+            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
+        )
+        custom_metadata_json = (
+            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
+        )
 
         partial_int = _to_sqlite_bool(event_record.get("partial"))
         turn_complete_int = _to_sqlite_bool(event_record.get("turn_complete"))

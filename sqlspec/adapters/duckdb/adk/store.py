@@ -1,23 +1,24 @@
-"""DuckDB ADK store for Google Agent Development Kit - DEV/TEST ONLY.
+"""DuckDB ADK store for Google Agent Development Kit.
 
-WARNING: DuckDB is an OLAP database optimized for analytical queries,
-not OLTP workloads. This adapter is suitable for:
-- Local development and testing
-- Analytical workloads on session data
-- Prototyping
+DuckDB is an OLAP database optimized for analytical queries. This adapter provides:
+- Embedded session storage with zero-configuration setup
+- Excellent performance for analytical queries on session data
+- Native JSON type support for flexible state storage
+- Perfect for development, testing, and analytical workloads
 
-NOT recommended for:
-- Production session storage
-- High-concurrency write workloads
-- Real-time session management
+Notes:
+    DuckDB is optimized for OLAP workloads and analytical queries. For highly
+    concurrent DML operations (frequent inserts/updates/deletes), consider
+    PostgreSQL or other OLTP-optimized databases.
 """
 
-import json
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 from sqlspec.extensions.adk.store import BaseSyncADKStore
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.config import DuckDBConfig
@@ -30,26 +31,14 @@ DUCKDB_TABLE_NOT_FOUND_ERROR: Final = "does not exist"
 
 
 class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
-    """DuckDB ADK store - DEV/TEST ONLY.
-
-    WARNING: DuckDB is an OLAP database optimized for analytical queries,
-    not OLTP workloads. This adapter is suitable for:
-    - Local development and testing
-    - Analytical workloads on session data
-    - Prototyping
-
-    NOT recommended for:
-    - Production session storage
-    - High-concurrency write workloads
-    - Real-time session management
+    """DuckDB ADK store for Google Agent Development Kit.
 
     Implements session and event storage for Google Agent Development Kit
-    using DuckDB via the synchronous driver. Uses async_() wrapper to
-    provide async interface. Provides:
+    using DuckDB's synchronous driver. Provides:
     - Session state management with native JSON type
     - Event history tracking with BLOB-serialized actions
     - Native TIMESTAMP type support
-    - Foreign key constraints with cascade delete
+    - Foreign key constraints (manual cascade in delete_session)
     - Columnar storage for analytical queries
 
     Args:
@@ -61,17 +50,25 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         from sqlspec.adapters.duckdb import DuckDBConfig
         from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 
-        config = DuckDBConfig()
+        config = DuckDBConfig(database="sessions.ddb")
         store = DuckdbADKStore(config)
         store.create_tables()
 
+        session = store.create_session(
+            session_id="session-123",
+            app_name="my-app",
+            user_id="user-456",
+            state={"context": "conversation"}
+        )
+
     Notes:
-        - DuckDB JSON type (not JSONB)
-        - TIMESTAMP provides date/time storage
+        - Uses DuckDB native JSON type (not JSONB)
+        - TIMESTAMP for date/time storage with microsecond precision
         - BLOB for binary actions data
         - BOOLEAN native type support
-        - Columnar storage optimized for analytics
-        - Limited write concurrency
+        - Columnar storage provides excellent analytical query performance
+        - DuckDB doesn't support CASCADE in foreign keys (manual cascade required)
+        - Optimized for OLAP workloads; for high-concurrency writes use PostgreSQL
     """
 
     __slots__ = ()
@@ -187,20 +184,23 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             Created session record.
 
         Notes:
-            Uses CURRENT_TIMESTAMP for create_time and update_time.
-            State is JSON-serialized before insertion.
+            Uses current UTC timestamp for create_time and update_time.
+            State is JSON-serialized using SQLSpec serializers.
         """
-        state_json = json.dumps(state)
+        now = datetime.now(timezone.utc)
+        state_json = to_json(state)
         sql = f"""
         INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, ?, ?, ?)
         """
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql, (session_id, app_name, user_id, state_json))
+            conn.execute(sql, (session_id, app_name, user_id, state_json, now, now))
             conn.commit()
 
-        return self.get_session(session_id)  # type: ignore[return-value]
+        return SessionRecord(
+            id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
+        )
 
     def get_session(self, session_id: str) -> "SessionRecord | None":
         """Get session by ID.
@@ -231,7 +231,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
                 session_id_val, app_name, user_id, state_data, create_time, update_time = row
 
-                state = json.loads(state_data) if isinstance(state_data, str) else state_data
+                state = from_json(state_data) if state_data else {}
 
                 return SessionRecord(
                     id=session_id_val,
@@ -255,18 +255,19 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
         Notes:
             This replaces the entire state dictionary.
-            Update time is automatically updated.
+            Update time is automatically set to current UTC timestamp.
         """
-        state_json = json.dumps(state)
+        now = datetime.now(timezone.utc)
+        state_json = to_json(state)
 
         sql = f"""
         UPDATE {self._session_table}
-        SET state = ?, update_time = CURRENT_TIMESTAMP
+        SET state = ?, update_time = ?
         WHERE id = ?
         """
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql, (state_json, session_id))
+            conn.execute(sql, (state_json, now, session_id))
             conn.commit()
 
     def delete_session(self, session_id: str) -> None:
@@ -316,7 +317,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                         id=row[0],
                         app_name=row[1],
                         user_id=row[2],
-                        state=json.loads(row[3]) if isinstance(row[3], str) else row[3],
+                        state=from_json(row[3]) if row[3] else {},
                         create_time=row[4],
                         update_time=row[5],
                     )
@@ -352,12 +353,17 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
         Returns:
             Created event record.
+
+        Notes:
+            Uses current UTC timestamp if not provided in kwargs.
+            JSON fields are serialized using SQLSpec serializers.
         """
-        content_json = json.dumps(content) if content else None
+        timestamp = kwargs.get("timestamp", datetime.now(timezone.utc))
+        content_json = to_json(content) if content else None
         grounding_metadata = kwargs.get("grounding_metadata")
-        grounding_metadata_json = json.dumps(grounding_metadata) if grounding_metadata else None
+        grounding_metadata_json = to_json(grounding_metadata) if grounding_metadata else None
         custom_metadata = kwargs.get("custom_metadata")
-        custom_metadata_json = json.dumps(custom_metadata) if custom_metadata else None
+        custom_metadata_json = to_json(custom_metadata) if custom_metadata else None
 
         sql = f"""
         INSERT INTO {self._events_table} (
@@ -381,7 +387,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                     actions,
                     kwargs.get("long_running_tool_ids_json"),
                     kwargs.get("branch"),
-                    kwargs.get("timestamp") if kwargs.get("timestamp") else None,
+                    timestamp,
                     content_json,
                     grounding_metadata_json,
                     custom_metadata_json,
@@ -394,7 +400,26 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             )
             conn.commit()
 
-        return self.get_event(event_id)  # type: ignore[return-value]
+        return EventRecord(
+            id=event_id,
+            session_id=session_id,
+            app_name=app_name,
+            user_id=user_id,
+            invocation_id=kwargs.get("invocation_id", ""),
+            author=author or "",
+            actions=actions or b"",
+            long_running_tool_ids_json=kwargs.get("long_running_tool_ids_json"),
+            branch=kwargs.get("branch"),
+            timestamp=timestamp,
+            content=content,
+            grounding_metadata=grounding_metadata,
+            custom_metadata=custom_metadata,
+            partial=kwargs.get("partial"),
+            turn_complete=kwargs.get("turn_complete"),
+            interrupted=kwargs.get("interrupted"),
+            error_code=kwargs.get("error_code"),
+            error_message=kwargs.get("error_message"),
+        )
 
     def get_event(self, event_id: str) -> "EventRecord | None":
         """Get event by ID.
@@ -433,9 +458,9 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                     long_running_tool_ids_json=row[7],
                     branch=row[8],
                     timestamp=row[9],
-                    content=json.loads(row[10]) if row[10] and isinstance(row[10], str) else row[10],
-                    grounding_metadata=json.loads(row[11]) if row[11] and isinstance(row[11], str) else row[11],
-                    custom_metadata=json.loads(row[12]) if row[12] and isinstance(row[12], str) else row[12],
+                    content=from_json(row[10]) if row[10] else None,
+                    grounding_metadata=from_json(row[11]) if row[11] else None,
+                    custom_metadata=from_json(row[12]) if row[12] else None,
                     partial=row[13],
                     turn_complete=row[14],
                     interrupted=row[15],
@@ -483,9 +508,9 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                         long_running_tool_ids_json=row[7],
                         branch=row[8],
                         timestamp=row[9],
-                        content=json.loads(row[10]) if row[10] and isinstance(row[10], str) else row[10],
-                        grounding_metadata=json.loads(row[11]) if row[11] and isinstance(row[11], str) else row[11],
-                        custom_metadata=json.loads(row[12]) if row[12] and isinstance(row[12], str) else row[12],
+                        content=from_json(row[10]) if row[10] else None,
+                        grounding_metadata=from_json(row[11]) if row[11] else None,
+                        custom_metadata=from_json(row[12]) if row[12] else None,
                         partial=row[13],
                         turn_complete=row[14],
                         interrupted=row[15],

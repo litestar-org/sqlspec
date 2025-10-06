@@ -396,14 +396,135 @@ OracleDB
 - BLOB for binary data
 - NUMBER(1) for boolean values (0/1)
 
-DuckDB Adapter (Development Only)
-==================================
+BigQuery Adapter
+================
 
-.. warning::
+Google Cloud BigQuery is a serverless, highly scalable data warehouse optimized for
+analytics workloads. It's an excellent choice for storing and analyzing large volumes
+of AI agent session and event data.
 
-   **DuckDB is for development and testing ONLY.** DuckDB is an OLAP (analytical) database
-   optimized for read-heavy analytical workloads, not concurrent transactional writes.
-   It has limited concurrency support and write performance. **Do NOT use in production.**
+.. seealso::
+
+   :doc:`backends/bigquery`
+      Complete BigQuery backend documentation with cost optimization guide
+
+BigQuery
+--------
+
+**Import:**
+
+.. code-block:: python
+
+   from sqlspec.adapters.bigquery import BigQueryConfig
+   from sqlspec.adapters.bigquery.adk import BigQueryADKStore
+
+**Features:**
+
+- **Serverless** - No infrastructure management required
+- **Scalable** - Handles petabyte-scale data seamlessly
+- **Native JSON type** - Efficient JSON storage and querying
+- **Partitioning & Clustering** - Automatic query optimization
+- **Cost-effective** - Pay only for queries run (bytes scanned)
+- **Analytics-optimized** - Built for complex aggregations
+
+**Configuration:**
+
+.. code-block:: python
+
+   from sqlspec.adapters.bigquery import BigQueryConfig
+   from sqlspec.adapters.bigquery.adk import BigQueryADKStore
+
+   config = BigQueryConfig(
+       connection_config={
+           "project": "my-gcp-project",
+           "dataset_id": "my_dataset",
+           "use_query_cache": True,
+           "maximum_bytes_billed": 100000000,  # 100 MB cost limit
+       }
+   )
+
+   store = BigQueryADKStore(config)
+   await store.create_tables()
+
+**Schema DDL:**
+
+.. code-block:: sql
+
+   CREATE TABLE `dataset.adk_sessions` (
+       id STRING NOT NULL,
+       app_name STRING NOT NULL,
+       user_id STRING NOT NULL,
+       state JSON NOT NULL,  -- Native JSON type
+       create_time TIMESTAMP NOT NULL,
+       update_time TIMESTAMP NOT NULL
+   )
+   PARTITION BY DATE(create_time)
+   CLUSTER BY app_name, user_id;
+
+   CREATE TABLE `dataset.adk_events` (
+       id STRING NOT NULL,
+       session_id STRING NOT NULL,
+       app_name STRING NOT NULL,
+       user_id STRING NOT NULL,
+       invocation_id STRING,
+       author STRING,
+       actions BYTES,
+       long_running_tool_ids_json STRING,
+       branch STRING,
+       timestamp TIMESTAMP NOT NULL,
+       content JSON,
+       grounding_metadata JSON,
+       custom_metadata JSON,
+       partial BOOL,
+       turn_complete BOOL,
+       interrupted BOOL,
+       error_code STRING,
+       error_message STRING
+   )
+   PARTITION BY DATE(timestamp)
+   CLUSTER BY session_id, timestamp;
+
+**Best For:**
+
+- Large-scale AI agent deployments (millions of users)
+- Analytics and insights on agent interactions
+- Long-term storage of conversation history
+- Multi-region deployments requiring global scalability
+- Applications already using Google Cloud Platform
+
+**Considerations:**
+
+- Eventual consistency (writes may take seconds to be visible)
+- Pay-per-query cost model (optimize queries carefully)
+- No foreign keys (implements cascade delete manually)
+- Optimized for analytics, not high-frequency transactional updates
+
+**Cost Optimization:**
+
+BigQuery charges based on bytes scanned. The store implements:
+
+- **Partitioning by date** - Reduces data scanned for time-based queries
+- **Clustering** - Optimizes filtering on app_name, user_id, session_id
+- **Query caching** - Automatically caches results for 24 hours
+- **Byte limits** - Prevents runaway query costs
+
+.. note::
+
+   For highly concurrent transactional workloads with frequent small DML operations,
+   PostgreSQL or Oracle are better choices. BigQuery excels at storing and analyzing
+   large volumes of session/event data with complex analytical queries.
+
+DuckDB Adapter
+==============
+
+DuckDB is an embedded OLAP database optimized for analytical queries. It provides excellent
+performance for read-heavy workloads and analytical operations on session data.
+
+.. note::
+
+   DuckDB is optimized for OLAP workloads and analytical queries. For highly concurrent
+   DML operations (frequent inserts/updates/deletes), consider PostgreSQL or other
+   OLTP-optimized databases.
 
 DuckDB
 ------
@@ -413,42 +534,148 @@ DuckDB
 .. code-block:: python
 
    from sqlspec.adapters.duckdb import DuckDBConfig
-   from sqlspec.adapters.duckdb.adk import DuckDBADKStore
+   from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 
 **Features:**
 
-- Embedded analytical database
-- Fast analytical queries
-- JSON type support
-- Single-file or in-memory
+- **Zero-configuration setup** - embedded database, no server required
+- **Native JSON type** - efficient JSON storage and querying
+- **Columnar storage** - excellent for analytical queries on session data
+- **Single-file or in-memory** - flexible deployment options
+- **ACID guarantees** - reliable transaction support
 
 **Configuration:**
 
 .. code-block:: python
 
    from sqlspec.adapters.duckdb import DuckDBConfig
-   from sqlspec.adapters.duckdb.adk import DuckDBADKStore
+   from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 
+   # File-based database
    config = DuckDBConfig(pool_config={
-       "database": ":memory:"  # Or "/path/to/agent.duckdb"
+       "database": "/path/to/sessions.duckdb"
    })
 
-   store = DuckDBADKStore(config)
-   await store.create_tables()
+   # Or in-memory for testing
+   config = DuckDBConfig(pool_config={
+       "database": ":memory:"
+   })
 
-**Limitations:**
+   store = DuckdbADKStore(config)
+   store.create_tables()  # Sync interface
 
-- **Poor write concurrency** - not suitable for concurrent agent sessions
-- **Not ACID compliant** for concurrent writes
-- **Limited locking** - single-writer model
-- **No production support** - use PostgreSQL, MySQL, or SQLite instead
+**Schema DDL:**
 
-**Use Cases:**
+.. code-block:: sql
 
-- Local development and prototyping
+   CREATE TABLE IF NOT EXISTS adk_sessions (
+       id VARCHAR PRIMARY KEY,
+       app_name VARCHAR NOT NULL,
+       user_id VARCHAR NOT NULL,
+       state JSON NOT NULL,  -- Native JSON type
+       create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+   );
+
+   CREATE INDEX idx_adk_sessions_app_user
+       ON adk_sessions(app_name, user_id);
+   CREATE INDEX idx_adk_sessions_update_time
+       ON adk_sessions(update_time DESC);
+
+**Best For:**
+
+- Development and testing (zero-configuration setup)
+- Analytical workloads on session data (session analytics, reporting)
+- Embedded applications (single-file database)
 - Offline analysis of session logs
-- Testing with analytical queries
-- Single-user demos
+- Prototyping and demos
+
+**Considerations:**
+
+- Optimized for OLAP, not high-concurrency writes
+- For production systems with frequent concurrent writes, PostgreSQL is recommended
+- Manual cascade delete required (DuckDB doesn't support CASCADE in foreign keys)
+
+ADBC (Arrow Database Connectivity)
+===================================
+
+ADBC provides a vendor-neutral API for database access using Apache Arrow's columnar format.
+It supports multiple backend databases through a single consistent interface.
+
+**Import:**
+
+.. code-block:: python
+
+   from sqlspec.adapters.adbc import AdbcConfig
+   from sqlspec.adapters.adbc.adk import AdbcADKStore
+
+.. seealso::
+
+   :doc:`backends/adbc`
+      Complete ADBC backend guide with examples for PostgreSQL, SQLite, DuckDB, and more
+
+**Features:**
+
+- Zero-copy data transfer via Apache Arrow
+- Columnar format for analytical workloads
+- Vendor-neutral (PostgreSQL, SQLite, DuckDB, Snowflake, Flight SQL)
+- High-performance bulk operations
+- Arrow ecosystem integration (Polars, PyArrow)
+
+**Configuration:**
+
+.. code-block:: python
+
+   from sqlspec.adapters.adbc import AdbcConfig
+   from sqlspec.adapters.adbc.adk import AdbcADKStore
+
+   # SQLite backend
+   config = AdbcConfig(connection_config={
+       "driver_name": "sqlite",
+       "uri": "file:agent.db"
+   })
+
+   # PostgreSQL backend
+   config = AdbcConfig(connection_config={
+       "driver_name": "postgresql",
+       "uri": "postgresql://user:pass@localhost:5432/agentdb"
+   })
+
+   store = AdbcADKStore(config)
+   store.create_tables()
+
+**Schema DDL (Database-Agnostic):**
+
+.. code-block:: sql
+
+   CREATE TABLE IF NOT EXISTS adk_sessions (
+       id VARCHAR(128) PRIMARY KEY,
+       app_name VARCHAR(128) NOT NULL,
+       user_id VARCHAR(128) NOT NULL,
+       state TEXT NOT NULL DEFAULT '{}',
+       create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+   )
+
+   CREATE INDEX IF NOT EXISTS idx_adk_sessions_app_user
+       ON adk_sessions(app_name, user_id);
+   CREATE INDEX IF NOT EXISTS idx_adk_sessions_update_time
+       ON adk_sessions(update_time DESC);
+
+**Best For:**
+
+- Multi-database applications requiring portability
+- Analytical AI agents processing large datasets
+- Integration with Arrow ecosystem tools
+- Bulk data operations and ETL pipelines
+- Applications needing zero-copy data transfer
+
+**Considerations:**
+
+- Synchronous API (no native async support)
+- TEXT storage for JSON (less optimized than native JSONB)
+- SQLite backend: Foreign key cascade deletes require explicit connection-level setup
+- Creates new connection per operation by default
 
 Adapter Comparison
 ==================
@@ -487,6 +714,12 @@ Adapter Comparison
      - JSON
      - Production (MySQL shops)
      - Requires 5.7.8+
+   * - BigQuery
+     - Google Cloud
+     - ✅
+     - JSON
+     - Analytics, massive scale
+     - Serverless, partitioned
    * - SQLite
      - SQLite
      - ❌
@@ -507,10 +740,16 @@ Adapter Comparison
      - Requires 19c+
    * - DuckDB
      - DuckDB
-     - ❌
+     - ❌ (sync)
      - JSON
-     - **Development ONLY**
-     - Not for production
+     - OLAP/Analytics
+     - Embedded, zero-config
+   * - ADBC
+     - Multi (PostgreSQL, SQLite, DuckDB, etc.)
+     - ❌ (sync)
+     - TEXT
+     - Arrow ecosystem, analytics
+     - Zero-copy, vendor-neutral
 
 Custom Table Names
 ==================
@@ -573,7 +812,10 @@ See Also
 - :doc:`schema` - Detailed schema reference
 - :doc:`api` - API documentation
 - :doc:`/reference/adapters` - SQLSpec adapters reference
+- :doc:`backends/adbc` - ADBC backend guide
+- :doc:`backends/bigquery` - BigQuery backend guide
 - :doc:`/examples/adk_basic_asyncpg` - PostgreSQL example
+- :doc:`/examples/adk_basic_bigquery` - BigQuery example
 - :doc:`/examples/adk_basic_mysql` - MySQL example
 - :doc:`/examples/adk_basic_sqlite` - SQLite example
 - :doc:`/examples/adk_multi_tenant` - Multi-tenant deployment example

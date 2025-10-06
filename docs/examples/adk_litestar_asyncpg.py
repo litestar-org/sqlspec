@@ -89,9 +89,7 @@ async def health_check() -> dict[str, str]:
 
 
 @post("/sessions", status_code=HTTP_201_CREATED)
-async def create_session(
-    data: CreateSessionRequest, adk_service: SQLSpecSessionService
-) -> dict[str, Any]:
+async def create_session(data: CreateSessionRequest, adk_service: SQLSpecSessionService) -> dict[str, Any]:
     """Create a new ADK session.
 
     Args:

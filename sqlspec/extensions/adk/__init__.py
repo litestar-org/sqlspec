@@ -3,10 +3,17 @@
 Provides session and event storage for Google Agent Development Kit using
 SQLSpec database adapters.
 
+Public API exports:
+    - SQLSpecSessionService: Main service class implementing BaseSessionService
+    - BaseAsyncADKStore: Base class for async database store implementations
+    - BaseSyncADKStore: Base class for sync database store implementations
+    - SessionRecord: TypedDict for session database records
+    - EventRecord: TypedDict for event database records
+
 Example:
     from sqlspec.adapters.asyncpg import AsyncpgConfig
     from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKStore
-    from sqlspec.extensions.adk import SQLSpecSessionService
+    from sqlspec.extensions.adk import SQLSpecSessionService, SessionRecord
 
     config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
     store = AsyncpgADKStore(config)

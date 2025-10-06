@@ -10,6 +10,15 @@ Google ADK Extension
    quickstart
    api
    adapters
+   backends/adbc
+   backends/aiosqlite
+   backends/asyncmy
+   backends/asyncpg
+   backends/bigquery
+   backends/duckdb
+   backends/psqlpy
+   backends/psycopg
+   backends/sqlite
    migrations
    schema
 
@@ -95,22 +104,23 @@ Database Support Status
      - CLOB JSON, BLOB storage
    * - DuckDB
      - ``duckdb``
-     - ⚠️  Dev/Test Only
-     - OLAP database, limited concurrency
+     - ✅ Production*
+     - Best for OLAP workloads, analytics
    * - BigQuery
      - ``bigquery``
-     - ❌ Not Implemented
-     - Future support planned
+     - ✅ Production
+     - Serverless, partitioned, cost-optimized
    * - ADBC
      - ``adbc``
-     - ❌ Not Implemented
-     - Future support planned
+     - ✅ Production
+     - Arrow-native, multi-backend support
 
-.. warning::
+.. note::
 
-   **DuckDB is for development and testing only.** DuckDB is an OLAP (analytical) database optimized for
-   analytical queries, not concurrent writes. It has limited concurrency support and is not suitable for
-   production AI agent applications. Use PostgreSQL, MySQL, SQLite, or Oracle for production deployments.
+   **DuckDB is optimized for OLAP workloads.** DuckDB excels at analytical queries and embedded
+   use cases with zero-configuration setup. It's perfect for development, testing, and analytical
+   workloads on session data. For highly concurrent DML operations (frequent inserts/updates/deletes),
+   consider PostgreSQL or other OLTP-optimized databases.
 
 Quick Example
 =============

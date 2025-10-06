@@ -1,16 +1,21 @@
 """Example: Google ADK session storage with SQLite.
 
 This example demonstrates basic session and event management using
-the Google ADK extension with SQLite (synchronous driver with async wrapper).
+the Google ADK extension with SQLite (embedded database).
+
+SQLite is perfect for:
+- Development and testing (zero-configuration)
+- Embedded desktop applications
+- Single-user AI agents
+- Prototyping and demos
 
 Requirements:
-    - pip install sqlspec[adk] google-genai
+    - pip install sqlspec google-genai
 
 Usage:
     python docs/examples/adk_basic_sqlite.py
 """
 
-import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,18 +31,25 @@ __all__ = ("main", "run_adk_example")
 
 async def run_adk_example() -> None:
     """Demonstrate Google ADK session storage with SQLite."""
-    db_path = Path("./sqlspec_adk_example.db")
-    config = SqliteConfig(database=str(db_path))
+    db_path = Path("./sqlspec_adk_sqlite.db")
+    config = SqliteConfig(pool_config={"database": str(db_path)})
 
     store = SqliteADKStore(config)
     await store.create_tables()
     print(f"✅ Created ADK tables in SQLite database: {db_path}")
 
+    # Enable WAL mode for better concurrency
+    with config.provide_connection() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.commit()
+    print("✅ Enabled WAL mode and foreign keys")
+
     service = SQLSpecSessionService(store)
 
     print("\n=== Creating Session ===")
     session = await service.create_session(
-        app_name="chatbot", user_id="alice", state={"theme": "dark", "language": "en"}
+        app_name="chatbot", user_id="user_123", state={"conversation_started": True, "context": "greeting"}
     )
     print(f"Created session: {session.id}")
     print(f"App: {session.app_name}, User: {session.user_id}")
@@ -51,7 +63,7 @@ async def run_adk_example() -> None:
         branch="main",
         actions=[],
         timestamp=datetime.now(timezone.utc).timestamp(),
-        content=types.Content(parts=[types.Part(text="How do I use SQLSpec with ADK?")]),
+        content=types.Content(parts=[types.Part(text="Hello! Can you help me with Python?")]),
         partial=False,
         turn_complete=True,
     )
@@ -68,8 +80,9 @@ async def run_adk_example() -> None:
         content=types.Content(
             parts=[
                 types.Part(
-                    text="SQLSpec provides ADK stores for multiple databases. "
-                    "Just create a store instance, create tables, and pass it to SQLSpecSessionService!"
+                    text="Of course! SQLite is perfect for embedded applications. "
+                    "It's lightweight, requires zero configuration, and works great for "
+                    "development and single-user scenarios!"
                 )
             ]
         ),
@@ -80,7 +93,7 @@ async def run_adk_example() -> None:
     print(f"Added assistant event: {assistant_event.id}")
 
     print("\n=== Retrieving Session with History ===")
-    retrieved_session = await service.get_session(app_name="chatbot", user_id="alice", session_id=session.id)
+    retrieved_session = await service.get_session(app_name="chatbot", user_id="user_123", session_id=session.id)
 
     if retrieved_session:
         print(f"Retrieved session: {retrieved_session.id}")
@@ -95,46 +108,48 @@ async def run_adk_example() -> None:
 
     print("\n=== Multi-Session Management ===")
     session2 = await service.create_session(
-        app_name="chatbot", user_id="alice", state={"theme": "light", "language": "es"}
+        app_name="chatbot", user_id="user_123", state={"conversation_started": True, "context": "technical_help"}
     )
     print(f"Created second session: {session2.id}")
 
-    all_sessions = await service.list_sessions(app_name="chatbot", user_id="alice")
-    print(f"\nAlice has {len(all_sessions.sessions)} active session(s):")
-    for s in all_sessions.sessions:
-        state_preview = str(s.state)[:50]
-        print(f"  - {s.id[:8]}... (state: {state_preview})")
+    sessions = await service.list_sessions(app_name="chatbot", user_id="user_123")
+    print(f"Total sessions for user 'user_123': {len(sessions)}")
 
-    print("\n=== State Updates ===")
-    session.state["message_count"] = 2
-    session.state["last_topic"] = "ADK Integration"
-    await store.update_session_state(session.id, session.state)
-    print(f"Updated session state: {session.state}")
+    print("\n=== SQLite Benefits ===")
+    print("SQLite is ideal for:")
+    print("  ✅ Zero-configuration development")
+    print("  ✅ Embedded desktop applications")
+    print("  ✅ Single-user AI agents")
+    print("  ✅ Prototyping and testing")
+    print("  ✅ Offline-first applications")
+    print()
+    print("Consider PostgreSQL for:")
+    print("  ⚠️  High-concurrency production deployments")
+    print("  ⚠️  Multi-user web applications")
+    print("  ⚠️  Server-based architectures")
 
     print("\n=== Cleanup ===")
-    await service.delete_session(app_name="chatbot", user_id="alice", session_id=session.id)
-    await service.delete_session(app_name="chatbot", user_id="alice", session_id=session2.id)
-    print("Deleted all sessions")
+    await service.delete_session(session.id)
+    await service.delete_session(session2.id)
+    print(f"Deleted {2} sessions")
 
-    remaining = await service.list_sessions(app_name="chatbot", user_id="alice")
-    print(f"Remaining sessions: {len(remaining.sessions)}")
+    if db_path.exists():
+        db_path.unlink()
+        print(f"Cleaned up database: {db_path}")
 
-    print(f"\nNote: Database file retained at: {db_path}")
-    print("Delete manually if desired, or use it for inspection with: sqlite3 sqlspec_adk_example.db")
+    print("\n✅ Example completed successfully!")
 
 
-def main() -> None:
-    """Run the ADK SQLite example."""
-    print("=== Google ADK with SQLite Example ===")
+async def main() -> None:
+    """Run the ADK example."""
     try:
-        asyncio.run(run_adk_example())
-        print("\n✅ Example completed successfully!")
+        await run_adk_example()
     except Exception as e:
-        print(f"\n❌ Example failed: {e}")
-        import traceback
-
-        traceback.print_exc()
+        print(f"\n❌ Error: {e!s}")
+        raise
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+
+    asyncio.run(main())

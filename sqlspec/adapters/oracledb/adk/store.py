@@ -1335,9 +1335,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
-    def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
-    ) -> SessionRecord:
+    def create_session(self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]") -> SessionRecord:
         """Create a new session.
 
         Args:
