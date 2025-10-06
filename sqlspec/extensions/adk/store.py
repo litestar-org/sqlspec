@@ -44,12 +44,7 @@ class BaseADKStore(ABC, Generic[ConfigT]):
 
     __slots__ = ("_config", "_events_table", "_session_table")
 
-    def __init__(
-        self,
-        config: ConfigT,
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-    ) -> None:
+    def __init__(self, config: ConfigT, session_table: str = "adk_sessions", events_table: str = "adk_events") -> None:
         """Initialize the ADK store.
 
         Args:
@@ -80,11 +75,7 @@ class BaseADKStore(ABC, Generic[ConfigT]):
 
     @abstractmethod
     async def create_session(
-        self,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        state: "dict[str, Any]",
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
     ) -> "SessionRecord":
         """Create a new session.
 
@@ -112,11 +103,7 @@ class BaseADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def update_session_state(
-        self,
-        session_id: str,
-        state: "dict[str, Any]",
-    ) -> None:
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
@@ -126,11 +113,7 @@ class BaseADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def list_sessions(
-        self,
-        app_name: str,
-        user_id: str,
-    ) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """List all sessions for an app and user.
 
         Args:
@@ -162,10 +145,7 @@ class BaseADKStore(ABC, Generic[ConfigT]):
 
     @abstractmethod
     async def get_events(
-        self,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
         """Get events for a session.
 
@@ -271,12 +251,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
 
     __slots__ = ("_config", "_events_table", "_session_table")
 
-    def __init__(
-        self,
-        config: ConfigT,
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-    ) -> None:
+    def __init__(self, config: ConfigT, session_table: str = "adk_sessions", events_table: str = "adk_events") -> None:
         """Initialize the sync ADK store.
 
         Args:
@@ -306,13 +281,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         return self._events_table
 
     @abstractmethod
-    def create_session(
-        self,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        state: "dict[str, Any]",
-    ) -> "SessionRecord":
+    def create_session(self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]") -> "SessionRecord":
         """Create a new session.
 
         Args:
@@ -339,11 +308,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def update_session_state(
-        self,
-        session_id: str,
-        state: "dict[str, Any]",
-    ) -> None:
+    def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
@@ -353,11 +318,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def list_sessions(
-        self,
-        app_name: str,
-        user_id: str,
-    ) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """List all sessions for an app and user.
 
         Args:
@@ -408,10 +369,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def list_events(
-        self,
-        session_id: str,
-    ) -> "list[EventRecord]":
+    def list_events(self, session_id: str) -> "list[EventRecord]":
         """List events for a session ordered by timestamp.
 
         Args:

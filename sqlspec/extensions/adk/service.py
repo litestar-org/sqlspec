@@ -61,12 +61,7 @@ class SQLSpecSessionService(BaseSessionService):
         return self._store
 
     async def create_session(
-        self,
-        *,
-        app_name: str,
-        user_id: str,
-        state: "dict[str, Any] | None" = None,
-        session_id: "str | None" = None,
+        self, *, app_name: str, user_id: str, state: "dict[str, Any] | None" = None, session_id: "str | None" = None
     ) -> "Session":
         """Create a new session.
 
@@ -86,21 +81,13 @@ class SQLSpecSessionService(BaseSessionService):
             state = {}
 
         record = await self._store.create_session(
-            session_id=session_id,
-            app_name=app_name,
-            user_id=user_id,
-            state=state,
+            session_id=session_id, app_name=app_name, user_id=user_id, state=state
         )
 
         return record_to_session(record, events=[])
 
     async def get_session(
-        self,
-        *,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        config: "GetSessionConfig | None" = None,
+        self, *, app_name: str, user_id: str, session_id: str, config: "GetSessionConfig | None" = None
     ) -> "Session | None":
         """Get a session by ID.
 
@@ -128,25 +115,14 @@ class SQLSpecSessionService(BaseSessionService):
             if config.after_timestamp:
                 from datetime import datetime, timezone
 
-                after_timestamp = datetime.fromtimestamp(
-                    config.after_timestamp, tz=timezone.utc
-                )
+                after_timestamp = datetime.fromtimestamp(config.after_timestamp, tz=timezone.utc)
             limit = config.num_recent_events
 
-        events = await self._store.get_events(
-            session_id=session_id,
-            after_timestamp=after_timestamp,
-            limit=limit,
-        )
+        events = await self._store.get_events(session_id=session_id, after_timestamp=after_timestamp, limit=limit)
 
         return record_to_session(record, events)
 
-    async def list_sessions(
-        self,
-        *,
-        app_name: str,
-        user_id: str,
-    ) -> "ListSessionsResponse":
+    async def list_sessions(self, *, app_name: str, user_id: str) -> "ListSessionsResponse":
         """List all sessions for an app and user.
 
         Args:
@@ -156,22 +132,13 @@ class SQLSpecSessionService(BaseSessionService):
         Returns:
             Response containing list of sessions (without events).
         """
-        records = await self._store.list_sessions(
-            app_name=app_name,
-            user_id=user_id,
-        )
+        records = await self._store.list_sessions(app_name=app_name, user_id=user_id)
 
         sessions = [record_to_session(record, events=[]) for record in records]
 
         return ListSessionsResponse(sessions=sessions)
 
-    async def delete_session(
-        self,
-        *,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-    ) -> None:
+    async def delete_session(self, *, app_name: str, user_id: str, session_id: str) -> None:
         """Delete a session and all its events.
 
         Args:
@@ -205,10 +172,7 @@ class SQLSpecSessionService(BaseSessionService):
             return event
 
         event_record = event_to_record(
-            event=event,
-            session_id=session.id,
-            app_name=session.app_name,
-            user_id=session.user_id,
+            event=event, session_id=session.id, app_name=session.app_name, user_id=session.user_id
         )
 
         await self._store.append_event(event_record)

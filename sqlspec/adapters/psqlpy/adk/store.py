@@ -43,10 +43,7 @@ class PsqlpyADKStore(AsyncpgADKStore):
     __slots__ = ()
 
     def __init__(
-        self,
-        config: "PsqlpyConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
+        self, config: "PsqlpyConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
     ) -> None:
         """Initialize Psqlpy ADK store.
 

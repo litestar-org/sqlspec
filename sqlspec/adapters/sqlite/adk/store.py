@@ -107,7 +107,7 @@ def _from_sqlite_json(text: "str | None") -> "dict[str, Any] | None":
     """
     if text is None or text == "":
         return None
-    result: "dict[str, Any]" = json.loads(text)
+    result: dict[str, Any] = json.loads(text)
     return result
 
 
@@ -149,10 +149,7 @@ class SqliteADKStore(BaseADKStore["SqliteConfig"]):
     __slots__ = ()
 
     def __init__(
-        self,
-        config: "SqliteConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
+        self, config: "SqliteConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
     ) -> None:
         """Initialize SQLite ADK store.
 
@@ -240,10 +237,7 @@ class SqliteADKStore(BaseADKStore["SqliteConfig"]):
             Order matters: drop events table (child) before sessions (parent).
             SQLite automatically drops indexes when dropping tables.
         """
-        return [
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
-        ]
+        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
     def _enable_foreign_keys(self, connection: Any) -> None:
         """Enable foreign key constraints for this connection.
@@ -268,13 +262,7 @@ class SqliteADKStore(BaseADKStore["SqliteConfig"]):
         """Create both sessions and events tables if they don't exist."""
         await async_(self._create_tables)()
 
-    def _create_session(
-        self,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        state: "dict[str, Any]",
-    ) -> SessionRecord:
+    def _create_session(self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]") -> SessionRecord:
         """Synchronous implementation of create_session."""
         now = datetime.now(timezone.utc)
         now_julian = _datetime_to_julian(now)
@@ -291,20 +279,11 @@ class SqliteADKStore(BaseADKStore["SqliteConfig"]):
             conn.commit()
 
         return SessionRecord(
-            id=session_id,
-            app_name=app_name,
-            user_id=user_id,
-            state=state,
-            create_time=now,
-            update_time=now,
+            id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
         )
 
     async def create_session(
-        self,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        state: "dict[str, Any]",
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
     ) -> SessionRecord:
         """Create a new session.
 
@@ -363,11 +342,7 @@ class SqliteADKStore(BaseADKStore["SqliteConfig"]):
         """
         return await async_(self._get_session)(session_id)
 
-    def _update_session_state(
-        self,
-        session_id: str,
-        state: "dict[str, Any]",
-    ) -> None:
+    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Synchronous implementation of update_session_state."""
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
         state_json = _to_sqlite_json(state)
@@ -383,11 +358,7 @@ class SqliteADKStore(BaseADKStore["SqliteConfig"]):
             conn.execute(sql, (state_json, now_julian, session_id))
             conn.commit()
 
-    async def update_session_state(
-        self,
-        session_id: str,
-        state: "dict[str, Any]",
-    ) -> None:
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
@@ -400,11 +371,7 @@ class SqliteADKStore(BaseADKStore["SqliteConfig"]):
         """
         await async_(self._update_session_state)(session_id, state)
 
-    def _list_sessions(
-        self,
-        app_name: str,
-        user_id: str,
-    ) -> "list[SessionRecord]":
+    def _list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """Synchronous implementation of list_sessions."""
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -430,11 +397,7 @@ class SqliteADKStore(BaseADKStore["SqliteConfig"]):
                 for row in rows
             ]
 
-    async def list_sessions(
-        self,
-        app_name: str,
-        user_id: str,
-    ) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """List all sessions for a user in an app.
 
         Args:
@@ -533,10 +496,7 @@ class SqliteADKStore(BaseADKStore["SqliteConfig"]):
         await async_(self._append_event)(event_record)
 
     def _get_events(
-        self,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
         """Synchronous implementation of get_events."""
         where_clauses = ["session_id = ?"]
@@ -589,10 +549,7 @@ class SqliteADKStore(BaseADKStore["SqliteConfig"]):
             ]
 
     async def get_events(
-        self,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
         """Get events for a session.
 

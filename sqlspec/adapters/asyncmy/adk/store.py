@@ -53,10 +53,7 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
     __slots__ = ()
 
     def __init__(
-        self,
-        config: "AsyncmyConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
+        self, config: "AsyncmyConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
     ) -> None:
         """Initialize AsyncMy ADK store.
 
@@ -145,10 +142,7 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
             Order matters: drop events table (child) before sessions (parent).
             MySQL automatically drops indexes when dropping tables.
         """
-        return [
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
-        ]
+        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -158,11 +152,7 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        state: "dict[str, Any]",
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
     ) -> SessionRecord:
         """Create a new session.
 
@@ -235,11 +225,7 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
                 return None
             raise
 
-    async def update_session_state(
-        self,
-        session_id: str,
-        state: "dict[str, Any]",
-    ) -> None:
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
@@ -277,11 +263,7 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
             await cursor.execute(sql, (session_id,))
             await conn.commit()
 
-    async def list_sessions(
-        self,
-        app_name: str,
-        user_id: str,
-    ) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """List all sessions for a user in an app.
 
         Args:
@@ -380,10 +362,7 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
             await conn.commit()
 
     async def get_events(
-        self,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
         """Get events for a session.
 

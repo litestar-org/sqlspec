@@ -124,16 +124,9 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
     session_table, events_table = _get_table_names(context)
     store_class = _get_store_class(context)
 
-    store_instance = store_class(
-        config=context.config,
-        session_table=session_table,
-        events_table=events_table,
-    )
+    store_instance = store_class(config=context.config, session_table=session_table, events_table=events_table)
 
-    return [
-        store_instance._get_create_sessions_table_sql(),
-        store_instance._get_create_events_table_sql(),
-    ]
+    return [store_instance._get_create_sessions_table_sql(), store_instance._get_create_events_table_sql()]
 
 
 async def down(context: "MigrationContext | None" = None) -> "list[str]":
@@ -155,10 +148,6 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
     session_table, events_table = _get_table_names(context)
     store_class = _get_store_class(context)
 
-    store_instance = store_class(
-        config=context.config,
-        session_table=session_table,
-        events_table=events_table,
-    )
+    store_instance = store_class(config=context.config, session_table=session_table, events_table=events_table)
 
     return store_instance._get_drop_tables_sql()

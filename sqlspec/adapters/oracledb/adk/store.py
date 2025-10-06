@@ -83,10 +83,7 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
     __slots__ = ()
 
     def __init__(
-        self,
-        config: "OracleAsyncConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
+        self, config: "OracleAsyncConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
     ) -> None:
         """Initialize Oracle ADK store.
 
@@ -166,7 +163,7 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
                 interrupted NUMBER(1),
                 error_code VARCHAR2(256),
                 error_message VARCHAR2(1024),
-                CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id) 
+                CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
                     REFERENCES {self._session_table}(id) ON DELETE CASCADE
             )';
         EXCEPTION
@@ -249,7 +246,7 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
 
             sessions_idx_app_user = f"""
             BEGIN
-                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_app_user 
+                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_app_user
                     ON {self._session_table}(app_name, user_id)';
             EXCEPTION
                 WHEN OTHERS THEN
@@ -263,7 +260,7 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
 
             sessions_idx_update = f"""
             BEGIN
-                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_update_time 
+                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_update_time
                     ON {self._session_table}(update_time DESC)';
             EXCEPTION
                 WHEN OTHERS THEN
@@ -280,7 +277,7 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
 
             events_idx = f"""
             BEGIN
-                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session 
+                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
                     ON {self._events_table}(session_id, timestamp ASC)';
             EXCEPTION
                 WHEN OTHERS THEN
@@ -295,11 +292,7 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        state: "dict[str, Any]",
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
     ) -> SessionRecord:
         """Create a new session.
 
@@ -324,9 +317,7 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
 
         async with self._config.provide_connection() as conn:
             cursor = conn.cursor()
-            await cursor.execute(
-                sql, {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_json}
-            )
+            await cursor.execute(sql, {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_json})
             await conn.commit()
 
         return await self.get_session(session_id)  # type: ignore[return-value]
@@ -382,11 +373,7 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
                 return None
             raise
 
-    async def update_session_state(
-        self,
-        session_id: str,
-        state: "dict[str, Any]",
-    ) -> None:
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
@@ -426,11 +413,7 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
             await cursor.execute(sql, {"id": session_id})
             await conn.commit()
 
-    async def list_sessions(
-        self,
-        app_name: str,
-        user_id: str,
-    ) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """List all sessions for a user in an app.
 
         Args:
@@ -544,10 +527,7 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
             await conn.commit()
 
     async def get_events(
-        self,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
         """Get events for a session.
 

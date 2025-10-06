@@ -106,7 +106,7 @@ def _from_sqlite_json(text: "str | None") -> "dict[str, Any] | None":
     """
     if text is None or text == "":
         return None
-    result: "dict[str, Any]" = json.loads(text)
+    result: dict[str, Any] = json.loads(text)
     return result
 
 
@@ -147,10 +147,7 @@ class AiosqliteADKStore(BaseADKStore["AiosqliteConfig"]):
     __slots__ = ()
 
     def __init__(
-        self,
-        config: "AiosqliteConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
+        self, config: "AiosqliteConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
     ) -> None:
         """Initialize Aiosqlite ADK store.
 
@@ -238,10 +235,7 @@ class AiosqliteADKStore(BaseADKStore["AiosqliteConfig"]):
             Order matters: drop events table (child) before sessions (parent).
             SQLite automatically drops indexes when dropping tables.
         """
-        return [
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
-        ]
+        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
     async def _enable_foreign_keys(self, connection: Any) -> None:
         """Enable foreign key constraints for this connection.
@@ -264,11 +258,7 @@ class AiosqliteADKStore(BaseADKStore["AiosqliteConfig"]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        state: "dict[str, Any]",
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
     ) -> SessionRecord:
         """Create a new session.
 
@@ -300,12 +290,7 @@ class AiosqliteADKStore(BaseADKStore["AiosqliteConfig"]):
             await conn.commit()
 
         return SessionRecord(
-            id=session_id,
-            app_name=app_name,
-            user_id=user_id,
-            state=state,
-            create_time=now,
-            update_time=now,
+            id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
         )
 
     async def get_session(self, session_id: str) -> "SessionRecord | None":
@@ -344,11 +329,7 @@ class AiosqliteADKStore(BaseADKStore["AiosqliteConfig"]):
                 update_time=_julian_to_datetime(row[5]),
             )
 
-    async def update_session_state(
-        self,
-        session_id: str,
-        state: "dict[str, Any]",
-    ) -> None:
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
@@ -373,11 +354,7 @@ class AiosqliteADKStore(BaseADKStore["AiosqliteConfig"]):
             await conn.execute(sql, (state_json, now_julian, session_id))
             await conn.commit()
 
-    async def list_sessions(
-        self,
-        app_name: str,
-        user_id: str,
-    ) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """List all sessions for a user in an app.
 
         Args:
@@ -490,10 +467,7 @@ class AiosqliteADKStore(BaseADKStore["AiosqliteConfig"]):
             await conn.commit()
 
     async def get_events(
-        self,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
         """Get events for a session.
 

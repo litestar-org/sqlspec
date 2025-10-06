@@ -24,9 +24,4 @@ from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 from sqlspec.extensions.adk.service import SQLSpecSessionService
 from sqlspec.extensions.adk.store import BaseADKStore
 
-__all__ = (
-    "BaseADKStore",
-    "EventRecord",
-    "SQLSpecSessionService",
-    "SessionRecord",
-)
+__all__ = ("BaseADKStore", "EventRecord", "SQLSpecSessionService", "SessionRecord")

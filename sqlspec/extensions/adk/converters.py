@@ -15,12 +15,7 @@ if TYPE_CHECKING:
 
 logger = get_logger("extensions.adk.converters")
 
-__all__ = (
-    "event_to_record",
-    "record_to_event",
-    "record_to_session",
-    "session_to_record",
-)
+__all__ = ("event_to_record", "record_to_event", "record_to_session", "session_to_record")
 
 
 def session_to_record(session: "Session") -> "SessionRecord":
@@ -44,10 +39,7 @@ def session_to_record(session: "Session") -> "SessionRecord":
     )
 
 
-def record_to_session(
-    record: "SessionRecord",
-    events: "list[EventRecord]",
-) -> "Session":
+def record_to_session(record: "SessionRecord", events: "list[EventRecord]") -> "Session":
     """Convert database record to ADK Session.
 
     Args:
@@ -69,12 +61,7 @@ def record_to_session(
     )
 
 
-def event_to_record(
-    event: "Event",
-    session_id: str,
-    app_name: str,
-    user_id: str,
-) -> "EventRecord":
+def event_to_record(event: "Event", session_id: str, app_name: str, user_id: str) -> "EventRecord":
     """Convert ADK Event to database record.
 
     Args:
@@ -100,9 +87,7 @@ def event_to_record(
 
     grounding_metadata_dict = None
     if event.grounding_metadata:
-        grounding_metadata_dict = event.grounding_metadata.model_dump(
-            exclude_none=True, mode="json"
-        )
+        grounding_metadata_dict = event.grounding_metadata.model_dump(exclude_none=True, mode="json")
 
     custom_metadata_dict = event.custom_metadata
 
@@ -179,9 +164,7 @@ def _decode_content(content_dict: "dict[str, Any] | None") -> Any:
     return types.Content.model_validate(content_dict)
 
 
-def _decode_grounding_metadata(
-    grounding_dict: "dict[str, Any] | None",
-) -> Any:
+def _decode_grounding_metadata(grounding_dict: "dict[str, Any] | None") -> Any:
     """Decode grounding metadata dictionary from database to ADK object.
 
     Args:

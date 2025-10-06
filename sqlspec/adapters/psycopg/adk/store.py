@@ -43,10 +43,7 @@ class PsycopgADKStore(AsyncpgADKStore):
     __slots__ = ()
 
     def __init__(
-        self,
-        config: "PsycopgAsyncConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
+        self, config: "PsycopgAsyncConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
     ) -> None:
         """Initialize Psycopg ADK store.
 

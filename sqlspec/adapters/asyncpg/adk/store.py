@@ -61,10 +61,7 @@ class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
     __slots__ = ()
 
     def __init__(
-        self,
-        config: PostgresConfigT,
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
+        self, config: PostgresConfigT, session_table: str = "adk_sessions", events_table: str = "adk_events"
     ) -> None:
         """Initialize AsyncPG ADK store.
 
@@ -164,10 +161,7 @@ class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
             Order matters: drop events table (child) before sessions (parent).
             PostgreSQL automatically drops indexes when dropping tables.
         """
-        return [
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
-        ]
+        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -177,11 +171,7 @@ class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        state: "dict[str, Any]",
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
     ) -> SessionRecord:
         """Create a new session.
 
@@ -247,11 +237,7 @@ class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
         except asyncpg.exceptions.UndefinedTableError:
             return None
 
-    async def update_session_state(
-        self,
-        session_id: str,
-        state: "dict[str, Any]",
-    ) -> None:
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
@@ -285,11 +271,7 @@ class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
             await conn.execute(sql, session_id)
 
-    async def list_sessions(
-        self,
-        app_name: str,
-        user_id: str,
-    ) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """List all sessions for a user in an app.
 
         Args:
@@ -382,10 +364,7 @@ class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
             )
 
     async def get_events(
-        self,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
         """Get events for a session.
 
@@ -441,9 +420,15 @@ class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
                         long_running_tool_ids_json=row["long_running_tool_ids_json"],
                         branch=row["branch"],
                         timestamp=row["timestamp"],
-                        content=json.loads(row["content"]) if row["content"] and isinstance(row["content"], str) else row["content"],
-                        grounding_metadata=json.loads(row["grounding_metadata"]) if row["grounding_metadata"] and isinstance(row["grounding_metadata"], str) else row["grounding_metadata"],
-                        custom_metadata=json.loads(row["custom_metadata"]) if row["custom_metadata"] and isinstance(row["custom_metadata"], str) else row["custom_metadata"],
+                        content=json.loads(row["content"])
+                        if row["content"] and isinstance(row["content"], str)
+                        else row["content"],
+                        grounding_metadata=json.loads(row["grounding_metadata"])
+                        if row["grounding_metadata"] and isinstance(row["grounding_metadata"], str)
+                        else row["grounding_metadata"],
+                        custom_metadata=json.loads(row["custom_metadata"])
+                        if row["custom_metadata"] and isinstance(row["custom_metadata"], str)
+                        else row["custom_metadata"],
                         partial=row["partial"],
                         turn_complete=row["turn_complete"],
                         interrupted=row["interrupted"],
