@@ -387,3 +387,263 @@ def test_concurrent_session_updates(duckdb_adk_store: DuckdbADKStore) -> None:
     final_session = duckdb_adk_store.get_session(session_id)
     assert final_session is not None
     assert final_session["state"]["counter"] == 10
+
+
+def test_user_fk_column_with_integer(tmp_path: Path, worker_id: str) -> None:
+    """Test user FK column with INTEGER type."""
+    db_path = tmp_path / f"test_user_fk_int_{worker_id}.duckdb"
+    try:
+        config = DuckDBConfig(pool_config={"database": str(db_path)})
+
+        with config.provide_connection() as conn:
+            conn.execute("CREATE TABLE tenants (id INTEGER PRIMARY KEY, name VARCHAR)")
+            conn.execute("INSERT INTO tenants (id, name) VALUES (1, 'Tenant A'), (2, 'Tenant B')")
+            conn.commit()
+
+        store = DuckdbADKStore(
+            config,
+            session_table="sessions_with_tenant",
+            events_table="events_with_tenant",
+            user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)",
+        )
+        store.create_tables()
+
+        assert store.user_fk_column_name == "tenant_id"
+        assert store.user_fk_column_ddl == "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"
+
+        session = store.create_session(
+            session_id="session-tenant-1", app_name="test-app", user_id="user-001", state={"data": "test"}, user_fk=1
+        )
+
+        assert session["id"] == "session-tenant-1"
+
+        with config.provide_connection() as conn:
+            cursor = conn.execute("SELECT tenant_id FROM sessions_with_tenant WHERE id = ?", ("session-tenant-1",))
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] == 1
+    finally:
+        if db_path.exists():
+            db_path.unlink()
+
+
+def test_user_fk_column_with_ubigint(tmp_path: Path, worker_id: str) -> None:
+    """Test user FK column with DuckDB UBIGINT type."""
+    db_path = tmp_path / f"test_user_fk_ubigint_{worker_id}.duckdb"
+    try:
+        config = DuckDBConfig(pool_config={"database": str(db_path)})
+
+        with config.provide_connection() as conn:
+            conn.execute("CREATE TABLE users (id UBIGINT PRIMARY KEY, email VARCHAR)")
+            conn.execute("INSERT INTO users (id, email) VALUES (18446744073709551615, 'user@example.com')")
+            conn.commit()
+
+        store = DuckdbADKStore(
+            config,
+            session_table="sessions_with_user",
+            events_table="events_with_user",
+            user_fk_column="user_fk UBIGINT REFERENCES users(id)",
+        )
+        store.create_tables()
+
+        assert store.user_fk_column_name == "user_fk"
+
+        session = store.create_session(
+            session_id="session-user-1",
+            app_name="test-app",
+            user_id="user-001",
+            state={"data": "test"},
+            user_fk=18446744073709551615,
+        )
+
+        assert session["id"] == "session-user-1"
+
+        with config.provide_connection() as conn:
+            cursor = conn.execute("SELECT user_fk FROM sessions_with_user WHERE id = ?", ("session-user-1",))
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] == 18446744073709551615
+    finally:
+        if db_path.exists():
+            db_path.unlink()
+
+
+def test_user_fk_column_foreign_key_constraint(tmp_path: Path, worker_id: str) -> None:
+    """Test that FK constraint is enforced."""
+    db_path = tmp_path / f"test_user_fk_constraint_{worker_id}.duckdb"
+    try:
+        config = DuckDBConfig(pool_config={"database": str(db_path)})
+
+        with config.provide_connection() as conn:
+            conn.execute("CREATE TABLE organizations (id INTEGER PRIMARY KEY, name VARCHAR)")
+            conn.execute("INSERT INTO organizations (id, name) VALUES (100, 'Org A')")
+            conn.commit()
+
+        store = DuckdbADKStore(
+            config,
+            session_table="sessions_with_org",
+            events_table="events_with_org",
+            user_fk_column="org_id INTEGER NOT NULL REFERENCES organizations(id)",
+        )
+        store.create_tables()
+
+        store.create_session(
+            session_id="session-org-1", app_name="test-app", user_id="user-001", state={"data": "test"}, user_fk=100
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            store.create_session(
+                session_id="session-org-invalid",
+                app_name="test-app",
+                user_id="user-002",
+                state={"data": "test"},
+                user_fk=999,
+            )
+
+        assert "FOREIGN KEY constraint" in str(exc_info.value) or "Constraint Error" in str(exc_info.value)
+    finally:
+        if db_path.exists():
+            db_path.unlink()
+
+
+def test_user_fk_column_without_value(tmp_path: Path, worker_id: str) -> None:
+    """Test creating session without user_fk when column is configured but nullable."""
+    db_path = tmp_path / f"test_user_fk_nullable_{worker_id}.duckdb"
+    try:
+        config = DuckDBConfig(pool_config={"database": str(db_path)})
+
+        with config.provide_connection() as conn:
+            conn.execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, name VARCHAR)")
+            conn.commit()
+
+        store = DuckdbADKStore(
+            config,
+            session_table="sessions_nullable_fk",
+            events_table="events_nullable_fk",
+            user_fk_column="account_id INTEGER REFERENCES accounts(id)",
+        )
+        store.create_tables()
+
+        session = store.create_session(
+            session_id="session-no-fk", app_name="test-app", user_id="user-001", state={"data": "test"}, user_fk=None
+        )
+
+        assert session["id"] == "session-no-fk"
+
+        retrieved = store.get_session("session-no-fk")
+        assert retrieved is not None
+    finally:
+        if db_path.exists():
+            db_path.unlink()
+
+
+def test_user_fk_column_with_varchar(tmp_path: Path, worker_id: str) -> None:
+    """Test user FK column with VARCHAR type."""
+    db_path = tmp_path / f"test_user_fk_varchar_{worker_id}.duckdb"
+    try:
+        config = DuckDBConfig(pool_config={"database": str(db_path)})
+
+        with config.provide_connection() as conn:
+            conn.execute("CREATE TABLE companies (code VARCHAR PRIMARY KEY, name VARCHAR)")
+            conn.execute("INSERT INTO companies (code, name) VALUES ('ACME', 'Acme Corp'), ('INIT', 'Initech')")
+            conn.commit()
+
+        store = DuckdbADKStore(
+            config,
+            session_table="sessions_with_company",
+            events_table="events_with_company",
+            user_fk_column="company_code VARCHAR NOT NULL REFERENCES companies(code)",
+        )
+        store.create_tables()
+
+        session = store.create_session(
+            session_id="session-company-1",
+            app_name="test-app",
+            user_id="user-001",
+            state={"data": "test"},
+            user_fk="ACME",
+        )
+
+        assert session["id"] == "session-company-1"
+
+        with config.provide_connection() as conn:
+            cursor = conn.execute("SELECT company_code FROM sessions_with_company WHERE id = ?", ("session-company-1",))
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] == "ACME"
+    finally:
+        if db_path.exists():
+            db_path.unlink()
+
+
+def test_user_fk_column_multiple_sessions(tmp_path: Path, worker_id: str) -> None:
+    """Test multiple sessions with same FK value."""
+    db_path = tmp_path / f"test_user_fk_multiple_{worker_id}.duckdb"
+    try:
+        config = DuckDBConfig(pool_config={"database": str(db_path)})
+
+        with config.provide_connection() as conn:
+            conn.execute("CREATE TABLE departments (id INTEGER PRIMARY KEY, name VARCHAR)")
+            conn.execute("INSERT INTO departments (id, name) VALUES (10, 'Engineering'), (20, 'Sales')")
+            conn.commit()
+
+        store = DuckdbADKStore(
+            config,
+            session_table="sessions_with_dept",
+            events_table="events_with_dept",
+            user_fk_column="dept_id INTEGER NOT NULL REFERENCES departments(id)",
+        )
+        store.create_tables()
+
+        for i in range(5):
+            store.create_session(
+                session_id=f"session-dept-{i}", app_name="test-app", user_id=f"user-{i}", state={"index": i}, user_fk=10
+            )
+
+        with config.provide_connection() as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM sessions_with_dept WHERE dept_id = ?", (10,))
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] == 5
+    finally:
+        if db_path.exists():
+            db_path.unlink()
+
+
+def test_user_fk_column_query_by_fk(tmp_path: Path, worker_id: str) -> None:
+    """Test querying sessions by FK column value."""
+    db_path = tmp_path / f"test_user_fk_query_{worker_id}.duckdb"
+    try:
+        config = DuckDBConfig(pool_config={"database": str(db_path)})
+
+        with config.provide_connection() as conn:
+            conn.execute("CREATE TABLE projects (id INTEGER PRIMARY KEY, name VARCHAR)")
+            conn.execute("INSERT INTO projects (id, name) VALUES (1, 'Project Alpha'), (2, 'Project Beta')")
+            conn.commit()
+
+        store = DuckdbADKStore(
+            config,
+            session_table="sessions_with_project",
+            events_table="events_with_project",
+            user_fk_column="project_id INTEGER NOT NULL REFERENCES projects(id)",
+        )
+        store.create_tables()
+
+        store.create_session("s1", "app", "u1", {"val": 1}, user_fk=1)
+        store.create_session("s2", "app", "u2", {"val": 2}, user_fk=1)
+        store.create_session("s3", "app", "u3", {"val": 3}, user_fk=2)
+
+        with config.provide_connection() as conn:
+            cursor = conn.execute("SELECT id FROM sessions_with_project WHERE project_id = ? ORDER BY id", (1,))
+            rows = cursor.fetchall()
+            assert len(rows) == 2
+            assert rows[0][0] == "s1"
+            assert rows[1][0] == "s2"
+
+            cursor = conn.execute("SELECT id FROM sessions_with_project WHERE project_id = ?", (2,))
+            rows = cursor.fetchall()
+            assert len(rows) == 1
+            assert rows[0][0] == "s3"
+    finally:
+        if db_path.exists():
+            db_path.unlink()

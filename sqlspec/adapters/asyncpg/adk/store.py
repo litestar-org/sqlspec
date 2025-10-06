@@ -4,8 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, TypeVar
 
 import asyncpg
 
-from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.store import BaseAsyncADKStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -35,11 +34,13 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
     - Efficient upserts using ON CONFLICT
     - GIN indexes for JSONB queries
     - HOT updates with FILLFACTOR 80
+    - Optional user FK column for multi-tenancy
 
     Args:
         config: PostgreSQL database config (AsyncpgConfig, PsycopgAsyncConfig, or PsqlpyConfig).
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
+        user_fk_column: Optional FK column DDL for user references. Defaults to None.
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -48,6 +49,12 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
         store = AsyncpgADKStore(config)
         await store.create_tables()
+
+        store_with_fk = AsyncpgADKStore(
+            config,
+            user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+        )
+        await store_with_fk.create_tables()
 
     Notes:
         - PostgreSQL JSONB type used for state (more efficient than JSON)
@@ -58,12 +65,17 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         - GIN index on state for JSONB queries (partial index)
         - FILLFACTOR 80 leaves space for HOT updates
         - Generic over PostgresConfigT to support all PostgreSQL drivers
+        - User FK column enables multi-tenant isolation with referential integrity
     """
 
     __slots__ = ()
 
     def __init__(
-        self, config: PostgresConfigT, session_table: str = "adk_sessions", events_table: str = "adk_events"
+        self,
+        config: PostgresConfigT,
+        session_table: str = "adk_sessions",
+        events_table: str = "adk_events",
+        user_fk_column: "str | None" = None,
     ) -> None:
         """Initialize AsyncPG ADK store.
 
@@ -71,8 +83,9 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
             config: PostgreSQL database config (AsyncpgConfig, PsycopgAsyncConfig, or PsqlpyConfig).
             session_table: Name of the sessions table.
             events_table: Name of the events table.
+            user_fk_column: Optional FK column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
         """
-        super().__init__(config, session_table, events_table)
+        super().__init__(config, session_table, events_table, user_fk_column)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.
@@ -88,12 +101,17 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
             - Composite index on (app_name, user_id) for listing
             - Index on update_time DESC for recent session queries
             - Partial GIN index on state for JSONB queries (only non-empty)
+            - Optional user FK column for multi-tenancy or user references
         """
+        user_fk_line = ""
+        if self._user_fk_column_ddl:
+            user_fk_line = f",\n            {self._user_fk_column_ddl}"
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL{user_fk_line},
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -173,7 +191,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -182,6 +200,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
+            user_fk: Optional FK value for user_fk_column (if configured).
 
         Returns:
             Created session record.
@@ -189,14 +208,22 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         Notes:
             Uses CURRENT_TIMESTAMP for create_time and update_time.
             State is passed as dict and asyncpg converts to JSONB automatically.
+            If user_fk_column is configured, user_fk value must be provided.
         """
-        sql = f"""
-        INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """
-
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            await conn.execute(sql, session_id, app_name, user_id, state)
+            if self._user_fk_column_name:
+                sql = f"""
+                INSERT INTO {self._session_table}
+                (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """
+                await conn.execute(sql, session_id, app_name, user_id, user_fk, state)
+            else:
+                sql = f"""
+                INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """
+                await conn.execute(sql, session_id, app_name, user_id, state)
 
         return await self.get_session(session_id)  # type: ignore[return-value]
 

@@ -13,7 +13,7 @@ from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.bigquery.adk import BigQueryADKStore
 from sqlspec.extensions.adk import SQLSpecSessionService
 
-__all__ = ("main", )
+__all__ = ("main",)
 
 
 async def main() -> None:

@@ -236,13 +236,13 @@ Psqlpy has a unique API pattern that differs from other PostgreSQL drivers:
 
    # Psqlpy requires LIST parameters (not tuples)
    # Uses PostgreSQL numeric placeholders: $1, $2, $3
-   
+
    # CORRECT - List parameters
    await conn.execute(
        "INSERT INTO adk_sessions (id, app_name, user_id, state) VALUES ($1, $2, $3, $4)",
        [session_id, app_name, user_id, state_dict]
    )
-   
+
    # INCORRECT - Tuples don't work
    # await conn.execute(sql, (param1, param2))  # Will fail!
 
@@ -252,15 +252,15 @@ Psqlpy has a unique API pattern that differs from other PostgreSQL drivers:
 
    # Psqlpy automatically converts Python dicts to/from JSONB
    # NO wrapper types needed (unlike psycopg's Jsonb)
-   
+
    state = {"key": "value", "nested": {"data": 123}}
-   
+
    # Pass dict directly - automatically converted to JSONB
    await conn.execute(
        "INSERT INTO adk_sessions (state) VALUES ($1)",
        [state]  # Dict is automatically converted to JSONB
    )
-   
+
    # Retrieved as Python dict automatically
    result = await conn.fetch("SELECT state FROM adk_sessions WHERE id = $1", [session_id])
    rows = result.result()
@@ -281,14 +281,14 @@ PostgreSQL JSONB operators work seamlessly with Psqlpy:
            ["active"]
        )
        rows = result.result()
-       
+
        # Check if JSONB contains key
        result = await conn.fetch(
            "SELECT * FROM adk_sessions WHERE state ? $1",
            ["dashboard"]
        )
        rows = result.result()
-       
+
        # Check if JSONB contains value
        result = await conn.fetch(
            "SELECT * FROM adk_sessions WHERE state @> $1::jsonb",
@@ -334,7 +334,7 @@ Optimize pool size for your workload:
            "max_db_pool_size": 100,  # Large pool for many concurrent users
        }
    )
-   
+
    # For low-latency workloads
    config = PsqlpyConfig(
        pool_config={
@@ -360,13 +360,13 @@ Optimize JSONB operations:
 
    # Use GIN index for JSONB queries
    # Already created by default in sessions table
-   
+
    # Efficient: Uses partial GIN index
    result = await conn.fetch(
        "SELECT * FROM adk_sessions WHERE state @> $1::jsonb",
        ['{"status": "active"}']
    )
-   
+
    # Efficient: Indexed extraction
    result = await conn.fetch(
        "SELECT * FROM adk_sessions WHERE state->>'user_role' = $1",
@@ -531,11 +531,11 @@ Real-Time Analytics on Sessions
    async with config.provide_connection() as conn:
        result = await conn.fetch(
            """
-           SELECT 
+           SELECT
                state->>'category' as category,
                COUNT(*) as session_count
            FROM adk_sessions
-           WHERE app_name = $1 
+           WHERE app_name = $1
              AND state @> '{"active": true}'::jsonb
            GROUP BY category
            ORDER BY session_count DESC
@@ -598,7 +598,7 @@ Parameter Type Errors
 
    # WRONG - Using tuple
    await conn.execute(sql, (param1, param2))
-   
+
    # CORRECT - Use list
    await conn.execute(sql, [param1, param2])
 

@@ -4,8 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import psqlpy.exceptions
 
-from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.store import BaseAsyncADKStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -39,6 +38,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         config: PsqlpyConfig database configuration.
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
+        user_fk_column: Optional FK column DDL. Defaults to None.
 
     Example:
         from sqlspec.adapters.psqlpy import PsqlpyConfig
@@ -61,7 +61,11 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     __slots__ = ()
 
     def __init__(
-        self, config: "PsqlpyConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
+        self,
+        config: "PsqlpyConfig",
+        session_table: str = "adk_sessions",
+        events_table: str = "adk_events",
+        user_fk_column: "str | None" = None,
     ) -> None:
         """Initialize Psqlpy ADK store.
 
@@ -69,8 +73,9 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             config: PsqlpyConfig instance.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
+            user_fk_column: Optional FK column DDL.
         """
-        super().__init__(config, session_table, events_table)
+        super().__init__(config, session_table, events_table, user_fk_column)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.
@@ -86,12 +91,17 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             - Composite index on (app_name, user_id) for listing
             - Index on update_time DESC for recent session queries
             - Partial GIN index on state for JSONB queries (only non-empty)
+            - Optional user FK column for multi-tenancy or user references
         """
+        user_fk_line = ""
+        if self._user_fk_column_ddl:
+            user_fk_line = f",\n            {self._user_fk_column_ddl}"
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL{user_fk_line},
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -167,16 +177,26 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """Create both sessions and events tables if they don't exist.
 
         Notes:
-            Executes multi-statement SQL using psqlpy's execute method.
+            Psqlpy doesn't support multiple statements in a single execute.
+            Splits SQL statements and executes them separately.
             Creates sessions table first, then events table (FK dependency).
         """
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            await conn.execute(self._get_create_sessions_table_sql(), [])
-            await conn.execute(self._get_create_events_table_sql(), [])
+            sessions_sql = self._get_create_sessions_table_sql()
+            for statement in sessions_sql.split(";"):
+                statement = statement.strip()
+                if statement:
+                    await conn.execute(statement, [])
+
+            events_sql = self._get_create_events_table_sql()
+            for statement in events_sql.split(";"):
+                statement = statement.strip()
+                if statement:
+                    await conn.execute(statement, [])
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -185,6 +205,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
+            user_fk: Optional FK value for user_fk_column (if configured).
 
         Returns:
             Created session record.
@@ -192,14 +213,22 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         Notes:
             Uses CURRENT_TIMESTAMP for create_time and update_time.
             State is passed as dict and psqlpy converts to JSONB automatically.
+            If user_fk_column is configured, user_fk value must be provided.
         """
-        sql = f"""
-        INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """
-
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            await conn.execute(sql, [session_id, app_name, user_id, state])
+            if self._user_fk_column_name:
+                sql = f"""
+                INSERT INTO {self._session_table}
+                (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """
+                await conn.execute(sql, [session_id, app_name, user_id, user_fk, state])
+            else:
+                sql = f"""
+                INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """
+                await conn.execute(sql, [session_id, app_name, user_id, state])
 
         return await self.get_session(session_id)  # type: ignore[return-value]
 

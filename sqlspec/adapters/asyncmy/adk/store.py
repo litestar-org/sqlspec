@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import asyncmy
 
-from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.store import BaseAsyncADKStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -55,7 +54,11 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
     __slots__ = ()
 
     def __init__(
-        self, config: "AsyncmyConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
+        self,
+        config: "AsyncmyConfig",
+        session_table: str = "adk_sessions",
+        events_table: str = "adk_events",
+        user_fk_column: "str | None" = None,
     ) -> None:
         """Initialize AsyncMy ADK store.
 
@@ -63,8 +66,9 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             config: AsyncmyConfig instance.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
+            user_fk_column: Optional FK column DDL (e.g., "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE").
         """
-        super().__init__(config, session_table, events_table)
+        super().__init__(config, session_table, events_table, user_fk_column)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for sessions.
@@ -79,12 +83,16 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             - AUTO-UPDATE on update_time
             - Composite index on (app_name, user_id) for listing
             - Index on update_time DESC for recent session queries
+            - Optional user FK column for multi-tenancy
         """
+        user_fk_col = f"{self._user_fk_column_ddl}," if self._user_fk_column_ddl else ""
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
+            {user_fk_col}
             state JSON NOT NULL,
             create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
@@ -154,7 +162,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -163,6 +171,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
+            user_fk: Optional FK value for user_fk_column (if configured).
 
         Returns:
             Created session record.
@@ -170,15 +179,25 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         Notes:
             Uses INSERT with UTC_TIMESTAMP(6) for create_time and update_time.
             State is JSON-serialized before insertion.
+            If user_fk_column is configured, user_fk must be provided.
         """
         state_json = json.dumps(state)
-        sql = f"""
-        INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-        VALUES (%s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-        """
+
+        if self._user_fk_column_name:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+            VALUES (%s, %s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+            """
+            params = (session_id, app_name, user_id, user_fk, state_json)
+        else:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            VALUES (%s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+            """
+            params = (session_id, app_name, user_id, state_json)
 
         async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(sql, (session_id, app_name, user_id, state_json))
+            await cursor.execute(sql, params)
             await conn.commit()
 
         return await self.get_session(session_id)  # type: ignore[return-value]

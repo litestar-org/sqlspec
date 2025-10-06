@@ -117,7 +117,7 @@ def record_to_event(record: "EventRecord") -> "Event":
     Returns:
         ADK Event object.
     """
-    actions = pickle.loads(record["actions"])
+    actions = pickle.loads(record["actions"])  # noqa: S301
 
     long_running_tool_ids = None
     if record["long_running_tool_ids_json"]:

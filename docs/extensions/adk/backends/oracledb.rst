@@ -275,10 +275,10 @@ The Oracle ADK store **automatically detects** your Oracle version and uses the 
 .. note::
 
    Version detection happens **once** at table creation by querying:
-   
+
    - ``product_component_version`` for Oracle version
    - ``v$parameter`` for compatibility setting
-   
+
    The result is cached to avoid repeated checks.
 
 Sessions Table
@@ -408,7 +408,7 @@ Data Type Mappings
 .. important::
 
    **Boolean Conversion**: Oracle doesn't have a native BOOLEAN type. The store automatically converts:
-   
+
    - ``True`` → ``1``
    - ``False`` → ``0``
    - ``None`` → ``NULL``

@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import oracledb
 
-from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -77,13 +76,17 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         config: OracleAsyncConfig instance.
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
+        user_fk_column: Optional FK column DDL. Defaults to None.
 
     Example:
         from sqlspec.adapters.oracledb import OracleAsyncConfig
         from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore
 
         config = OracleAsyncConfig(pool_config={"dsn": "oracle://..."})
-        store = OracleAsyncADKStore(config)
+        store = OracleAsyncADKStore(
+            config,
+            user_fk_column="tenant_id NUMBER(10) REFERENCES tenants(id)"
+        )
         await store.create_tables()
 
     Notes:
@@ -93,12 +96,17 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         - NUMBER(1) for booleans (0/1/NULL)
         - Named parameters using :param_name
         - State merging handled at application level
+        - user_fk_column supports NUMBER, VARCHAR2, RAW for Oracle FK types
     """
 
     __slots__ = ("_json_storage_type",)
 
     def __init__(
-        self, config: "OracleAsyncConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
+        self,
+        config: "OracleAsyncConfig",
+        session_table: str = "adk_sessions",
+        events_table: str = "adk_events",
+        user_fk_column: "str | None" = None,
     ) -> None:
         """Initialize Oracle ADK store.
 
@@ -106,8 +114,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             config: OracleAsyncConfig instance.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
+            user_fk_column: Optional FK column DDL.
         """
-        super().__init__(config, session_table, events_table)
+        super().__init__(config, session_table, events_table, user_fk_column)
         self._json_storage_type: JSONStorageType | None = None
 
     async def _detect_json_storage_type(self) -> JSONStorageType:
@@ -260,6 +269,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         else:
             state_column = "state BLOB NOT NULL"
 
+        user_fk_column_sql = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._session_table} (
@@ -268,7 +279,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 user_id VARCHAR2(128) NOT NULL,
                 {state_column},
                 create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{user_fk_column_sql}
             )';
         EXCEPTION
             WHEN OTHERS THEN
@@ -543,7 +554,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -552,6 +563,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
+            user_fk: Optional FK value for user_fk_column (if configured).
 
         Returns:
             Created session record.
@@ -559,16 +571,32 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         Notes:
             Uses SYSTIMESTAMP for create_time and update_time.
             State is serialized using version-appropriate format.
+            user_fk is ignored if user_fk_column not configured.
         """
         state_data = await self._serialize_state(state)
-        sql = f"""
-        INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-        VALUES (:id, :app_name, :user_id, :state, SYSTIMESTAMP, SYSTIMESTAMP)
-        """
+
+        if self._user_fk_column_name:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time, {self._user_fk_column_name})
+            VALUES (:id, :app_name, :user_id, :state, SYSTIMESTAMP, SYSTIMESTAMP, :user_fk)
+            """
+            params = {
+                "id": session_id,
+                "app_name": app_name,
+                "user_id": user_id,
+                "state": state_data,
+                "user_fk": user_fk,
+            }
+        else:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            VALUES (:id, :app_name, :user_id, :state, SYSTIMESTAMP, SYSTIMESTAMP)
+            """
+            params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
 
         async with self._config.provide_connection() as conn:
             cursor = conn.cursor()
-            await cursor.execute(sql, {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data})
+            await cursor.execute(sql, params)
             await conn.commit()
 
         return await self.get_session(session_id)  # type: ignore[return-value]
@@ -870,13 +898,17 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         config: OracleSyncConfig instance.
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
+        user_fk_column: Optional FK column DDL. Defaults to None.
 
     Example:
         from sqlspec.adapters.oracledb import OracleSyncConfig
         from sqlspec.adapters.oracledb.adk import OracleSyncADKStore
 
         config = OracleSyncConfig(pool_config={"dsn": "oracle://..."})
-        store = OracleSyncADKStore(config)
+        store = OracleSyncADKStore(
+            config,
+            user_fk_column="account_id NUMBER(19) REFERENCES accounts(id)"
+        )
         store.create_tables()
 
     Notes:
@@ -886,12 +918,17 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         - NUMBER(1) for booleans (0/1/NULL)
         - Named parameters using :param_name
         - State merging handled at application level
+        - user_fk_column supports NUMBER, VARCHAR2, RAW for Oracle FK types
     """
 
     __slots__ = ("_json_storage_type",)
 
     def __init__(
-        self, config: "OracleSyncConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
+        self,
+        config: "OracleSyncConfig",
+        session_table: str = "adk_sessions",
+        events_table: str = "adk_events",
+        user_fk_column: "str | None" = None,
     ) -> None:
         """Initialize Oracle synchronous ADK store.
 
@@ -899,8 +936,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             config: OracleSyncConfig instance.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
+            user_fk_column: Optional FK column DDL.
         """
-        super().__init__(config, session_table, events_table)
+        super().__init__(config, session_table, events_table, user_fk_column)
         self._json_storage_type: JSONStorageType | None = None
 
     def _detect_json_storage_type(self) -> JSONStorageType:
@@ -1053,6 +1091,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         else:
             state_column = "state BLOB NOT NULL"
 
+        user_fk_column_sql = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._session_table} (
@@ -1061,7 +1101,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 user_id VARCHAR2(128) NOT NULL,
                 {state_column},
                 create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{user_fk_column_sql}
             )';
         EXCEPTION
             WHEN OTHERS THEN
@@ -1335,7 +1375,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
-    def create_session(self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]") -> SessionRecord:
+    def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+    ) -> SessionRecord:
         """Create a new session.
 
         Args:
@@ -1343,6 +1385,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
+            user_fk: Optional FK value for user_fk_column (if configured).
 
         Returns:
             Created session record.
@@ -1350,16 +1393,32 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         Notes:
             Uses SYSTIMESTAMP for create_time and update_time.
             State is serialized using version-appropriate format.
+            user_fk is ignored if user_fk_column not configured.
         """
         state_data = self._serialize_state(state)
-        sql = f"""
-        INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-        VALUES (:id, :app_name, :user_id, :state, SYSTIMESTAMP, SYSTIMESTAMP)
-        """
+
+        if self._user_fk_column_name:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time, {self._user_fk_column_name})
+            VALUES (:id, :app_name, :user_id, :state, SYSTIMESTAMP, SYSTIMESTAMP, :user_fk)
+            """
+            params = {
+                "id": session_id,
+                "app_name": app_name,
+                "user_id": user_id,
+                "state": state_data,
+                "user_fk": user_fk,
+            }
+        else:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            VALUES (:id, :app_name, :user_id, :state, SYSTIMESTAMP, SYSTIMESTAMP)
+            """
+            params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(sql, {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data})
+            cursor.execute(sql, params)
             conn.commit()
 
         return self.get_session(session_id)  # type: ignore[return-value]

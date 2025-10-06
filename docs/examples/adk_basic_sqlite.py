@@ -102,7 +102,8 @@ async def run_adk_example() -> None:
         for idx, event in enumerate(retrieved_session.events, 1):
             author = event.author or "unknown"
             text = event.content.parts[0].text if event.content and event.content.parts else "No content"
-            print(f"  {idx}. [{author}]: {text[:80]}{'...' if len(text) > 80 else ''}")
+            max_text_length = 80
+            print(f"  {idx}. [{author}]: {text[:max_text_length]}{'...' if len(text or '') > max_text_length else ''}")
     else:
         print("❌ Session not found")
 

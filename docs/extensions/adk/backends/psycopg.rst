@@ -5,8 +5,8 @@ Psycopg Backend
 Overview
 ========
 
-Psycopg3 is the modern, redesigned PostgreSQL adapter that provides both **synchronous and asynchronous** 
-database access with native support for PostgreSQL-specific features like JSONB, server-side cursors, 
+Psycopg3 is the modern, redesigned PostgreSQL adapter that provides both **synchronous and asynchronous**
+database access with native support for PostgreSQL-specific features like JSONB, server-side cursors,
 and the COPY protocol.
 
 **Key Features:**
@@ -30,18 +30,18 @@ and the COPY protocol.
 .. warning::
 
    **CRITICAL: JSONB Type Safety**
-   
-   Unlike asyncpg or psqlpy, psycopg3 requires explicitly wrapping Python dicts 
-   with ``Jsonb()`` when inserting JSONB data. This provides stronger type safety 
+
+   Unlike asyncpg or psqlpy, psycopg3 requires explicitly wrapping Python dicts
+   with ``Jsonb()`` when inserting JSONB data. This provides stronger type safety
    but means you cannot pass raw dicts directly to JSONB columns.
-   
+
    .. code-block:: python
-   
+
       from psycopg.types.json import Jsonb
-      
+
       # WRONG - Will fail
       await cur.execute("INSERT INTO table (data) VALUES (%s)", ({"key": "value"},))
-      
+
       # CORRECT - Wrap with Jsonb()
       await cur.execute("INSERT INTO table (data) VALUES (%s)", (Jsonb({"key": "value"}),))
 
@@ -54,17 +54,17 @@ Install SQLSpec with Psycopg support:
 
    # Binary distribution (recommended for development)
    pip install sqlspec[psycopg] google-genai
-   
+
    # C extension (better performance for production)
    pip install sqlspec[psycopg] psycopg[c] google-genai
-   
+
    # With connection pooling (recommended)
    pip install sqlspec[psycopg] psycopg-pool google-genai
 
 .. tip::
 
    **Performance Options:**
-   
+
    - ``psycopg[binary]`` - Pure Python, easier installation
    - ``psycopg[c]`` - C extension, ~30% faster, requires compiler
    - ``psycopg-pool`` - Connection pooling, required for production
@@ -181,14 +181,14 @@ Advanced Configuration
        pool_config={
            # Connection string
            "conninfo": "postgresql://user:pass@localhost/db?sslmode=require",
-           
+
            # OR individual parameters
            "host": "localhost",
            "port": 5432,
            "user": "myuser",
            "password": "mypass",
            "dbname": "mydb",
-           
+
            # Pool settings
            "min_size": 5,
            "max_size": 20,
@@ -198,7 +198,7 @@ Advanced Configuration
            "max_idle": 600.0,       # Close idle connections after 10min
            "reconnect_timeout": 300.0,
            "num_workers": 3,        # Background worker threads
-           
+
            # Connection settings
            "connect_timeout": 10,
            "application_name": "my_adk_agent",
@@ -282,7 +282,7 @@ Events Table
 .. note::
 
    **PostgreSQL-Specific Features:**
-   
+
    - ``JSONB`` - Binary JSON type, more efficient than JSON text
    - ``TIMESTAMPTZ`` - Timezone-aware timestamps with microsecond precision
    - ``BYTEA`` - Binary data storage for pickled actions
@@ -304,7 +304,7 @@ Psycopg3 requires explicit type wrapping for JSONB data:
 
    # Creating session with JSONB state
    state = {"user": "alice", "preferences": {"theme": "dark"}}
-   
+
    # Store handles Jsonb() wrapping internally
    session = await service.create_session(
        app_name="my_app",
@@ -320,7 +320,7 @@ Psycopg3 requires explicit type wrapping for JSONB data:
                "INSERT INTO sessions (state) VALUES (%s)",
                ({"key": "value"},)
            )
-           
+
            # CORRECT - Wrap with Jsonb()
            await cur.execute(
                "INSERT INTO sessions (state) VALUES (%s)",
@@ -345,9 +345,9 @@ Psycopg3 provides safe SQL composition tools:
                INSERT INTO {table} (id, state, update_time)
                VALUES (%s, %s, CURRENT_TIMESTAMP)
            """).format(table=pg_sql.Identifier("adk_sessions"))
-           
+
            await cur.execute(query, (session_id, Jsonb(state)))
-           
+
            # Multiple identifiers
            query = pg_sql.SQL("""
                SELECT {col1}, {col2} FROM {table} WHERE {col1} = %s
@@ -356,13 +356,13 @@ Psycopg3 provides safe SQL composition tools:
                col2=pg_sql.Identifier("state"),
                table=pg_sql.Identifier("adk_sessions")
            )
-           
+
            await cur.execute(query, ("user_123",))
 
 .. warning::
 
    **Never use f-strings or format() for SQL construction!**
-   
+
    Use ``pg_sql.SQL()`` and ``pg_sql.Identifier()`` to prevent SQL injection.
 
 Cursor Context Managers
@@ -395,11 +395,11 @@ For processing large event histories:
        # Named cursor creates server-side cursor
        async with conn.cursor(name="large_event_query") as cur:
            await cur.execute("""
-               SELECT * FROM adk_events 
+               SELECT * FROM adk_events
                WHERE app_name = %s
                ORDER BY timestamp ASC
            """, ("my_app",))
-           
+
            # Stream results without loading all into memory
            async for row in cur:
                process_event(row)
@@ -416,7 +416,7 @@ Transaction Management
                await cur.execute(sql1)
                await cur.execute(sql2)
                # Auto-commit on success, rollback on exception
-       
+
    # Sync transaction
    with config.provide_connection() as conn:
        with conn.transaction():
@@ -458,13 +458,13 @@ The explicit ``Jsonb()`` wrapper provides:
 
    # Session state
    state = {"key": "value"}
-   
+
    # Event content
    content = {"parts": [{"text": "Hello"}]}
-   
+
    # Metadata
    metadata = {"source": "web", "version": "1.0"}
-   
+
    # All must be wrapped when inserting manually
    await cur.execute(
        "INSERT INTO events (content, metadata) VALUES (%s, %s)",
@@ -892,7 +892,7 @@ Key Differences
    conn = psycopg2.connect("dbname=test")
    cur = conn.cursor()
    cur.execute("SELECT * FROM table")
-   
+
    # Psycopg3 (new) - Async
    import psycopg
    async with await psycopg.AsyncConnection.connect("dbname=test") as conn:

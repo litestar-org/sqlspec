@@ -89,20 +89,36 @@ def _raise_store_import_failed(store_path: str, error: ImportError) -> NoReturn:
     raise SQLSpecError(msg) from error
 
 
-def _get_table_names(context: "MigrationContext | None") -> "tuple[str, str]":
-    """Extract table names from migration context.
+def _get_store_config(context: "MigrationContext | None") -> "dict[str, str | None]":
+    """Extract ADK store configuration from migration context.
 
     Args:
-        context: Migration context with extension config.
+        context: Migration context with config or extension_config.
 
     Returns:
-        Tuple of (session_table_name, events_table_name).
+        Dict with session_table, events_table, and user_fk_column (if provided).
+
+    Notes:
+        Reads from context.config.extension_config["adk"] first (preferred),
+        then falls back to context.extension_config for backwards compatibility.
     """
+    if context and context.config and hasattr(context.config, "extension_config"):
+        adk_config = context.config.extension_config.get("adk", {})
+        if adk_config:
+            return {
+                "session_table": adk_config.get("session_table", "adk_sessions"),
+                "events_table": adk_config.get("events_table", "adk_events"),
+                "user_fk_column": adk_config.get("user_fk_column"),
+            }
+
     if context and context.extension_config:
-        session_table: str = context.extension_config.get("session_table", "adk_sessions")
-        events_table: str = context.extension_config.get("events_table", "adk_events")
-        return session_table, events_table
-    return "adk_sessions", "adk_events"
+        return {
+            "session_table": context.extension_config.get("session_table", "adk_sessions"),
+            "events_table": context.extension_config.get("events_table", "adk_events"),
+            "user_fk_column": context.extension_config.get("user_fk_column"),
+        }
+
+    return {"session_table": "adk_sessions", "events_table": "adk_events", "user_fk_column": None}
 
 
 async def up(context: "MigrationContext | None" = None) -> "list[str]":
@@ -117,14 +133,19 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
 
     Returns:
         List of SQL statements to execute for upgrade.
+
+    Notes:
+        Reads configuration from context.config.extension_config["adk"] if available.
+        Supports custom table names and optional user_fk_column for linking
+        sessions to user tables.
     """
     if context is None or context.config is None:
         _raise_missing_config()
 
-    session_table, events_table = _get_table_names(context)
+    store_config = _get_store_config(context)
     store_class = _get_store_class(context)
 
-    store_instance = store_class(config=context.config, session_table=session_table, events_table=events_table)
+    store_instance = store_class(config=context.config, **store_config)
 
     return [
         store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
@@ -148,9 +169,9 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
     if context is None or context.config is None:
         _raise_missing_config()
 
-    session_table, events_table = _get_table_names(context)
+    store_config = _get_store_config(context)
     store_class = _get_store_class(context)
 
-    store_instance = store_class(config=context.config, session_table=session_table, events_table=events_table)
+    store_instance = store_class(config=context.config, **store_config)
 
     return store_instance._get_drop_tables_sql()  # pyright: ignore[reportPrivateUsage]

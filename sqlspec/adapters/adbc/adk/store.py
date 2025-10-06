@@ -2,8 +2,7 @@
 
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.store import BaseSyncADKStore
+from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -13,6 +12,12 @@ if TYPE_CHECKING:
 logger = get_logger("adapters.adbc.adk.store")
 
 __all__ = ("AdbcADKStore",)
+
+DIALECT_POSTGRESQL: Final = "postgresql"
+DIALECT_SQLITE: Final = "sqlite"
+DIALECT_DUCKDB: Final = "duckdb"
+DIALECT_SNOWFLAKE: Final = "snowflake"
+DIALECT_GENERIC: Final = "generic"
 
 ADBC_TABLE_NOT_FOUND_PATTERNS: Final = ("no such table", "table or view does not exist", "relation does not exist")
 
@@ -55,10 +60,14 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         - ADBC drivers handle parameter binding automatically
     """
 
-    __slots__ = ()
+    __slots__ = ("_dialect",)
 
     def __init__(
-        self, config: "AdbcConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
+        self,
+        config: "AdbcConfig",
+        session_table: str = "adk_sessions",
+        events_table: str = "adk_events",
+        user_fk_column: "str | None" = None,
     ) -> None:
         """Initialize ADBC ADK store.
 
@@ -66,8 +75,38 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             config: AdbcConfig instance (any ADBC driver).
             session_table: Name of the sessions table.
             events_table: Name of the events table.
+            user_fk_column: Optional FK column DDL for multi-tenancy.
         """
-        super().__init__(config, session_table, events_table)
+        super().__init__(config, session_table, events_table, user_fk_column)
+        self._dialect = self._detect_dialect()
+
+    def _detect_dialect(self) -> str:
+        """Detect ADBC driver dialect from connection config.
+
+        Returns:
+            Dialect identifier for DDL generation.
+
+        Notes:
+            Reads from config.connection_config driver_name.
+            Falls back to generic for unknown drivers.
+        """
+        driver_name = self._config.connection_config.get("driver_name", "").lower()
+
+        if "postgres" in driver_name:
+            return DIALECT_POSTGRESQL
+        if "sqlite" in driver_name:
+            return DIALECT_SQLITE
+        if "duckdb" in driver_name:
+            return DIALECT_DUCKDB
+        if "snowflake" in driver_name:
+            return DIALECT_SNOWFLAKE
+
+        logger.warning(
+            "Unknown ADBC driver: %s. Using generic SQL dialect. "
+            "Consider using a direct adapter for better performance.",
+            driver_name,
+        )
+        return DIALECT_GENERIC
 
     def _serialize_state(self, state: "dict[str, Any]") -> str:
         """Serialize state dictionary to JSON string.
@@ -120,24 +159,105 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         return from_json(str(data))  # type: ignore[no-any-return]
 
     def _get_create_sessions_table_sql(self) -> str:
-        """Get CREATE TABLE SQL for sessions.
+        """Get CREATE TABLE SQL for sessions with dialect dispatch.
 
         Returns:
-            SQL statement to create adk_sessions table with indexes.
-
-        Notes:
-            - VARCHAR(128) for IDs and names (universal support)
-            - TEXT for JSON state storage (serialized as JSON string)
-            - TIMESTAMP for create_time and update_time
-            - Composite index on (app_name, user_id) for listing
-            - Index on update_time DESC for recent session queries
-            - Uses IF NOT EXISTS for idempotency
+            SQL statement to create adk_sessions table.
         """
+        if self._dialect == DIALECT_POSTGRESQL:
+            return self._get_sessions_ddl_postgresql()
+        if self._dialect == DIALECT_SQLITE:
+            return self._get_sessions_ddl_sqlite()
+        if self._dialect == DIALECT_DUCKDB:
+            return self._get_sessions_ddl_duckdb()
+        if self._dialect == DIALECT_SNOWFLAKE:
+            return self._get_sessions_ddl_snowflake()
+        return self._get_sessions_ddl_generic()
+
+    def _get_sessions_ddl_postgresql(self) -> str:
+        """PostgreSQL DDL with JSONB and TIMESTAMPTZ.
+
+        Returns:
+            SQL to create sessions table optimized for PostgreSQL.
+        """
+        user_fk_ddl = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL{user_fk_ddl},
+            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+
+    def _get_sessions_ddl_sqlite(self) -> str:
+        """SQLite DDL with TEXT and REAL timestamps.
+
+        Returns:
+            SQL to create sessions table optimized for SQLite.
+        """
+        user_fk_ddl = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id TEXT PRIMARY KEY,
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL{user_fk_ddl},
+            state TEXT NOT NULL DEFAULT '{{}}',
+            create_time REAL NOT NULL,
+            update_time REAL NOT NULL
+        )
+        """
+
+    def _get_sessions_ddl_duckdb(self) -> str:
+        """DuckDB DDL with native JSON type.
+
+        Returns:
+            SQL to create sessions table optimized for DuckDB.
+        """
+        user_fk_ddl = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL{user_fk_ddl},
+            state JSON NOT NULL,
+            create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+
+    def _get_sessions_ddl_snowflake(self) -> str:
+        """Snowflake DDL with VARIANT type.
+
+        Returns:
+            SQL to create sessions table optimized for Snowflake.
+        """
+        user_fk_ddl = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id VARCHAR PRIMARY KEY,
+            app_name VARCHAR NOT NULL,
+            user_id VARCHAR NOT NULL{user_fk_ddl},
+            state VARIANT NOT NULL,
+            create_time TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+            update_time TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
+        )
+        """
+
+    def _get_sessions_ddl_generic(self) -> str:
+        """Generic SQL-92 compatible DDL fallback.
+
+        Returns:
+            SQL to create sessions table using generic types.
+        """
+        user_fk_ddl = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL{user_fk_ddl},
             state TEXT NOT NULL DEFAULT '{{}}',
             create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -145,19 +265,146 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
 
     def _get_create_events_table_sql(self) -> str:
-        """Get CREATE TABLE SQL for events.
+        """Get CREATE TABLE SQL for events with dialect dispatch.
 
         Returns:
-            SQL statement to create adk_events table with indexes.
+            SQL statement to create adk_events table.
+        """
+        if self._dialect == DIALECT_POSTGRESQL:
+            return self._get_events_ddl_postgresql()
+        if self._dialect == DIALECT_SQLITE:
+            return self._get_events_ddl_sqlite()
+        if self._dialect == DIALECT_DUCKDB:
+            return self._get_events_ddl_duckdb()
+        if self._dialect == DIALECT_SNOWFLAKE:
+            return self._get_events_ddl_snowflake()
+        return self._get_events_ddl_generic()
 
-        Notes:
-            - VARCHAR sizes: id(128), session_id(128), invocation_id(256), author(256),
-              branch(256), error_code(256), error_message(1024)
-            - BLOB for pickled actions
-            - TEXT for JSON fields and long_running_tool_ids_json
-            - INTEGER for partial, turn_complete, interrupted (0/1/NULL)
-            - Foreign key to sessions with CASCADE delete
-            - Index on (session_id, timestamp ASC) for ordered event retrieval
+    def _get_events_ddl_postgresql(self) -> str:
+        """PostgreSQL DDL for events table.
+
+        Returns:
+            SQL to create events table optimized for PostgreSQL.
+        """
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            invocation_id VARCHAR(256),
+            author VARCHAR(256),
+            actions BYTEA,
+            long_running_tool_ids_json TEXT,
+            branch VARCHAR(256),
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            content JSONB,
+            grounding_metadata JSONB,
+            custom_metadata JSONB,
+            partial BOOLEAN,
+            turn_complete BOOLEAN,
+            interrupted BOOLEAN,
+            error_code VARCHAR(256),
+            error_message VARCHAR(1024),
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+        )
+        """
+
+    def _get_events_ddl_sqlite(self) -> str:
+        """SQLite DDL for events table.
+
+        Returns:
+            SQL to create events table optimized for SQLite.
+        """
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            invocation_id TEXT,
+            author TEXT,
+            actions BLOB,
+            long_running_tool_ids_json TEXT,
+            branch TEXT,
+            timestamp REAL NOT NULL,
+            content TEXT,
+            grounding_metadata TEXT,
+            custom_metadata TEXT,
+            partial INTEGER,
+            turn_complete INTEGER,
+            interrupted INTEGER,
+            error_code TEXT,
+            error_message TEXT,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+        )
+        """
+
+    def _get_events_ddl_duckdb(self) -> str:
+        """DuckDB DDL for events table.
+
+        Returns:
+            SQL to create events table optimized for DuckDB.
+        """
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            invocation_id VARCHAR(256),
+            author VARCHAR(256),
+            actions BLOB,
+            long_running_tool_ids_json VARCHAR,
+            branch VARCHAR(256),
+            timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            content JSON,
+            grounding_metadata JSON,
+            custom_metadata JSON,
+            partial BOOLEAN,
+            turn_complete BOOLEAN,
+            interrupted BOOLEAN,
+            error_code VARCHAR(256),
+            error_message VARCHAR(1024),
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+        )
+        """
+
+    def _get_events_ddl_snowflake(self) -> str:
+        """Snowflake DDL for events table.
+
+        Returns:
+            SQL to create events table optimized for Snowflake.
+        """
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR PRIMARY KEY,
+            session_id VARCHAR NOT NULL,
+            app_name VARCHAR NOT NULL,
+            user_id VARCHAR NOT NULL,
+            invocation_id VARCHAR,
+            author VARCHAR,
+            actions BINARY,
+            long_running_tool_ids_json VARCHAR,
+            branch VARCHAR,
+            timestamp TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+            content VARIANT,
+            grounding_metadata VARIANT,
+            custom_metadata VARIANT,
+            partial BOOLEAN,
+            turn_complete BOOLEAN,
+            interrupted BOOLEAN,
+            error_code VARCHAR,
+            error_message VARCHAR,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
+        )
+        """
+
+    def _get_events_ddl_generic(self) -> str:
+        """Generic SQL-92 compatible DDL for events table.
+
+        Returns:
+            SQL to create events table using generic types.
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -250,7 +497,9 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         except Exception:
             logger.debug("Foreign key enforcement not supported or already enabled")
 
-    def create_session(self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]") -> SessionRecord:
+    def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+    ) -> SessionRecord:
         """Create a new session.
 
         Args:
@@ -258,24 +507,31 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
+            user_fk: Optional FK value for user_fk_column (can be None for nullable columns).
 
         Returns:
             Created session record.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for create_time and update_time.
-            State is serialized to JSON string.
         """
         state_json = self._serialize_state(state)
-        sql = f"""
-        INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """
+
+        if self._user_fk_column_name:
+            sql = f"""
+            INSERT INTO {self._session_table}
+            (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """
+            params = (session_id, app_name, user_id, user_fk, state_json)
+        else:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """
+            params = (session_id, app_name, user_id, state_json)
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, (session_id, app_name, user_id, state_json))
+                cursor.execute(sql, params)
                 conn.commit()
             finally:
                 cursor.close()

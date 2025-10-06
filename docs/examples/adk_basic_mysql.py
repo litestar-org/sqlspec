@@ -69,7 +69,7 @@ async def run_adk_example() -> None:
             turn_complete=True,
         )
         await service.append_event(session, event)
-        print(f"  Turn {turn_idx} [{author}]: {message[:60]}{'...' if len(message) > 60 else ''}")
+        print(f"  Turn {turn_idx} [{author}]: {message[:60]}{'...' if len(message) > 60 else ''}")  # noqa: PLR2004
 
     print("\n=== Retrieving Full Conversation ===")
     retrieved_session = await service.get_session(app_name="assistant", user_id="bob", session_id=session.id)
@@ -98,7 +98,7 @@ async def run_adk_example() -> None:
         for event in recent_session.events:
             author = event.author or "unknown"
             text = event.content.parts[0].text if event.content and event.content.parts else "No content"
-            print(f"  [{author}]: {text[:50]}{'...' if len(text) > 50 else ''}")
+            print(f"  [{author}]: {text[:50]}{'...' if len(text) > 50 else ''}")  # noqa: PLR2004
 
     print("\n=== State Management ===")
     session.state["message_count"] = len(conversation)

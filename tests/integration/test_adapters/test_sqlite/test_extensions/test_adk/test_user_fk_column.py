@@ -1,0 +1,331 @@
+"""Tests for SQLite ADK store user_fk_column functionality.
+
+This test module verifies that the SQLite ADK store correctly handles optional
+user foreign key columns for multi-tenant scenarios and referential integrity.
+"""
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+import pytest
+
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.adapters.sqlite.adk.store import SqliteADKStore
+
+pytestmark = pytest.mark.sqlite
+
+
+def _create_tenants_table(config: SqliteConfig) -> None:
+    """Create a tenants reference table for FK testing."""
+    with config.provide_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tenants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE
+            )
+        """)
+        conn.commit()
+
+
+def _insert_tenant(config: SqliteConfig, tenant_name: str) -> int:
+    """Insert a tenant and return its ID."""
+    with config.provide_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        cursor = conn.execute("INSERT INTO tenants (name) VALUES (?)", (tenant_name,))
+        tenant_id = cursor.lastrowid
+        conn.commit()
+        return tenant_id
+
+
+def _create_users_table(config: SqliteConfig) -> None:
+    """Create a users reference table for FK testing with TEXT primary key."""
+    with config.provide_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE
+            )
+        """)
+        conn.commit()
+
+
+def _insert_user(config: SqliteConfig, username: str, email: str) -> None:
+    """Insert a user."""
+    with config.provide_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("INSERT INTO users (username, email) VALUES (?, ?)", (username, email))
+        conn.commit()
+
+
+@pytest.fixture
+def sqlite_config() -> SqliteConfig:
+    """Provide in-memory SQLite config for testing."""
+    return SqliteConfig(pool_config={"database": ":memory:"})
+
+
+@pytest.fixture
+def session_id() -> str:
+    """Generate unique session ID."""
+    return str(uuid.uuid4())
+
+
+@pytest.fixture
+def app_name() -> str:
+    """Provide test app name."""
+    return "test_app"
+
+
+@pytest.fixture
+def user_id() -> str:
+    """Provide test user ID."""
+    return "user_123"
+
+
+@pytest.fixture
+def initial_state() -> "dict[str, Any]":
+    """Provide initial session state."""
+    return {"key": "value", "count": 0}
+
+
+async def test_user_fk_column_integer_reference(
+    sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test user FK column with INTEGER foreign key."""
+    _create_tenants_table(sqlite_config)
+    tenant_id = _insert_tenant(sqlite_config, "tenant_alpha")
+
+    store = SqliteADKStore(
+        sqlite_config, user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+    )
+    await store.create_tables()
+
+    session = await store.create_session(session_id, app_name, user_id, initial_state, user_fk=tenant_id)
+
+    assert session.id == session_id
+    assert session.app_name == app_name
+    assert session.user_id == user_id
+    assert session.state == initial_state
+    assert isinstance(session.create_time, datetime)
+    assert isinstance(session.update_time, datetime)
+
+    retrieved = await store.get_session(session_id)
+    assert retrieved is not None
+    assert retrieved.id == session_id
+    assert retrieved.state == initial_state
+
+
+async def test_user_fk_column_text_reference(
+    sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test user FK column with TEXT foreign key."""
+    _create_users_table(sqlite_config)
+    username = "alice"
+    _insert_user(sqlite_config, username, "alice@example.com")
+
+    store = SqliteADKStore(sqlite_config, user_fk_column="user_ref TEXT REFERENCES users(username) ON DELETE CASCADE")
+    await store.create_tables()
+
+    session = await store.create_session(session_id, app_name, user_id, initial_state, user_fk=username)
+
+    assert session.id == session_id
+    assert session.state == initial_state
+
+    retrieved = await store.get_session(session_id)
+    assert retrieved is not None
+    assert retrieved.id == session_id
+
+
+async def test_user_fk_column_cascade_delete(
+    sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test CASCADE DELETE on user FK column."""
+    _create_tenants_table(sqlite_config)
+    tenant_id = _insert_tenant(sqlite_config, "tenant_beta")
+
+    store = SqliteADKStore(
+        sqlite_config, user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+    )
+    await store.create_tables()
+
+    await store.create_session(session_id, app_name, user_id, initial_state, user_fk=tenant_id)
+
+    retrieved_before = await store.get_session(session_id)
+    assert retrieved_before is not None
+
+    with sqlite_config.provide_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("DELETE FROM tenants WHERE id = ?", (tenant_id,))
+        conn.commit()
+
+    retrieved_after = await store.get_session(session_id)
+    assert retrieved_after is None
+
+
+async def test_user_fk_column_constraint_violation(
+    sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test FK constraint violation with invalid tenant_id."""
+    _create_tenants_table(sqlite_config)
+
+    store = SqliteADKStore(sqlite_config, user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)")
+    await store.create_tables()
+
+    invalid_tenant_id = 99999
+
+    with pytest.raises(Exception) as exc_info:
+        await store.create_session(session_id, app_name, user_id, initial_state, user_fk=invalid_tenant_id)
+
+    assert "FOREIGN KEY constraint failed" in str(exc_info.value) or "constraint" in str(exc_info.value).lower()
+
+
+async def test_user_fk_column_not_null_constraint(
+    sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test NOT NULL constraint on user FK column."""
+    _create_tenants_table(sqlite_config)
+
+    store = SqliteADKStore(sqlite_config, user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)")
+    await store.create_tables()
+
+    with pytest.raises(Exception) as exc_info:
+        await store.create_session(session_id, app_name, user_id, initial_state, user_fk=None)
+
+    assert "NOT NULL constraint failed" in str(exc_info.value) or "not null" in str(exc_info.value).lower()
+
+
+async def test_user_fk_column_nullable(
+    sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test nullable user FK column."""
+    _create_tenants_table(sqlite_config)
+    tenant_id = _insert_tenant(sqlite_config, "tenant_gamma")
+
+    store = SqliteADKStore(sqlite_config, user_fk_column="tenant_id INTEGER REFERENCES tenants(id)")
+    await store.create_tables()
+
+    session_without_fk = await store.create_session(str(uuid.uuid4()), app_name, user_id, initial_state, user_fk=None)
+    assert session_without_fk is not None
+
+    session_with_fk = await store.create_session(session_id, app_name, user_id, initial_state, user_fk=tenant_id)
+    assert session_with_fk is not None
+
+
+async def test_without_user_fk_column(
+    sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test store without user FK column configured."""
+    store = SqliteADKStore(sqlite_config)
+    await store.create_tables()
+
+    session = await store.create_session(session_id, app_name, user_id, initial_state)
+
+    assert session.id == session_id
+    assert session.state == initial_state
+
+    retrieved = await store.get_session(session_id)
+    assert retrieved is not None
+    assert retrieved.id == session_id
+
+
+async def test_foreign_keys_pragma_enabled(
+    sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test that PRAGMA foreign_keys = ON is properly enabled."""
+    _create_tenants_table(sqlite_config)
+    tenant_id = _insert_tenant(sqlite_config, "tenant_delta")
+
+    store = SqliteADKStore(sqlite_config, user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)")
+    await store.create_tables()
+
+    await store.create_session(session_id, app_name, user_id, initial_state, user_fk=tenant_id)
+
+    with sqlite_config.provide_connection() as conn:
+        cursor = conn.execute("PRAGMA foreign_keys")
+        fk_enabled = cursor.fetchone()[0]
+        assert fk_enabled == 1
+
+
+async def test_multi_tenant_isolation(
+    sqlite_config: SqliteConfig, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test multi-tenant isolation with different tenant IDs."""
+    _create_tenants_table(sqlite_config)
+    tenant1_id = _insert_tenant(sqlite_config, "tenant_one")
+    tenant2_id = _insert_tenant(sqlite_config, "tenant_two")
+
+    store = SqliteADKStore(
+        sqlite_config, user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+    )
+    await store.create_tables()
+
+    session1_id = str(uuid.uuid4())
+    session2_id = str(uuid.uuid4())
+
+    await store.create_session(session1_id, app_name, user_id, initial_state, user_fk=tenant1_id)
+    await store.create_session(session2_id, app_name, user_id, {"data": "tenant2"}, user_fk=tenant2_id)
+
+    session1 = await store.get_session(session1_id)
+    session2 = await store.get_session(session2_id)
+
+    assert session1 is not None
+    assert session2 is not None
+    assert session1.state == initial_state
+    assert session2.state == {"data": "tenant2"}
+
+    with sqlite_config.provide_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("DELETE FROM tenants WHERE id = ?", (tenant1_id,))
+        conn.commit()
+
+    session1_after = await store.get_session(session1_id)
+    session2_after = await store.get_session(session2_id)
+
+    assert session1_after is None
+    assert session2_after is not None
+
+
+async def test_user_fk_column_ddl_extraction(sqlite_config: SqliteConfig) -> None:
+    """Test that column name is correctly extracted from DDL."""
+    store = SqliteADKStore(
+        sqlite_config, user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+    )
+
+    assert store._user_fk_column_name == "tenant_id"
+    assert store._user_fk_column_ddl == "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+
+
+async def test_create_session_without_fk_when_not_required(
+    sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test creating session without user_fk when column is nullable."""
+    _create_tenants_table(sqlite_config)
+
+    store = SqliteADKStore(sqlite_config, user_fk_column="tenant_id INTEGER REFERENCES tenants(id)")
+    await store.create_tables()
+
+    session = await store.create_session(session_id, app_name, user_id, initial_state)
+
+    assert session.id == session_id
+    assert session.state == initial_state
+
+
+async def test_user_fk_with_default_value(
+    sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
+) -> None:
+    """Test user FK column with DEFAULT value."""
+    _create_tenants_table(sqlite_config)
+    default_tenant_id = _insert_tenant(sqlite_config, "default_tenant")
+
+    store = SqliteADKStore(
+        sqlite_config, user_fk_column=f"tenant_id INTEGER DEFAULT {default_tenant_id} REFERENCES tenants(id)"
+    )
+    await store.create_tables()
+
+    session = await store.create_session(session_id, app_name, user_id, initial_state)
+
+    assert session.id == session_id
+    retrieved = await store.get_session(session_id)
+    assert retrieved is not None

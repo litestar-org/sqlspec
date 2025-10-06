@@ -94,7 +94,7 @@ def run_adk_example() -> None:
         for idx, event in enumerate(retrieved_session.events, 1):
             author = event.author or "unknown"
             text = event.content.parts[0].text if event.content and event.content.parts else "No content"
-            print(f"  {idx}. [{author}]: {text[:80]}{'...' if len(text) > 80 else ''}")
+            print(f"  {idx}. [{author}]: {text[:80]}{'...' if len(text) > 80 else ''}")  # noqa: PLR2004
     else:
         print("❌ Session not found")
 

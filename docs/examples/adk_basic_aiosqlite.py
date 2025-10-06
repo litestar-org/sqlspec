@@ -63,9 +63,7 @@ async def run_adk_example() -> None:
 
     print("\n=== Creating Session (Async) ===")
     session = await service.create_session(
-        app_name="async_chatbot",
-        user_id="async_user_1",
-        state={"mode": "conversational", "language": "en"},
+        app_name="async_chatbot", user_id="async_user_1", state={"mode": "conversational", "language": "en"}
     )
     print(f"Created session: {session['id']}")
     print(f"App: {session['app_name']}, User: {session['user_id']}")
@@ -120,15 +118,13 @@ async def run_adk_example() -> None:
         for idx, event in enumerate(retrieved_session["events"], 1):
             author = event.author or "unknown"
             text = event.content.parts[0].text if event.content and event.content.parts else "No content"
-            print(f"  {idx}. [{author}]: {text[:80]}{'...' if len(text) > 80 else ''}")
+            print(f"  {idx}. [{author}]: {text[:80]}{'...' if len(text) > 80 else ''}")  # noqa: PLR2004
     else:
         print("❌ Session not found")
 
     print("\n=== Multi-Session Management (Async) ===")
     session2 = await service.create_session(
-        app_name="async_chatbot",
-        user_id="async_user_1",
-        state={"mode": "analytical", "language": "en"},
+        app_name="async_chatbot", user_id="async_user_1", state={"mode": "analytical", "language": "en"}
     )
     print(f"Created second session: {session2['id']}")
 

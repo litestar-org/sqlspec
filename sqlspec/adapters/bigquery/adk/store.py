@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
 
-from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.store import BaseAsyncADKStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.sync_tools import async_
@@ -39,6 +38,7 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
         dataset_id: Optional dataset ID. If not provided, uses config's dataset_id.
+        user_fk_column: Optional FK column DDL. Defaults to None.
 
     Example:
         from sqlspec.adapters.bigquery import BigQueryConfig
@@ -52,6 +52,12 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         )
         store = BigQueryADKStore(config)
         await store.create_tables()
+
+        store_with_fk = BigQueryADKStore(
+            config,
+            user_fk_column="tenant_id INT64 NOT NULL"
+        )
+        await store_with_fk.create_tables()
 
     Notes:
         - JSON type for state, content, and metadata (native BigQuery JSON)
@@ -72,6 +78,7 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         session_table: str = "adk_sessions",
         events_table: str = "adk_events",
         dataset_id: "str | None" = None,
+        user_fk_column: "str | None" = None,
     ) -> None:
         """Initialize BigQuery ADK store.
 
@@ -80,8 +87,9 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
             session_table: Name of the sessions table.
             events_table: Name of the events table.
             dataset_id: Optional dataset ID override.
+            user_fk_column: Optional FK column DDL (e.g., "tenant_id INT64 NOT NULL").
         """
-        super().__init__(config, session_table, events_table)
+        super().__init__(config, session_table, events_table, user_fk_column)
         self._dataset_id = dataset_id or config.connection_config.get("dataset_id")
 
     def _get_full_table_name(self, table_name: str) -> str:
@@ -114,13 +122,19 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
             - Partitioned by DATE(create_time) for cost optimization
             - Clustered by app_name, user_id for query performance
             - No indexes needed (BigQuery auto-optimizes)
+            - Optional user FK column for multi-tenant scenarios
+            - Note: BigQuery doesn't enforce FK constraints
         """
+        user_fk_line = ""
+        if self._user_fk_column_ddl:
+            user_fk_line = f",\n            {self._user_fk_column_ddl}"
+
         table_name = self._get_full_table_name(self._session_table)
         return f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             id STRING NOT NULL,
             app_name STRING NOT NULL,
-            user_id STRING NOT NULL,
+            user_id STRING NOT NULL{user_fk_line},
             state JSON NOT NULL,
             create_time TIMESTAMP NOT NULL,
             update_time TIMESTAMP NOT NULL
@@ -195,25 +209,44 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         """Create both sessions and events tables if they don't exist."""
         await async_(self._create_tables)()
 
-    def _create_session(self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]") -> SessionRecord:
+    def _create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+    ) -> SessionRecord:
         """Synchronous implementation of create_session."""
         now = datetime.now(timezone.utc)
         state_json = to_json(state) if state else "{}"
 
         table_name = self._get_full_table_name(self._session_table)
-        sql = f"""
-        INSERT INTO {table_name} (id, app_name, user_id, state, create_time, update_time)
-        VALUES (@id, @app_name, @user_id, JSON(@state), @create_time, @update_time)
-        """
 
-        params = [
-            ScalarQueryParameter("id", "STRING", session_id),
-            ScalarQueryParameter("app_name", "STRING", app_name),
-            ScalarQueryParameter("user_id", "STRING", user_id),
-            ScalarQueryParameter("state", "STRING", state_json),
-            ScalarQueryParameter("create_time", "TIMESTAMP", now),
-            ScalarQueryParameter("update_time", "TIMESTAMP", now),
-        ]
+        if self._user_fk_column_name:
+            sql = f"""
+            INSERT INTO {table_name} (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+            VALUES (@id, @app_name, @user_id, @user_fk, JSON(@state), @create_time, @update_time)
+            """
+
+            params = [
+                ScalarQueryParameter("id", "STRING", session_id),
+                ScalarQueryParameter("app_name", "STRING", app_name),
+                ScalarQueryParameter("user_id", "STRING", user_id),
+                ScalarQueryParameter("user_fk", "STRING", str(user_fk) if user_fk is not None else None),
+                ScalarQueryParameter("state", "STRING", state_json),
+                ScalarQueryParameter("create_time", "TIMESTAMP", now),
+                ScalarQueryParameter("update_time", "TIMESTAMP", now),
+            ]
+        else:
+            sql = f"""
+            INSERT INTO {table_name} (id, app_name, user_id, state, create_time, update_time)
+            VALUES (@id, @app_name, @user_id, JSON(@state), @create_time, @update_time)
+            """
+
+            params = [
+                ScalarQueryParameter("id", "STRING", session_id),
+                ScalarQueryParameter("app_name", "STRING", app_name),
+                ScalarQueryParameter("user_id", "STRING", user_id),
+                ScalarQueryParameter("state", "STRING", state_json),
+                ScalarQueryParameter("create_time", "TIMESTAMP", now),
+                ScalarQueryParameter("update_time", "TIMESTAMP", now),
+            ]
 
         with self._config.provide_connection() as conn:
             job_config = QueryJobConfig(query_parameters=params)
@@ -224,7 +257,7 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         )
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -233,6 +266,7 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
+            user_fk: Optional FK value for user_fk_column (if configured).
 
         Returns:
             Created session record.
@@ -240,8 +274,10 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         Notes:
             Uses CURRENT_TIMESTAMP() for timestamps.
             State is JSON-serialized then stored in JSON column.
+            If user_fk_column is configured, user_fk value must be provided.
+            BigQuery doesn't enforce FK constraints, but column is useful for JOINs.
         """
-        return await async_(self._create_session)(session_id, app_name, user_id, state)
+        return await async_(self._create_session)(session_id, app_name, user_id, state, user_fk)
 
     def _get_session(self, session_id: str) -> "SessionRecord | None":
         """Synchronous implementation of get_session."""

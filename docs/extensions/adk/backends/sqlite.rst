@@ -27,8 +27,8 @@ SQLite is a zero-configuration, embedded SQL database engine that runs in the sa
 
 .. warning::
 
-   **SQLite is optimized for embedded and single-user scenarios**, not high-concurrency 
-   production deployments. For production AI agents with many simultaneous users, use 
+   **SQLite is optimized for embedded and single-user scenarios**, not high-concurrency
+   production deployments. For production AI agents with many simultaneous users, use
    PostgreSQL or MySQL. SQLite excels at development, testing, and embedded use cases.
 
 Installation
@@ -131,9 +131,9 @@ Write-Ahead Logging (WAL) mode significantly improves concurrency:
 .. note::
 
    WAL mode benefits:
-   
+
    - Readers don't block writers
-   - Writers don't block readers  
+   - Writers don't block readers
    - Better concurrency than default rollback journal
    - Faster in most cases
 
@@ -259,7 +259,7 @@ SQLite doesn't have native JSON type. SQLSpec handles JSON serialization transpa
 .. tip::
 
    SQLSpec uses the best available JSON serializer:
-   
+
    1. ``msgspec`` (fastest, if available)
    2. ``orjson`` (fast, if available)
    3. ``stdlib json`` (always available)
@@ -274,7 +274,7 @@ SQLite requires foreign keys to be enabled per connection:
    # Foreign keys enabled automatically by store
    with config.provide_connection() as conn:
        conn.execute("PRAGMA foreign_keys=ON")
-       
+
        # Now cascade deletes work correctly
        await store.delete_session(session_id)  # Events auto-deleted
 
@@ -381,7 +381,7 @@ Best Practices
    db_path = Path("./agent_sessions.db")
    backup_path = Path("./backups") / f"sessions_{datetime.now():%Y%m%d_%H%M%S}.db"
    backup_path.parent.mkdir(exist_ok=True)
-   
+
    # Close connections before backup
    config.close()
    shutil.copy2(db_path, backup_path)
@@ -393,7 +393,7 @@ When to Use SQLite
 
 ✅ Development and testing environments
 ✅ Embedded desktop applications
-✅ Single-user AI agents  
+✅ Single-user AI agents
 ✅ Prototyping and demos
 ✅ Offline-first applications
 ✅ Learning and experimentation
@@ -571,7 +571,7 @@ File Permission Errors
 .. code-block:: python
 
    from pathlib import Path
-   
+
    db_path = Path("./data/agent.db")
    db_path.parent.mkdir(parents=True, exist_ok=True)
    config = SqliteConfig(pool_config={"database": str(db_path)})
@@ -638,7 +638,7 @@ When ready for production, migrate from SQLite to PostgreSQL:
            user_id=session.user_id,
            state=session.state
        )
-       
+
        # Migrate events
        events = await sqlite_store.get_events(session.id)
        for event in events:
@@ -652,13 +652,13 @@ Complete runnable example demonstrating SQLite ADK integration:
 .. code-block:: python
 
    """Example: Google ADK session storage with SQLite.
-   
+
    SQLite is perfect for:
    - Development and testing (zero-configuration)
    - Embedded applications
    - Single-user AI agents
    - Prototyping
-   
+
    Requirements:
        - pip install sqlspec google-genai
    """
@@ -718,7 +718,7 @@ Complete runnable example demonstrating SQLite ADK integration:
        # Retrieve session with events
        retrieved = await service.get_session(
            app_name="chatbot",
-           user_id="user_123", 
+           user_id="user_123",
            session_id=session.id
        )
        print(f"\n📥 Retrieved session with {len(retrieved.events)} events")

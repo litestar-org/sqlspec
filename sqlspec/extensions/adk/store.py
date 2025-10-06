@@ -18,7 +18,37 @@ logger = get_logger("extensions.adk.store")
 __all__ = ("BaseAsyncADKStore", "BaseSyncADKStore")
 
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
 MAX_TABLE_NAME_LENGTH: Final = 63
+
+
+def _parse_user_fk_column(user_fk_column_ddl: str) -> str:
+    """Extract column name from user FK column DDL definition.
+
+    Args:
+        user_fk_column_ddl: Full column DDL string (e.g., "user_id INTEGER REFERENCES users(id)").
+
+    Returns:
+        Column name only (first word).
+
+    Raises:
+        ValueError: If DDL format is invalid.
+
+    Examples:
+        "account_id INTEGER NOT NULL" -> "account_id"
+        "user_id UUID REFERENCES users(id)" -> "user_id"
+        "tenant VARCHAR(64) DEFAULT 'public'" -> "tenant"
+
+    Notes:
+        Only the column name is parsed. The rest of the DDL is passed through
+        verbatim to CREATE TABLE statements.
+    """
+    match = COLUMN_NAME_PATTERN.match(user_fk_column_ddl.strip())
+    if not match:
+        msg = f"Invalid user_fk_column DDL: {user_fk_column_ddl!r}. Must start with column name."
+        raise ValueError(msg)
+
+    return match.group(1)
 
 
 def _validate_table_name(table_name: str) -> None:
@@ -71,23 +101,33 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         config: SQLSpec database configuration (async).
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
+        user_fk_column: Optional FK column definition. Defaults to None.
     """
 
-    __slots__ = ("_config", "_events_table", "_session_table")
+    __slots__ = ("_config", "_events_table", "_session_table", "_user_fk_column_ddl", "_user_fk_column_name")
 
-    def __init__(self, config: ConfigT, session_table: str = "adk_sessions", events_table: str = "adk_events") -> None:
+    def __init__(
+        self,
+        config: ConfigT,
+        session_table: str = "adk_sessions",
+        events_table: str = "adk_events",
+        user_fk_column: "str | None" = None,
+    ) -> None:
         """Initialize the ADK store.
 
         Args:
             config: SQLSpec database configuration.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
+            user_fk_column: Optional FK column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
         """
         _validate_table_name(session_table)
         _validate_table_name(events_table)
         self._config = config
         self._session_table = session_table
         self._events_table = events_table
+        self._user_fk_column_ddl = user_fk_column
+        self._user_fk_column_name = _parse_user_fk_column(user_fk_column) if user_fk_column else None
 
     @property
     def config(self) -> ConfigT:
@@ -104,9 +144,19 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         """Return the events table name."""
         return self._events_table
 
+    @property
+    def user_fk_column_ddl(self) -> "str | None":
+        """Return the full user FK column DDL (or None if not configured)."""
+        return self._user_fk_column_ddl
+
+    @property
+    def user_fk_column_name(self) -> "str | None":
+        """Return the user FK column name only (or None if not configured)."""
+        return self._user_fk_column_name
+
     @abstractmethod
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
     ) -> "SessionRecord":
         """Create a new session.
 
@@ -115,6 +165,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
             app_name: Name of the application.
             user_id: ID of the user.
             state: Session state dictionary.
+            user_fk: Optional FK value for user_fk_column (if configured).
 
         Returns:
             The created session record.
@@ -247,23 +298,33 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         config: SQLSpec database configuration (sync).
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
+        user_fk_column: Optional FK column definition. Defaults to None.
     """
 
-    __slots__ = ("_config", "_events_table", "_session_table")
+    __slots__ = ("_config", "_events_table", "_session_table", "_user_fk_column_ddl", "_user_fk_column_name")
 
-    def __init__(self, config: ConfigT, session_table: str = "adk_sessions", events_table: str = "adk_events") -> None:
+    def __init__(
+        self,
+        config: ConfigT,
+        session_table: str = "adk_sessions",
+        events_table: str = "adk_events",
+        user_fk_column: "str | None" = None,
+    ) -> None:
         """Initialize the sync ADK store.
 
         Args:
             config: SQLSpec database configuration.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
+            user_fk_column: Optional FK column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
         """
         _validate_table_name(session_table)
         _validate_table_name(events_table)
         self._config = config
         self._session_table = session_table
         self._events_table = events_table
+        self._user_fk_column_ddl = user_fk_column
+        self._user_fk_column_name = _parse_user_fk_column(user_fk_column) if user_fk_column else None
 
     @property
     def config(self) -> ConfigT:
@@ -280,8 +341,20 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         """Return the events table name."""
         return self._events_table
 
+    @property
+    def user_fk_column_ddl(self) -> "str | None":
+        """Return the full user FK column DDL (or None if not configured)."""
+        return self._user_fk_column_ddl
+
+    @property
+    def user_fk_column_name(self) -> "str | None":
+        """Return the user FK column name only (or None if not configured)."""
+        return self._user_fk_column_name
+
     @abstractmethod
-    def create_session(self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]") -> "SessionRecord":
+    def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+    ) -> "SessionRecord":
         """Create a new session.
 
         Args:
@@ -289,6 +362,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
             app_name: Name of the application.
             user_id: ID of the user.
             state: Session state dictionary.
+            user_fk: Optional FK value for user_fk_column (if configured).
 
         Returns:
             The created session record.

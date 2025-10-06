@@ -101,7 +101,7 @@ AsyncMy's built-in connection pool is production-ready:
 .. tip::
 
    **Production Pool Sizing:**
-   
+
    - **minsize**: 10-20 for steady-state workloads
    - **maxsize**: 50-100 for high-concurrency applications
    - **pool_recycle**: 3600 (1 hour) to prevent stale connections
@@ -121,10 +121,10 @@ Sessions Table
        app_name VARCHAR(128) NOT NULL,
        user_id VARCHAR(128) NOT NULL,
        state JSON NOT NULL,                         -- Native MySQL JSON type
-       create_time TIMESTAMP(6) NOT NULL 
+       create_time TIMESTAMP(6) NOT NULL
            DEFAULT CURRENT_TIMESTAMP(6),            -- Microsecond precision
-       update_time TIMESTAMP(6) NOT NULL 
-           DEFAULT CURRENT_TIMESTAMP(6) 
+       update_time TIMESTAMP(6) NOT NULL
+           DEFAULT CURRENT_TIMESTAMP(6)
            ON UPDATE CURRENT_TIMESTAMP(6),          -- Auto-update on changes
        INDEX idx_adk_sessions_app_user (app_name, user_id),
        INDEX idx_adk_sessions_update_time (update_time DESC)
@@ -145,7 +145,7 @@ Events Table
        actions BLOB NOT NULL,                       -- Pickled action data
        long_running_tool_ids_json TEXT,
        branch VARCHAR(256),
-       timestamp TIMESTAMP(6) NOT NULL 
+       timestamp TIMESTAMP(6) NOT NULL
            DEFAULT CURRENT_TIMESTAMP(6),            -- Microsecond precision
        content JSON,                                -- Native JSON type
        grounding_metadata JSON,
@@ -155,8 +155,8 @@ Events Table
        interrupted BOOLEAN,
        error_code VARCHAR(256),
        error_message VARCHAR(1024),
-       FOREIGN KEY (session_id) 
-           REFERENCES adk_sessions(id) 
+       FOREIGN KEY (session_id)
+           REFERENCES adk_sessions(id)
            ON DELETE CASCADE,                       -- Auto-delete events
        INDEX idx_adk_events_session (session_id, timestamp ASC)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -164,7 +164,7 @@ Events Table
 .. note::
 
    **Schema Design Decisions:**
-   
+
    - **InnoDB Engine**: Required for foreign key support and ACID transactions
    - **utf8mb4**: Full Unicode support (4-byte characters including emoji)
    - **TIMESTAMP(6)**: Microsecond precision for event ordering
@@ -263,7 +263,7 @@ MySQL's JSON type supports efficient querying and indexing:
    async with config.provide_connection() as conn:
        async with conn.cursor() as cursor:
            await cursor.execute("""
-               SELECT 
+               SELECT
                    id,
                    user_id,
                    JSON_EXTRACT(state, '$.dashboard') as dashboard,
@@ -272,7 +272,7 @@ MySQL's JSON type supports efficient querying and indexing:
                WHERE app_name = %s
                    AND JSON_EXTRACT(state, '$.dashboard') = %s
            """, ("analytics_bot", "sales"))
-           
+
            results = await cursor.fetchall()
            for row in results:
                print(f"Session {row[0]}: Dashboard={row[2]}, Region={row[3]}")
@@ -286,7 +286,7 @@ Microsecond Timestamp Handling
 
    # Get events after specific microsecond-precision time
    cutoff_time = datetime(2025, 10, 6, 12, 30, 45, 123456, tzinfo=timezone.utc)
-   
+
    events = await store.get_events(
        session_id=session.id,
        after_timestamp=cutoff_time  # Microsecond precision preserved
@@ -304,12 +304,12 @@ Transaction Management
    async with config.provide_connection() as conn:
        try:
            await conn.begin()  # Start transaction
-           
+
            async with conn.cursor() as cursor:
                # Multiple operations in single transaction
                await cursor.execute("INSERT INTO adk_sessions ...")
                await cursor.execute("INSERT INTO adk_events ...")
-           
+
            await conn.commit()  # Commit transaction
        except Exception:
            await conn.rollback()  # Rollback on error
@@ -357,14 +357,14 @@ MySQL JSON queries benefit from virtual column indexing:
 
    -- Create virtual column for frequently queried JSON path
    ALTER TABLE adk_sessions
-       ADD COLUMN dashboard_type VARCHAR(64) 
+       ADD COLUMN dashboard_type VARCHAR(64)
        AS (JSON_UNQUOTE(JSON_EXTRACT(state, '$.dashboard'))) STORED;
 
    -- Index the virtual column
    CREATE INDEX idx_dashboard_type ON adk_sessions(dashboard_type);
 
    -- Now this query uses the index
-   SELECT * FROM adk_sessions 
+   SELECT * FROM adk_sessions
    WHERE dashboard_type = 'sales';
 
 InnoDB Optimization
@@ -399,7 +399,7 @@ Index Usage Verification
 .. code-block:: sql
 
    -- Check if queries use indexes
-   EXPLAIN SELECT * FROM adk_sessions 
+   EXPLAIN SELECT * FROM adk_sessions
    WHERE app_name = 'my_app' AND user_id = 'user_123';
 
    -- Should show:
@@ -444,7 +444,7 @@ MySQL vs MariaDB Considerations
            await cursor.execute("SELECT VERSION()")
            version = await cursor.fetchone()
            print(f"Database version: {version[0]}")
-           
+
            # Ensure JSON support
            if "MariaDB" in version[0]:
                assert "10.2" in version[0] or "10.3" in version[0] or "10.4" in version[0]
@@ -574,7 +574,7 @@ Microsecond precision for event ordering:
 
    # Events are stored with microsecond timestamps
    event_time = datetime.now(timezone.utc)  # Includes microseconds
-   
+
    # Retrieve events with precise time filtering
    events = await store.get_events(
        session_id=session.id,
@@ -664,7 +664,7 @@ Timestamp Precision Loss
 
    -- Should see: timestamp TIMESTAMP(6) NOT NULL
    -- If not, alter table:
-   ALTER TABLE adk_events 
+   ALTER TABLE adk_events
        MODIFY COLUMN timestamp TIMESTAMP(6) NOT NULL;
 
 Foreign Key Constraint Errors
