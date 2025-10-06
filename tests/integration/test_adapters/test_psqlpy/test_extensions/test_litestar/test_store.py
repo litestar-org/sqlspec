@@ -10,7 +10,7 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.adapters.psqlpy.litestar.store import PsqlpyStore
 
-pytestmark = [pytest.mark.psqlpy, pytest.mark.integration]
+pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psqlpy, pytest.mark.integration]
 
 
 @pytest.fixture

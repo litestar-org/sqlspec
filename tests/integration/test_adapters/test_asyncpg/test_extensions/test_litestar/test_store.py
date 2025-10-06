@@ -10,7 +10,7 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
 
-pytestmark = [pytest.mark.asyncpg, pytest.mark.integration]
+pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncpg, pytest.mark.integration]
 
 
 @pytest.fixture

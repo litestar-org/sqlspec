@@ -9,7 +9,7 @@ import pytest
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.adapters.bigquery.litestar.store import BigQueryStore
 
-pytestmark = [pytest.mark.bigquery, pytest.mark.integration]
+pytestmark = [pytest.mark.xdist_group("bigquery"), pytest.mark.bigquery, pytest.mark.integration]
 
 
 @pytest.fixture

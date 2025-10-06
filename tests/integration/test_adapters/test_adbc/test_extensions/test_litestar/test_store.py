@@ -10,7 +10,7 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.litestar.store import ADBCStore
 
-pytestmark = [pytest.mark.adbc, pytest.mark.integration]
+pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.adbc, pytest.mark.integration]
 
 
 @pytest.fixture

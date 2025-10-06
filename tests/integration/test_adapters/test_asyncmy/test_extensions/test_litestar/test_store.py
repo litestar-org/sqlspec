@@ -10,7 +10,7 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 from sqlspec.adapters.asyncmy.litestar.store import AsyncmyStore
 
-pytestmark = [pytest.mark.asyncmy, pytest.mark.integration]
+pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.asyncmy, pytest.mark.integration]
 
 
 @pytest.fixture
