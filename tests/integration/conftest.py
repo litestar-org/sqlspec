@@ -2,19 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Generator
 from typing import Any
 
 import pytest
-
-
-@pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """Create an event loop for async tests."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture
