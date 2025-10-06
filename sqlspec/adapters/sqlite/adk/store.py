@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.store import BaseADKStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 
@@ -111,7 +111,7 @@ def _from_sqlite_json(text: "str | None") -> "dict[str, Any] | None":
     return result
 
 
-class SqliteADKStore(BaseADKStore["SqliteConfig"]):
+class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
     """SQLite ADK store using synchronous SQLite driver.
 
     Implements session and event storage for Google Agent Development Kit

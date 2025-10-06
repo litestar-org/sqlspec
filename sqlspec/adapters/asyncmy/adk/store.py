@@ -3,8 +3,10 @@
 import json
 from typing import TYPE_CHECKING, Any, Final
 
+import asyncmy
+
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.store import BaseADKStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -19,7 +21,7 @@ __all__ = ("AsyncmyADKStore",)
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
-class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
+class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
     """MySQL/MariaDB ADK store using AsyncMy driver.
 
     Implements session and event storage for Google Agent Development Kit
@@ -194,8 +196,6 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
             MySQL returns datetime objects for TIMESTAMP columns.
             JSON is parsed from database storage.
         """
-        import asyncmy
-
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
@@ -220,7 +220,7 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
                     create_time=create_time,
                     update_time=update_time,
                 )
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue][reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -276,8 +276,6 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
         Notes:
             Uses composite index on (app_name, user_id).
         """
-        import asyncmy
-
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
@@ -301,7 +299,7 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
                     )
                     for row in rows
                 ]
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -378,8 +376,6 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
             Uses index on (session_id, timestamp ASC).
             Parses JSON fields and converts BLOB actions to bytes.
         """
-        import asyncmy
-
         where_clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
 
@@ -428,7 +424,7 @@ class AsyncmyADKStore(BaseADKStore["AsyncmyConfig"]):
                     )
                     for row in rows
                 ]
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise

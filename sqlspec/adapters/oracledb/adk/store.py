@@ -3,8 +3,10 @@
 import json
 from typing import TYPE_CHECKING, Any, Final
 
+import oracledb
+
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.store import BaseADKStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -47,7 +49,7 @@ def _from_oracle_bool(value: "int | None") -> "bool | None":
     return bool(value)
 
 
-class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
+class OracledbADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     """Oracle ADK store using oracledb driver.
 
     Implements session and event storage for Google Agent Development Kit
@@ -335,7 +337,6 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
             Oracle returns datetime objects for TIMESTAMP columns.
             CLOB is read and JSON is parsed from database storage.
         """
-        import oracledb
 
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -426,7 +427,6 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
         Notes:
             Uses composite index on (app_name, user_id).
         """
-        import oracledb
 
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -544,7 +544,6 @@ class OracledbADKStore(BaseADKStore["OracleAsyncConfig"]):
             Parses JSON fields and converts BLOB actions to bytes.
             Converts NUMBER(1) booleans back to Python bool.
         """
-        import oracledb
 
         where_clauses = ["session_id = :session_id"]
         params: dict[str, Any] = {"session_id": session_id}

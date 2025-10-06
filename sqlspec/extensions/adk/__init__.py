@@ -22,6 +22,6 @@ Example:
 
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 from sqlspec.extensions.adk.service import SQLSpecSessionService
-from sqlspec.extensions.adk.store import BaseADKStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
 
-__all__ = ("BaseADKStore", "EventRecord", "SQLSpecSessionService", "SessionRecord")
+__all__ = ("BaseAsyncADKStore", "BaseSyncADKStore", "EventRecord", "SQLSpecSessionService", "SessionRecord")

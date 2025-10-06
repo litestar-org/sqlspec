@@ -74,6 +74,11 @@ doc = [
   "sphinx-toolbox>=3.8.1",
   "myst-parser",
   "sphinx-autodoc-typehints",
+  "sphinx-contributors",
+  "numpydoc",
+  "sphinx-autoapi",
+  "sphinx-iconify",
+  "sphinx-docsearch",
 ]
 extras = [
   "adbc_driver_manager",

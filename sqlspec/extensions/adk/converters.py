@@ -3,22 +3,21 @@
 import json
 import pickle
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from google.adk.events.event import Event
 from google.adk.sessions import Session
+from google.genai import types
 
+from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
-
-if TYPE_CHECKING:
-    from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 
 logger = get_logger("extensions.adk.converters")
 
 __all__ = ("event_to_record", "record_to_event", "record_to_session", "session_to_record")
 
 
-def session_to_record(session: "Session") -> "SessionRecord":
+def session_to_record(session: "Session") -> SessionRecord:
     """Convert ADK Session to database record.
 
     Args:
@@ -27,8 +26,6 @@ def session_to_record(session: "Session") -> "SessionRecord":
     Returns:
         SessionRecord for database storage.
     """
-    from sqlspec.extensions.adk._types import SessionRecord
-
     return SessionRecord(
         id=session.id,
         app_name=session.app_name,
@@ -39,7 +36,7 @@ def session_to_record(session: "Session") -> "SessionRecord":
     )
 
 
-def record_to_session(record: "SessionRecord", events: "list[EventRecord]") -> "Session":
+def record_to_session(record: SessionRecord, events: "list[EventRecord]") -> "Session":
     """Convert database record to ADK Session.
 
     Args:
@@ -61,7 +58,7 @@ def record_to_session(record: "SessionRecord", events: "list[EventRecord]") -> "
     )
 
 
-def event_to_record(event: "Event", session_id: str, app_name: str, user_id: str) -> "EventRecord":
+def event_to_record(event: "Event", session_id: str, app_name: str, user_id: str) -> EventRecord:
     """Convert ADK Event to database record.
 
     Args:
@@ -73,8 +70,6 @@ def event_to_record(event: "Event", session_id: str, app_name: str, user_id: str
     Returns:
         EventRecord for database storage.
     """
-    from sqlspec.extensions.adk._types import EventRecord
-
     actions_bytes = pickle.dumps(event.actions)
 
     long_running_tool_ids_json = None
@@ -159,8 +154,6 @@ def _decode_content(content_dict: "dict[str, Any] | None") -> Any:
     if not content_dict:
         return None
 
-    from google.genai import types
-
     return types.Content.model_validate(content_dict)
 
 
@@ -175,7 +168,5 @@ def _decode_grounding_metadata(grounding_dict: "dict[str, Any] | None") -> Any:
     """
     if not grounding_dict:
         return None
-
-    from google.genai import types
 
     return types.GroundingMetadata.model_validate(grounding_dict)

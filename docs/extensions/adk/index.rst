@@ -1,0 +1,309 @@
+====================
+Google ADK Extension
+====================
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Contents:
+
+   installation
+   quickstart
+   api
+   adapters
+   migrations
+   schema
+
+Session and event storage for the Google Agent Development Kit (ADK) using SQLSpec database adapters.
+
+Overview
+========
+
+The SQLSpec ADK extension provides persistent storage for `Google Agent Development Kit <https://github.com/google/genai>`_ sessions and events, enabling stateful AI agent applications with database-backed conversation history.
+
+This extension implements ADK's ``BaseSessionService`` protocol, allowing AI agents to store and retrieve:
+
+- **Session State**: Persistent conversation context and application state
+- **Event History**: Complete record of user/assistant interactions
+- **Multi-User Support**: Isolated sessions per application and user
+- **Type-Safe Storage**: Full type safety with TypedDicts and validated records
+
+Key Features
+============
+
+Production-Ready Storage
+------------------------
+
+- **Multiple Database Backends**: PostgreSQL, MySQL, SQLite, Oracle, DuckDB
+- **ACID Transactions**: Reliable storage with database guarantees
+- **Connection Pooling**: Built-in connection management via SQLSpec adapters
+- **Async/Sync Support**: Native async drivers and sync adapters with async wrappers
+
+Developer-Friendly Design
+-------------------------
+
+- **Simple API**: Clean, intuitive interface matching ADK patterns
+- **Type Safety**: Full type hints and runtime type checking
+- **Flexible Schema**: Customizable table names for multi-tenant deployments
+- **Rich Metadata**: JSON storage for content, grounding, and custom data
+
+Performance Optimized
+---------------------
+
+- **Indexed Queries**: Composite indexes on common query patterns
+- **Efficient JSON Storage**: JSONB (PostgreSQL) or native JSON types
+- **Cascade Deletes**: Automatic cleanup of related records
+- **HOT Updates**: PostgreSQL fillfactor tuning for reduced bloat
+
+Database Support Status
+=======================
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 15 45
+
+   * - Database
+     - Adapter
+     - Status
+     - Notes
+   * - PostgreSQL
+     - ``asyncpg``
+     - ✅ Production
+     - JSONB, microsecond timestamps
+   * - PostgreSQL
+     - ``psycopg``
+     - ✅ Production
+     - JSONB, full async support
+   * - PostgreSQL
+     - ``psqlpy``
+     - ✅ Production
+     - Rust-based, high performance
+   * - MySQL/MariaDB
+     - ``asyncmy``
+     - ✅ Production
+     - JSON type, microsecond timestamps
+   * - SQLite
+     - ``sqlite``
+     - ✅ Production
+     - Sync driver with async wrapper
+   * - SQLite
+     - ``aiosqlite``
+     - ✅ Production
+     - Native async support
+   * - Oracle
+     - ``oracledb``
+     - ✅ Production
+     - CLOB JSON, BLOB storage
+   * - DuckDB
+     - ``duckdb``
+     - ⚠️  Dev/Test Only
+     - OLAP database, limited concurrency
+   * - BigQuery
+     - ``bigquery``
+     - ❌ Not Implemented
+     - Future support planned
+   * - ADBC
+     - ``adbc``
+     - ❌ Not Implemented
+     - Future support planned
+
+.. warning::
+
+   **DuckDB is for development and testing only.** DuckDB is an OLAP (analytical) database optimized for
+   analytical queries, not concurrent writes. It has limited concurrency support and is not suitable for
+   production AI agent applications. Use PostgreSQL, MySQL, SQLite, or Oracle for production deployments.
+
+Quick Example
+=============
+
+Here's a simple example of creating and managing ADK sessions with PostgreSQL:
+
+.. literalinclude:: ../../examples/adk_basic_asyncpg.py
+   :language: python
+   :lines: 27-42
+   :caption: Create and use an ADK session with AsyncPG
+   :emphasize-lines: 2-3, 11-12
+
+Architecture Overview
+=====================
+
+The extension follows a layered architecture:
+
+.. code-block:: text
+
+   ┌─────────────────────┐
+   │   ADK Agent         │
+   └──────────┬──────────┘
+              │
+   ┌──────────▼──────────┐
+   │ SQLSpecSessionService│  ← Implements BaseSessionService
+   └──────────┬──────────┘
+              │
+   ┌──────────▼──────────┐
+   │ Store Implementation│  ← AsyncpgADKStore, SqliteADKStore, etc.
+   └──────────┬──────────┘
+              │
+   ┌──────────▼──────────┐
+   │  SQLSpec Config     │  ← AsyncpgConfig, SqliteConfig, etc.
+   └──────────┬──────────┘
+              │
+   ┌──────────▼──────────┐
+   │    Database         │
+   └─────────────────────┘
+
+**Layers:**
+
+1. **Service Layer** (``SQLSpecSessionService``): Implements ADK's ``BaseSessionService`` protocol
+2. **Store Layer** (``BaseAsyncADKStore``): Abstract database operations for each adapter
+3. **Config Layer** (SQLSpec): Connection pooling and resource management
+4. **Database Layer**: Physical storage with database-specific optimizations
+
+Examples
+========
+
+See the following runnable examples in the ``docs/examples/`` directory:
+
+.. grid:: 2
+   :gutter: 3
+
+   .. grid-item-card:: 📘 Basic AsyncPG Example
+      :link: /examples/adk_basic_asyncpg
+      :link-type: doc
+
+      Basic session management with PostgreSQL using AsyncPG driver - the recommended production setup.
+
+   .. grid-item-card:: 📗 Basic SQLite Example
+      :link: /examples/adk_basic_sqlite
+      :link-type: doc
+
+      SQLite example for local development and testing with minimal setup.
+
+   .. grid-item-card:: 📙 Basic MySQL Example
+      :link: /examples/adk_basic_mysql
+      :link-type: doc
+
+      Session management with MySQL/MariaDB using the AsyncMy driver.
+
+   .. grid-item-card:: 🌐 Litestar Web Integration
+      :link: /examples/adk_litestar_asyncpg
+      :link-type: doc
+
+      Complete web API example integrating ADK sessions with Litestar framework.
+
+   .. grid-item-card:: 🏢 Multi-Tenant Example
+      :link: /examples/adk_multi_tenant
+      :link-type: doc
+
+      Managing multiple applications and users with proper session isolation.
+
+Use Cases
+=========
+
+Conversational AI Agents
+------------------------
+
+Store complete conversation history with context, grounding metadata, and custom annotations:
+
+.. code-block:: python
+
+   from google.adk.events.event import Event
+   from google.genai.types import Content, Part
+
+   # Append user message
+   user_event = Event(
+       id="evt_1",
+       invocation_id="inv_1",
+       author="user",
+       content=Content(parts=[Part(text="What's the weather?")]),
+       actions=[]
+   )
+   await service.append_event(session, user_event)
+
+   # Append assistant response
+   assistant_event = Event(
+       id="evt_2",
+       invocation_id="inv_1",
+       author="assistant",
+       content=Content(parts=[Part(text="The weather is sunny.")]),
+       actions=[]
+   )
+   await service.append_event(session, assistant_event)
+
+Multi-Tenant Applications
+--------------------------
+
+Isolate sessions by application and user with custom table names:
+
+.. code-block:: python
+
+   # Tenant-specific stores
+   tenant_a_store = AsyncpgADKStore(
+       config,
+       session_table="tenant_a_sessions",
+       events_table="tenant_a_events"
+   )
+
+   tenant_b_store = AsyncpgADKStore(
+       config,
+       session_table="tenant_b_sessions",
+       events_table="tenant_b_events"
+   )
+
+Session Analytics
+-----------------
+
+Query session data for analytics and monitoring:
+
+.. code-block:: sql
+
+   -- Most active users
+   SELECT user_id, COUNT(*) as session_count
+   FROM adk_sessions
+   WHERE app_name = 'my_agent'
+   GROUP BY user_id
+   ORDER BY session_count DESC;
+
+   -- Session duration analysis
+   SELECT
+       user_id,
+       AVG(update_time - create_time) as avg_duration
+   FROM adk_sessions
+   WHERE app_name = 'my_agent'
+   GROUP BY user_id;
+
+Next Steps
+==========
+
+.. grid:: 2
+   :gutter: 3
+
+   .. grid-item-card:: 📦 Installation
+      :link: installation
+      :link-type: doc
+
+      Install the extension and database adapters
+
+   .. grid-item-card:: 🚀 Quick Start
+      :link: quickstart
+      :link-type: doc
+
+      Get up and running in 5 minutes
+
+   .. grid-item-card:: 📚 API Reference
+      :link: api
+      :link-type: doc
+
+      Complete API documentation
+
+   .. grid-item-card:: 🔌 Adapters
+      :link: adapters
+      :link-type: doc
+
+      Database-specific implementations
+
+See Also
+========
+
+- :doc:`/usage/framework_integrations` - Framework integration guide
+- :doc:`/reference/extensions` - SQLSpec extensions reference
+- :doc:`/reference/adapters` - Database adapters documentation
+- `Google ADK Documentation <https://github.com/google/genai>`_

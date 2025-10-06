@@ -7,7 +7,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_string
 
 if TYPE_CHECKING:
-    from sqlspec.extensions.adk.store import BaseADKStore
+    from sqlspec.extensions.adk.store import BaseAsyncADKStore
     from sqlspec.migrations.context import MigrationContext
 
 logger = get_logger("migrations.adk.tables")
@@ -15,7 +15,7 @@ logger = get_logger("migrations.adk.tables")
 __all__ = ("down", "up")
 
 
-def _get_store_class(context: "MigrationContext | None") -> "type[BaseADKStore]":
+def _get_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKStore]":
     """Get the appropriate store class based on the config's module path.
 
     Args:
@@ -45,7 +45,7 @@ def _get_store_class(context: "MigrationContext | None") -> "type[BaseADKStore]"
     store_path = f"sqlspec.adapters.{adapter_name}.adk.store.{store_class_name}"
 
     try:
-        store_class: type[BaseADKStore] = import_string(store_path)
+        store_class: type[BaseAsyncADKStore] = import_string(store_path)
     except ImportError as e:
         _raise_store_import_failed(store_path, e)
 
@@ -126,7 +126,10 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
 
     store_instance = store_class(config=context.config, session_table=session_table, events_table=events_table)
 
-    return [store_instance._get_create_sessions_table_sql(), store_instance._get_create_events_table_sql()]
+    return [
+        store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        store_instance._get_create_events_table_sql(),  # pyright: ignore[reportPrivateUsage]
+    ]
 
 
 async def down(context: "MigrationContext | None" = None) -> "list[str]":
@@ -150,4 +153,4 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
 
     store_instance = store_class(config=context.config, session_table=session_table, events_table=events_table)
 
-    return store_instance._get_drop_tables_sql()
+    return store_instance._get_drop_tables_sql()  # pyright: ignore[reportPrivateUsage]

@@ -3,8 +3,10 @@
 import json
 from typing import TYPE_CHECKING, Any, Final, TypeVar
 
+import asyncpg
+
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.store import BaseADKStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -19,7 +21,7 @@ POSTGRES_TABLE_NOT_FOUND_ERROR: Final = "42P01"
 PostgresConfigT = TypeVar("PostgresConfigT")
 
 
-class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
+class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
     """PostgreSQL ADK store base class for all PostgreSQL drivers.
 
     Implements session and event storage for Google Agent Development Kit
@@ -211,8 +213,6 @@ class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
             PostgreSQL returns datetime objects for TIMESTAMPTZ columns.
             JSONB is automatically parsed by asyncpg.
         """
-        import asyncpg
-
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
@@ -284,8 +284,6 @@ class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
         Notes:
             Uses composite index on (app_name, user_id).
         """
-        import asyncpg
-
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
@@ -380,8 +378,6 @@ class AsyncpgADKStore(BaseADKStore[PostgresConfigT]):
             Uses index on (session_id, timestamp ASC).
             Parses JSONB fields and converts BYTEA actions to bytes.
         """
-        import asyncpg
-
         where_clauses = ["session_id = $1"]
         params: list[Any] = [session_id]
 

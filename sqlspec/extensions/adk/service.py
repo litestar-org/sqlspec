@@ -1,6 +1,7 @@
 """SQLSpec-backed session service for Google ADK."""
 
 import uuid
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from google.adk.sessions.base_session_service import BaseSessionService, GetSessionConfig, ListSessionsResponse
@@ -12,7 +13,7 @@ if TYPE_CHECKING:
     from google.adk.events.event import Event
     from google.adk.sessions import Session
 
-    from sqlspec.extensions.adk.store import BaseADKStore
+    from sqlspec.extensions.adk.store import BaseAsyncADKStore
 
 logger = get_logger("extensions.adk.service")
 
@@ -47,7 +48,7 @@ class SQLSpecSessionService(BaseSessionService):
 
     __slots__ = ("_store",)
 
-    def __init__(self, store: "BaseADKStore") -> None:
+    def __init__(self, store: "BaseAsyncADKStore") -> None:
         """Initialize the session service.
 
         Args:
@@ -56,7 +57,7 @@ class SQLSpecSessionService(BaseSessionService):
         self._store = store
 
     @property
-    def store(self) -> "BaseADKStore":
+    def store(self) -> "BaseAsyncADKStore":
         """Return the database store."""
         return self._store
 
@@ -113,8 +114,6 @@ class SQLSpecSessionService(BaseSessionService):
 
         if config:
             if config.after_timestamp:
-                from datetime import datetime, timezone
-
                 after_timestamp = datetime.fromtimestamp(config.after_timestamp, tz=timezone.utc)
             limit = config.num_recent_events
 

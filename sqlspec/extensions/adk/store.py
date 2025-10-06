@@ -15,13 +15,44 @@ ConfigT = TypeVar("ConfigT")
 
 logger = get_logger("extensions.adk.store")
 
-__all__ = ("BaseADKStore", "BaseSyncADKStore")
+__all__ = ("BaseAsyncADKStore", "BaseSyncADKStore")
 
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 MAX_TABLE_NAME_LENGTH: Final = 63
 
 
-class BaseADKStore(ABC, Generic[ConfigT]):
+def _validate_table_name(table_name: str) -> None:
+    """Validate table name for SQL safety.
+
+    Args:
+        table_name: Table name to validate.
+
+    Raises:
+        ValueError: If table name is invalid.
+
+    Notes:
+        - Must start with letter or underscore
+        - Can only contain letters, numbers, and underscores
+        - Maximum length is 63 characters (PostgreSQL limit)
+        - Prevents SQL injection in table names
+    """
+    if not table_name:
+        msg = "Table name cannot be empty"
+        raise ValueError(msg)
+
+    if len(table_name) > MAX_TABLE_NAME_LENGTH:
+        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
+        raise ValueError(msg)
+
+    if not VALID_TABLE_NAME_PATTERN.match(table_name):
+        msg = (
+            f"Invalid table name: {table_name!r}. "
+            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
+        )
+        raise ValueError(msg)
+
+
+class BaseAsyncADKStore(ABC, Generic[ConfigT]):
     """Base class for async SQLSpec-backed ADK session stores.
 
     Implements storage operations for Google ADK sessions and events using
@@ -52,8 +83,8 @@ class BaseADKStore(ABC, Generic[ConfigT]):
             session_table: Name of the sessions table.
             events_table: Name of the events table.
         """
-        self._validate_table_name(session_table)
-        self._validate_table_name(events_table)
+        _validate_table_name(session_table)
+        _validate_table_name(events_table)
         self._config = config
         self._session_table = session_table
         self._events_table = events_table
@@ -196,37 +227,6 @@ class BaseADKStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    @staticmethod
-    def _validate_table_name(table_name: str) -> None:
-        """Validate table name for SQL safety.
-
-        Args:
-            table_name: Table name to validate.
-
-        Raises:
-            ValueError: If table name is invalid.
-
-        Notes:
-            - Must start with letter or underscore
-            - Can only contain letters, numbers, and underscores
-            - Maximum length is 63 characters (PostgreSQL limit)
-            - Prevents SQL injection in table names
-        """
-        if not table_name:
-            msg = "Table name cannot be empty"
-            raise ValueError(msg)
-
-        if len(table_name) > MAX_TABLE_NAME_LENGTH:
-            msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
-            raise ValueError(msg)
-
-        if not VALID_TABLE_NAME_PATTERN.match(table_name):
-            msg = (
-                f"Invalid table name: {table_name!r}. "
-                "Must start with letter/underscore and contain only alphanumeric characters and underscores"
-            )
-            raise ValueError(msg)
-
 
 class BaseSyncADKStore(ABC, Generic[ConfigT]):
     """Base class for sync SQLSpec-backed ADK session stores.
@@ -259,8 +259,8 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
             session_table: Name of the sessions table.
             events_table: Name of the events table.
         """
-        BaseADKStore._validate_table_name(session_table)
-        BaseADKStore._validate_table_name(events_table)
+        _validate_table_name(session_table)
+        _validate_table_name(events_table)
         self._config = config
         self._session_table = session_table
         self._events_table = events_table
