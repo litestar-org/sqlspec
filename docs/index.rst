@@ -8,66 +8,56 @@ SQLSpec
 
         <div class="brand-text">SQLSpec</div>
 
-SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between Python and SQL.
-It is NOT an ORM but rather a flexible connectivity layer that provides consistent interfaces across multiple database systems.
+**A type-safe SQL query mapper designed for minimal abstraction between Python and SQL.**
 
-SQLSpec provides :doc:`database adapters <usage/index>`, :doc:`statement compilation <reference/index>`,
-and implementations of connection pooling, parameter handling, and result mapping patterns
-to simplify your database operations while maintaining full control over your SQL.
-
-.. container:: buttons wrap
-
-  .. raw:: html
-
-    <a href="usage/index.html" class="btn-no-wrap">Get Started</a>
-    <a href="usage/index.html" class="btn-no-wrap">Usage Docs</a>
-    <a href="reference/index.html" class="btn-no-wrap">API Docs</a>
+SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a consistent, modern interface for executing SQL queries across multiple database systems. It empowers you to write raw, efficient SQL while benefiting from type safety, automatic parameter handling, and a powerful, optional query builder.
 
 .. grid:: 1 1 2 2
     :padding: 0
     :gutter: 2
 
-    .. grid-item-card:: :octicon:`versions` Changelog
-      :link: changelog
+    .. grid-item-card:: :octicon:`rocket` Get Started
+      :link: getting_started/index
       :link-type: doc
 
-      The latest updates and enhancements to SQLSpec
+      Install SQLSpec and run your first query in 5 minutes.
 
-    .. grid-item-card:: :octicon:`comment-discussion` Discussions
-      :link: https://github.com/litestar-org/sqlspec/discussions
-
-      Join discussions, pose questions, or share insights.
-
-    .. grid-item-card:: :octicon:`issue-opened` Issues
-      :link: https://github.com/litestar-org/sqlspec/issues
-
-      Report issues or suggest new features.
-
-    .. grid-item-card:: :octicon:`beaker` Contributing
-      :link: contribution-guide
+    .. grid-item-card:: :octicon:`book` Usage Guides
+      :link: usage/index
       :link-type: doc
 
-      Contribute to SQLSpec's growth with code, docs, and more.
+      In-depth guides on configuration, drivers, the query builder, and more.
 
+    .. grid-item-card:: :octicon:`beaker` Examples
+      :link: examples/index
+      :link-type: doc
 
-.. _sponsor-github: https://github.com/sponsors/litestar-org
-.. _sponsor-oc: https://opencollective.com/litestar
-.. _sponsor-polar: https://polar.sh/litestar-org
+      A gallery of practical, runnable examples for various databases and frameworks.
+
+    .. grid-item-card:: :octicon:`package` API Reference
+      :link: reference/index
+      :link-type: doc
+
+      The complete, auto-generated API documentation for the ``sqlspec`` library.
 
 .. toctree::
+    :hidden:
     :titlesonly:
     :caption: Documentation
-    :hidden:
 
+    getting_started/index
     usage/index
+    examples/index
     reference/index
 
 .. toctree::
+    :hidden:
     :titlesonly:
     :caption: Contributing
-    :hidden:
 
+    contributing/index
     changelog
     contribution-guide
-    Available Issues <https://github.com/search?q=user%3Alitestar-org+state%3Aopen+label%3A%22good+first+issue%22+++no%3Aassignee+repo%3A%22sqlspec%22&type=issues>
+    releases
     Code of Conduct <https://github.com/litestar-org/.github?tab=coc-ov-file#readme>
+    Security <https://github.com/litestar-org/.github?tab=coc-ov-file#security-ov-file>

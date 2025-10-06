@@ -129,19 +129,6 @@ class SQLResult(StatementResult):
     The operation_type attribute indicates the nature of the operation.
 
     For script execution, tracks multiple statement results and errors.
-
-    Attributes:
-        column_names: Names of columns in the result set.
-        error: Exception that occurred during execution.
-        errors: List of error messages for script execution.
-        has_more: Whether there are additional result pages available.
-        inserted_ids: List of IDs from INSERT operations.
-        operation_index: Index of operation in a script.
-        parameters: Parameters used for the query.
-        statement_results: Results from individual statements in a script.
-        successful_statements: Count of successful statements in a script.
-        total_count: Total number of rows in the complete result set.
-        total_statements: Total number of statements in a script.
     """
 
     __slots__ = (
