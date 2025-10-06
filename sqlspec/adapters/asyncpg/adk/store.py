@@ -1,6 +1,5 @@
 """AsyncPG ADK store for Google Agent Development Kit session/event storage."""
 
-import json
 from typing import TYPE_CHECKING, Any, Final, TypeVar
 
 import asyncpg
@@ -52,9 +51,10 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
 
     Notes:
         - PostgreSQL JSONB type used for state (more efficient than JSON)
+        - AsyncPG automatically converts Python dicts to/from JSONB (no manual serialization)
         - TIMESTAMPTZ provides timezone-aware microsecond precision
         - State merging uses `state || $1::jsonb` operator for efficiency
-        - BYTEA for pickled actions (no size limit unlike BLOB)
+        - BYTEA for pre-serialized actions from Google ADK (not pickled here)
         - GIN index on state for JSONB queries (partial index)
         - FILLFACTOR 80 leaves space for HOT updates
         - Generic over PostgresConfigT to support all PostgreSQL drivers
@@ -196,7 +196,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         """
 
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            await conn.execute(sql, session_id, app_name, user_id, json.dumps(state))
+            await conn.execute(sql, session_id, app_name, user_id, state)
 
         return await self.get_session(session_id)  # type: ignore[return-value]
 
@@ -230,7 +230,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
                     id=row["id"],
                     app_name=row["app_name"],
                     user_id=row["user_id"],
-                    state=json.loads(row["state"]) if isinstance(row["state"], str) else row["state"],
+                    state=row["state"],
                     create_time=row["create_time"],
                     update_time=row["update_time"],
                 )
@@ -255,7 +255,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         """
 
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            await conn.execute(sql, json.dumps(state), session_id)
+            await conn.execute(sql, state, session_id)
 
     async def delete_session(self, session_id: str) -> None:
         """Delete session and all associated events (cascade).
@@ -300,7 +300,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
                         id=row["id"],
                         app_name=row["app_name"],
                         user_id=row["user_id"],
-                        state=json.loads(row["state"]) if isinstance(row["state"], str) else row["state"],
+                        state=row["state"],
                         create_time=row["create_time"],
                         update_time=row["update_time"],
                     )
@@ -319,13 +319,9 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
             Uses CURRENT_TIMESTAMP for timestamp if not provided.
             JSONB fields are passed as dicts and asyncpg converts automatically.
         """
-        content_json = json.dumps(event_record.get("content")) if event_record.get("content") else None
-        grounding_metadata_json = (
-            json.dumps(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
-        )
-        custom_metadata_json = (
-            json.dumps(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
-        )
+        content_json = event_record.get("content")
+        grounding_metadata_json = event_record.get("grounding_metadata")
+        custom_metadata_json = event_record.get("custom_metadata")
 
         sql = f"""
         INSERT INTO {self._events_table} (
@@ -416,15 +412,9 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
                         long_running_tool_ids_json=row["long_running_tool_ids_json"],
                         branch=row["branch"],
                         timestamp=row["timestamp"],
-                        content=json.loads(row["content"])
-                        if row["content"] and isinstance(row["content"], str)
-                        else row["content"],
-                        grounding_metadata=json.loads(row["grounding_metadata"])
-                        if row["grounding_metadata"] and isinstance(row["grounding_metadata"], str)
-                        else row["grounding_metadata"],
-                        custom_metadata=json.loads(row["custom_metadata"])
-                        if row["custom_metadata"] and isinstance(row["custom_metadata"], str)
-                        else row["custom_metadata"],
+                        content=row["content"],
+                        grounding_metadata=row["grounding_metadata"],
+                        custom_metadata=row["custom_metadata"],
                         partial=row["partial"],
                         turn_complete=row["turn_complete"],
                         interrupted=row["interrupted"],

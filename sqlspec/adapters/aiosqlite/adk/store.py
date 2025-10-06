@@ -1,12 +1,12 @@
 """Aiosqlite async ADK store for Google Agent Development Kit session/event storage."""
 
-import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 from sqlspec.extensions.adk.store import BaseAsyncADKStore
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
@@ -81,35 +81,6 @@ def _from_sqlite_bool(value: "int | None") -> "bool | None":
     return bool(value)
 
 
-def _to_sqlite_json(data: "dict[str, Any] | None") -> "str | None":
-    """Serialize dict to JSON string for SQLite TEXT storage.
-
-    Args:
-        data: Dictionary to serialize.
-
-    Returns:
-        JSON string or None.
-    """
-    if data is None:
-        return None
-    return json.dumps(data)
-
-
-def _from_sqlite_json(text: "str | None") -> "dict[str, Any] | None":
-    """Deserialize JSON string from SQLite TEXT storage.
-
-    Args:
-        text: JSON string or None.
-
-    Returns:
-        Dictionary or None.
-    """
-    if text is None or text == "":
-        return None
-    result: dict[str, Any] = json.loads(text)
-    return result
-
-
 class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
     """Aiosqlite ADK store using asynchronous SQLite driver.
 
@@ -137,10 +108,10 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         await store.create_tables()
 
     Notes:
-        - JSON stored as TEXT with json.dumps/loads
+        - JSON stored as TEXT with SQLSpec serializers (msgspec/orjson/stdlib)
         - BOOLEAN as INTEGER (0/1, with None for NULL)
         - Timestamps as REAL (Julian day: julianday('now'))
-        - BLOB for pickled actions
+        - BLOB for pre-serialized actions from Google ADK
         - PRAGMA foreign_keys = ON (enable per connection)
     """
 
@@ -277,7 +248,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
         now = datetime.now(timezone.utc)
         now_julian = _datetime_to_julian(now)
-        state_json = _to_sqlite_json(state)
+        state_json = to_json(state) if state else None
 
         sql = f"""
         INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
@@ -324,7 +295,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 id=row[0],
                 app_name=row[1],
                 user_id=row[2],
-                state=_from_sqlite_json(row[3]) or {},
+                state=from_json(row[3]) if row[3] else {},
                 create_time=_julian_to_datetime(row[4]),
                 update_time=_julian_to_datetime(row[5]),
             )
@@ -341,7 +312,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             Updates update_time to current Julian Day.
         """
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
-        state_json = _to_sqlite_json(state)
+        state_json = to_json(state) if state else None
 
         sql = f"""
         UPDATE {self._session_table}
@@ -384,7 +355,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                     id=row[0],
                     app_name=row[1],
                     user_id=row[2],
-                    state=_from_sqlite_json(row[3]) or {},
+                    state=from_json(row[3]) if row[3] else {},
                     create_time=_julian_to_datetime(row[4]),
                     update_time=_julian_to_datetime(row[5]),
                 )
@@ -420,9 +391,9 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
 
-        content_json = _to_sqlite_json(event_record.get("content"))
-        grounding_metadata_json = _to_sqlite_json(event_record.get("grounding_metadata"))
-        custom_metadata_json = _to_sqlite_json(event_record.get("custom_metadata"))
+        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
+        grounding_metadata_json = to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
+        custom_metadata_json = to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
 
         partial_int = _to_sqlite_bool(event_record.get("partial"))
         turn_complete_int = _to_sqlite_bool(event_record.get("turn_complete"))
@@ -521,9 +492,9 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                     long_running_tool_ids_json=row[7],
                     branch=row[8],
                     timestamp=_julian_to_datetime(row[9]),
-                    content=_from_sqlite_json(row[10]),
-                    grounding_metadata=_from_sqlite_json(row[11]),
-                    custom_metadata=_from_sqlite_json(row[12]),
+                    content=from_json(row[10]) if row[10] else None,
+                    grounding_metadata=from_json(row[11]) if row[11] else None,
+                    custom_metadata=from_json(row[12]) if row[12] else None,
                     partial=_from_sqlite_bool(row[13]),
                     turn_complete=_from_sqlite_bool(row[14]),
                     interrupted=_from_sqlite_bool(row[15]),

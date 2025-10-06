@@ -184,11 +184,6 @@ async def run_multi_tenant_example() -> None:
     print(f"Bob's chatbot sessions (unchanged): {len(bob_remaining.sessions)}")
 
     print("\n=== Full Cleanup ===")
-    all_session_ids = [
-        chatbot_bob,
-        assistant_alice,
-        assistant_carol,
-    ]
 
     cleanup_map = [
         ("chatbot", "bob", chatbot_bob),

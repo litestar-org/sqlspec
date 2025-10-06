@@ -30,7 +30,6 @@ from google.adk.events.event import Event
 from google.genai import types
 from litestar import Litestar, get, post
 from litestar.datastructures import State
-from litestar.dto import DTOData
 from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
 from msgspec import Struct
 

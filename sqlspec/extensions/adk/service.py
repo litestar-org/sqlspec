@@ -165,7 +165,7 @@ class SQLSpecSessionService(BaseSessionService):
         Returns:
             The appended event.
         """
-        event = await super().append_event(session, event)
+        event = await super().append_event(session, event)  # pyright: ignore
 
         if event.partial:
             return event
