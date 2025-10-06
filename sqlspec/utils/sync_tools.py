@@ -93,7 +93,7 @@ class CapacityLimiter:
         self.release()
 
 
-_default_limiter = CapacityLimiter(15)
+_default_limiter = CapacityLimiter(100)
 
 
 def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -> "Callable[ParamSpecT, ReturnT]":
