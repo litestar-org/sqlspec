@@ -56,7 +56,6 @@ async def asyncpg_parameters_session(postgres_service: PostgresService) -> "Asyn
             await config.close_pool()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("parameters,expected_count", [(("test1",), 1), (["test1"], 1)])
 async def test_asyncpg_numeric_parameter_types(
     asyncpg_parameters_session: AsyncpgDriver, parameters: Any, expected_count: int
@@ -71,7 +70,6 @@ async def test_asyncpg_numeric_parameter_types(
         assert result[0]["name"] == "test1"
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_numeric_parameter_style(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test PostgreSQL numeric parameter style with AsyncPG."""
     result = await asyncpg_parameters_session.execute("SELECT * FROM test_parameters WHERE name = $1", ("test1",))
@@ -82,7 +80,6 @@ async def test_asyncpg_numeric_parameter_style(asyncpg_parameters_session: Async
     assert result[0]["name"] == "test1"
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_multiple_parameters_numeric(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test queries with multiple parameters using numeric style."""
     result = await asyncpg_parameters_session.execute(
@@ -97,7 +94,6 @@ async def test_asyncpg_multiple_parameters_numeric(asyncpg_parameters_session: A
     assert result[2]["value"] == 100
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_null_parameters(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test handling of NULL parameters on AsyncPG."""
 
@@ -120,7 +116,6 @@ async def test_asyncpg_null_parameters(asyncpg_parameters_session: AsyncpgDriver
     assert null_result[0]["description"] is None
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_parameter_escaping(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameter escaping prevents SQL injection."""
 
@@ -138,7 +133,6 @@ async def test_asyncpg_parameter_escaping(asyncpg_parameters_session: AsyncpgDri
     assert count_result[0]["count"] >= 3
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_parameter_with_like(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with LIKE operations."""
     result = await asyncpg_parameters_session.execute("SELECT * FROM test_parameters WHERE name LIKE $1", ("test%",))
@@ -154,7 +148,6 @@ async def test_asyncpg_parameter_with_like(asyncpg_parameters_session: AsyncpgDr
     assert specific_result[0]["name"] == "test1"
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_parameter_with_any_array(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL ANY and arrays."""
 
@@ -175,7 +168,6 @@ async def test_asyncpg_parameter_with_any_array(asyncpg_parameters_session: Asyn
     assert result[2]["name"] == "test1"
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_parameter_with_sql_object(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with SQL object."""
     from sqlspec.core.statement import SQL
@@ -189,7 +181,6 @@ async def test_asyncpg_parameter_with_sql_object(asyncpg_parameters_session: Asy
     assert all(row["value"] > 150 for row in result)
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_parameter_data_types(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test different parameter data types with AsyncPG."""
 
@@ -226,7 +217,6 @@ async def test_asyncpg_parameter_data_types(asyncpg_parameters_session: AsyncpgD
     assert result[0]["array_val"] == [1, 2, 3]
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_parameter_edge_cases(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test edge cases for AsyncPG parameters."""
 
@@ -250,7 +240,6 @@ async def test_asyncpg_parameter_edge_cases(asyncpg_parameters_session: AsyncpgD
     assert len(long_result[0]["description"]) == 1000
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_parameter_with_postgresql_functions(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL functions."""
 
@@ -276,7 +265,6 @@ async def test_asyncpg_parameter_with_postgresql_functions(asyncpg_parameters_se
         assert multiplied_value == expected
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_parameter_with_json(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL JSON operations."""
 
@@ -309,7 +297,6 @@ async def test_asyncpg_parameter_with_json(asyncpg_parameters_session: AsyncpgDr
     assert all(row["type"] == "test" for row in result)
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_parameter_with_arrays(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL array operations."""
 
@@ -345,7 +332,6 @@ async def test_asyncpg_parameter_with_arrays(asyncpg_parameters_session: Asyncpg
     assert len(length_result) == 2
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_parameter_with_window_functions(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL window functions."""
 
@@ -381,7 +367,6 @@ async def test_asyncpg_parameter_with_window_functions(asyncpg_parameters_sessio
     assert group_a_rows[1]["row_num"] == 2
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_none_values_in_named_parameters(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test that None values in named parameters are handled correctly."""
     await asyncpg_parameters_session.execute("""
@@ -444,7 +429,6 @@ async def test_asyncpg_none_values_in_named_parameters(asyncpg_parameters_sessio
     await asyncpg_parameters_session.execute("DROP TABLE test_none_values")
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_all_none_parameters(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test when all parameter values are None."""
     await asyncpg_parameters_session.execute("""
@@ -477,7 +461,6 @@ async def test_asyncpg_all_none_parameters(asyncpg_parameters_session: AsyncpgDr
     await asyncpg_parameters_session.execute("DROP TABLE test_all_none")
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_jsonb_none_parameters(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test JSONB column None parameter handling comprehensively."""
 

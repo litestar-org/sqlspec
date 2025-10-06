@@ -29,6 +29,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 @pytest.fixture
 def anyio_backend() -> str:
+    """Configure AnyIO to use asyncio backend only.
+
+    Disables trio backend to prevent duplicate test runs and compatibility issues
+    with pytest-xdist parallel execution.
+    """
     return "asyncio"
 
 

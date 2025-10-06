@@ -1,0 +1,1 @@
+"""BigQuery extensions integration tests."""

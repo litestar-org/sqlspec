@@ -80,7 +80,38 @@ class _PluginConfigState:
 
 
 class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
-    """Litestar plugin for SQLSpec database integration."""
+    """Litestar plugin for SQLSpec database integration.
+
+    Session Table Migrations:
+        The Litestar extension includes migrations for creating session storage tables.
+        To include these migrations in your database migration workflow, add 'litestar'
+        to the include_extensions list in your migration configuration.
+
+    Example:
+        config = AsyncpgConfig(
+            pool_config={"dsn": "postgresql://localhost/db"},
+            extension_config={
+                "litestar": {
+                    "connection_key": "db_connection",
+                    "commit_mode": "autocommit"
+                }
+            },
+            migration_config={
+                "script_location": "migrations",
+                "include_extensions": ["litestar"],
+            }
+        )
+
+        The session table migration will automatically use the appropriate column types
+        for your database dialect (JSONB for PostgreSQL, JSON for MySQL, TEXT for SQLite).
+        Customize the table name via extension_config:
+
+        migration_config={
+            "include_extensions": [
+                {"name": "litestar", "session_table": "custom_sessions"}
+            ]
+        }
+    """
 
     __slots__ = ("_plugin_configs", "_sqlspec")
 
@@ -270,7 +301,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             The annotation for the configuration.
         """
         for state in self._plugin_configs:
-            if key in (state.config, state.annotation) or key in {state.connection_key, state.pool_key}:
+            if key in {state.config, state.annotation} or key in {state.connection_key, state.pool_key}:
                 return cast(
                     "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
                     state.annotation,
@@ -314,7 +345,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
 
         for state in self._plugin_configs:
-            if name in (state.config, state.annotation):
+            if name in {state.config, state.annotation}:
                 return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
 
         msg = f"No database configuration found for name '{name}'. Available keys: {self._get_available_keys()}"
@@ -411,7 +442,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     return state
 
         for state in self._plugin_configs:
-            if key in (state.config, state.annotation):
+            if key in {state.config, state.annotation}:
                 return state
 
         self._raise_config_not_found(key)

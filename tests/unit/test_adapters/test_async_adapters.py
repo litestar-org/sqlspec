@@ -18,7 +18,6 @@ pytestmark = pytest.mark.xdist_group("adapter_unit")
 __all__ = ()
 
 
-@pytest.mark.asyncio
 async def test_async_driver_initialization(mock_async_connection: MockAsyncConnection) -> None:
     """Test basic async driver initialization."""
     driver = MockAsyncDriver(mock_async_connection)
@@ -29,7 +28,6 @@ async def test_async_driver_initialization(mock_async_connection: MockAsyncConne
     assert driver.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
 
 
-@pytest.mark.asyncio
 async def test_async_driver_with_custom_config(mock_async_connection: MockAsyncConnection) -> None:
     """Test async driver initialization with custom statement config."""
     custom_config = StatementConfig(
@@ -44,7 +42,6 @@ async def test_async_driver_with_custom_config(mock_async_connection: MockAsyncC
     assert driver.statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
 
 
-@pytest.mark.asyncio
 async def test_async_driver_with_cursor(mock_async_driver: MockAsyncDriver) -> None:
     """Test async cursor context manager functionality."""
     async with mock_async_driver.with_cursor(mock_async_driver.connection) as cursor:
@@ -54,7 +51,6 @@ async def test_async_driver_with_cursor(mock_async_driver: MockAsyncDriver) -> N
         assert cursor.connection is mock_async_driver.connection
 
 
-@pytest.mark.asyncio
 async def test_async_driver_database_exception_handling(mock_async_driver: MockAsyncDriver) -> None:
     """Test async database exception handling context manager."""
     async with mock_async_driver.handle_database_exceptions():
@@ -65,7 +61,6 @@ async def test_async_driver_database_exception_handling(mock_async_driver: MockA
             raise ValueError("Test async error")
 
 
-@pytest.mark.asyncio
 async def test_async_driver_execute_statement_select(mock_async_driver: MockAsyncDriver) -> None:
     """Test async _execute_statement method with SELECT query."""
     statement = SQL("SELECT id, name FROM users", statement_config=mock_async_driver.statement_config)
@@ -81,7 +76,6 @@ async def test_async_driver_execute_statement_select(mock_async_driver: MockAsyn
     assert result.data_row_count == 2
 
 
-@pytest.mark.asyncio
 async def test_async_driver_execute_statement_insert(mock_async_driver: MockAsyncDriver) -> None:
     """Test async _execute_statement method with INSERT query."""
     statement = SQL("INSERT INTO users (name) VALUES (?)", "test", statement_config=mock_async_driver.statement_config)
@@ -96,7 +90,6 @@ async def test_async_driver_execute_statement_insert(mock_async_driver: MockAsyn
     assert result.selected_data is None
 
 
-@pytest.mark.asyncio
 async def test_async_driver_execute_many(mock_async_driver: MockAsyncDriver) -> None:
     """Test async _execute_many method."""
     statement = SQL(
@@ -115,7 +108,6 @@ async def test_async_driver_execute_many(mock_async_driver: MockAsyncDriver) -> 
     assert mock_async_driver.connection.execute_many_count == 1
 
 
-@pytest.mark.asyncio
 async def test_async_driver_execute_many_no_parameters(mock_async_driver: MockAsyncDriver) -> None:
     """Test async _execute_many method fails without parameters."""
     statement = SQL(
@@ -126,7 +118,6 @@ async def test_async_driver_execute_many_no_parameters(mock_async_driver: MockAs
             await mock_async_driver._execute_many(cursor, statement)
 
 
-@pytest.mark.asyncio
 async def test_async_driver_execute_script(mock_async_driver: MockAsyncDriver) -> None:
     """Test async _execute_script method."""
     script = """
@@ -145,7 +136,6 @@ async def test_async_driver_execute_script(mock_async_driver: MockAsyncDriver) -
     assert result.successful_statements == 3
 
 
-@pytest.mark.asyncio
 async def test_async_driver_dispatch_statement_execution_select(mock_async_driver: MockAsyncDriver) -> None:
     """Test async dispatch_statement_execution with SELECT statement."""
     statement = SQL("SELECT * FROM users", statement_config=mock_async_driver.statement_config)
@@ -159,7 +149,6 @@ async def test_async_driver_dispatch_statement_execution_select(mock_async_drive
     assert result.get_data()[0]["name"] == "test"
 
 
-@pytest.mark.asyncio
 async def test_async_driver_dispatch_statement_execution_insert(mock_async_driver: MockAsyncDriver) -> None:
     """Test async dispatch_statement_execution with INSERT statement."""
     statement = SQL("INSERT INTO users (name) VALUES (?)", "test", statement_config=mock_async_driver.statement_config)
@@ -172,7 +161,6 @@ async def test_async_driver_dispatch_statement_execution_insert(mock_async_drive
     assert len(result.get_data()) == 0
 
 
-@pytest.mark.asyncio
 async def test_async_driver_dispatch_statement_execution_script(mock_async_driver: MockAsyncDriver) -> None:
     """Test async dispatch_statement_execution with script."""
     script = "INSERT INTO users (name) VALUES ('alice'); INSERT INTO users (name) VALUES ('bob');"
@@ -186,7 +174,6 @@ async def test_async_driver_dispatch_statement_execution_script(mock_async_drive
     assert result.successful_statements == 2
 
 
-@pytest.mark.asyncio
 async def test_async_driver_dispatch_statement_execution_many(mock_async_driver: MockAsyncDriver) -> None:
     """Test async dispatch_statement_execution with execute_many."""
     statement = SQL(
@@ -203,7 +190,6 @@ async def test_async_driver_dispatch_statement_execution_many(mock_async_driver:
     assert result.rows_affected == 2
 
 
-@pytest.mark.asyncio
 async def test_async_driver_transaction_management(mock_async_driver: MockAsyncDriver) -> None:
     """Test async transaction management methods."""
     connection = mock_async_driver.connection
@@ -220,7 +206,6 @@ async def test_async_driver_transaction_management(mock_async_driver: MockAsyncD
     assert connection.in_transaction is False
 
 
-@pytest.mark.asyncio
 async def test_async_driver_execute_method(mock_async_driver: MockAsyncDriver) -> None:
     """Test high-level async execute method."""
     result = await mock_async_driver.execute("SELECT * FROM users WHERE id = ?", 1)
@@ -230,7 +215,6 @@ async def test_async_driver_execute_method(mock_async_driver: MockAsyncDriver) -
     assert len(result.get_data()) == 2
 
 
-@pytest.mark.asyncio
 async def test_async_driver_execute_many_method(mock_async_driver: MockAsyncDriver) -> None:
     """Test high-level async execute_many method."""
     parameters = [["alice"], ["bob"], ["charlie"]]
@@ -241,7 +225,6 @@ async def test_async_driver_execute_many_method(mock_async_driver: MockAsyncDriv
     assert result.rows_affected == 3
 
 
-@pytest.mark.asyncio
 async def test_async_driver_execute_script_method(mock_async_driver: MockAsyncDriver) -> None:
     """Test high-level async execute_script method."""
     script = "INSERT INTO users (name) VALUES ('alice'); UPDATE users SET active = 1;"
@@ -253,14 +236,12 @@ async def test_async_driver_execute_script_method(mock_async_driver: MockAsyncDr
     assert result.successful_statements == 2
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select_one(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_one method - expects error when multiple rows returned."""
     with pytest.raises(ValueError, match="Expected exactly one row, found 2"):
         await mock_async_driver.select_one("SELECT * FROM users WHERE id = ?", 1)
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select_one_no_results(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_one method with no results."""
 
@@ -273,7 +254,6 @@ async def test_async_driver_select_one_no_results(mock_async_driver: MockAsyncDr
             await mock_async_driver.select_one("SELECT * FROM users WHERE id = ?", 999)
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select_one_multiple_results(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_one method with multiple results."""
 
@@ -286,14 +266,12 @@ async def test_async_driver_select_one_multiple_results(mock_async_driver: MockA
             await mock_async_driver.select_one("SELECT * FROM users")
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select_one_or_none(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_one_or_none method - expects error when multiple rows returned."""
     with pytest.raises(ValueError, match="Expected at most one row, found 2"):
         await mock_async_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 1)
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select_one_or_none_no_results(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_one_or_none method with no results."""
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
@@ -305,7 +283,6 @@ async def test_async_driver_select_one_or_none_no_results(mock_async_driver: Moc
         assert result is None
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select_one_or_none_multiple_results(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_one_or_none method with multiple results."""
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
@@ -317,7 +294,6 @@ async def test_async_driver_select_one_or_none_multiple_results(mock_async_drive
             await mock_async_driver.select_one_or_none("SELECT * FROM users")
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select method."""
     result: list[dict[str, Any]] = await mock_async_driver.select("SELECT * FROM users")
@@ -328,7 +304,6 @@ async def test_async_driver_select(mock_async_driver: MockAsyncDriver) -> None:
     assert result[1]["id"] == 2
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select_value(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_value method."""
 
@@ -341,7 +316,6 @@ async def test_async_driver_select_value(mock_async_driver: MockAsyncDriver) -> 
         assert result == 42
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select_value_no_results(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_value method with no results."""
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
@@ -353,14 +327,12 @@ async def test_async_driver_select_value_no_results(mock_async_driver: MockAsync
             await mock_async_driver.select_value("SELECT COUNT(*) FROM users WHERE id = 999")
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select_value_or_none(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_value_or_none method - expects error when multiple rows returned."""
     with pytest.raises(ValueError, match="Expected at most one row, found 2"):
         await mock_async_driver.select_value_or_none("SELECT * FROM users WHERE id = ?", 1)
 
 
-@pytest.mark.asyncio
 async def test_async_driver_select_value_or_none_no_results(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_value_or_none method with no results."""
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
@@ -372,7 +344,6 @@ async def test_async_driver_select_value_or_none_no_results(mock_async_driver: M
         assert result is None
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "parameter_style,expected_style",
     [
@@ -412,7 +383,6 @@ async def test_async_driver_parameter_styles(
     assert isinstance(result, SQLResult)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("dialect", ["sqlite", "postgres", "mysql"])
 async def test_async_driver_different_dialects(mock_async_connection: MockAsyncConnection, dialect: str) -> None:
     """Test async driver works with different SQL dialects."""
@@ -430,7 +400,6 @@ async def test_async_driver_different_dialects(mock_async_connection: MockAsyncC
     assert isinstance(result, SQLResult)
 
 
-@pytest.mark.asyncio
 async def test_async_driver_create_execution_result(mock_async_driver: MockAsyncDriver) -> None:
     """Test async create_execution_result method."""
     cursor = mock_async_driver.with_cursor(mock_async_driver.connection)
@@ -456,7 +425,6 @@ async def test_async_driver_create_execution_result(mock_async_driver: MockAsync
     assert result.successful_statements == 3
 
 
-@pytest.mark.asyncio
 async def test_async_driver_build_statement_result(mock_async_driver: MockAsyncDriver) -> None:
     """Test async build_statement_result method."""
     statement = SQL("SELECT * FROM users", statement_config=mock_async_driver.statement_config)
@@ -485,7 +453,6 @@ async def test_async_driver_build_statement_result(mock_async_driver: MockAsyncD
     assert script_sql_result.successful_statements == 1
 
 
-@pytest.mark.asyncio
 async def test_async_driver_special_handling_integration(mock_async_driver: MockAsyncDriver) -> None:
     """Test that async _try_special_handling is called during dispatch."""
     statement = SQL("SELECT * FROM users", statement_config=mock_async_driver.statement_config)
@@ -499,7 +466,6 @@ async def test_async_driver_special_handling_integration(mock_async_driver: Mock
         mock_special.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_async_driver_error_handling_in_dispatch(mock_async_driver: MockAsyncDriver) -> None:
     """Test error handling during async statement dispatch."""
     statement = SQL("SELECT * FROM users", statement_config=mock_async_driver.statement_config)
@@ -511,7 +477,6 @@ async def test_async_driver_error_handling_in_dispatch(mock_async_driver: MockAs
             await mock_async_driver.dispatch_statement_execution(statement, mock_async_driver.connection)
 
 
-@pytest.mark.asyncio
 async def test_async_driver_statement_processing_integration(mock_async_driver: MockAsyncDriver) -> None:
     """Test async driver statement processing integration."""
     statement = SQL("SELECT * FROM users WHERE active = ?", True, statement_config=mock_async_driver.statement_config)
@@ -523,7 +488,6 @@ async def test_async_driver_statement_processing_integration(mock_async_driver: 
         assert mock_compile.called or statement.sql == "SELECT * FROM test"
 
 
-@pytest.mark.asyncio
 async def test_async_driver_context_manager_integration(mock_async_driver: MockAsyncDriver) -> None:
     """Test async context manager integration during execution."""
     statement = SQL("SELECT * FROM users", statement_config=mock_async_driver.statement_config)
@@ -543,7 +507,6 @@ async def test_async_driver_context_manager_integration(mock_async_driver: MockA
             mock_handle_exceptions.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_async_driver_resource_cleanup(mock_async_driver: MockAsyncDriver) -> None:
     """Test async resource cleanup during execution."""
     connection = mock_async_driver.connection
@@ -555,7 +518,6 @@ async def test_async_driver_resource_cleanup(mock_async_driver: MockAsyncDriver)
     assert cursor.closed is True
 
 
-@pytest.mark.asyncio
 async def test_async_driver_concurrent_execution(mock_async_connection: MockAsyncConnection) -> None:
     """Test concurrent execution capability of async driver."""
     import asyncio
@@ -574,7 +536,6 @@ async def test_async_driver_concurrent_execution(mock_async_connection: MockAsyn
         assert result.operation_type == "SELECT"
 
 
-@pytest.mark.asyncio
 async def test_async_driver_with_transaction_context(mock_async_driver: MockAsyncDriver) -> None:
     """Test async driver transaction context usage."""
     connection = mock_async_driver.connection

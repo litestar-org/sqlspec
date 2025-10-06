@@ -8,6 +8,7 @@ for adapter implementations that need to support both sync and async patterns.
 import asyncio
 import functools
 import inspect
+import os
 import sys
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
@@ -47,12 +48,20 @@ class CapacityLimiter:
         """
         self._total_tokens = total_tokens
         self._semaphore_instance: asyncio.Semaphore | None = None
+        self._pid: int | None = None
 
     @property
     def _semaphore(self) -> asyncio.Semaphore:
-        """Lazy initialization of asyncio.Semaphore for Python 3.9 compatibility."""
-        if self._semaphore_instance is None:
+        """Lazy initialization of asyncio.Semaphore with per-process tracking.
+
+        Reinitializes the semaphore if running in a new process (detected via PID).
+        This ensures pytest-xdist workers each get their own semaphore bound to
+        their event loop, preventing cross-process deadlocks.
+        """
+        current_pid = os.getpid()
+        if self._semaphore_instance is None or self._pid != current_pid:
             self._semaphore_instance = asyncio.Semaphore(self._total_tokens)
+            self._pid = current_pid
         return self._semaphore_instance
 
     async def acquire(self) -> None:
@@ -72,6 +81,7 @@ class CapacityLimiter:
     def total_tokens(self, value: int) -> None:
         self._total_tokens = value
         self._semaphore_instance = None
+        self._pid = None
 
     async def __aenter__(self) -> None:
         """Async context manager entry."""
@@ -84,7 +94,7 @@ class CapacityLimiter:
         self.release()
 
 
-_default_limiter = CapacityLimiter(15)
+_default_limiter = CapacityLimiter(1000)
 
 
 def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -> "Callable[ParamSpecT, ReturnT]":

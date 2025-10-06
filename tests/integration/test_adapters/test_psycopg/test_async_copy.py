@@ -45,7 +45,6 @@ async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGener
         await config.close_pool()
 
 
-@pytest.mark.asyncio
 async def test_psycopg_async_copy_operations_positional(psycopg_async_session: PsycopgAsyncDriver) -> None:
     """Test PostgreSQL COPY operations with async psycopg driver using positional parameters."""
 
@@ -73,7 +72,6 @@ async def test_psycopg_async_copy_operations_positional(psycopg_async_session: P
     await psycopg_async_session.execute_script("DROP TABLE copy_test_async")
 
 
-@pytest.mark.asyncio
 async def test_psycopg_async_copy_operations_keyword(psycopg_async_session: PsycopgAsyncDriver) -> None:
     """Test PostgreSQL COPY operations with async psycopg driver using keyword parameters."""
 
@@ -101,7 +99,6 @@ async def test_psycopg_async_copy_operations_keyword(psycopg_async_session: Psyc
     await psycopg_async_session.execute_script("DROP TABLE copy_test_async_kw")
 
 
-@pytest.mark.asyncio
 async def test_psycopg_async_copy_csv_format_positional(psycopg_async_session: PsycopgAsyncDriver) -> None:
     """Test PostgreSQL COPY operations with CSV format using async driver and positional parameters."""
 
@@ -128,7 +125,6 @@ async def test_psycopg_async_copy_csv_format_positional(psycopg_async_session: P
     await psycopg_async_session.execute_script("DROP TABLE copy_csv_async_pos")
 
 
-@pytest.mark.asyncio
 async def test_psycopg_async_copy_csv_format_keyword(psycopg_async_session: PsycopgAsyncDriver) -> None:
     """Test PostgreSQL COPY operations with CSV format using async driver and keyword parameters."""
 

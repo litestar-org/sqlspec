@@ -79,6 +79,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         statement_config: StatementConfig | None = None,
         driver_features: dict[str, Any] | None = None,
         bind_key: str | None = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize configuration.
 
@@ -88,6 +89,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             statement_config: Default SQL statement configuration
             driver_features: Driver feature configuration
             bind_key: Optional unique identifier for this configuration
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
         if connection_config is None:
             connection_config = {}
@@ -108,6 +110,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             statement_config=statement_config,
             driver_features=driver_features or {},
             bind_key=bind_key,
+            extension_config=extension_config,
         )
 
     def _resolve_driver_name(self) -> str:

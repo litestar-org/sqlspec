@@ -51,6 +51,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize SQLite configuration.
 
@@ -61,6 +62,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
             bind_key: Optional bind key for the configuration
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
         if pool_config is None:
             pool_config = {}
@@ -84,6 +86,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             migration_config=migration_config,
             statement_config=statement_config or sqlite_statement_config,
             driver_features=driver_features or {},
+            extension_config=extension_config,
         )
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":

@@ -129,15 +129,15 @@ release:                                           ## Bump version and create re
 clean:                                              ## Cleanup temporary build artifacts
 	@echo "${INFO} Cleaning working directory... 🧹"
 	@rm -rf .pytest_cache .ruff_cache .hypothesis build/ -rf dist/ .eggs/ .coverage coverage.xml coverage.json htmlcov/ .pytest_cache tests/.pytest_cache tests/**/.pytest_cache .mypy_cache .unasyncd_cache/ .auto_pytabs_cache >/dev/null 2>&1
-	@find . -name '*.egg-info' -exec rm -rf {} + >/dev/null 2>&1
-	@find . -type f -name '*.egg' -exec rm -f {} + >/dev/null 2>&1
-	@find . -name '*.pyc' -exec rm -f {} + >/dev/null 2>&1
-	@find . -name '*.pyo' -exec rm -f {} + >/dev/null 2>&1
-	@find . -name '*~' -exec rm -f {} + >/dev/null 2>&1
-	@find . -name '__pycache__' -exec rm -rf {} + >/dev/null 2>&1
-	@find . -name '.ipynb_checkpoints' -exec rm -rf {} + >/dev/null 2>&1
-	@find . -name '*.so' -exec rm -f {} + >/dev/null 2>&1
-	@find . -name '*.c' -exec rm -f {} + >/dev/null 2>&1
+	@find . \( -path ./.venv -o -path ./.git \) -prune -o -name '*.egg-info' -exec rm -rf {} + >/dev/null 2>&1
+	@find . \( -path ./.venv -o -path ./.git \) -prune -o -type f -name '*.egg' -exec rm -f {} + >/dev/null 2>&1
+	@find . \( -path ./.venv -o -path ./.git \) -prune -o -name '*.pyc' -exec rm -f {} + >/dev/null 2>&1
+	@find . \( -path ./.venv -o -path ./.git \) -prune -o -name '*.pyo' -exec rm -f {} + >/dev/null 2>&1
+	@find . \( -path ./.venv -o -path ./.git \) -prune -o -name '*~' -exec rm -f {} + >/dev/null 2>&1
+	@find . \( -path ./.venv -o -path ./.git \) -prune -o -type d -name '__pycache__' -exec rm -rf {} + >/dev/null 2>&1
+	@find . \( -path ./.venv -o -path ./.git \) -prune -o -name '.ipynb_checkpoints' -exec rm -rf {} + >/dev/null 2>&1
+	@find . \( -path ./.venv -o -path ./.git \) -prune -o -name '*.so' -exec rm -f {} + >/dev/null 2>&1
+	@find . \( -path ./.venv -o -path ./.git \) -prune -o -name '*.c' -exec rm -f {} + >/dev/null 2>&1
 	@echo "${OK} Working directory cleaned"
 	$(MAKE) docs-clean
 

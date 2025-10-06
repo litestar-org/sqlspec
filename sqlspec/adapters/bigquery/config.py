@@ -95,6 +95,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "BigQueryDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize BigQuery configuration.
 
@@ -104,6 +105,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             statement_config: Statement configuration override
             driver_features: BigQuery-specific driver features
             bind_key: Optional unique identifier for this configuration
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
 
         self.connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
@@ -127,6 +129,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             statement_config=statement_config,
             driver_features=self.driver_features,
             bind_key=bind_key,
+            extension_config=extension_config,
         )
 
     def _setup_default_job_config(self) -> None:
