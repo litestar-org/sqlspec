@@ -37,11 +37,9 @@ def bigquery_config(bigquery_service: "BigQueryService", table_schema_prefix: st
 @pytest.fixture
 def bigquery_session(bigquery_config: BigQueryConfig) -> Generator[BigQueryDriver, Any, None]:
     """Create a BigQuery sync session."""
-    try:
-        with bigquery_config.provide_session() as session:
-            yield session
-    finally:
-        pass
+
+    with bigquery_config.provide_session() as session:
+        yield session
 
 
 @pytest.fixture
