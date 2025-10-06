@@ -27,14 +27,14 @@ async def simple_psycopg(db_session: PsycopgAsyncDriver) -> dict[str, str]:
     return result.get_first() or {"greeting": "No result found"}
 
 
-sql = SQLSpec()
-sql.add_config(
+spec = SQLSpec()
+db = spec.add_config(
     PsycopgAsyncConfig(
         pool_config={"conninfo": "postgres://app:app@localhost:15432/app", "min_size": 1, "max_size": 3},
         extension_config={"litestar": {"commit_mode": "autocommit"}},
     )
 )
-plugin = SQLSpecPlugin(sqlspec=sql)
+plugin = SQLSpecPlugin(sqlspec=spec)
 app = Litestar(route_handlers=[simple_psycopg], plugins=[plugin])
 
 if __name__ == "__main__":

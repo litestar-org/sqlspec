@@ -7,9 +7,8 @@ mixin functionality for common database operations.
 
 import asyncio
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.builder import Select
 
 __all__ = ("aiosqlite_example", "main")
 
@@ -18,11 +17,10 @@ async def aiosqlite_example() -> None:
     """Demonstrate asynchronous database driver usage with query mixins."""
     # Create SQLSpec instance with AIOSQLite
     spec = SQLSpec()
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
-    conf = spec.add_config(config)
+    db = spec.add_config(AiosqliteConfig(pool_config={"database": ":memory:"}))
 
-    # Get an async driver directly (drivers now have built-in query methods)
-    async with spec.provide_session(conf) as driver:
+    # Get a driver directly (drivers now have built-in query methods)
+    async with spec.provide_session(db) as driver:
         # Create a table
         await driver.execute("""
             CREATE TABLE products (
@@ -58,7 +56,7 @@ async def aiosqlite_example() -> None:
         print(f"Applied 10% discount to {result.rows_affected} expensive products")
 
         # Use query builder with async driver
-        query = Select("name", "price").from_("products").where("price < ?").order_by("price")
+        query = sql.select("name", "price").from_("products").where("price < ?").order_by("price")
         cheap_products = await driver.select(query, 100.0)
         print(f"Cheap products: {cheap_products}")
 

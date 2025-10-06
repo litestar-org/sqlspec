@@ -36,9 +36,9 @@ async def simple_sqlite(db_session: AiosqliteDriver) -> dict[str, str]:
     return {"greeting": greeting["greeting"] if greeting is not None else "hi"}
 
 
-sql = SQLSpec()
-sql.add_config(AiosqliteConfig(extension_config={"litestar": {"commit_mode": "autocommit"}}))
-sql.add_config(
+spec = SQLSpec()
+sqlite_db = spec.add_config(AiosqliteConfig(extension_config={"litestar": {"commit_mode": "autocommit"}}))
+duckdb_db = spec.add_config(
     DuckDBConfig(
         driver_features={
             "extensions": [{"name": "vss", "force_install": True}],
@@ -47,7 +47,7 @@ sql.add_config(
         extension_config={"litestar": {"connection_key": "etl_connection", "session_key": "etl_session"}},
     )
 )
-plugin = SQLSpecPlugin(sqlspec=sql)
+plugin = SQLSpecPlugin(sqlspec=spec)
 app = Litestar(route_handlers=[simple_sqlite, simple_select], plugins=[plugin])
 
 if __name__ == "__main__":

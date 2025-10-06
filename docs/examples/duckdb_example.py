@@ -3,9 +3,8 @@
 This example shows how to use the DuckDB driver (no container needed).
 """
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.duckdb import DuckDBConfig
-from sqlspec.builder import Select
 
 __all__ = ("duckdb_example", "main")
 
@@ -14,11 +13,10 @@ def duckdb_example() -> None:
     """Demonstrate DuckDB database driver usage with query mixins."""
     # Create SQLSpec instance with DuckDB (in-memory)
     spec = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
-    spec.add_config(config)
+    db = spec.add_config(DuckDBConfig(pool_config={"database": ":memory:"}))
 
     # Get a driver directly (drivers now have built-in query methods)
-    with spec.provide_session(config) as driver:
+    with spec.provide_session(db) as driver:
         # Create a table
         driver.execute_script("""
             CREATE TABLE analytics (
@@ -71,13 +69,13 @@ def duckdb_example() -> None:
         print(f"Updated {result.rows_affected} click events")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
-        query = Select("*").from_("analytics").where("user_id = ?")
+        query = sql.select("*").from_("analytics").where("user_id = ?")
         user_events = driver.select(query, 1001)
         print(f"User 1001 events: {user_events}")
 
         # Query builder with JSON extraction (DuckDB-specific)
         query = (
-            Select("event_name", "json_extract_string(properties, '$.page') as page")
+            sql.select("event_name", "json_extract_string(properties, '$.page') as page")
             .from_("analytics")
             .where("event_name = ?")
         )

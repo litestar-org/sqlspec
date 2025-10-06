@@ -5,9 +5,8 @@ This example shows how to use the psycopg synchronous driver with the developmen
 PostgreSQL container started by `make infra-up`.
 """
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.psycopg import PsycopgSyncConfig
-from sqlspec.builder import Select
 
 __all__ = ("main", "psycopg_sync_example")
 
@@ -16,19 +15,20 @@ def psycopg_sync_example() -> None:
     """Demonstrate psycopg sync database driver usage with query mixins."""
     # Create SQLSpec instance with psycopg sync (connects to dev container)
     spec = SQLSpec()
-    config = PsycopgSyncConfig(
-        pool_config={
-            "host": "localhost",
-            "port": 5433,
-            "user": "postgres",
-            "password": "postgres",
-            "dbname": "postgres",
-        }
+    db = spec.add_config(
+        PsycopgSyncConfig(
+            pool_config={
+                "host": "localhost",
+                "port": 5433,
+                "user": "postgres",
+                "password": "postgres",
+                "dbname": "postgres",
+            }
+        )
     )
-    spec.add_config(config)
 
     # Get a driver directly (drivers now have built-in query methods)
-    with spec.provide_session(config) as driver:
+    with spec.provide_session(db) as driver:
         # Create a table
         driver.execute("""
             CREATE TABLE IF NOT EXISTS customers (
@@ -87,12 +87,12 @@ def psycopg_sync_example() -> None:
         print(f"Removed {result.rows_affected} inactive customers")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
-        query = Select("*").from_("customers").where("is_active = %s")
+        query = sql.select("*").from_("customers").where("is_active = %s")
         active_customers = driver.select(query, True)
         print(f"Active customers: {active_customers}")
 
         # Query builder with LIKE
-        query = Select("name", "email").from_("customers").where("email LIKE %s").order_by("name")
+        query = sql.select("name", "email").from_("customers").where("email LIKE %s").order_by("name")
         example_customers = driver.select(query, "%@example.com")
         print(f"Example.com customers: {example_customers}")
 

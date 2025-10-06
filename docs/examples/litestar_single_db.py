@@ -24,7 +24,7 @@ async def simple_sqlite(db_connection: Connection) -> dict[str, str]:
     return {"greeting": next(iter(result))[0]}
 
 
-sql = SQLSpec()
-sql.add_config(AiosqliteConfig())
-plugin = SQLSpecPlugin(sqlspec=sql)
+spec = SQLSpec()
+db = spec.add_config(AiosqliteConfig())
+plugin = SQLSpecPlugin(sqlspec=spec)
 app = Litestar(route_handlers=[simple_sqlite], plugins=[plugin])

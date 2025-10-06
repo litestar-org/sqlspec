@@ -6,9 +6,8 @@ container started by `make infra-up`.
 
 import asyncio
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.asyncpg import AsyncpgConfig
-from sqlspec.builder import Select
 
 __all__ = ("asyncpg_example", "main")
 
@@ -17,19 +16,20 @@ async def asyncpg_example() -> None:
     """Demonstrate asyncpg database driver usage with query mixins."""
     # Create SQLSpec instance with PostgreSQL (connects to dev container)
     spec = SQLSpec()
-    config = AsyncpgConfig(
-        pool_config={
-            "host": "localhost",
-            "port": 5433,
-            "user": "postgres",
-            "password": "postgres",
-            "database": "postgres",
-        }
+    db = spec.add_config(
+        AsyncpgConfig(
+            pool_config={
+                "host": "localhost",
+                "port": 5433,
+                "user": "postgres",
+                "password": "postgres",
+                "database": "postgres",
+            }
+        )
     )
-    spec.add_config(config)
 
     # Get a driver directly (drivers now have built-in query methods)
-    async with spec.provide_session(config) as driver:
+    async with spec.provide_session(db) as driver:
         # Create a table
         await driver.execute("""
             CREATE TABLE IF NOT EXISTS products (
@@ -84,12 +84,12 @@ async def asyncpg_example() -> None:
         print(f"Deleted {result.rows_affected} office products")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
-        query = Select("*").from_("products").where("category = $1")
+        query = sql.select("*").from_("products").where("category = $1")
         electronics = await driver.select(query, "Electronics")
         print(f"Electronics: {electronics}")
 
         # Query builder with LIKE operator
-        query = Select("name", "price").from_("products").where("name LIKE $1").order_by("price")
+        query = sql.select("name", "price").from_("products").where("name LIKE $1").order_by("price")
         m_products = await driver.select(query, "M%")
         print(f"Products starting with M: {m_products}")
 

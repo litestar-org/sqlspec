@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Litestar AsyncPG Integration Example
 
 This example demonstrates how to use SQLSpec with AsyncPG in a Litestar application.
@@ -71,8 +70,8 @@ async def get_status() -> dict[str, str]:
 
 # Configure SQLSpec with AsyncPG
 # Note: Modify this DSN to match your database configuration
-sql = SQLSpec()
-sql.add_config(
+spec = SQLSpec()
+db = spec.add_config(
     AsyncpgConfig(
         pool_config=AsyncpgPoolConfig(
             dsn="postgresql://postgres:postgres@localhost:5433/postgres", min_size=5, max_size=5
@@ -80,7 +79,7 @@ sql.add_config(
         extension_config={"litestar": {"commit_mode": "autocommit"}},
     )
 )
-plugin = SQLSpecPlugin(sqlspec=sql)
+plugin = SQLSpecPlugin(sqlspec=spec)
 app = Litestar(route_handlers=[hello_world, get_version, list_tables, get_status], plugins=[plugin], debug=True)
 
 if __name__ == "__main__":

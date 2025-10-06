@@ -6,9 +6,8 @@ PostgreSQL container started by `make infra-up`.
 
 import asyncio
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig
-from sqlspec.builder import Select
 
 __all__ = ("main", "psycopg_async_example")
 
@@ -17,19 +16,20 @@ async def psycopg_async_example() -> None:
     """Demonstrate psycopg async database driver usage with query mixins."""
     # Create SQLSpec instance with psycopg async (connects to dev container)
     spec = SQLSpec()
-    config = PsycopgAsyncConfig(
-        pool_config={
-            "host": "localhost",
-            "port": 5433,
-            "user": "postgres",
-            "password": "postgres",
-            "dbname": "postgres",
-        }
+    db = spec.add_config(
+        PsycopgAsyncConfig(
+            pool_config={
+                "host": "localhost",
+                "port": 5433,
+                "user": "postgres",
+                "password": "postgres",
+                "dbname": "postgres",
+            }
+        )
     )
-    spec.add_config(config)
 
     # Get a driver directly (drivers now have built-in query methods)
-    async with spec.provide_session(config) as driver:
+    async with spec.provide_session(db) as driver:
         # Create a table
         await driver.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
@@ -92,12 +92,12 @@ async def psycopg_async_example() -> None:
         print(f"Removed {result.rows_affected} small transactions")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
-        query = Select("*").from_("transactions").where("account_id = %s")
+        query = sql.select("*").from_("transactions").where("account_id = %s")
         account_transactions = await driver.select(query, 1002)
         print(f"Account 1002 transactions: {account_transactions}")
 
         # Query builder with comparison
-        query = Select("description", "amount").from_("transactions").where("amount > %s").order_by("amount DESC")
+        query = sql.select("description", "amount").from_("transactions").where("amount > %s").order_by("amount DESC")
         large_transactions = await driver.select(query, 100.0)
         print(f"Large transactions: {large_transactions}")
 

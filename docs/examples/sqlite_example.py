@@ -5,9 +5,8 @@ This example shows how to use the SQLite driver directly with its built-in query
 mixin functionality for common database operations.
 """
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.builder import Select
 
 __all__ = ("main", "sqlite_example")
 
@@ -16,11 +15,10 @@ def sqlite_example() -> None:
     """Demonstrate synchronous SQLite database driver usage with query mixins."""
     # Create SQLSpec instance with SQLite
     spec = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:"})
-    spec.add_config(config)
+    db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
     # Get a driver directly (drivers now have built-in query methods)
-    with spec.provide_session(config) as driver:
+    with spec.provide_session(db) as driver:
         # Create a table
         driver.execute("""
                 CREATE TABLE users (
@@ -64,7 +62,7 @@ def sqlite_example() -> None:
         print(f"Deleted {result.rows_affected} rows")
 
         # Use query builder with driver - this demonstrates the fix
-        query = Select("*").from_("users").where("email LIKE ?")
+        query = sql.select("*").from_("users").where("email LIKE ?")
         matching_users = driver.select(query, "%@example.com%")
         print(f"Matching users: {matching_users}")
 
