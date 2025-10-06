@@ -1,7 +1,6 @@
 """Integration tests for DuckDB sync session store."""
 
 import asyncio
-import tempfile
 from collections.abc import AsyncGenerator
 from datetime import timedelta
 from pathlib import Path
@@ -15,16 +14,23 @@ pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
 
 @pytest.fixture
-async def duckdb_store() -> AsyncGenerator[DuckdbStore, None]:
+async def duckdb_store(tmp_path: Path, worker_id: str) -> AsyncGenerator[DuckdbStore, None]:
     """Create DuckDB store with temporary file-based database.
+
+    Args:
+        tmp_path: Pytest fixture providing unique temporary directory per test.
+        worker_id: Pytest-xdist fixture providing unique worker identifier.
 
     Note:
         DuckDB in-memory databases are connection-local, not process-wide.
         Since the thread-local connection pool creates separate connection
         objects for each thread, we must use a file-based database to ensure
         all threads share the same data.
+
+        Worker ID ensures parallel pytest-xdist workers use separate database
+        files, preventing file locking conflicts.
     """
-    db_path = Path(tempfile.mktemp(suffix=".duckdb"))
+    db_path = tmp_path / f"test_sessions_{worker_id}.duckdb"
     try:
         config = DuckDBConfig(pool_config={"database": str(db_path)})
         store = DuckdbStore(config, table_name="test_sessions")
