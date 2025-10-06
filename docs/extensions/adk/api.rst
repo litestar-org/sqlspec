@@ -13,8 +13,6 @@ SQLSpecSessionService
 ---------------------
 
 .. autoclass:: SQLSpecSessionService
-   :members:
-   :undoc-members:
    :show-inheritance:
 
    SQLSpec-backed implementation of Google ADK's ``BaseSessionService``.
@@ -25,6 +23,7 @@ SQLSpecSessionService
    **Attributes:**
 
    .. attribute:: store
+      :no-index:
 
       The database store implementation (e.g., ``AsyncpgADKStore``).
 
@@ -64,8 +63,6 @@ BaseAsyncADKStore
 ------------
 
 .. autoclass:: BaseAsyncADKStore
-   :members:
-   :undoc-members:
    :show-inheritance:
 
    Abstract base class for async SQLSpec-backed ADK session stores.
@@ -97,14 +94,17 @@ BaseAsyncADKStore
    **Properties:**
 
    .. attribute:: config
+      :no-index:
 
       The SQLSpec database configuration.
 
    .. attribute:: session_table
+      :no-index:
 
       Name of the sessions table (default: ``adk_sessions``).
 
    .. attribute:: events_table
+      :no-index:
 
       Name of the events table (default: ``adk_events``).
 
@@ -132,8 +132,6 @@ BaseSyncADKStore
 ----------------
 
 .. autoclass:: BaseSyncADKStore
-   :members:
-   :undoc-members:
    :show-inheritance:
 
    Abstract base class for synchronous SQLSpec-backed ADK session stores.
@@ -179,8 +177,6 @@ SessionRecord
 -------------
 
 .. autoclass:: sqlspec.extensions.adk._types.SessionRecord
-   :members:
-   :undoc-members:
 
    TypedDict representing a session database record.
 
@@ -235,8 +231,6 @@ EventRecord
 -----------
 
 .. autoclass:: sqlspec.extensions.adk._types.EventRecord
-   :members:
-   :undoc-members:
 
    TypedDict representing an event database record.
 

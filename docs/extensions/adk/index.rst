@@ -1,3 +1,5 @@
+:orphan:
+
 ====================
 Google ADK Extension
 ====================
@@ -16,6 +18,7 @@ Google ADK Extension
    backends/asyncpg
    backends/bigquery
    backends/duckdb
+   backends/oracledb
    backends/psqlpy
    backends/psycopg
    backends/sqlite

@@ -87,6 +87,7 @@ Base Store Classes
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
    Abstract base class for async ADK session stores. See :doc:`/extensions/adk/api` for details.
 
@@ -94,6 +95,7 @@ Base Store Classes
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
    Abstract base class for sync ADK session stores. See :doc:`/extensions/adk/api` for details.
 
@@ -104,6 +106,7 @@ Session Service
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
    SQLSpec-backed implementation of Google ADK's BaseSessionService. See :doc:`/extensions/adk/api` for details.
 

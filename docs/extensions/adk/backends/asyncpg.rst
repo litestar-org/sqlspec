@@ -1021,10 +1021,12 @@ API Reference
    :members:
    :inherited-members:
    :show-inheritance:
+   :no-index:
 
 .. autoclass:: sqlspec.adapters.asyncpg.AsyncpgConfig
    :members:
    :show-inheritance:
+   :no-index:
 
 See Also
 ========

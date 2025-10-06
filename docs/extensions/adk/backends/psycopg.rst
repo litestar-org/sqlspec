@@ -933,11 +933,13 @@ API Reference
    :members:
    :inherited-members:
    :show-inheritance:
+   :no-index:
 
 .. autoclass:: sqlspec.adapters.psycopg.adk.PsycopgSyncADKStore
    :members:
    :inherited-members:
    :show-inheritance:
+   :no-index:
 
 See Also
 ========

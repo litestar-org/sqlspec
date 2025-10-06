@@ -824,6 +824,7 @@ API Reference
    :members:
    :inherited-members:
    :show-inheritance:
+   :no-index:
 
 See Also
 ========
