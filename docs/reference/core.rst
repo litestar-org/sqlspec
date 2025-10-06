@@ -79,40 +79,49 @@ Parameter Handling
 
 .. currentmodule:: sqlspec.core.parameters
 
-.. autoclass:: ParameterBinder
+.. autoclass:: ParameterProcessor
    :members:
    :undoc-members:
    :show-inheritance:
 
-   Handles parameter binding and conversion between parameter styles.
+   Processes SQL parameters by converting between different parameter styles.
 
    **Supported parameter styles:**
 
-   - ``?`` - SQLite/DuckDB positional
-   - ``$1, $2`` - PostgreSQL positional (asyncpg, psqlpy)
-   - ``%s`` - PostgreSQL/MySQL format style (psycopg, asyncmy)
-   - ``:name`` - Named parameters (Oracle, SQLite)
-   - ``@name`` - BigQuery named parameters
+   - ``ParameterStyle.QMARK`` - ``?`` (SQLite/DuckDB positional)
+   - ``ParameterStyle.NUMERIC`` - ``$1, $2`` (PostgreSQL positional for asyncpg, psqlpy)
+   - ``ParameterStyle.POSITIONAL_PYFORMAT`` - ``%s`` (PostgreSQL/MySQL format style)
+   - ``ParameterStyle.NAMED_COLON`` - ``:name`` (Named parameters for Oracle, SQLite)
+   - ``ParameterStyle.NAMED_AT`` - ``@name`` (BigQuery named parameters)
+   - ``ParameterStyle.NAMED_PYFORMAT`` - ``%(name)s`` (Python format style)
 
-   **Conversion:**
+.. autoclass:: ParameterConverter
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-   .. code-block:: python
+   Converts parameters between different styles.
 
-      # Input with named parameters
-      sql = "SELECT * FROM users WHERE name = :name AND age > :age"
-      params = {"name": "Alice", "age": 25}
+.. autoclass:: ParameterValidator
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-      # Convert to PostgreSQL style ($1, $2)
-      binder = ParameterBinder(sql, params, target_style="$")
-      converted_sql = binder.bind()
-      # Result: "SELECT * FROM users WHERE name = $1 AND age > $2"
-      # Parameters: ["Alice", 25]
+   Validates parameter format and style.
 
-.. autofunction:: convert_parameters
-   :noindex:
+.. autoclass:: ParameterStyleConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-.. autofunction:: bind_parameters
-   :noindex:
+   Configuration for parameter style handling.
+
+.. autoclass:: ParameterStyle
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Enum defining supported parameter styles.
 
 Result Processing
 =================
@@ -159,161 +168,104 @@ Result Processing
       # Get scalar value
       count = result.scalar()  # First column of first row
 
-.. autoclass:: ResultMapper
-   :members:
-   :undoc-members:
-   :show-inheritance:
+**Type Mapping:**
 
-   Maps raw database results to Python types.
+SQLResult supports mapping to various Python type systems:
 
-   **Supported type systems:**
+- Pydantic models
+- msgspec.Struct
+- attrs classes
+- dataclasses
+- TypedDict
+- Plain dicts
 
-   - Pydantic models
-   - msgspec.Struct
-   - attrs classes
-   - dataclasses
-   - TypedDict
-   - Plain dicts
-
-   **Example:**
-
-   .. code-block:: python
-
-      from msgspec import Struct
-
-      class User(Struct):
-          id: int
-          name: str
-          email: str
-
-      mapper = ResultMapper(User)
-      users = mapper.map_all(result.data)
-
-.. autoclass:: ResultColumn
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-   Metadata about a result column.
-
-   **Attributes:**
-
-   - ``name`` - Column name
-   - ``type`` - Database type
-   - ``nullable`` - Whether NULL is allowed
-   - ``table`` - Source table name
-   - ``schema`` - Source schema name
+Type mapping is handled directly by methods on the ``SQLResult`` class such as ``as_type()``, ``as_type_one()``, and ``as_type_one_or_none()``.
 
 SQL Compilation
 ===============
 
 .. currentmodule:: sqlspec.core.compiler
 
-.. autoclass:: SQLCompiler
+.. autoclass:: SQLProcessor
    :members:
    :undoc-members:
    :show-inheritance:
 
-   Compiles and validates SQL using sqlglot.
+   SQL processor with compilation and caching.
 
-   **Features:**
-
-   - Syntax validation
-   - Dialect-specific compilation
-   - Query analysis
-   - Optimization hints
-   - Error reporting
+   Processes SQL statements by compiling them into executable format with
+   parameter substitution. Includes LRU-style caching for compilation results
+   to avoid re-processing identical statements.
 
    **Usage:**
 
    .. code-block:: python
 
-      compiler = SQLCompiler(dialect="postgres")
+      from sqlspec.core.statement import StatementConfig
+      from sqlspec.core.compiler import SQLProcessor
 
-      # Compile SQL
-      compiled = compiler.compile("SELECT * FROM users WHERE active = TRUE")
+      config = StatementConfig(dialect="postgres")
+      processor = SQLProcessor(config)
 
-      # Validate SQL
-      is_valid = compiler.validate("SELECT * FROM users")
+      # Compile SQL with parameters
+      compiled = processor.compile(
+          "SELECT * FROM users WHERE active = ?",
+          parameters=[True]
+      )
 
-      # Analyze SQL
-      analysis = compiler.analyze("""
-          SELECT u.name, COUNT(o.id)
-          FROM users u
-          LEFT JOIN orders o ON u.id = o.user_id
-          GROUP BY u.id
-      """)
-
-.. autoclass:: CompilerConfig
+.. autoclass:: CompiledSQL
    :members:
    :undoc-members:
    :show-inheritance:
 
-   Configuration for SQL compilation.
+   Compiled SQL result containing the compiled SQL text, processed parameters,
+   operation type, and execution metadata.
 
-   **Options:**
+.. autoclass:: OperationType
+   :members:
+   :undoc-members:
 
-   - ``dialect`` - SQL dialect (postgres, mysql, sqlite, etc.)
-   - ``validate`` - Enable validation
-   - ``pretty`` - Pretty-print compiled SQL
-   - ``optimize`` - Apply optimizations
-
-.. autofunction:: compile_sql
-   :noindex:
-
-.. autofunction:: validate_sql
-   :noindex:
+   Type alias for SQL operation types (SELECT, INSERT, UPDATE, DELETE, etc.).
 
 Statement Caching
 =================
 
 .. currentmodule:: sqlspec.core.cache
 
-.. autoclass:: StatementCache
+.. autoclass:: UnifiedCache
    :members:
    :undoc-members:
    :show-inheritance:
 
-   LRU cache for compiled SQL statements.
+   Unified LRU cache for SQL statements and compilation results.
 
-   **Features:**
+.. autoclass:: MultiLevelCache
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-   - Configurable size
-   - Thread-safe
-   - Automatic eviction
-   - Cache statistics
-
-   **Usage:**
-
-   .. code-block:: python
-
-      cache = StatementCache(max_size=1000)
-
-      # Store statement
-      cache.set("SELECT * FROM users", compiled_stmt)
-
-      # Retrieve statement
-      stmt = cache.get("SELECT * FROM users")
-
-      # Clear cache
-      cache.clear()
-
-      # Get statistics
-      stats = cache.stats()
-      print(f"Hits: {stats.hits}, Misses: {stats.misses}")
+   Multi-level cache system for different caching strategies.
 
 .. autoclass:: CacheConfig
    :members:
    :undoc-members:
    :show-inheritance:
 
-   Configuration for statement caching.
+   Configuration for caching behavior.
 
-   **Options:**
+.. autoclass:: CacheStats
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-   - ``max_size`` - Maximum number of cached statements
-   - ``ttl`` - Time to live in seconds
-   - ``enabled`` - Enable/disable caching
+   Cache statistics tracking hits, misses, and evictions.
+
+.. autoclass:: CacheKey
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Cache key for tracking cached items.
 
 SQL Filters
 ===========
@@ -322,23 +274,14 @@ SQL Filters
 
 Filters transform SQL statements by adding or modifying clauses.
 
-.. autoclass:: SQLFilter
+.. autoclass:: StatementFilter
    :members:
    :undoc-members:
    :show-inheritance:
 
-   Base class for SQL filters.
+   Base class for SQL statement filters.
 
-   **Protocol:**
-
-   .. code-block:: python
-
-      from sqlspec.protocols import SQLFilterProtocol
-
-      class CustomFilter(SQLFilterProtocol):
-          def apply(self, sql: SQL) -> SQL:
-              # Transform SQL
-              return modified_sql
+   All filters implement the ``append_to_statement()`` method to modify SQL statements.
 
 Built-in Filters
 ----------------
@@ -355,7 +298,7 @@ Built-in Filters
       from sqlspec.core.filters import LimitOffsetFilter
 
       filter = LimitOffsetFilter(limit=10, offset=20)
-      filtered_sql = filter.apply(base_sql)
+      filtered_sql = filter.append_to_statement(base_sql)
       # Adds: LIMIT 10 OFFSET 20
 
 .. autoclass:: OrderByFilter
@@ -369,8 +312,8 @@ Built-in Filters
 
       from sqlspec.core.filters import OrderByFilter
 
-      filter = OrderByFilter("created_at", "desc")
-      filtered_sql = filter.apply(base_sql)
+      filter = OrderByFilter(field_name="created_at", sort_order="desc")
+      filtered_sql = filter.append_to_statement(base_sql)
       # Adds: ORDER BY created_at DESC
 
 .. autoclass:: SearchFilter
@@ -384,24 +327,9 @@ Built-in Filters
 
       from sqlspec.core.filters import SearchFilter
 
-      filter = SearchFilter("name", "John", operator="ILIKE")
-      filtered_sql = filter.apply(base_sql)
+      filter = SearchFilter(field_name="name", value="John", operator="ILIKE")
+      filtered_sql = filter.append_to_statement(base_sql)
       # Adds: WHERE name ILIKE '%John%'
-
-.. autoclass:: WhereFilter
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-   Adds WHERE condition.
-
-   .. code-block:: python
-
-      from sqlspec.core.filters import WhereFilter
-
-      filter = WhereFilter("active = TRUE")
-      filtered_sql = filter.apply(base_sql)
-      # Adds: WHERE active = TRUE
 
 Filter Composition
 ------------------
@@ -420,13 +348,13 @@ Filters can be composed and chained:
    base_sql = SQL("SELECT * FROM users")
 
    # Apply multiple filters
-   filtered = base_sql.copy()
-   for filter in [
-       SearchFilter("name", "Alice"),
-       OrderByFilter("created_at", "desc"),
-       LimitOffsetFilter(10, 0)
+   filtered = base_sql
+   for filter_obj in [
+       SearchFilter(field_name="name", value="Alice"),
+       OrderByFilter(field_name="created_at", sort_order="desc"),
+       LimitOffsetFilter(limit=10, offset=0)
    ]:
-       filtered = filter.apply(filtered)
+       filtered = filter_obj.append_to_statement(filtered)
 
    # Result: SELECT * FROM users
    #         WHERE name ILIKE '%Alice%'
@@ -436,28 +364,14 @@ Filters can be composed and chained:
 Type Conversions
 ================
 
-.. currentmodule:: sqlspec.core.converters
+.. currentmodule:: sqlspec.core.type_conversion
 
-.. autoclass:: TypeConverter
+.. autoclass:: BaseTypeConverter
    :members:
    :undoc-members:
    :show-inheritance:
 
-   Converts between Python types and database types.
-
-   **Supported conversions:**
-
-   - Python datetime <-> Database timestamp
-   - Python Decimal <-> Database numeric
-   - Python UUID <-> Database UUID/text
-   - Python Enum <-> Database text/int
-   - Python bool <-> Database boolean/int
-
-.. autofunction:: python_to_db
-   :noindex:
-
-.. autofunction:: db_to_python
-   :noindex:
+   Base class for type conversion between Python types and database types.
 
 Advanced Features
 =================
@@ -542,10 +456,10 @@ Performance Tips
 
    .. code-block:: python
 
-      # Faster
+      # Positional parameters
       stmt = SQL("SELECT * FROM users WHERE id = ?", 123)
 
-      # Slower (requires parameter parsing)
+      # Named parameters (requires parsing)
       stmt = SQL("SELECT * FROM users WHERE id = :id", id=123)
 
 See Also

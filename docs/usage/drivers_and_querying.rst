@@ -54,10 +54,9 @@ SQLSpec drivers follow a layered architecture:
 
    # Typical driver usage
    spec = SQLSpec()
-   config = AsyncpgConfig(pool_config={...})  # Config layer
-   spec.add_config(config)                     # Registers pool
+   db = spec.add_config(AsyncpgConfig(pool_config={...}))  # Config layer, registers pool
 
-   async with spec.provide_session(config) as session:  # Session layer
+   async with spec.provide_session(db) as session:  # Session layer
        result = await session.execute("SELECT 1")       # Driver layer
 
 PostgreSQL Drivers
@@ -74,16 +73,17 @@ High-performance async PostgreSQL driver with native connection pooling.
    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
    spec = SQLSpec()
-   config = AsyncpgConfig(
-       pool_config={
-           "dsn": "postgresql://user:pass@localhost:5432/mydb",
-           "min_size": 10,
-           "max_size": 20,
-       }
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={
+               "dsn": "postgresql://user:pass@localhost:5432/mydb",
+               "min_size": 10,
+               "max_size": 20,
+           }
+       )
    )
-   spec.add_config(config)
 
-   async with spec.provide_session(config) as session:
+   async with spec.provide_session(db) as session:
        # Basic query
        result = await session.execute("SELECT * FROM users WHERE id = $1", 1)
        user = result.one()
@@ -442,7 +442,7 @@ Execute a SELECT query and return all rows.
 
 .. code-block:: python
 
-   users = session.select("SELECT * FROM users WHERE status = ?", "active")
+   users = session.execute("SELECT * FROM users WHERE status = ?", "active")
    # Returns list of dictionaries: [{"id": 1, "name": "Alice", ...}, ...]
 
 select_one()
@@ -570,7 +570,7 @@ Context Manager Transactions
 .. code-block:: python
 
    async with spec.provide_session(config) as session:
-       async with session.begin_transaction():
+       async with session.begin():
            await session.execute("UPDATE accounts SET balance = balance - 100 WHERE id = ?", 1)
            await session.execute("UPDATE accounts SET balance = balance + 100 WHERE id = ?", 2)
            # Auto-commits on success, auto-rollbacks on exception

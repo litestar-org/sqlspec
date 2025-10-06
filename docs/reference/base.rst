@@ -32,66 +32,24 @@ SQLSpec Registry
       from sqlspec.adapters.asyncpg import AsyncpgConfig
 
       sql = SQLSpec()
-      config = AsyncpgConfig(
-          pool_config={"host": "localhost", "database": "mydb"}
+      db = sql.add_config(
+          AsyncpgConfig(
+              pool_config={"host": "localhost", "database": "mydb"}
+          )
       )
-      sql.add_config(config)
 
-      async with sql.provide_session(config) as session:
+      async with sql.provide_session(db) as session:
           result = await session.execute("SELECT * FROM users")
 
 Configuration Types
 ===================
 
-.. autoclass:: SQLConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-   Base class for all database adapter configurations.
-
-   **Adapter-specific configs:**
-
-   - :class:`sqlspec.adapters.asyncpg.AsyncpgConfig` - PostgreSQL (asyncpg)
-   - :class:`sqlspec.adapters.psycopg.PsycopgConfig` - PostgreSQL (psycopg)
-   - :class:`sqlspec.adapters.sqlite.SqliteConfig` - SQLite (sync)
-   - :class:`sqlspec.adapters.aiosqlite.AiosqliteConfig` - SQLite (async)
-   - :class:`sqlspec.adapters.duckdb.DuckDBConfig` - DuckDB
-   - :class:`sqlspec.adapters.asyncmy.AsyncmyConfig` - MySQL
-   - :class:`sqlspec.adapters.oracledb.OracleDBConfig` - Oracle
-   - :class:`sqlspec.adapters.bigquery.BigQueryConfig` - BigQuery
-   - :class:`sqlspec.adapters.adbc.ADBCConfig` - ADBC
+All database adapter configurations inherit from base protocol classes defined in ``sqlspec.config``.
 
 Connection Pooling
 ==================
 
-.. autoclass:: ConnectionPoolConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-   Configuration for connection pooling behavior.
-
-   **Supported by:**
-
-   - AsyncPG (native pooling)
-   - Psycopg (psycopg_pool)
-   - Other adapters (where available)
-
-   **Example:**
-
-   .. code-block:: python
-
-      from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
-
-      config = AsyncpgConfig(
-          pool_config=AsyncpgPoolConfig(
-              dsn="postgresql://user:pass@localhost/db",
-              min_size=5,
-              max_size=20,
-              timeout=30.0
-          )
-      )
+Connection pooling is configured via adapter-specific TypedDicts passed to the ``pool_config`` parameter.
 
 Session Management
 ==================
@@ -99,21 +57,7 @@ Session Management
 Session Protocols
 -----------------
 
-.. autoclass:: sqlspec.protocols.SessionProtocol
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-   Protocol defining the interface for database sessions.
-
-   **Key methods:**
-
-   - ``execute()`` - Execute SQL and return results
-   - ``execute_many()`` - Execute SQL for multiple parameter sets
-   - ``select()`` - Execute SELECT and return all rows
-   - ``select_one()`` - Execute SELECT and return one row (error if none)
-   - ``select_one_or_none()`` - Execute SELECT and return one row or None
-   - ``select_value()`` - Execute SELECT and return a scalar value
+Sessions are provided by driver adapter classes: ``SyncDriverAdapterBase`` and ``AsyncDriverAdapterBase``.
 
 .. autoclass:: sqlspec.protocols.AsyncSessionProtocol
    :members:
@@ -154,15 +98,15 @@ Manual lifecycle control:
 .. code-block:: python
 
    sql = SQLSpec()
-   sql.add_config(config)
+   db = sql.add_config(AsyncpgConfig(pool_config={...}))
 
    # Startup pools explicitly
-   await sql.on_startup()
+   # Pools created lazily on first use
 
    # ... application runs ...
 
    # Shutdown pools explicitly
-   await sql.on_shutdown()
+   await sql.close_all_pools()
 
 Configuration Registry
 ======================
@@ -177,18 +121,16 @@ SQLSpec supports multiple databases simultaneously:
    sql = SQLSpec()
 
    # Add PostgreSQL
-   pg_config = AsyncpgConfig(...)
-   sql.add_config(pg_config)
+   pg_db = sql.add_config(AsyncpgConfig(...))
 
    # Add SQLite
-   sqlite_config = SqliteConfig(...)
-   sql.add_config(sqlite_config)
+   sqlite_db = sql.add_config(SqliteConfig(...))
 
    # Get sessions for each
-   async with sql.provide_session(pg_config) as pg_session:
+   async with sql.provide_session(pg_db) as pg_session:
        users = await pg_session.select("SELECT * FROM users")
 
-   async with sql.provide_session(sqlite_config) as sqlite_session:
+   async with sql.provide_session(sqlite_db) as sqlite_session:
        cache = await sqlite_session.select("SELECT * FROM cache")
 
 Configuration Lookup

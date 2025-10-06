@@ -25,7 +25,7 @@ Synchronous Driver
 
 .. currentmodule:: sqlspec.driver._sync
 
-.. autoclass:: BaseSyncDriver
+.. autoclass:: SyncDriverAdapterBase
    :members:
    :undoc-members:
    :show-inheritance:
@@ -46,7 +46,7 @@ Asynchronous Driver
 
 .. currentmodule:: sqlspec.driver._async
 
-.. autoclass:: BaseAsyncDriver
+.. autoclass:: AsyncDriverAdapterBase
    :members:
    :undoc-members:
    :show-inheritance:
@@ -90,8 +90,7 @@ Both sync and async drivers support transaction context managers:
 .. code-block:: python
 
    # Async transactions
-   async with driver.transaction():
-       await driver.execute("INSERT INTO users VALUES (?, ?)", "Bob", 25)
+          await driver.execute("INSERT INTO users VALUES (?, ?)", "Bob", 25)
        await driver.execute("UPDATE accounts SET balance = balance - 50 WHERE user = ?", "Bob")
 
 Connection Pooling

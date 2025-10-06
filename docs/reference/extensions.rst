@@ -61,9 +61,11 @@ Plugin
       from sqlspec.extensions.litestar import SQLSpecPlugin
 
       sql = SQLSpec()
-      sql.add_config(AsyncpgConfig(
-          pool_config={"dsn": "postgresql://localhost/db"}
-      ))
+      db = sql.add_config(
+          AsyncpgConfig(
+              pool_config={"dsn": "postgresql://localhost/db"}
+          )
+      )
 
       plugin = SQLSpecPlugin(sqlspec=sql)
 
@@ -77,52 +79,17 @@ Plugin
 Configuration
 -------------
 
-.. autoclass:: SQLSpecConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
-   Configuration class for Litestar SQLSpec plugin.
 
 Session Backend
 ---------------
 
-.. autoclass:: SQLSpecSessionBackend
+.. autoclass:: BaseSQLSpecStore
    :members:
    :undoc-members:
    :show-inheritance:
 
-   Session backend for Litestar using SQLSpec.
-
-FastAPI Integration
-===================
-
-.. currentmodule:: sqlspec.extensions.fastapi
-
-.. automodule:: sqlspec.extensions.fastapi
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Flask Integration
-=================
-
-.. currentmodule:: sqlspec.extensions.flask
-
-.. automodule:: sqlspec.extensions.flask
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Sanic Integration
-=================
-
-.. currentmodule:: sqlspec.extensions.sanic
-
-.. automodule:: sqlspec.extensions.sanic
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   Abstract base class for session storage backends.
 
 Starlette Integration
 =====================

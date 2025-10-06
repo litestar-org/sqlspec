@@ -30,17 +30,18 @@ Basic Setup
    from sqlspec.adapters.asyncpg import AsyncpgConfig
    from sqlspec.extensions.litestar import SQLSpecPlugin
 
-   # Configure database
-   config = AsyncpgConfig(
-       pool_config={
-           "dsn": "postgresql://localhost/mydb",
-           "min_size": 10,
-           "max_size": 20,
-       }
+   # Configure database and create plugin
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={
+               "dsn": "postgresql://localhost/mydb",
+               "min_size": 10,
+               "max_size": 20,
+           }
+       )
    )
-
-   # Create plugin
-   sqlspec_plugin = SQLSpecPlugin(config=config)
+   sqlspec_plugin = SQLSpecPlugin(sqlspec=spec)
 
    # Create Litestar app
    app = Litestar(
@@ -171,7 +172,7 @@ Customize the dependency injection keys:
    @get("/users")
    async def list_users(session: AsyncDriverAdapterBase) -> list:
        result = await session.execute("SELECT * FROM users")
-       return result.data
+       return result.rows
 
 Multiple Database Configurations
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -237,15 +238,17 @@ Use SQLSpec as a session backend for Litestar:
    from sqlspec.extensions.litestar import SQLSpecPlugin, BaseSQLSpecStore
 
    # Configure with session backend
-   config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/db"},
-       migration_config={
-           "script_location": "migrations",
-           "include_extensions": ["litestar"],  # Include session table migrations
-       }
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://localhost/db"},
+           migration_config={
+               "script_location": "migrations",
+               "include_extensions": ["litestar"],  # Include session table migrations
+           }
+       )
    )
-
-   plugin = SQLSpecPlugin(config=config)
+   sqlspec_plugin = SQLSpecPlugin(sqlspec=spec)
 
    # Session middleware with SQLSpec backend
    app = Litestar(
@@ -310,14 +313,15 @@ Basic Setup
 
    # Configure database
    spec = SQLSpec()
-   config = AsyncpgConfig(
-       pool_config={
-           "dsn": "postgresql://localhost/mydb",
-           "min_size": 10,
-           "max_size": 20,
-       }
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={
+               "dsn": "postgresql://localhost/mydb",
+               "min_size": 10,
+               "max_size": 20,
+           }
+       )
    )
-   spec.add_config(config)
 
    # Lifespan context manager
    @asynccontextmanager
@@ -392,20 +396,18 @@ Support multiple databases with different dependencies:
 .. code-block:: python
 
    # Main database
-   main_config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/main"})
-   spec.add_config(main_config)
+   main_db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/main"}))
 
    # Analytics database
-   analytics_config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/analytics"})
-   spec.add_config(analytics_config)
+   analytics_db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/analytics"}))
 
    # Dependency functions
    async def get_main_db():
-       async with spec.provide_session(main_config) as session:
+       async with spec.provide_session(main_db) as session:
            yield session
 
    async def get_analytics_db():
-       async with spec.provide_session(analytics_config) as session:
+       async with spec.provide_session(analytics_db) as session:
            yield session
 
    # Use in handlers
@@ -439,12 +441,11 @@ Basic Setup
 
    # Initialize SQLSpec
    spec = SQLSpec()
-   config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"})
-   spec.add_config(config)
+   db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"}))
 
    # Store in app context
    app.ctx.sqlspec = spec
-   app.ctx.db_config = config
+   app.ctx.db_config = db
 
    # Cleanup on shutdown
    @app.before_server_stop
@@ -485,7 +486,7 @@ Middleware for Automatic Sessions
    @app.get("/users")
    async def list_users(request: Request):
        result = await request.ctx.db.execute("SELECT * FROM users")
-       return json(result.data)
+       return json(result.rows)
 
 Flask Integration
 -----------------
@@ -505,8 +506,7 @@ Basic Setup
 
    # Initialize SQLSpec
    spec = SQLSpec()
-   config = SqliteConfig(pool_config={"database": "app.db"})
-   spec.add_config(config)
+   db = spec.add_config(SqliteConfig(pool_config={"database": "app.db"}))
 
 Using Request Context
 ^^^^^^^^^^^^^^^^^^^^^
@@ -515,7 +515,7 @@ Using Request Context
 
    def get_db():
        if 'db' not in g:
-           g.db = spec.provide_session(config).__enter__()
+           g.db = spec.provide_session(db).__enter__()
        return g.db
 
    @app.teardown_appcontext
@@ -600,8 +600,9 @@ For simple applications with a single database:
            if cls._instance is None:
                cls._instance = super().__new__(cls)
                cls._spec = SQLSpec()
-               cls._config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"})
-               cls._spec.add_config(cls._config)
+               cls._config = cls._spec.add_config(
+                   AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"})
+               )
            return cls._instance
 
        async def session(self):
@@ -620,7 +621,9 @@ Best Practices
 .. code-block:: python
 
    # Prefer Litestar plugin over manual setup
-   app = Litestar(plugins=[SQLSpecPlugin(config=config)])
+   spec = SQLSpec()
+   db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}))
+   app = Litestar(plugins=[SQLSpecPlugin(sqlspec=spec)])
 
 **2. Always Clean Up Pools**
 
@@ -697,10 +700,9 @@ Testing with Framework Integration
    @pytest.fixture
    async def test_db():
        spec = SQLSpec()
-       config = SqliteConfig(pool_config={"database": ":memory:"})
-       spec.add_config(config)
+       db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
-       async with spec.provide_session(config) as session:
+       async with spec.provide_session(db) as session:
            # Set up test schema
            await session.execute("""
                CREATE TABLE users (

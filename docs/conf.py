@@ -168,6 +168,21 @@ html_context = {
 }
 
 
+# Mermaid configuration
+mermaid_version = "11.2.0"
+mermaid_init_js = """
+mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    securityLevel: 'loose',
+    flowchart: {
+        useMaxWidth: true,
+        htmlLabels: true,
+        curve: 'basis'
+    }
+});
+"""
+
 html_theme_options = {
     "logo_target": "/",
     "accent_color": "amber",

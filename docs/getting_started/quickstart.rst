@@ -16,11 +16,10 @@ Let's start with the simplest possible example - executing a query and getting r
 
     # Create SQLSpec instance and configure database
     db_manager = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:"})
-    db_manager.add_config(config)
+    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
     # Execute a query
-    with db_manager.provide_session(config) as session:
+    with db_manager.provide_session(db) as session:
         result = session.execute("SELECT 'Hello, SQLSpec!' as message")
         print(result.get_first())  # {'message': 'Hello, SQLSpec!'}
 
@@ -42,10 +41,9 @@ Let's create a table, insert some data, and query it:
     from sqlspec.adapters.sqlite import SqliteConfig
 
     db_manager = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:"})
-    db_manager.add_config(config)
+    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
-    with db_manager.provide_session(config) as session:
+    with db_manager.provide_session(db) as session:
         # Create a table
         session.execute("""
             CREATE TABLE users (
@@ -112,10 +110,9 @@ The real power of SQLSpec comes from type-safe result mapping. Define your data 
         email: str
 
     db_manager = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:"})
-    db_manager.add_config(config)
+    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
-    with db_manager.provide_session(config) as session:
+    with db_manager.provide_session(db) as session:
         # Setup
         session.execute("""
             CREATE TABLE users (id INTEGER, name TEXT, email TEXT)
@@ -166,10 +163,9 @@ SQLSpec supports async/await for non-blocking database operations. Here's the sa
 
     async def main() -> None:
         db_manager = SQLSpec()
-        config = AiosqliteConfig(pool_config={"database": ":memory:"})
-        db_manager.add_config(config)
+        db = db_manager.add_config(AiosqliteConfig(pool_config={"database": ":memory:"}))
 
-        async with db_manager.provide_session(config) as session:
+        async with db_manager.provide_session(db) as session:
             # Create table
             await session.execute("""
                 CREATE TABLE users (id INTEGER, name TEXT, email TEXT)
@@ -212,18 +208,19 @@ One of SQLSpec's strengths is the consistent API across databases. Here's the sa
 
     async def main() -> None:
         db_manager = SQLSpec()
-        config = AsyncpgConfig(
-            pool_config={
-                "host": "localhost",
-                "port": 5432,
-                "user": "postgres",
-                "password": "postgres",
-                "database": "mydb",
-            }
+        db = db_manager.add_config(
+            AsyncpgConfig(
+                pool_config={
+                    "host": "localhost",
+                    "port": 5432,
+                    "user": "postgres",
+                    "password": "postgres",
+                    "database": "mydb",
+                }
+            )
         )
-        db_manager.add_config(config)
 
-        async with db_manager.provide_session(config) as session:
+        async with db_manager.provide_session(db) as session:
             # PostgreSQL uses $1, $2 for parameters instead of ?
             user = await session.select_one(
                 "SELECT * FROM users WHERE id = $1",
@@ -252,17 +249,14 @@ Need to work with multiple databases? Register multiple configs:
     db_manager = SQLSpec()
 
     # Register multiple databases
-    sqlite_config = SqliteConfig(pool_config={"database": "app.db"})
-    duckdb_config = DuckDBConfig(pool_config={"database": "analytics.duckdb"})
-
-    db_manager.add_config(sqlite_config)
-    db_manager.add_config(duckdb_config)
+    sqlite_db = db_manager.add_config(SqliteConfig(pool_config={"database": "app.db"}))
+    duckdb_db = db_manager.add_config(DuckDBConfig(pool_config={"database": "analytics.duckdb"}))
 
     # Use different databases
-    with db_manager.provide_session(sqlite_config) as sqlite_session:
+    with db_manager.provide_session(sqlite_db) as sqlite_session:
         users = sqlite_session.select("SELECT * FROM users")
 
-    with db_manager.provide_session(duckdb_config) as duckdb_session:
+    with db_manager.provide_session(duckdb_db) as duckdb_session:
         analytics = duckdb_session.select("SELECT * FROM events")
 
 Transaction Support
@@ -276,18 +270,17 @@ SQLSpec automatically manages transactions. By default, each session is a transa
     from sqlspec.adapters.sqlite import SqliteConfig
 
     db_manager = SQLSpec()
-    config = SqliteConfig(pool_config={"database": "mydb.db"})
-    db_manager.add_config(config)
+    db = db_manager.add_config(SqliteConfig(pool_config={"database": "mydb.db"}))
 
     # Transaction committed on successful exit
-    with db_manager.provide_session(config) as session:
+    with db_manager.provide_session(db) as session:
         session.execute("INSERT INTO users (name) VALUES (?)", "Alice")
         session.execute("INSERT INTO orders (user_name) VALUES (?)", "Alice")
         # Both committed together
 
     # Transaction rolled back on exception
     try:
-        with db_manager.provide_session(config) as session:
+        with db_manager.provide_session(db) as session:
             session.execute("INSERT INTO users (name) VALUES (?)", "Bob")
             raise ValueError("Something went wrong!")
     except ValueError:
@@ -317,10 +310,9 @@ For those who prefer programmatic query construction, SQLSpec includes an experi
     )
 
     db_manager = SQLSpec()
-    config = SqliteConfig(pool_config={"database": ":memory:"})
-    db_manager.add_config(config)
+    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
-    with db_manager.provide_session(config) as session:
+    with db_manager.provide_session(db) as session:
         # Setup
         session.execute("""
             CREATE TABLE users (id INTEGER, name TEXT, email TEXT, age INTEGER)

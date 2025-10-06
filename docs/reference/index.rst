@@ -126,8 +126,8 @@ Common Workflows
 
 1. Import adapter config: ``from sqlspec.adapters.asyncpg import AsyncpgConfig``
 2. Create SQLSpec instance: ``sql = SQLSpec()``
-3. Add configuration: ``sql.add_config(AsyncpgConfig(...))``
-4. Get session: ``async with sql.provide_session(config) as session:``
+3. Add configuration: ``db = sql.add_config(AsyncpgConfig(...))``
+4. Get session: ``async with sql.provide_session(db) as session:``
 
 **Building Queries:**
 

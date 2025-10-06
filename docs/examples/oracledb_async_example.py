@@ -6,9 +6,8 @@ container started by `make infra-up`.
 
 import asyncio
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.oracledb import OracleAsyncConfig
-from sqlspec.builder import Select
 
 __all__ = ("main", "oracledb_async_example")
 
@@ -17,19 +16,20 @@ async def oracledb_async_example() -> None:
     """Demonstrate oracledb async database driver usage with query mixins."""
     # Create SQLSpec instance with Oracle (connects to dev container)
     spec = SQLSpec()
-    config = OracleAsyncConfig(
-        pool_config={
-            "host": "localhost",
-            "port": 1522,
-            "user": "system",
-            "password": "oracle",
-            "service_name": "FREEPDB1",
-        }
+    db = spec.add_config(
+        OracleAsyncConfig(
+            pool_config={
+                "host": "localhost",
+                "port": 1522,
+                "user": "system",
+                "password": "oracle",
+                "service_name": "FREEPDB1",
+            }
+        )
     )
-    spec.add_config(config)
 
     # Get a driver directly (drivers now have built-in query methods)
-    async with spec.provide_session(config) as driver:
+    async with spec.provide_session(db) as driver:
         # Create a table
         await driver.execute("""
             BEGIN
@@ -93,12 +93,12 @@ async def oracledb_async_example() -> None:
         print(f"Removed {result.rows_affected} employees with low salaries")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
-        query = Select("*").from_("employees").where("department = :1")
+        query = sql.select("*").from_("employees").where("department = :1")
         engineers = await driver.select(query, "Engineering")
         print(f"Engineers: {engineers}")
 
         # Query builder with comparison
-        query = Select("name", "salary").from_("employees").where("salary > :1").order_by("salary DESC")
+        query = sql.select("name", "salary").from_("employees").where("salary > :1").order_by("salary DESC")
         high_earners = await driver.select(query, 80000.0)
         print(f"High earners: {high_earners}")
 

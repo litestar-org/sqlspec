@@ -4,9 +4,8 @@ This example shows how to use the oracledb sync driver with the development Orac
 container started by `make infra-up`.
 """
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.oracledb import OracleSyncConfig
-from sqlspec.builder import Select
 
 __all__ = ("main", "oracledb_sync_example")
 
@@ -15,19 +14,20 @@ def oracledb_sync_example() -> None:
     """Demonstrate oracledb sync database driver usage with query mixins."""
     # Create SQLSpec instance with Oracle (connects to dev container)
     spec = SQLSpec()
-    config = OracleSyncConfig(
-        pool_config={
-            "host": "localhost",
-            "port": 1522,
-            "user": "system",
-            "password": "oracle",
-            "service_name": "FREEPDB1",
-        }
+    db = spec.add_config(
+        OracleSyncConfig(
+            pool_config={
+                "host": "localhost",
+                "port": 1522,
+                "user": "system",
+                "password": "oracle",
+                "service_name": "FREEPDB1",
+            }
+        )
     )
-    spec.add_config(config)
 
     # Get a driver directly (drivers now have built-in query methods)
-    with spec.provide_session(config) as driver:
+    with spec.provide_session(db) as driver:
         # Create a table
         driver.execute("""
             BEGIN
@@ -91,12 +91,12 @@ def oracledb_sync_example() -> None:
         print(f"Removed {result.rows_affected} departments with small budgets")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
-        query = Select("*").from_("departments").where("budget > :1")
+        query = sql.select("*").from_("departments").where("budget > :1")
         large_depts = driver.select(query, 400000.0)
         print(f"Large departments: {large_depts}")
 
         # Query builder with LIKE
-        query = Select("name", "manager_name").from_("departments").where("manager_name LIKE :1").order_by("name")
+        query = sql.select("name", "manager_name").from_("departments").where("manager_name LIKE :1").order_by("name")
         managers_with_a = driver.select(query, "A%")
         print(f"Departments with managers starting with A: {managers_with_a}")
 

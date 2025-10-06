@@ -66,14 +66,15 @@ AsyncPG (Async, High Performance)
    from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
 
    sql = SQLSpec()
-   config = AsyncpgConfig(
-       pool_config=AsyncpgPoolConfig(
-           dsn="postgresql://user:pass@localhost/db",
-           min_size=5,
-           max_size=20
+   db = sql.add_config(
+       AsyncpgConfig(
+           pool_config=AsyncpgPoolConfig(
+               dsn="postgresql://user:pass@localhost/db",
+               min_size=5,
+               max_size=20
+           )
        )
    )
-   sql.add_config(config)
 
 Psycopg (Sync/Async, Modern)
 -----------------------------
@@ -112,16 +113,10 @@ Psycopg (Sync/Async, Modern)
    from sqlspec.adapters.psycopg import PsycopgConfig
 
    # Async usage
-   config = PsycopgConfig(
-       pool_config={"conninfo": "postgresql://user:pass@localhost/db"},
-       is_async=True
-   )
+   config = PsycopgAsyncConfig(pool_config={"conninfo": "postgresql://user:pass@localhost/db"})
 
    # Sync usage
-   config_sync = PsycopgConfig(
-       pool_config={"conninfo": "postgresql://user:pass@localhost/db"},
-       is_async=False
-   )
+   config_sync = PsycopgSyncConfig(pool_config={"conninfo": "postgresql://user:pass@localhost/db"})
 
 psqlpy (Rust-based, Ultra High Performance)
 --------------------------------------------
@@ -318,14 +313,7 @@ Oracle Adapter
 
    from sqlspec.adapters.oracledb import OracleDBConfig
 
-   config = OracleDBConfig(
-       pool_config={
-           "user": "system",
-           "password": "oracle",
-           "dsn": "localhost:1521/xe"
-       },
-       is_async=True
-   )
+   config = OracleAsyncConfig(pool_config={"user": "system", "password": "oracle", "dsn": "localhost:1521/xe"})
 
 BigQuery Adapter
 ================

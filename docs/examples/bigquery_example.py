@@ -4,9 +4,8 @@ This example shows how to use the BigQuery adapter with the development BigQuery
 emulator started by `make infra-up`.
 """
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.bigquery import BigQueryConfig
-from sqlspec.builder import Select
 
 __all__ = ("bigquery_example", "main")
 
@@ -15,11 +14,12 @@ def bigquery_example() -> None:
     """Demonstrate BigQuery database driver usage with query mixins."""
     # Create SQLSpec instance with BigQuery (connects to dev emulator)
     spec = SQLSpec()
-    config = BigQueryConfig(connection_config={"project": "test-project", "api_endpoint": "http://localhost:9050"})
-    spec.add_config(config)
+    db = spec.add_config(
+        BigQueryConfig(connection_config={"project": "test-project", "api_endpoint": "http://localhost:9050"})
+    )
 
     # Get a driver directly (drivers now have built-in query methods)
-    with spec.provide_session(config) as driver:
+    with spec.provide_session(db) as driver:
         # Create a dataset
         driver.execute("CREATE SCHEMA IF NOT EXISTS analytics")
 
@@ -89,13 +89,13 @@ def bigquery_example() -> None:
         print(f"Updated {result.rows_affected} events for user_123")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
-        query = Select("*").from_("analytics.web_events").where("user_id = ?")
+        query = sql.select("*").from_("analytics.web_events").where("user_id = ?")
         user_events = driver.select(query, "user_456")
         print(f"User 456 events: {user_events}")
 
         # Query builder with aggregation
         query = (
-            Select("user_id", "COUNT(*) as event_count")
+            sql.select("user_id", "COUNT(*) as event_count")
             .from_("analytics.web_events")
             .where("event_type = ?")
             .group_by("user_id")

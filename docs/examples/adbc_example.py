@@ -4,9 +4,8 @@ This example shows how to use the ADBC (Arrow Database Connectivity) driver
 with the development PostgreSQL container started by `make infra-up`.
 """
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.adbc import AdbcConfig
-from sqlspec.builder import Select
 
 __all__ = ("adbc_example", "main")
 
@@ -15,8 +14,9 @@ def adbc_example() -> None:
     """Demonstrate ADBC database driver usage with query mixins."""
     # Create SQLSpec instance with ADBC (connects to dev PostgreSQL container)
     spec = SQLSpec()
-    config = AdbcConfig(connection_config={"uri": "postgresql://postgres:postgres@localhost:5433/postgres"})
-    db = spec.add_config(config)
+    db = spec.add_config(
+        AdbcConfig(connection_config={"uri": "postgresql://postgres:postgres@localhost:5433/postgres"})
+    )
 
     # Get a driver directly (drivers now have built-in query methods)
     with spec.provide_session(db) as driver:
@@ -82,7 +82,7 @@ def adbc_example() -> None:
         print(f"Removed {result.rows_affected} low-value metrics")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
-        query = Select("*").from_("analytics_data").where("metric_name = $1")
+        query = sql.select("*").from_("analytics_data").where("metric_name = $1")
         page_view_metrics = driver.select(query, "page_views")
         print(f"Page view metrics: {page_view_metrics}")
 

@@ -1,6 +1,6 @@
-==========================
-The SQLSpec Execution Flow
-==========================
+==============
+Execution Flow
+==============
 
 Understanding how SQLSpec processes a query from input to result is essential for using the library effectively and debugging issues. SQLSpec employs a sophisticated "parse once, transform once, validate once" pipeline that ensures both performance and security.
 
@@ -18,28 +18,28 @@ High-Level Flow Diagram
 
    graph TD
       subgraph "1. User Input"
-         A[SQL String or QueryBuilder] --> B[SQL Object Creation];
+         A[SQL String or QueryBuilder] --> B[SQL Object Creation]
       end
 
       subgraph "2. SQLSpec Core Pipeline"
-         B --> C[Parameter Extraction];
-         C --> D[AST Generation via SQLGlot];
-         D --> E{Validation};
-         E --> F{Transformation};
-         F --> G[SQL Compilation];
+         B --> C[Parameter Extraction]
+         C --> D[AST Generation via SQLGlot]
+         D --> E{Validation}
+         E --> F{Transformation}
+         F --> G[SQL Compilation]
       end
 
       subgraph "3. Driver & Database"
-         G --> H[Driver Execution];
-         H --> I[DBAPI Connection];
-         I --> J[(Database)];
-         J --> K[Raw Results];
+         G --> H[Driver Execution]
+         H --> I[DBAPI Connection]
+         I --> J[(Database)]
+         J --> K[Raw Results]
       end
 
       subgraph "4. Result Handling"
-         K --> L[SQLResult Object];
-         L --> M{Schema Mapping};
-         M --> N[Typed Python Objects];
+         K --> L[SQLResult Object]
+         L --> M{Schema Mapping}
+         M --> N[Typed Python Objects]
       end
 
       style E fill:#f9f,stroke:#333,stroke-width:2px
@@ -70,10 +70,10 @@ The execution flow begins when you create a SQL object. SQLSpec accepts multiple
 
 .. code-block:: python
 
-   from sqlspec.builder import Select
+   from sqlspec import sql as sql_factory
 
    # Build SQL programmatically
-   query = Select("id", "name", "email").from_("users").where("status = ?")
+   query = sql_factory.select("id", "name", "email").from_("users").where("status = ?")
    sql = SQL(query, "active")
 
 **From SQL Files**
@@ -109,8 +109,8 @@ The first step extracts and preserves parameter information before any SQL modif
    # Params: [1, 'active']
    #
    # Result: Positional parameter mapping created
-   #         Position 0 ' value: 1
-   #         Position 1 ' value: 'active'
+   #         Position 0 → value: 1
+   #         Position 1 → value: 'active'
 
 This step uses ``ParameterValidator`` to ensure parameters are properly formatted and positions are tracked.
 
@@ -139,121 +139,44 @@ Instead of treating SQL as plain text, SQLSpec uses the AST to:
 - Detect performance issues (missing JOINs, unbounded queries)
 - Transform queries safely (add filters, parameterize literals)
 
-**Step 3: Validation**
+**Step 3: Compilation**
 
-The AST is passed through multiple validators to check for potential issues:
-
-.. code-block:: python
-
-   from sqlspec.core.validation import (
-       SecurityValidator,
-       PerformanceValidator,
-       DMLSafetyValidator
-   )
-
-**SecurityValidator**
-
-Detects SQL injection patterns and dangerous constructs:
-
-- Tautologies (``OR 1=1``, ``OR 'x'='x'``)
-- Comment-based injection attempts
-- Dangerous keywords (``EXEC``, ``xp_cmdshell``)
-- Union-based injection patterns
+The AST is compiled into the target SQL dialect:
 
 .. code-block:: python
 
-   # BLOCKED: Suspicious tautology pattern
-   SQL("SELECT * FROM users WHERE id = 1 OR 1=1")
+   import sqlglot
 
-   # BLOCKED: Comment injection attempt
-   SQL("SELECT * FROM users WHERE name = 'admin' --'")
-
-**PerformanceValidator**
-
-Identifies potential performance bottlenecks:
-
-- Cartesian products (missing JOIN conditions)
-- Queries without WHERE clauses on large tables
-- SELECT * on tables with many columns
-- Missing LIMIT on potentially large result sets
-
-.. code-block:: python
-
-   # WARNING: Query without WHERE clause
-   SQL("SELECT * FROM large_table")
-
-   # WARNING: Cartesian product detected
-   SQL("SELECT * FROM users, orders")  # Missing JOIN condition
-
-**DMLSafetyValidator**
-
-Enforces safe data modification practices:
-
-- UPDATE without WHERE clause
-- DELETE without WHERE clause
-- Truncation safety checks
-
-.. code-block:: python
-
-   # BLOCKED: DELETE without WHERE
-   SQL("DELETE FROM users")  # Would delete all users!
-
-   # ALLOWED: DELETE with WHERE
-   SQL("DELETE FROM users WHERE inactive = true")
-
-**Step 4: Transformation**
-
-After validation, the AST can be programmatically transformed. SQLSpec includes several built-in transformers:
-
-**Literal Parameterization**
-
-The ``ParameterizeLiterals`` transformer converts hardcoded values into bound parameters:
-
-.. code-block:: python
-
-   # Before transformation:
-   SQL("SELECT * FROM users WHERE status = 'active'")
-
-   # After transformation:
-   # SQL: "SELECT * FROM users WHERE status = ?"
-   # Parameters: ['active']
-
-This improves security and enables database query plan caching.
-
-**Custom Transformations**
-
-Drivers can inject their own transformers. For example, you could:
-
-- Auto-append soft-delete filters (``WHERE deleted_at IS NULL``)
-- Add row-level security filters based on user context
-- Transform DELETE into UPDATE for audit trails
-- Inject tenant isolation filters for multi-tenant applications
-
-.. code-block:: python
-
-   # Example custom transformer
-   class SoftDeleteTransformer:
-       def transform(self, ast):
-           # Add "WHERE deleted_at IS NULL" to all SELECT queries
-           if ast.find(exp.Select):
-               # Inject soft delete filter
-               pass
-
-**Step 5: SQL Compilation**
-
-The final, validated, and transformed AST is compiled back to a SQL string in the target database dialect:
-
-.. code-block:: python
-
-   # Compile for PostgreSQL
-   sql_string = expression.sql(dialect="postgres")
+   # Compile AST to target dialect
+   compiled_sql = expression.sql(dialect="postgres")
    # Result: "SELECT * FROM users WHERE id = $1"
 
-   # Compile for SQLite
-   sql_string = expression.sql(dialect="sqlite")
-   # Result: "SELECT * FROM users WHERE id = ?"
 
-Parameters are prepared in the appropriate style for the database driver (``?``, ``$1``, ``:name``, ``%s``, etc.).
+
+
+**Step 4: Parameter Processing**
+
+Parameters are converted to the appropriate style for the target database:
+
+.. code-block:: python
+
+   # Input parameters: [1, 'active']
+   # Target style: PostgreSQL numeric ($1, $2)
+   # Result: Parameters ready for execution
+
+This ensures compatibility across different database drivers.
+
+**Step 5: Statement Execution**
+
+The compiled SQL and processed parameters are sent to the database:
+
+.. code-block:: python
+
+   # Driver executes compiled SQL with parameters
+   cursor.execute(compiled_sql, parameters)
+   results = cursor.fetchall()
+
+The driver handles database-specific execution patterns and result retrieval.
 
 Stage 3: Driver Execution
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -372,8 +295,8 @@ SQLSpec implements caching at multiple levels:
 
 .. code-block:: python
 
-   # Cache types and their benefits:
-   sql_cache: dict[str, str]              # Compiled SQL strings (12x+ speedup)
+   # Cache types and their purposes:
+   sql_cache: dict[str, str]              # Compiled SQL strings
    optimized_cache: dict[str, Expression] # Post-optimization AST
    builder_cache: dict[str, bytes]        # QueryBuilder serialization
    file_cache: dict[str, CachedSQLFile]   # File loading with checksums
@@ -381,20 +304,20 @@ SQLSpec implements caching at multiple levels:
 
 **Cache Benefits**
 
-- File operations: 12x+ performance improvement
-- Repeated queries: Near-instant compilation
-- AST processing: Cached validation and transformation results
-- Parameter conversion: Reuse for identical patterns
+- Avoids recompiling identical SQL statements
+- Skips redundant AST processing for repeated queries
+- Caches validation and transformation results
+- Reuses parameter conversion for identical patterns
 
 Single-Pass Processing
 ^^^^^^^^^^^^^^^^^^^^^^
 
 Each SQL statement is processed exactly once through the pipeline:
 
-1. Parse once ' AST generation happens once
-2. Transform once ' Modifications applied once to AST
-3. Validate once ' Security and performance checks run once
-4. Compile once ' SQL generation happens once per dialect
+1. Parse once → AST generation happens once
+2. Transform once → Modifications applied once to AST
+3. Validate once → Security and performance checks run once
+4. Compile once → SQL generation happens once per dialect
 
 This eliminates redundant work and ensures consistent results.
 

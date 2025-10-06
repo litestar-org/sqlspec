@@ -27,11 +27,10 @@ The simplest way to use SQLSpec is with default configuration:
    spec = SQLSpec()
 
    # Add database configuration
-   config = SqliteConfig(pool_config={"database": ":memory:"})
-   spec.add_config(config)
+   db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
    # Use the database
-   with spec.provide_session(config) as session:
+   with spec.provide_session(db) as session:
        result = session.execute("SELECT 1")
 
 Database Configurations
@@ -187,11 +186,10 @@ Pool Configuration
 
    # SQLSpec manages pool lifecycle automatically
    spec = SQLSpec()
-   config = AsyncpgConfig(pool_config={...})
-   spec.add_config(config)
+   db = spec.add_config(AsyncpgConfig(pool_config={...}))
 
    # Pool is created on first use
-   async with spec.provide_session(config) as session:
+   async with spec.provide_session(db) as session:
        await session.execute("SELECT 1")
 
    # Clean up all pools on shutdown
@@ -213,11 +211,8 @@ You can create and manage pools manually:
        max_size=20
    )
 
-   # Pass to config
-   config = AsyncpgConfig(pool_instance=pool)
-
-   # Use with SQLSpec
-   spec.add_config(config)
+   # Pass to config and add to SQLSpec
+   db = spec.add_config(AsyncpgConfig(pool_instance=pool))
 
 No-Pooling Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -275,11 +270,7 @@ Control how parameters are handled:
        },
        has_native_list_expansion=False,
        needs_static_script_compilation=False,
-       type_coercion_map={
-           bool: int,                    # Convert bools to ints
-           datetime.datetime: lambda v: v.isoformat(),
-       }
-   )
+          )
 
    statement_config = StatementConfig(
        dialect="postgres",
@@ -307,34 +298,13 @@ SQLSpec supports multiple parameter placeholder styles:
    ParameterStyle.NAMED_AT       # WHERE id = @id
 
    # Format/pyformat (psycopg, MySQL)
-   ParameterStyle.FORMAT         # WHERE id = %s
-   ParameterStyle.PYFORMAT       # WHERE id = %(id)s
+   ParameterStyle.POSITIONAL_PYFORMAT         # WHERE id = %s
+   ParameterStyle.NAMED_PYFORMAT       # WHERE id = %(id)s
 
 Validation Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-Configure security and performance validation:
-
-.. code-block:: python
-
-   from sqlspec.core.validation import (
-       SecurityValidator,
-       PerformanceValidator,
-       DMLSafetyValidator
-   )
-
-   # Create custom validators
-   security_validator = SecurityValidator(
-       check_tautologies=True,
-       check_comments=True,
-       check_dangerous_keywords=True,
-   )
-
-   # Apply via statement config
-   statement_config = StatementConfig(
-       dialect="postgres",
-       enable_validation=True,  # Enables validators
-   )
+Configure security and performance validation.
 
 Disable validation for performance-critical paths where input is trusted:
 
@@ -349,7 +319,7 @@ Disable validation for performance-critical paths where input is trusted:
 Cache Configuration
 -------------------
 
-SQLSpec uses multi-tier caching for 12x+ performance improvements.
+SQLSpec uses multi-tier caching to avoid recompiling SQL statements.
 
 Global Cache Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -386,7 +356,7 @@ Per-Instance Cache Configuration
 Cache Statistics
 ^^^^^^^^^^^^^^^^
 
-Monitor cache performance:
+Monitor cache statistics:
 
 .. code-block:: python
 
@@ -427,17 +397,14 @@ Binding Multiple Configs
    spec = SQLSpec()
 
    # Add multiple configurations
-   sqlite_config = SqliteConfig(pool_config={"database": "cache.db"})
-   postgres_config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
-
-   spec.add_config(sqlite_config)
-   spec.add_config(postgres_config)
+   sqlite_db = spec.add_config(SqliteConfig(pool_config={"database": "cache.db"}))
+   postgres_db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}))
 
    # Use specific configuration
-   with spec.provide_session(sqlite_config) as session:
+   with spec.provide_session(sqlite_db) as session:
        session.execute("SELECT * FROM cache")
 
-   async with spec.provide_session(postgres_config) as session:
+   async with spec.provide_session(postgres_db) as session:
        await session.execute("SELECT * FROM users")
 
 Named Bindings
@@ -448,8 +415,8 @@ Use bind keys for clearer configuration management:
 .. code-block:: python
 
    # Add with bind keys
-   spec.add_config(sqlite_config, bind_key="cache_db")
-   spec.add_config(postgres_config, bind_key="main_db")
+   cache_db = spec.add_config(SqliteConfig(pool_config={"database": "cache.db"}), bind_key="cache_db")
+   main_db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}), bind_key="main_db")
 
    # Access by bind key
    with spec.provide_session("cache_db") as session:
@@ -553,7 +520,7 @@ Always use pooling in production:
 
 **2. Enable Caching**
 
-Enable all cache tiers for best performance:
+Enable caching to avoid recompiling SQL statements:
 
 .. code-block:: python
 

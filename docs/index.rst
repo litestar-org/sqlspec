@@ -1,12 +1,14 @@
-=======
-SQLSpec
-=======
+:title: SQLSpec
+
+.. meta::
+   :description: A type-safe SQL query mapper designed for minimal abstraction between Python and SQL
+   :keywords: SQL, Python, database, query mapper, type-safe
 
 .. container:: title-with-logo
 
     .. raw:: html
 
-        <div class="brand-text">SQLSpec</div>
+        <h1 class="brand-text" aria-label="SQLSpec - Type-safe SQL query mapper">SQLSpec</h1>
 
 **A type-safe SQL query mapper designed for minimal abstraction between Python and SQL.**
 

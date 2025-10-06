@@ -31,8 +31,8 @@ def duckllm_chat(db_session: DuckDBDriver, data: ChatMessage) -> ChatMessage:
     return db_session.to_schema(results or {"message": "No response from DuckLLM"}, schema_type=ChatMessage)
 
 
-sql = SQLSpec()
-sql.add_config(
+spec = SQLSpec()
+db = spec.add_config(
     DuckDBConfig(
         driver_features={
             "extensions": [{"name": "open_prompt"}],
@@ -50,7 +50,7 @@ sql.add_config(
         }
     )
 )
-plugin = SQLSpecPlugin(sqlspec=sql)
+plugin = SQLSpecPlugin(sqlspec=spec)
 app = Litestar(route_handlers=[duckllm_chat], plugins=[plugin], debug=True)
 
 if __name__ == "__main__":

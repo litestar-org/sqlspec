@@ -6,9 +6,8 @@ with the development PostgreSQL container started by `make infra-up`.
 
 import asyncio
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.psqlpy import PsqlpyConfig
-from sqlspec.builder import Select
 
 __all__ = ("main", "psqlpy_example")
 
@@ -17,19 +16,20 @@ async def psqlpy_example() -> None:
     """Demonstrate PSQLPy database driver usage with query mixins."""
     # Create SQLSpec instance with PSQLPy (connects to dev container)
     spec = SQLSpec()
-    config = PsqlpyConfig(
-        pool_config={
-            "host": "localhost",
-            "port": 5433,
-            "username": "postgres",
-            "password": "postgres",
-            "db_name": "postgres",
-        }
+    db = spec.add_config(
+        PsqlpyConfig(
+            pool_config={
+                "host": "localhost",
+                "port": 5433,
+                "username": "postgres",
+                "password": "postgres",
+                "db_name": "postgres",
+            }
+        )
     )
-    spec.add_config(config)
 
     # Get a driver directly (drivers now have built-in query methods)
-    async with spec.provide_session(config) as driver:
+    async with spec.provide_session(db) as driver:
         # Create a table
         await driver.execute("""
             CREATE TABLE IF NOT EXISTS orders (
@@ -88,13 +88,13 @@ async def psqlpy_example() -> None:
         print(f"Removed {result.rows_affected} cancelled orders")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
-        query = Select("*").from_("orders").where("status = $1")
+        query = sql.select("*").from_("orders").where("status = $1")
         pending_orders = await driver.select(query, "pending")
         print(f"Pending orders: {pending_orders}")
 
         # Query builder with comparison
         query = (
-            Select("customer_name", "order_total")
+            sql.select("customer_name", "order_total")
             .from_("orders")
             .where("order_total > $1")
             .order_by("order_total DESC")

@@ -6,9 +6,8 @@ container started by `make infra-up`.
 
 import asyncio
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, sql
 from sqlspec.adapters.asyncmy import AsyncmyConfig
-from sqlspec.builder import Select
 
 __all__ = ("asyncmy_example", "main")
 
@@ -17,13 +16,14 @@ async def asyncmy_example() -> None:
     """Demonstrate asyncmy database driver usage with query mixins."""
     # Create SQLSpec instance with MySQL (connects to dev container)
     spec = SQLSpec()
-    config = AsyncmyConfig(
-        pool_config={"host": "localhost", "port": 3307, "user": "root", "password": "mysql", "database": "test"}
+    db = spec.add_config(
+        AsyncmyConfig(
+            pool_config={"host": "localhost", "port": 3307, "user": "root", "password": "mysql", "database": "test"}
+        )
     )
-    spec.add_config(config)
 
     # Get a driver directly (drivers now have built-in query methods)
-    async with spec.provide_session(config) as driver:
+    async with spec.provide_session(db) as driver:
         # Create a table
         await driver.execute("""
             CREATE TABLE IF NOT EXISTS inventory (
@@ -85,12 +85,12 @@ async def asyncmy_example() -> None:
         print(f"Removed {result.rows_affected} low-stock items")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
-        query = Select("*").from_("inventory").where("supplier = %s")
+        query = sql.select("*").from_("inventory").where("supplier = %s")
         techcorp_items = await driver.select(query, "TechCorp")
         print(f"TechCorp items: {techcorp_items}")
 
         # Query builder with comparison
-        query = Select("item_name", "price").from_("inventory").where("price > %s").order_by("price")
+        query = sql.select("item_name", "price").from_("inventory").where("price > %s").order_by("price")
         expensive_items = await driver.select(query, 200.0)
         print(f"Expensive items: {expensive_items}")
 

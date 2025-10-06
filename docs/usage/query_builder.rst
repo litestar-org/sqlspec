@@ -1,6 +1,6 @@
-====================
-Query Builder (Beta)
-====================
+=============
+Query Builder
+=============
 
 SQLSpec includes an experimental fluent query builder API for programmatically constructing SQL queries. While raw SQL is recommended for most use cases, the query builder is useful for dynamic query construction.
 
@@ -15,11 +15,11 @@ The query builder provides a fluent, chainable API for constructing SQL statemen
 
 .. code-block:: python
 
-   from sqlspec.builder import Select, Insert, Update, Delete
+   from sqlspec import sql
 
    # Build SELECT query
    query = (
-       Select("id", "name", "email")
+       sql.select("id", "name", "email")
        .from_("users")
        .where("status = ?")
        .order_by("created_at DESC")
@@ -63,18 +63,18 @@ Basic SELECT
 
 .. code-block:: python
 
-   from sqlspec.builder import Select
+   from sqlspec import sql
 
    # Simple select
-   query = Select("*").from_("users")
+   query = sql.select("*").from_("users")
    # SQL: SELECT * FROM users
 
    # Specific columns
-   query = Select("id", "name", "email").from_("users")
+   query = sql.select("id", "name", "email").from_("users")
    # SQL: SELECT id, name, email FROM users
 
    # With table alias
-   query = Select("u.id", "u.name").from_("users u")
+   query = sql.select("u.id", "u.name").from_("users u")
    # SQL: SELECT u.id, u.name FROM users u
 
 WHERE Clauses
@@ -83,11 +83,11 @@ WHERE Clauses
 .. code-block:: python
 
    # Simple WHERE
-   query = Select("*").from_("users").where("status = ?")
+   query = sql.select("*").from_("users").where("status = ?")
 
    # Multiple conditions (AND)
    query = (
-       Select("*")
+       sql.select("*")
        .from_("users")
        .where("status = ?")
        .where("created_at > ?")
@@ -96,13 +96,13 @@ WHERE Clauses
 
    # OR conditions
    query = (
-       Select("*")
+       sql.select("*")
        .from_("users")
        .where("status = ? OR role = ?")
    )
 
    # IN clause
-   query = Select("*").from_("users").where("id IN (?, ?, ?)")
+   query = sql.select("*").from_("users").where("id IN (?, ?, ?)")
 
 Dynamic Filtering
 ^^^^^^^^^^^^^^^^^
@@ -111,8 +111,10 @@ Build queries conditionally based on runtime values:
 
 .. code-block:: python
 
+   from sqlspec import sql
+
    def search_users(name=None, email=None, status=None):
-       query = Select("id", "name", "email", "status").from_("users")
+       query = sql.select("id", "name", "email", "status").from_("users")
        params = []
 
        if name:
@@ -139,7 +141,7 @@ JOINs
 
    # INNER JOIN
    query = (
-       Select("u.id", "u.name", "o.total")
+       sql.select("u.id", "u.name", "o.total")
        .from_("users u")
        .join("orders o", "u.id = o.user_id")
    )
@@ -148,7 +150,7 @@ JOINs
 
    # LEFT JOIN
    query = (
-       Select("u.id", "u.name", "COUNT(o.id) as order_count")
+       sql.select("u.id", "u.name", "COUNT(o.id) as order_count")
        .from_("users u")
        .left_join("orders o", "u.id = o.user_id")
        .group_by("u.id", "u.name")
@@ -156,7 +158,7 @@ JOINs
 
    # Multiple JOINs
    query = (
-       Select("u.name", "o.id", "p.name as product")
+       sql.select("u.name", "o.id", "p.name as product")
        .from_("users u")
        .join("orders o", "u.id = o.user_id")
        .join("order_items oi", "o.id = oi.order_id")
@@ -169,23 +171,23 @@ Ordering and Limiting
 .. code-block:: python
 
    # ORDER BY
-   query = Select("*").from_("users").order_by("created_at DESC")
+   query = sql.select("*").from_("users").order_by("created_at DESC")
 
    # Multiple order columns
    query = (
-       Select("*")
+       sql.select("*")
        .from_("users")
        .order_by("status ASC", "created_at DESC")
    )
 
    # LIMIT and OFFSET
-   query = Select("*").from_("users").limit(10).offset(20)
+   query = sql.select("*").from_("users").limit(10).offset(20)
 
    # Pagination helper
    def paginate(page=1, per_page=20):
        offset = (page - 1) * per_page
        return (
-           Select("*")
+           sql.select("*")
            .from_("users")
            .order_by("id")
            .limit(per_page)
@@ -198,18 +200,18 @@ Aggregations
 .. code-block:: python
 
    # COUNT
-   query = Select("COUNT(*) as total").from_("users")
+   query = sql.select("COUNT(*) as total").from_("users")
 
    # GROUP BY
    query = (
-       Select("status", "COUNT(*) as count")
+       sql.select("status", "COUNT(*) as count")
        .from_("users")
        .group_by("status")
    )
 
    # HAVING
    query = (
-       Select("user_id", "COUNT(*) as order_count")
+       sql.select("user_id", "COUNT(*) as order_count")
        .from_("orders")
        .group_by("user_id")
        .having("COUNT(*) > ?")
@@ -217,7 +219,7 @@ Aggregations
 
    # Multiple aggregations
    query = (
-       Select(
+       sql.select(
            "DATE(created_at) as date",
            "COUNT(*) as orders",
            "SUM(total) as revenue"
@@ -231,24 +233,22 @@ Subqueries
 
 .. code-block:: python
 
-   from sqlspec.builder import SubqueryBuilder
-
    # Subquery in WHERE
-   subquery = Select("id").from_("orders").where("total > ?")
+   subquery = sql.select("id").from_("orders").where("total > ?")
    query = (
-       Select("*")
+       sql.select("*")
        .from_("users")
        .where(f"id IN ({subquery})")
    )
 
    # Subquery in FROM
    subquery = (
-       Select("user_id", "COUNT(*) as order_count")
+       sql.select("user_id", "COUNT(*) as order_count")
        .from_("orders")
        .group_by("user_id")
    )
    query = (
-       Select("u.name", "o.order_count")
+       sql.select("u.name", "o.order_count")
        .from_("users u")
        .join(f"({subquery}) o", "u.id = o.user_id")
    )
@@ -261,10 +261,10 @@ Basic INSERT
 
 .. code-block:: python
 
-   from sqlspec.builder import Insert
+   from sqlspec import sql
 
    # Single row insert
-   query = Insert("users").columns("name", "email").values("?", "?")
+   query = sql.insert("users").columns("name", "email").values("?", "?")
    # SQL: INSERT INTO users (name, email) VALUES (?, ?)
 
    result = session.execute(query, "Alice", "alice@example.com")
@@ -276,7 +276,7 @@ Multiple Rows
 
    # Multiple value sets
    query = (
-       Insert("users")
+       sql.insert("users")
        .columns("name", "email")
        .values("?", "?")
        .values("?", "?")
@@ -297,7 +297,7 @@ INSERT with RETURNING
 
    # PostgreSQL RETURNING clause
    query = (
-       Insert("users")
+       sql.insert("users")
        .columns("name", "email")
        .values("?", "?")
        .returning("id", "created_at")
@@ -315,11 +315,11 @@ Basic UPDATE
 
 .. code-block:: python
 
-   from sqlspec.builder import Update
+   from sqlspec import sql
 
    # Update with WHERE
    query = (
-       Update("users")
+       sql.update("users")
        .set("email", "?")
        .where("id = ?")
    )
@@ -335,7 +335,7 @@ Multiple Columns
 
    # Update multiple columns
    query = (
-       Update("users")
+       sql.update("users")
        .set("name", "?")
        .set("email", "?")
        .set("updated_at", "CURRENT_TIMESTAMP")
@@ -349,9 +349,11 @@ Conditional Updates
 
 .. code-block:: python
 
+   from sqlspec import sql
+
    # Dynamic update builder
    def update_user(user_id, **fields):
-       query = Update("users")
+       query = sql.update("users")
        params = []
 
        for field, value in fields.items():
@@ -374,10 +376,10 @@ Basic DELETE
 
 .. code-block:: python
 
-   from sqlspec.builder import Delete
+   from sqlspec import sql
 
    # Delete with WHERE
-   query = Delete("users").where("id = ?")
+   query = sql.delete("users").where("id = ?")
    # SQL: DELETE FROM users WHERE id = ?
 
    result = session.execute(query, 1)
@@ -390,7 +392,7 @@ Multiple Conditions
 
    # Delete with multiple conditions
    query = (
-       Delete("users")
+       sql.delete("users")
        .where("status = ?")
        .where("last_login < ?")
    )
@@ -405,11 +407,11 @@ CREATE TABLE
 
 .. code-block:: python
 
-   from sqlspec.builder import CreateTable
+   from sqlspec import sql
 
    # Create table
    query = (
-       CreateTable("users")
+       sql.create_table("users")
        .column("id", "INTEGER PRIMARY KEY")
        .column("name", "TEXT NOT NULL")
        .column("email", "TEXT UNIQUE NOT NULL")
@@ -423,13 +425,11 @@ DROP TABLE
 
 .. code-block:: python
 
-   from sqlspec.builder import DropTable
-
    # Drop table
-   query = DropTable("users")
+   query = sql.drop_table("users")
 
    # Drop if exists
-   query = DropTable("users").if_exists()
+   query = sql.drop_table("users").if_exists()
 
    session.execute(query)
 
@@ -438,18 +438,16 @@ CREATE INDEX
 
 .. code-block:: python
 
-   from sqlspec.builder import CreateIndex
-
    # Create index
    query = (
-       CreateIndex("idx_users_email")
+       sql.create_index("idx_users_email")
        .on("users")
        .columns("email")
    )
 
    # Unique index
    query = (
-       CreateIndex("idx_users_email")
+       sql.create_index("idx_users_email")
        .on("users")
        .columns("email")
        .unique()
@@ -465,9 +463,7 @@ Window Functions
 
 .. code-block:: python
 
-   from sqlspec.builder import Select
-
-   query = Select(
+   query = sql.select(
        "id",
        "name",
        "salary",
@@ -479,16 +475,16 @@ CASE Expressions
 
 .. code-block:: python
 
-   from sqlspec.builder import Case
+   from sqlspec import sql
 
    case_expr = (
-       Case()
+       sql.case()
        .when("status = 'active'", "'Active User'")
        .when("status = 'pending'", "'Pending Approval'")
        .else_("'Inactive'")
    )
 
-   query = Select("id", "name", f"{case_expr} as status_label").from_("users")
+   query = sql.select("id", "name", f"{case_expr} as status_label").from_("users")
 
 Common Table Expressions (CTE)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -496,10 +492,10 @@ Common Table Expressions (CTE)
 .. code-block:: python
 
    # WITH clause
-   cte = Select("user_id", "COUNT(*) as order_count").from_("orders").group_by("user_id")
+   cte = sql.select("user_id", "COUNT(*) as order_count").from_("orders").group_by("user_id")
 
    query = (
-       Select("u.name", "c.order_count")
+       sql.select("u.name", "c.order_count")
        .with_("user_orders", cte)
        .from_("users u")
        .join("user_orders c", "u.id = c.user_id")
@@ -513,8 +509,10 @@ Reusable Query Components
 
 .. code-block:: python
 
+   from sqlspec import sql
+
    # Base query
-   base_query = Select("id", "name", "email", "status").from_("users")
+   base_query = sql.select("id", "name", "email", "status").from_("users")
 
    # Add filters based on context
    def active_users():
@@ -532,18 +530,20 @@ Query Templates
 
 .. code-block:: python
 
+   from sqlspec import sql
+
    class UserQueries:
        @staticmethod
        def by_id():
-           return Select("*").from_("users").where("id = ?")
+           return sql.select("*").from_("users").where("id = ?")
 
        @staticmethod
        def by_email():
-           return Select("*").from_("users").where("email = ?")
+           return sql.select("*").from_("users").where("email = ?")
 
        @staticmethod
        def search(filters):
-           query = Select("*").from_("users")
+           query = sql.select("*").from_("users")
            params = []
 
            if "name" in filters:
@@ -572,16 +572,18 @@ Best Practices
    result = session.execute("SELECT * FROM users WHERE id = ?", 1)
 
    # Over this:
-   query = Select("*").from_("users").where("id = ?")
+   query = sql.select("*").from_("users").where("id = ?")
    result = session.execute(query, 1)
 
 **2. Builder for Dynamic Queries**
 
 .. code-block:: python
 
+   from sqlspec import sql
+
    # Good use case: dynamic filtering
    def search_products(category=None, min_price=None, in_stock=None):
-       query = Select("*").from_("products")
+       query = sql.select("*").from_("products")
        params = []
 
        if category:
@@ -601,9 +603,11 @@ Best Practices
 
 .. code-block:: python
 
+   from sqlspec import sql
+
    # Always use placeholders for user input
    search_term = user_input  # From user
-   query = Select("*").from_("users").where("name LIKE ?")
+   query = sql.select("*").from_("users").where("name LIKE ?")
    result = session.execute(query, f"%{search_term}%")
 
 **4. Type Safety with Schema Mapping**
@@ -611,21 +615,24 @@ Best Practices
 .. code-block:: python
 
    from pydantic import BaseModel
+   from sqlspec import sql
 
    class User(BaseModel):
        id: int
        name: str
        email: str
 
-   query = Select("id", "name", "email").from_("users")
+   query = sql.select("id", "name", "email").from_("users")
    users: list[User] = session.execute(query, schema_type=User).to_schema()
 
 **5. Test Generated SQL**
 
 .. code-block:: python
 
+   from sqlspec import sql
+
    # Check generated SQL during development
-   query = Select("*").from_("users").where("id = ?")
+   query = sql.select("*").from_("users").where("id = ?")
    print(query)  # Shows generated SQL
 
 Limitations
@@ -669,6 +676,8 @@ When migrating from raw SQL to the query builder:
 
 .. code-block:: python
 
+   from sqlspec import sql
+
    # Before: Raw SQL
    result = session.execute("""
        SELECT u.id, u.name, COUNT(o.id) as order_count
@@ -683,7 +692,7 @@ When migrating from raw SQL to the query builder:
 
    # After: Query Builder
    query = (
-       Select("u.id", "u.name", "COUNT(o.id) as order_count")
+       sql.select("u.id", "u.name", "COUNT(o.id) as order_count")
        .from_("users u")
        .left_join("orders o", "u.id = o.user_id")
        .where("u.status = ?")

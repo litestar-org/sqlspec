@@ -192,15 +192,14 @@ def database_integration_example() -> None:
 
         # Initialize SQLSpec and register database
         sqlspec = SQLSpec()
-        config = SqliteConfig()
-        sqlspec.add_config(config)
+        db = sqlspec.add_config(SqliteConfig())
 
         # Initialize loader and load SQL files
         loader = SQLFileLoader()
         loader.load_sql(base_dir / "sql" / "users.sql")
 
         # Create tables
-        with sqlspec.provide_session(type(config)) as session:
+        with sqlspec.provide_session(db) as session:
             # Create users table
             session.execute(
                 SQL("""

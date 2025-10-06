@@ -235,17 +235,8 @@ class ParameterInfo:
 class ParameterStyleConfig:
     """Configuration for parameter style processing.
 
-    Provides configuration for parameter processing operations.
-
-    Attributes:
-        default_parameter_style: Primary parsing style
-        supported_parameter_styles: All input styles supported
-        supported_execution_parameter_styles: Styles driver can execute
-        default_execution_parameter_style: Target execution format
-        type_coercion_map: Type conversions
-        output_transformer: Final SQL/parameter transformation hook
-        preserve_parameter_format: Maintain original parameter structure
-        needs_static_script_compilation: Embed parameters in SQL
+    Provides configuration for parameter processing operations including
+    style conversion, type coercion, and parameter format preservation.
     """
 
     __slots__ = (

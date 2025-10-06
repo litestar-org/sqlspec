@@ -48,10 +48,9 @@ Quick Reference
    from sqlspec.adapters.sqlite import SqliteConfig
 
    spec = SQLSpec()
-   config = SqliteConfig()
-   spec.add_config(config)
+   db = spec.add_config(SqliteConfig())
 
-   with spec.provide_session(config) as session:
+   with spec.provide_session(db) as session:
        result = session.execute("SELECT * FROM users WHERE id = ?", 1)
        user = result.one()
 
@@ -59,9 +58,9 @@ Quick Reference
 
 .. code-block:: python
 
-   from sqlspec.builder import Select
+   from sqlspec import sql
 
-   query = Select("id", "name", "email").from_("users").where("active = ?")
+   query = sql.select("id", "name", "email").from_("users").where("active = ?")
    result = session.execute(query, True)
    users = result.data
 
