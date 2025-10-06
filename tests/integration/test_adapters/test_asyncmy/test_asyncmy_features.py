@@ -52,7 +52,6 @@ async def asyncmy_pooled_session(mysql_service: MySQLService) -> AsyncGenerator[
         yield session
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_mysql_json_operations(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test MySQL JSON column operations."""
     driver = asyncmy_pooled_session
@@ -87,7 +86,6 @@ async def test_asyncmy_mysql_json_operations(asyncmy_pooled_session: AsyncmyDriv
     assert contains_result.get_data()[0]["count"] == 1
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test MySQL-specific SQL features and syntax."""
     driver = asyncmy_pooled_session
@@ -131,7 +129,6 @@ async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: Async
     assert "important" in enum_row["tags"]
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_transaction_isolation_levels(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test MySQL transaction isolation level handling."""
     driver = asyncmy_pooled_session
@@ -158,7 +155,6 @@ async def test_asyncmy_transaction_isolation_levels(asyncmy_pooled_session: Asyn
     assert committed_result.get_data()[0]["value"] == "transaction_data"
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_stored_procedures(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test stored procedure execution."""
     driver = asyncmy_pooled_session
@@ -185,7 +181,6 @@ async def test_asyncmy_stored_procedures(asyncmy_pooled_session: AsyncmyDriver) 
     await driver.execute("CALL simple_procedure(?)", (5,))
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_bulk_operations_performance(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test bulk operations for performance characteristics."""
     driver = asyncmy_pooled_session
@@ -220,7 +215,6 @@ async def test_asyncmy_bulk_operations_performance(asyncmy_pooled_session: Async
     assert select_result.get_data()[99]["sequence_num"] == 99
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_error_recovery(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test error handling and connection recovery."""
     driver = asyncmy_pooled_session
@@ -247,7 +241,6 @@ async def test_asyncmy_error_recovery(asyncmy_pooled_session: AsyncmyDriver) -> 
     assert final_result.get_data()[0]["value"] == "test_value"
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_sql_object_advanced_features(asyncmy_pooled_session: AsyncmyDriver) -> None:
     """Test SQL object integration with advanced AsyncMy features."""
     driver = asyncmy_pooled_session

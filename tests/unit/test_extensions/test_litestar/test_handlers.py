@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from litestar.types import Message, Scope
 
 
-@pytest.mark.asyncio
 async def test_async_manual_handler_closes_connection() -> None:
     """Test async manual handler closes connection on terminus event."""
     connection_key = "test_connection"
@@ -42,7 +41,6 @@ async def test_async_manual_handler_closes_connection() -> None:
     assert get_sqlspec_scope_state(scope, connection_key) is None
 
 
-@pytest.mark.asyncio
 async def test_async_manual_handler_ignores_non_terminus_events() -> None:
     """Test async manual handler ignores non-terminus events."""
     connection_key = "test_connection"
@@ -62,7 +60,6 @@ async def test_async_manual_handler_ignores_non_terminus_events() -> None:
     assert get_sqlspec_scope_state(scope, connection_key) is mock_connection
 
 
-@pytest.mark.asyncio
 async def test_async_autocommit_handler_commits_on_success() -> None:
     """Test async autocommit handler commits on 2xx status."""
     connection_key = "test_connection"
@@ -85,7 +82,6 @@ async def test_async_autocommit_handler_commits_on_success() -> None:
     mock_connection.close.assert_awaited_once()
 
 
-@pytest.mark.asyncio
 async def test_async_autocommit_handler_rolls_back_on_error() -> None:
     """Test async autocommit handler rolls back on 4xx/5xx status."""
     connection_key = "test_connection"
@@ -108,7 +104,6 @@ async def test_async_autocommit_handler_rolls_back_on_error() -> None:
     mock_connection.close.assert_awaited_once()
 
 
-@pytest.mark.asyncio
 async def test_async_autocommit_handler_with_redirect_commit() -> None:
     """Test async autocommit handler commits on 3xx when enabled."""
     connection_key = "test_connection"
@@ -129,7 +124,6 @@ async def test_async_autocommit_handler_with_redirect_commit() -> None:
     mock_connection.rollback.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_async_autocommit_handler_extra_commit_statuses() -> None:
     """Test async autocommit handler uses extra commit statuses."""
     connection_key = "test_connection"
@@ -150,7 +144,6 @@ async def test_async_autocommit_handler_extra_commit_statuses() -> None:
     mock_connection.rollback.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_async_autocommit_handler_raises_on_conflicting_statuses() -> None:
     """Test async autocommit handler raises error when status sets overlap."""
     with pytest.raises(ImproperConfigurationError) as exc_info:
@@ -159,7 +152,6 @@ async def test_async_autocommit_handler_raises_on_conflicting_statuses() -> None
     assert "must not share" in str(exc_info.value)
 
 
-@pytest.mark.asyncio
 async def test_async_lifespan_handler_creates_and_closes_pool() -> None:
     """Test async lifespan handler manages pool lifecycle."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -179,7 +171,6 @@ async def test_async_lifespan_handler_creates_and_closes_pool() -> None:
     assert pool_key not in mock_app.state
 
 
-@pytest.mark.asyncio
 async def test_async_pool_provider_returns_pool() -> None:
     """Test async pool provider returns pool from state."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -198,7 +189,6 @@ async def test_async_pool_provider_returns_pool() -> None:
     state.get.assert_called_once_with(pool_key)
 
 
-@pytest.mark.asyncio
 async def test_async_pool_provider_raises_when_pool_missing() -> None:
     """Test async pool provider raises error when pool not in state."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -217,7 +207,6 @@ async def test_async_pool_provider_raises_when_pool_missing() -> None:
     assert "not found in application state" in str(exc_info.value)
 
 
-@pytest.mark.asyncio
 async def test_async_connection_provider_creates_connection() -> None:
     """Test async connection provider creates connection from pool."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -237,7 +226,6 @@ async def test_async_connection_provider_creates_connection() -> None:
         assert get_sqlspec_scope_state(scope, connection_key) is connection
 
 
-@pytest.mark.asyncio
 async def test_async_connection_provider_raises_when_pool_missing() -> None:
     """Test async connection provider raises error when pool missing."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})
@@ -257,7 +245,6 @@ async def test_async_connection_provider_raises_when_pool_missing() -> None:
     assert pool_key in str(exc_info.value)
 
 
-@pytest.mark.asyncio
 async def test_async_session_provider_creates_session() -> None:
     """Test async session provider creates driver session."""
     config = AiosqliteConfig(pool_config={"database": ":memory:"})

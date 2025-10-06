@@ -73,7 +73,6 @@ def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> No
     )
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsyncDriver) -> None:
     """Test creation and execution of PL/SQL stored procedures."""
 
@@ -197,7 +196,6 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
     )
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle's analytic/window functions."""
 
@@ -298,7 +296,6 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncDriver) -> Non
     assert "CREATE SEQUENCE" in sql_output
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_oracle_exception_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle-specific exception handling in PL/SQL."""
 

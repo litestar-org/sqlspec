@@ -41,13 +41,11 @@ async def asyncmy_store(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyS
             pass
 
 
-@pytest.mark.asyncio
 async def test_store_create_table(asyncmy_store: AsyncmyStore) -> None:
     """Test table creation."""
     assert asyncmy_store.table_name == "test_asyncmy_sessions"
 
 
-@pytest.mark.asyncio
 async def test_store_set_and_get(asyncmy_store: AsyncmyStore) -> None:
     """Test basic set and get operations."""
     test_data = b"test session data"
@@ -57,14 +55,12 @@ async def test_store_set_and_get(asyncmy_store: AsyncmyStore) -> None:
     assert result == test_data
 
 
-@pytest.mark.asyncio
 async def test_store_get_nonexistent(asyncmy_store: AsyncmyStore) -> None:
     """Test getting a non-existent session returns None."""
     result = await asyncmy_store.get("nonexistent")
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_store_set_with_string_value(asyncmy_store: AsyncmyStore) -> None:
     """Test setting a string value (should be converted to bytes)."""
     await asyncmy_store.set("session_str", "string data")
@@ -73,7 +69,6 @@ async def test_store_set_with_string_value(asyncmy_store: AsyncmyStore) -> None:
     assert result == b"string data"
 
 
-@pytest.mark.asyncio
 async def test_store_delete(asyncmy_store: AsyncmyStore) -> None:
     """Test delete operation."""
     await asyncmy_store.set("session_to_delete", b"data")
@@ -86,13 +81,11 @@ async def test_store_delete(asyncmy_store: AsyncmyStore) -> None:
     assert await asyncmy_store.get("session_to_delete") is None
 
 
-@pytest.mark.asyncio
 async def test_store_delete_nonexistent(asyncmy_store: AsyncmyStore) -> None:
     """Test deleting a non-existent session is a no-op."""
     await asyncmy_store.delete("nonexistent")
 
 
-@pytest.mark.asyncio
 async def test_store_expiration_with_int(asyncmy_store: AsyncmyStore) -> None:
     """Test session expiration with integer seconds."""
     await asyncmy_store.set("expiring_session", b"data", expires_in=1)
@@ -106,7 +99,6 @@ async def test_store_expiration_with_int(asyncmy_store: AsyncmyStore) -> None:
     assert not await asyncmy_store.exists("expiring_session")
 
 
-@pytest.mark.asyncio
 async def test_store_expiration_with_timedelta(asyncmy_store: AsyncmyStore) -> None:
     """Test session expiration with timedelta."""
     await asyncmy_store.set("expiring_session", b"data", expires_in=timedelta(seconds=1))
@@ -119,7 +111,6 @@ async def test_store_expiration_with_timedelta(asyncmy_store: AsyncmyStore) -> N
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_store_no_expiration(asyncmy_store: AsyncmyStore) -> None:
     """Test session without expiration persists."""
     await asyncmy_store.set("permanent_session", b"data")
@@ -130,7 +121,6 @@ async def test_store_no_expiration(asyncmy_store: AsyncmyStore) -> None:
     assert await asyncmy_store.exists("permanent_session")
 
 
-@pytest.mark.asyncio
 async def test_store_expires_in(asyncmy_store: AsyncmyStore) -> None:
     """Test expires_in returns correct time."""
     await asyncmy_store.set("timed_session", b"data", expires_in=10)
@@ -140,7 +130,6 @@ async def test_store_expires_in(asyncmy_store: AsyncmyStore) -> None:
     assert 8 <= expires_in <= 10
 
 
-@pytest.mark.asyncio
 async def test_store_expires_in_expired(asyncmy_store: AsyncmyStore) -> None:
     """Test expires_in returns 0 for expired session."""
     await asyncmy_store.set("expired_session", b"data", expires_in=1)
@@ -151,7 +140,6 @@ async def test_store_expires_in_expired(asyncmy_store: AsyncmyStore) -> None:
     assert expires_in == 0
 
 
-@pytest.mark.asyncio
 async def test_store_cleanup(asyncmy_store: AsyncmyStore) -> None:
     """Test delete_expired removes only expired sessions."""
     await asyncmy_store.set("active_session", b"data", expires_in=60)
@@ -170,7 +158,6 @@ async def test_store_cleanup(asyncmy_store: AsyncmyStore) -> None:
     assert not await asyncmy_store.exists("expired_session_2")
 
 
-@pytest.mark.asyncio
 async def test_store_upsert(asyncmy_store: AsyncmyStore) -> None:
     """Test updating existing session (UPSERT)."""
     await asyncmy_store.set("session_upsert", b"original data")
@@ -184,7 +171,6 @@ async def test_store_upsert(asyncmy_store: AsyncmyStore) -> None:
     assert result == b"updated data"
 
 
-@pytest.mark.asyncio
 async def test_store_upsert_with_expiration_change(asyncmy_store: AsyncmyStore) -> None:
     """Test updating session expiration."""
     await asyncmy_store.set("session_exp", b"data", expires_in=60)
@@ -200,7 +186,6 @@ async def test_store_upsert_with_expiration_change(asyncmy_store: AsyncmyStore) 
     assert expires_in <= 10
 
 
-@pytest.mark.asyncio
 async def test_store_renew_for(asyncmy_store: AsyncmyStore) -> None:
     """Test renewing session expiration on get."""
     await asyncmy_store.set("session_renew", b"data", expires_in=5)
@@ -219,7 +204,6 @@ async def test_store_renew_for(asyncmy_store: AsyncmyStore) -> None:
     assert expires_after > 8
 
 
-@pytest.mark.asyncio
 async def test_store_large_data(asyncmy_store: AsyncmyStore) -> None:
     """Test storing large session data (>1MB)."""
     large_data = b"x" * (1024 * 1024 + 100)
@@ -232,7 +216,6 @@ async def test_store_large_data(asyncmy_store: AsyncmyStore) -> None:
     assert len(result) > 1024 * 1024
 
 
-@pytest.mark.asyncio
 async def test_store_delete_all(asyncmy_store: AsyncmyStore) -> None:
     """Test delete_all removes all sessions."""
     await asyncmy_store.set("session1", b"data1")
@@ -250,7 +233,6 @@ async def test_store_delete_all(asyncmy_store: AsyncmyStore) -> None:
     assert not await asyncmy_store.exists("session3")
 
 
-@pytest.mark.asyncio
 async def test_store_exists(asyncmy_store: AsyncmyStore) -> None:
     """Test exists method."""
     assert not await asyncmy_store.exists("test_session")
@@ -260,7 +242,6 @@ async def test_store_exists(asyncmy_store: AsyncmyStore) -> None:
     assert await asyncmy_store.exists("test_session")
 
 
-@pytest.mark.asyncio
 async def test_store_context_manager(asyncmy_store: AsyncmyStore) -> None:
     """Test store can be used as async context manager."""
     async with asyncmy_store:

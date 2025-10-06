@@ -37,13 +37,11 @@ async def oracle_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[Or
             await config.close_pool()
 
 
-@pytest.mark.asyncio
 async def test_store_create_table(oracle_store: OracleAsyncStore) -> None:
     """Test table creation."""
     assert oracle_store.table_name == "test_sessions"
 
 
-@pytest.mark.asyncio
 async def test_store_set_and_get(oracle_store: OracleAsyncStore) -> None:
     """Test basic set and get operations."""
     test_data = b"test session data"
@@ -53,14 +51,12 @@ async def test_store_set_and_get(oracle_store: OracleAsyncStore) -> None:
     assert result == test_data
 
 
-@pytest.mark.asyncio
 async def test_store_get_nonexistent(oracle_store: OracleAsyncStore) -> None:
     """Test getting a non-existent session returns None."""
     result = await oracle_store.get("nonexistent")
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_store_set_with_string_value(oracle_store: OracleAsyncStore) -> None:
     """Test setting a string value (should be converted to bytes)."""
     await oracle_store.set("session_str", "string data")
@@ -69,7 +65,6 @@ async def test_store_set_with_string_value(oracle_store: OracleAsyncStore) -> No
     assert result == b"string data"
 
 
-@pytest.mark.asyncio
 async def test_store_delete(oracle_store: OracleAsyncStore) -> None:
     """Test delete operation."""
     await oracle_store.set("session_to_delete", b"data")
@@ -82,13 +77,11 @@ async def test_store_delete(oracle_store: OracleAsyncStore) -> None:
     assert await oracle_store.get("session_to_delete") is None
 
 
-@pytest.mark.asyncio
 async def test_store_delete_nonexistent(oracle_store: OracleAsyncStore) -> None:
     """Test deleting a non-existent session is a no-op."""
     await oracle_store.delete("nonexistent")
 
 
-@pytest.mark.asyncio
 async def test_store_expiration_with_int(oracle_store: OracleAsyncStore) -> None:
     """Test session expiration with integer seconds."""
     await oracle_store.set("expiring_session", b"data", expires_in=1)
@@ -102,7 +95,6 @@ async def test_store_expiration_with_int(oracle_store: OracleAsyncStore) -> None
     assert not await oracle_store.exists("expiring_session")
 
 
-@pytest.mark.asyncio
 async def test_store_expiration_with_timedelta(oracle_store: OracleAsyncStore) -> None:
     """Test session expiration with timedelta."""
     await oracle_store.set("expiring_session", b"data", expires_in=timedelta(seconds=1))
@@ -115,7 +107,6 @@ async def test_store_expiration_with_timedelta(oracle_store: OracleAsyncStore) -
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_store_no_expiration(oracle_store: OracleAsyncStore) -> None:
     """Test session without expiration persists."""
     await oracle_store.set("permanent_session", b"data")
@@ -126,7 +117,6 @@ async def test_store_no_expiration(oracle_store: OracleAsyncStore) -> None:
     assert await oracle_store.exists("permanent_session")
 
 
-@pytest.mark.asyncio
 async def test_store_expires_in(oracle_store: OracleAsyncStore) -> None:
     """Test expires_in returns correct time."""
     await oracle_store.set("timed_session", b"data", expires_in=10)
@@ -136,7 +126,6 @@ async def test_store_expires_in(oracle_store: OracleAsyncStore) -> None:
     assert 8 <= expires_in <= 10
 
 
-@pytest.mark.asyncio
 async def test_store_expires_in_expired(oracle_store: OracleAsyncStore) -> None:
     """Test expires_in returns 0 for expired session."""
     await oracle_store.set("expired_session", b"data", expires_in=1)
@@ -147,7 +136,6 @@ async def test_store_expires_in_expired(oracle_store: OracleAsyncStore) -> None:
     assert expires_in == 0
 
 
-@pytest.mark.asyncio
 async def test_store_cleanup(oracle_store: OracleAsyncStore) -> None:
     """Test delete_expired removes only expired sessions."""
     await oracle_store.set("active_session", b"data", expires_in=60)
@@ -166,7 +154,6 @@ async def test_store_cleanup(oracle_store: OracleAsyncStore) -> None:
     assert not await oracle_store.exists("expired_session_2")
 
 
-@pytest.mark.asyncio
 async def test_store_upsert(oracle_store: OracleAsyncStore) -> None:
     """Test updating existing session (UPSERT)."""
     await oracle_store.set("session_upsert", b"original data")
@@ -180,7 +167,6 @@ async def test_store_upsert(oracle_store: OracleAsyncStore) -> None:
     assert result == b"updated data"
 
 
-@pytest.mark.asyncio
 async def test_store_upsert_with_expiration_change(oracle_store: OracleAsyncStore) -> None:
     """Test updating session expiration."""
     await oracle_store.set("session_exp", b"data", expires_in=60)
@@ -196,7 +182,6 @@ async def test_store_upsert_with_expiration_change(oracle_store: OracleAsyncStor
     assert expires_in <= 10
 
 
-@pytest.mark.asyncio
 async def test_store_renew_for(oracle_store: OracleAsyncStore) -> None:
     """Test renewing session expiration on get."""
     await oracle_store.set("session_renew", b"data", expires_in=5)
@@ -215,7 +200,6 @@ async def test_store_renew_for(oracle_store: OracleAsyncStore) -> None:
     assert expires_after > 8
 
 
-@pytest.mark.asyncio
 async def test_store_large_data(oracle_store: OracleAsyncStore) -> None:
     """Test storing large session data (>1MB)."""
     large_data = b"x" * (1024 * 1024 + 100)
@@ -228,7 +212,6 @@ async def test_store_large_data(oracle_store: OracleAsyncStore) -> None:
     assert len(result) > 1024 * 1024
 
 
-@pytest.mark.asyncio
 async def test_store_delete_all(oracle_store: OracleAsyncStore) -> None:
     """Test delete_all removes all sessions."""
     await oracle_store.set("session1", b"data1")
@@ -246,7 +229,6 @@ async def test_store_delete_all(oracle_store: OracleAsyncStore) -> None:
     assert not await oracle_store.exists("session3")
 
 
-@pytest.mark.asyncio
 async def test_store_exists(oracle_store: OracleAsyncStore) -> None:
     """Test exists method."""
     assert not await oracle_store.exists("test_session")
@@ -256,7 +238,6 @@ async def test_store_exists(oracle_store: OracleAsyncStore) -> None:
     assert await oracle_store.exists("test_session")
 
 
-@pytest.mark.asyncio
 async def test_store_context_manager(oracle_store: OracleAsyncStore) -> None:
     """Test store can be used as async context manager."""
     async with oracle_store:

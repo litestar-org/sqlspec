@@ -39,7 +39,6 @@ def test_capacity_limiter_property_setter() -> None:
     assert limiter.total_tokens == 10
 
 
-@pytest.mark.asyncio
 async def test_capacity_limiter_async_context() -> None:
     """Test CapacityLimiter as async context manager."""
     limiter = CapacityLimiter(1)
@@ -50,7 +49,6 @@ async def test_capacity_limiter_async_context() -> None:
     assert limiter._semaphore._value == 1
 
 
-@pytest.mark.asyncio
 async def test_capacity_limiter_acquire_release() -> None:
     """Test CapacityLimiter manual acquire/release."""
     limiter = CapacityLimiter(1)
@@ -62,7 +60,6 @@ async def test_capacity_limiter_acquire_release() -> None:
     assert limiter._semaphore._value == 1
 
 
-@pytest.mark.asyncio
 async def test_capacity_limiter_concurrent_access_edge_cases() -> None:
     """Test CapacityLimiter with edge case concurrent scenarios."""
     limiter = CapacityLimiter(1)
@@ -176,7 +173,6 @@ def test_await_raise_sync_error_configurations() -> None:
         sync_func_strict(21)
 
 
-@pytest.mark.asyncio
 async def test_async_basic() -> None:
     """Test async_ decorator basic functionality."""
 
@@ -188,7 +184,6 @@ async def test_async_basic() -> None:
     assert result == 12
 
 
-@pytest.mark.asyncio
 async def test_async_with_limiter() -> None:
     """Test async_ decorator with custom limiter."""
     limiter = CapacityLimiter(1)
@@ -201,7 +196,6 @@ async def test_async_with_limiter() -> None:
     assert result == 10
 
 
-@pytest.mark.asyncio
 async def test_ensure_async_with_async_function() -> None:
     """Test ensure_async_ with already async function."""
 
@@ -213,7 +207,6 @@ async def test_ensure_async_with_async_function() -> None:
     assert result == 12
 
 
-@pytest.mark.asyncio
 async def test_ensure_async_with_sync_function() -> None:
     """Test ensure_async_ with sync function."""
 
@@ -225,7 +218,6 @@ async def test_ensure_async_with_sync_function() -> None:
     assert result == 21
 
 
-@pytest.mark.asyncio
 async def test_ensure_async_exception_propagation() -> None:
     """Test ensure_async_ properly propagates exceptions."""
 
@@ -237,7 +229,6 @@ async def test_ensure_async_exception_propagation() -> None:
         await sync_func_that_raises()
 
 
-@pytest.mark.asyncio
 async def test_with_ensure_async_context_manager() -> None:
     """Test with_ensure_async_ with sync context manager."""
 
@@ -263,7 +254,6 @@ async def test_with_ensure_async_context_manager() -> None:
     assert result.exited is True
 
 
-@pytest.mark.asyncio
 async def test_with_ensure_async_async_context_manager() -> None:
     """Test with_ensure_async_ with already async context manager."""
 
@@ -289,7 +279,6 @@ async def test_with_ensure_async_async_context_manager() -> None:
     assert result.exited is True
 
 
-@pytest.mark.asyncio
 async def test_get_next_basic() -> None:
     """Test get_next with async iterator."""
 
@@ -317,7 +306,6 @@ async def test_get_next_basic() -> None:
     assert result2 == 2
 
 
-@pytest.mark.asyncio
 async def test_get_next_with_default() -> None:
     """Test get_next with default value when iterator is exhausted."""
 
@@ -334,7 +322,6 @@ async def test_get_next_with_default() -> None:
     assert result == "default_value"
 
 
-@pytest.mark.asyncio
 async def test_get_next_no_default_behavior() -> None:
     """Test get_next behavior when iterator is exhausted without default."""
 
@@ -372,7 +359,6 @@ def test_sync_tools_error_handling() -> None:
         async_function_with_error()
 
 
-@pytest.mark.asyncio
 async def test_async_tools_integration() -> None:
     """Test async tools work together."""
 
