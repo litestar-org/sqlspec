@@ -13,17 +13,25 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncpg, pytest.m
 
 
 @pytest.fixture
-async def asyncpg_config_for_fk(postgres_service: Any) -> AsyncpgConfig:
-    """Create AsyncPG config for FK tests."""
-    return AsyncpgConfig(
+async def asyncpg_config_for_fk(postgres_service: Any) -> "AsyncGenerator[AsyncpgConfig, None]":
+    """Create AsyncPG config for FK tests with proper pool cleanup."""
+    config = AsyncpgConfig(
         pool_config={
             "host": postgres_service.host,
             "port": postgres_service.port,
             "user": postgres_service.user,
             "password": postgres_service.password,
             "database": postgres_service.database,
+            "max_size": 10,
+            "min_size": 2,
         }
     )
+
+    try:
+        yield config
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
 @pytest.fixture
