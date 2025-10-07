@@ -79,7 +79,9 @@ async def run_adk_example() -> None:
     )
     await service.append_event(session, assistant_event)
     print(f"[cyan]Added assistant event:[/cyan] {assistant_event.id}")
-    print(f"[cyan]Assistant response:[/cyan] {assistant_event.content.parts[0].text if assistant_event.content else 'None'}")
+    print(
+        f"[cyan]Assistant response:[/cyan] {assistant_event.content.parts[0].text if assistant_event.content else 'None'}"
+    )
 
     print("\n[bold cyan]=== Retrieving Session with Events ===[/bold cyan]")
     retrieved_session = await service.get_session(app_name="chatbot", user_id="user_123", session_id=session.id)
@@ -126,7 +128,9 @@ def main() -> None:
     except Exception as e:
         print(f"\n[red]❌ Example failed: {e}[/red]")
         print("[yellow]Make sure PostgreSQL is running with:[/yellow] [cyan]make infra-up[/cyan]")
-        print("[yellow]Or manually:[/yellow] [cyan]docker run -d --name postgres-dev -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres[/cyan]")
+        print(
+            "[yellow]Or manually:[/yellow] [cyan]docker run -d --name postgres-dev -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres[/cyan]"
+        )
 
 
 if __name__ == "__main__":

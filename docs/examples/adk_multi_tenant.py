@@ -123,7 +123,9 @@ async def run_multi_tenant_example() -> None:
     alice_chatbot = await service.list_sessions(app_name="chatbot", user_id="alice")
     print(f"   [cyan]Found {len(alice_chatbot.sessions)} session(s)[/cyan]")
     for s in alice_chatbot.sessions:
-        print(f"     - {s.id[:12]}... [dim](updated: {datetime.fromtimestamp(s.last_update_time, tz=timezone.utc)})[/dim]")
+        print(
+            f"     - {s.id[:12]}... [dim](updated: {datetime.fromtimestamp(s.last_update_time, tz=timezone.utc)})[/dim]"
+        )
 
     print("\n[cyan]2. Bob's chatbot sessions:[/cyan]")
     bob_chatbot = await service.list_sessions(app_name="chatbot", user_id="bob")

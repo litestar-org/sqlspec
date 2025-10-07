@@ -35,7 +35,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from sqlspec import SQL, StatementConfig, SQLSpec, sql
+from sqlspec import SQL, SQLSpec, StatementConfig, sql
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.core.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
 

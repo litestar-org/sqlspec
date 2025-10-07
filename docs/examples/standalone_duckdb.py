@@ -12,6 +12,7 @@ This example demonstrates how to generate embeddings with Gemini using only Duck
 """
 
 import os
+import sys
 
 from rich import print
 
@@ -24,7 +25,7 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     print("[red]Error: GOOGLE_API_KEY environment variable not set[/red]")
     print("[yellow]Please set GOOGLE_API_KEY to use this example[/yellow]")
-    exit(1)
+    sys.exit(1)
 
 API_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{EMBEDDING_MODEL}:embedContent?key=${GOOGLE_API_KEY}"
