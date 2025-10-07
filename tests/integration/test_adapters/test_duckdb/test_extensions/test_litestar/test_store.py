@@ -33,8 +33,7 @@ async def duckdb_store(tmp_path: Path, worker_id: str) -> AsyncGenerator[DuckdbS
     db_path = tmp_path / f"test_sessions_{worker_id}.duckdb"
     try:
         config = DuckDBConfig(
-            pool_config={"database": str(db_path)},
-            extension_config={"litestar": {"session_table": "test_sessions"}},
+            pool_config={"database": str(db_path)}, extension_config={"litestar": {"session_table": "test_sessions"}}
         )
         store = DuckdbStore(config)
         await store.create_table()
