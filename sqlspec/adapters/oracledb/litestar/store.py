@@ -77,7 +77,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             litestar_config = config.extension_config.get("litestar", {})
             self._in_memory: bool = bool(litestar_config.get("in_memory", False))
         else:
-            self._in_memory: bool = False
+            self._in_memory = False
 
     def _get_create_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema.
@@ -456,7 +456,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             litestar_config = config.extension_config.get("litestar", {})
             self._in_memory: bool = bool(litestar_config.get("in_memory", False))
         else:
-            self._in_memory: bool = False
+            self._in_memory = False
 
     def _get_create_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema.

@@ -125,7 +125,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             adk_config = config.extension_config.get("adk", {})
             self._in_memory: bool = bool(adk_config.get("in_memory", False))
         else:
-            self._in_memory: bool = False
+            self._in_memory = False
 
     async def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
@@ -974,7 +974,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             adk_config = config.extension_config.get("adk", {})
             self._in_memory: bool = bool(adk_config.get("in_memory", False))
         else:
-            self._in_memory: bool = False
+            self._in_memory = False
 
     def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
