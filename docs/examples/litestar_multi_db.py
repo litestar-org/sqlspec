@@ -5,15 +5,21 @@ This example demonstrates how to use multiple databases in a Litestar applicatio
 The example uses the `SQLSpec` extension to create a connection to a SQLite (via `aiosqlite`) and DuckDB database.
 
 The DuckDB database also demonstrates how to use the plugin loader and `secrets` configuration manager built into SQLSpec.
+
+Usage:
+    litestar --app docs.examples.litestar_multi_db:app run --reload
 """
 # /// script
 # dependencies = [
-#   "sqlspec[aiosqlite,duckdb]",
+#   "sqlspec[aiosqlite,duckdb,litestar]",
+#   "rich",
 #   "litestar[standard]",
 # ]
+# requires-python = ">=3.10"
 # ///
 
 from litestar import Litestar, get
+from rich import print
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
@@ -51,10 +57,5 @@ plugin = SQLSpecPlugin(sqlspec=spec)
 app = Litestar(route_handlers=[simple_sqlite, simple_select], plugins=[plugin])
 
 if __name__ == "__main__":
-    import os
-
-    from litestar.cli import litestar_group
-
-    os.environ["LITESTAR_APP"] = "docs.examples.litestar_multi_db:app"
-
-    litestar_group()
+    print("[cyan]Run with:[/cyan] litestar --app docs.examples.litestar_multi_db:app run --reload")
+    print("[yellow]Or directly:[/yellow] uv run python docs/examples/litestar_multi_db.py")

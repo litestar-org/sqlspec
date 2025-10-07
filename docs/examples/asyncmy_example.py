@@ -1,3 +1,10 @@
+# /// script
+# dependencies = [
+#   "sqlspec[asyncmy]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating asyncmy driver usage with query mixins.
 
 This example shows how to use the asyncmy driver with the development MySQL
@@ -5,6 +12,8 @@ container started by `make infra-up`.
 """
 
 import asyncio
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.asyncmy import AsyncmyConfig
@@ -60,55 +69,55 @@ async def asyncmy_example() -> None:
 
         # Select all items using query mixin
         items = await driver.select("SELECT * FROM inventory ORDER BY price")
-        print(f"All inventory: {items}")
+        print(f"[cyan]All inventory:[/cyan] {items}")
 
         # Select one item using query mixin
         laptop = await driver.select_one("SELECT * FROM inventory WHERE item_name = %s", "Laptop")
-        print(f"Laptop: {laptop}")
+        print(f"[cyan]Laptop:[/cyan] {laptop}")
 
         # Select one or none (no match) using query mixin
         nothing = await driver.select_one_or_none("SELECT * FROM inventory WHERE item_name = %s", "Nothing")
-        print(f"Nothing: {nothing}")
+        print(f"[cyan]Nothing:[/cyan] {nothing}")
 
         # Select scalar value using query mixin
         total_value = await driver.select_value("SELECT SUM(quantity * price) FROM inventory")
-        print(f"Total inventory value: ${total_value:.2f}")
+        print(f"[cyan]Total inventory value:[/cyan] ${total_value:.2f}")
 
         # Update
         result = await driver.execute(
             "UPDATE inventory SET quantity = quantity + %s WHERE supplier = %s", 10, "TechCorp"
         )
-        print(f"Added stock for {result.rows_affected} TechCorp items")
+        print(f"[yellow]Added stock for {result.rows_affected} TechCorp items[/yellow]")
 
         # Delete
         result = await driver.execute("DELETE FROM inventory WHERE quantity < %s", 80)
-        print(f"Removed {result.rows_affected} low-stock items")
+        print(f"[yellow]Removed {result.rows_affected} low-stock items[/yellow]")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
         query = sql.select("*").from_("inventory").where("supplier = %s")
         techcorp_items = await driver.select(query, "TechCorp")
-        print(f"TechCorp items: {techcorp_items}")
+        print(f"[cyan]TechCorp items:[/cyan] {techcorp_items}")
 
         # Query builder with comparison
         query = sql.select("item_name", "price").from_("inventory").where("price > %s").order_by("price")
         expensive_items = await driver.select(query, 200.0)
-        print(f"Expensive items: {expensive_items}")
+        print(f"[cyan]Expensive items:[/cyan] {expensive_items}")
 
         # Demonstrate pagination
         page_items = await driver.select("SELECT * FROM inventory ORDER BY item_name LIMIT %s OFFSET %s", 2, 0)
         total_count = await driver.select_value("SELECT COUNT(*) FROM inventory")
-        print(f"Page 1: {page_items}, Total: {total_count}")
+        print(f"[cyan]Page 1:[/cyan] {page_items}[cyan], Total:[/cyan] {total_count}")
 
 
 def main() -> None:
     """Run asyncmy example."""
-    print("=== asyncmy Driver Example ===")
+    print("[bold blue]=== asyncmy Driver Example ===[/bold blue]")
     try:
         asyncio.run(asyncmy_example())
-        print("✅ asyncmy example completed successfully!")
+        print("[green]✅ asyncmy example completed successfully![/green]")
     except Exception as e:
-        print(f"❌ asyncmy example failed: {e}")
-        print("Make sure MySQL is running with: make infra-up")
+        print(f"[red]❌ asyncmy example failed: {e}[/red]")
+        print("[yellow]Make sure MySQL is running with: make infra-up[/yellow]")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,10 @@
+# /// script
+# dependencies = [
+#   "sqlspec[psycopg]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating psycopg async driver usage with query mixins.
 
 This example shows how to use the psycopg asynchronous driver with the development
@@ -5,6 +12,8 @@ PostgreSQL container started by `make infra-up`.
 """
 
 import asyncio
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig
@@ -67,57 +76,57 @@ async def psycopg_async_example() -> None:
 
         # Select all transactions using query mixin
         transactions = await driver.select("SELECT * FROM transactions ORDER BY created_at")
-        print(f"All transactions: {transactions}")
+        print(f"[cyan]All transactions:[/cyan] {transactions}")
 
         # Select one transaction using query mixin
         deposit = await driver.select_one("SELECT * FROM transactions WHERE transaction_type = %s", "deposit")
-        print(f"First deposit: {deposit}")
+        print(f"[cyan]First deposit:[/cyan] {deposit}")
 
         # Select one or none (no match) using query mixin
         nothing = await driver.select_one_or_none("SELECT * FROM transactions WHERE transaction_type = %s", "nothing")
-        print(f"Nothing: {nothing}")
+        print(f"[cyan]Nothing:[/cyan] {nothing}")
 
         # Select scalar value using query mixin
         account_balance = await driver.select_value("SELECT SUM(amount) FROM transactions WHERE account_id = %s", 1001)
-        print(f"Account 1001 balance: ${account_balance:.2f}")
+        print(f"[cyan]Account 1001 balance:[/cyan] ${account_balance:.2f}")
 
         # Update
         result = await driver.execute(
             "UPDATE transactions SET description = %s WHERE amount < %s", "Small transaction", 0
         )
-        print(f"Updated {result.rows_affected} negative transactions")
+        print(f"[yellow]Updated {result.rows_affected} negative transactions[/yellow]")
 
         # Delete
         result = await driver.execute("DELETE FROM transactions WHERE ABS(amount) < %s", 30.0)
-        print(f"Removed {result.rows_affected} small transactions")
+        print(f"[yellow]Removed {result.rows_affected} small transactions[/yellow]")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
         query = sql.select("*").from_("transactions").where("account_id = %s")
         account_transactions = await driver.select(query, 1002)
-        print(f"Account 1002 transactions: {account_transactions}")
+        print(f"[cyan]Account 1002 transactions:[/cyan] {account_transactions}")
 
         # Query builder with comparison
         query = sql.select("description", "amount").from_("transactions").where("amount > %s").order_by("amount DESC")
         large_transactions = await driver.select(query, 100.0)
-        print(f"Large transactions: {large_transactions}")
+        print(f"[cyan]Large transactions:[/cyan] {large_transactions}")
 
         # Demonstrate pagination
         page_transactions = await driver.select(
             "SELECT * FROM transactions ORDER BY created_at LIMIT %s OFFSET %s", 2, 0
         )
         total_count = await driver.select_value("SELECT COUNT(*) FROM transactions")
-        print(f"Page 1: {page_transactions}, Total: {total_count}")
+        print(f"[cyan]Page 1:[/cyan] {page_transactions}[cyan], Total:[/cyan] {total_count}")
 
 
 def main() -> None:
     """Run psycopg async example."""
-    print("=== psycopg (async) Driver Example ===")
+    print("[bold blue]=== psycopg (async) Driver Example ===[/bold blue]")
     try:
         asyncio.run(psycopg_async_example())
-        print("✅ psycopg async example completed successfully!")
+        print("[green]✅ psycopg async example completed successfully![/green]")
     except Exception as e:
-        print(f"❌ psycopg async example failed: {e}")
-        print("Make sure PostgreSQL is running with: make infra-up")
+        print(f"[red]❌ psycopg async example failed: {e}[/red]")
+        print("[yellow]Make sure PostgreSQL is running with: make infra-up[/yellow]")
 
 
 if __name__ == "__main__":

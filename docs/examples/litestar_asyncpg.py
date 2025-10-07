@@ -11,17 +11,23 @@ To run this example, you need a PostgreSQL database running. You can use Docker:
     docker run -d --name postgres-test -e POSTGRES_PASSWORD=test -p 5432:5432 postgres
 
 Then modify the DSN below to match your database configuration.
+
+Usage:
+    litestar --app docs.examples.litestar_asyncpg:app run --reload
 """
 # /// script
 # dependencies = [
-#   "sqlspec[asyncpg,performance]",
+#   "sqlspec[asyncpg,litestar]",
+#   "rich",
 #   "litestar[standard]",
 # ]
+# requires-python = ">=3.10"
 # ///
 
 from typing import Any
 
 from litestar import Litestar, get
+from rich import print
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
@@ -83,10 +89,5 @@ plugin = SQLSpecPlugin(sqlspec=spec)
 app = Litestar(route_handlers=[hello_world, get_version, list_tables, get_status], plugins=[plugin], debug=True)
 
 if __name__ == "__main__":
-    import os
-
-    from litestar.cli import litestar_group
-
-    os.environ["LITESTAR_APP"] = "docs.examples.litestar_asyncpg:app"
-
-    litestar_group()
+    print("[cyan]Run with:[/cyan] litestar --app docs.examples.litestar_asyncpg:app run --reload")
+    print("[yellow]Or directly:[/yellow] uv run python docs/examples/litestar_asyncpg.py")

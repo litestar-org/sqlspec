@@ -1,4 +1,11 @@
 # type: ignore
+# /// script
+# dependencies = [
+#   "sqlspec[aiosqlite]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating AIOSQLite driver usage with query mixins.
 
 This example shows how to use the AIOSQLite driver directly with its built-in query
@@ -6,6 +13,8 @@ mixin functionality for common database operations.
 """
 
 import asyncio
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
@@ -41,36 +50,36 @@ async def aiosqlite_example() -> None:
 
         # Select all products using query mixin
         products = await driver.select("SELECT * FROM products ORDER BY price")
-        print(f"All products: {products}")
+        print(f"[cyan]All products:[/cyan] {products}")
 
         # Select one product using query mixin
         laptop = await driver.select_one("SELECT * FROM products WHERE name = ?", "Laptop")
-        print(f"Laptop: {laptop}")
+        print(f"[cyan]Laptop:[/cyan] {laptop}")
 
         # Select scalar value using query mixin
         avg_price = await driver.select_value("SELECT AVG(price) FROM products")
-        print(f"Average price: ${avg_price:.2f}")
+        print(f"[cyan]Average price:[/cyan] ${avg_price:.2f}")
 
         # Update
         result = await driver.execute("UPDATE products SET price = price * 0.9 WHERE price > ?", 100.0)
-        print(f"Applied 10% discount to {result.rows_affected} expensive products")
+        print(f"[yellow]Applied 10% discount to {result.rows_affected} expensive products[/yellow]")
 
         # Use query builder with async driver
         query = sql.select("name", "price").from_("products").where("price < ?").order_by("price")
         cheap_products = await driver.select(query, 100.0)
-        print(f"Cheap products: {cheap_products}")
+        print(f"[cyan]Cheap products:[/cyan] {cheap_products}")
 
         # Demonstrate pagination
         page_products = await driver.select("SELECT * FROM products ORDER BY price LIMIT ? OFFSET ?", 2, 1)
         total_count = await driver.select_value("SELECT COUNT(*) FROM products")
-        print(f"Products page 2: {len(page_products)} items, Total: {total_count}")
+        print(f"[cyan]Products page 2:[/cyan] {len(page_products)} items[cyan], Total:[/cyan] {total_count}")
 
 
 async def main_async() -> None:
     """Run AIOSQLite example with proper cleanup."""
-    print("=== AIOSQLite Driver Example ===")
+    print("[bold blue]=== AIOSQLite Driver Example ===[/bold blue]")
     await aiosqlite_example()
-    print("✅ AIOSQLite example completed successfully!")
+    print("[green]✅ AIOSQLite example completed successfully![/green]")
 
 
 def main() -> None:

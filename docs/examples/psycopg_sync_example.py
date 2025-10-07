@@ -1,9 +1,18 @@
 # ruff: noqa: FBT003
+# /// script
+# dependencies = [
+#   "sqlspec[psycopg]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating psycopg sync driver usage with query mixins.
 
 This example shows how to use the psycopg synchronous driver with the development
 PostgreSQL container started by `make infra-up`.
 """
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.psycopg import PsycopgSyncConfig
@@ -64,53 +73,53 @@ def psycopg_sync_example() -> None:
 
         # Select all customers using query mixin
         customers = driver.select("SELECT * FROM customers ORDER BY name")
-        print(f"All customers: {customers}")
+        print(f"[cyan]All customers:[/cyan] {customers}")
 
         # Select one customer using query mixin
         alice = driver.select_one("SELECT * FROM customers WHERE name = %s", "Alice Cooper")
-        print(f"Alice: {alice}")
+        print(f"[cyan]Alice:[/cyan] {alice}")
 
         # Select one or none (no match) using query mixin
         nobody = driver.select_one_or_none("SELECT * FROM customers WHERE name = %s", "Nobody")
-        print(f"Nobody: {nobody}")
+        print(f"[cyan]Nobody:[/cyan] {nobody}")
 
         # Select scalar value using query mixin
         active_count = driver.select_value("SELECT COUNT(*) FROM customers WHERE is_active = %s", True)
-        print(f"Active customers: {active_count}")
+        print(f"[cyan]Active customers:[/cyan] {active_count}")
 
         # Update
         result = driver.execute("UPDATE customers SET is_active = %s WHERE email LIKE %s", False, "%@startup.io")
-        print(f"Deactivated {result.rows_affected} startup customers")
+        print(f"[yellow]Deactivated {result.rows_affected} startup customers[/yellow]")
 
         # Delete
         result = driver.execute("DELETE FROM customers WHERE is_active = %s", False)
-        print(f"Removed {result.rows_affected} inactive customers")
+        print(f"[yellow]Removed {result.rows_affected} inactive customers[/yellow]")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
         query = sql.select("*").from_("customers").where("is_active = %s")
         active_customers = driver.select(query, True)
-        print(f"Active customers: {active_customers}")
+        print(f"[cyan]Active customers:[/cyan] {active_customers}")
 
         # Query builder with LIKE
         query = sql.select("name", "email").from_("customers").where("email LIKE %s").order_by("name")
         example_customers = driver.select(query, "%@example.com")
-        print(f"Example.com customers: {example_customers}")
+        print(f"[cyan]Example.com customers:[/cyan] {example_customers}")
 
         # Demonstrate pagination
         page_customers = driver.select("SELECT * FROM customers ORDER BY name LIMIT %s OFFSET %s", 2, 0)
         total_count = driver.select_value("SELECT COUNT(*) FROM customers")
-        print(f"Page 1: {page_customers}, Total: {total_count}")
+        print(f"[cyan]Page 1:[/cyan] {page_customers}[cyan], Total:[/cyan] {total_count}")
 
 
 def main() -> None:
     """Run psycopg sync example."""
-    print("=== psycopg (sync) Driver Example ===")
+    print("[bold blue]=== psycopg (sync) Driver Example ===[/bold blue]")
     try:
         psycopg_sync_example()
-        print("✅ psycopg sync example completed successfully!")
+        print("[green]✅ psycopg sync example completed successfully![/green]")
     except Exception as e:
-        print(f"❌ psycopg sync example failed: {e}")
-        print("Make sure PostgreSQL is running with: make infra-up")
+        print(f"[red]❌ psycopg sync example failed: {e}[/red]")
+        print("[yellow]Make sure PostgreSQL is running with: make infra-up[/yellow]")
 
 
 if __name__ == "__main__":

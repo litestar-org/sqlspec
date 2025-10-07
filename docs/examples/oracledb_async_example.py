@@ -1,3 +1,10 @@
+# /// script
+# dependencies = [
+#   "sqlspec[oracledb]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating oracledb async driver usage with query mixins.
 
 This example shows how to use the oracledb async driver with the development Oracle
@@ -5,6 +12,8 @@ container started by `make infra-up`.
 """
 
 import asyncio
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.oracledb import OracleAsyncConfig
@@ -70,55 +79,55 @@ async def oracledb_async_example() -> None:
 
         # Select all employees using query mixin
         employees = await driver.select("SELECT * FROM employees ORDER BY salary")
-        print(f"All employees: {employees}")
+        print(f"[cyan]All employees:[/cyan] {employees}")
 
         # Select one employee using query mixin
         alice = await driver.select_one("SELECT * FROM employees WHERE name = :1", "Alice Johnson")
-        print(f"Alice: {alice}")
+        print(f"[cyan]Alice:[/cyan] {alice}")
 
         # Select one or none (no match) using query mixin
         nobody = await driver.select_one_or_none("SELECT * FROM employees WHERE name = :1", "Nobody")
-        print(f"Nobody: {nobody}")
+        print(f"[cyan]Nobody:[/cyan] {nobody}")
 
         # Select scalar value using query mixin
         avg_salary = await driver.select_value("SELECT AVG(salary) FROM employees")
-        print(f"Average salary: ${avg_salary:.2f}")
+        print(f"[cyan]Average salary:[/cyan] ${avg_salary:.2f}")
 
         # Update
         result = await driver.execute("UPDATE employees SET salary = salary * 1.1 WHERE department = :1", "Engineering")
-        print(f"Gave 10% raise to {result.rows_affected} engineering employees")
+        print(f"[yellow]Gave 10% raise to {result.rows_affected} engineering employees[/yellow]")
 
         # Delete
         result = await driver.execute("DELETE FROM employees WHERE salary < :1", 60000.0)
-        print(f"Removed {result.rows_affected} employees with low salaries")
+        print(f"[yellow]Removed {result.rows_affected} employees with low salaries[/yellow]")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
         query = sql.select("*").from_("employees").where("department = :1")
         engineers = await driver.select(query, "Engineering")
-        print(f"Engineers: {engineers}")
+        print(f"[cyan]Engineers:[/cyan] {engineers}")
 
         # Query builder with comparison
         query = sql.select("name", "salary").from_("employees").where("salary > :1").order_by("salary DESC")
         high_earners = await driver.select(query, 80000.0)
-        print(f"High earners: {high_earners}")
+        print(f"[cyan]High earners:[/cyan] {high_earners}")
 
         # Demonstrate pagination
         page_employees = await driver.select(
             "SELECT * FROM employees ORDER BY name OFFSET :1 ROWS FETCH NEXT :2 ROWS ONLY", 0, 2
         )
         total_count = await driver.select_value("SELECT COUNT(*) FROM employees")
-        print(f"Page 1: {page_employees}, Total: {total_count}")
+        print(f"[cyan]Page 1:[/cyan] {page_employees}, [cyan]Total:[/cyan] {total_count}")
 
 
 def main() -> None:
     """Run oracledb async example."""
-    print("=== oracledb (async) Driver Example ===")
+    print("[bold cyan]=== oracledb (async) Driver Example ===[/bold cyan]")
     try:
         asyncio.run(oracledb_async_example())
-        print("✅ oracledb async example completed successfully!")
+        print("[green]✅ oracledb async example completed successfully![/green]")
     except Exception as e:
-        print(f"❌ oracledb async example failed: {e}")
-        print("Make sure Oracle is running with: make infra-up")
+        print(f"[red]❌ oracledb async example failed: {e}[/red]")
+        print("[yellow]Make sure Oracle is running with: make infra-up[/yellow]")
 
 
 if __name__ == "__main__":

@@ -4,17 +4,23 @@ This example demonstrates how to use the Litestar framework with the DuckLLM ext
 
 The example uses the `SQLSpec` extension to create a connection to the DuckDB database.
 The `DuckDB` adapter is used to create a connection to the database.
+
+Usage:
+    litestar --app docs.examples.litestar_duckllm:app run --reload
 """
 
 # /// script
 # dependencies = [
-#   "sqlspec[duckdb,performance]",
+#   "sqlspec[duckdb,litestar]",
+#   "rich",
 #   "litestar[standard]",
 # ]
+# requires-python = ">=3.10"
 # ///
 
 from litestar import Litestar, post
 from msgspec import Struct
+from rich import print
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
@@ -54,6 +60,5 @@ plugin = SQLSpecPlugin(sqlspec=spec)
 app = Litestar(route_handlers=[duckllm_chat], plugins=[plugin], debug=True)
 
 if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("[cyan]Run with:[/cyan] litestar --app docs.examples.litestar_duckllm:app run --reload")
+    print("[yellow]Or directly:[/yellow] uv run python docs/examples/litestar_duckllm.py")

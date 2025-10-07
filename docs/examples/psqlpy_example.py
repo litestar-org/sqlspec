@@ -1,3 +1,10 @@
+# /// script
+# dependencies = [
+#   "sqlspec[psqlpy]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating PSQLPy driver usage with query mixins.
 
 This example shows how to use the psqlpy (Rust-based) async PostgreSQL driver
@@ -5,6 +12,8 @@ with the development PostgreSQL container started by `make infra-up`.
 """
 
 import asyncio
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.psqlpy import PsqlpyConfig
@@ -65,32 +74,32 @@ async def psqlpy_example() -> None:
 
         # Select all orders using query mixin
         orders = await driver.select("SELECT * FROM orders ORDER BY order_total")
-        print(f"All orders: {orders}")
+        print(f"[cyan]All orders:[/cyan] {orders}")
 
         # Select one order using query mixin
         john_order = await driver.select_one("SELECT * FROM orders WHERE customer_name = $1", "John Doe")
-        print(f"John's order: {john_order}")
+        print(f"[cyan]John's order:[/cyan] {john_order}")
 
         # Select one or none (no match) using query mixin
         nobody = await driver.select_one_or_none("SELECT * FROM orders WHERE customer_name = $1", "Nobody")
-        print(f"Nobody: {nobody}")
+        print(f"[cyan]Nobody:[/cyan] {nobody}")
 
         # Select scalar value using query mixin
         total_revenue = await driver.select_value("SELECT SUM(order_total) FROM orders WHERE status = $1", "completed")
-        print(f"Total completed revenue: ${total_revenue:.2f}")
+        print(f"[cyan]Total completed revenue:[/cyan] ${total_revenue:.2f}")
 
         # Update
         result = await driver.execute("UPDATE orders SET status = $1 WHERE order_total < $2", "processed", 100.0)
-        print(f"Processed {result.rows_affected} small orders")
+        print(f"[yellow]Processed {result.rows_affected} small orders[/yellow]")
 
         # Delete
         result = await driver.execute("DELETE FROM orders WHERE status = $1", "cancelled")
-        print(f"Removed {result.rows_affected} cancelled orders")
+        print(f"[yellow]Removed {result.rows_affected} cancelled orders[/yellow]")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
         query = sql.select("*").from_("orders").where("status = $1")
         pending_orders = await driver.select(query, "pending")
-        print(f"Pending orders: {pending_orders}")
+        print(f"[cyan]Pending orders:[/cyan] {pending_orders}")
 
         # Query builder with comparison
         query = (
@@ -100,23 +109,23 @@ async def psqlpy_example() -> None:
             .order_by("order_total DESC")
         )
         large_orders = await driver.select(query, 200.0)
-        print(f"Large orders: {large_orders}")
+        print(f"[cyan]Large orders:[/cyan] {large_orders}")
 
         # Demonstrate pagination
         page_orders = await driver.select("SELECT * FROM orders ORDER BY customer_name LIMIT $1 OFFSET $2", 2, 0)
         total_count = await driver.select_value("SELECT COUNT(*) FROM orders")
-        print(f"Page 1: {page_orders}, Total: {total_count}")
+        print(f"[cyan]Page 1:[/cyan] {page_orders}[cyan], Total:[/cyan] {total_count}")
 
 
 def main() -> None:
     """Run PSQLPy example."""
-    print("=== PSQLPy (Rust PostgreSQL) Driver Example ===")
+    print("[bold blue]=== PSQLPy (Rust PostgreSQL) Driver Example ===[/bold blue]")
     try:
         asyncio.run(psqlpy_example())
-        print("✅ PSQLPy example completed successfully!")
+        print("[green]✅ PSQLPy example completed successfully![/green]")
     except Exception as e:
-        print(f"❌ PSQLPy example failed: {e}")
-        print("Make sure PostgreSQL is running with: make infra-up")
+        print(f"[red]❌ PSQLPy example failed: {e}[/red]")
+        print("[yellow]Make sure PostgreSQL is running with: make infra-up[/yellow]")
 
 
 if __name__ == "__main__":
