@@ -1,5 +1,8 @@
 """Tests for ADBC ADK store edge cases and error handling."""
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
@@ -9,7 +12,7 @@ pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.i
 
 
 @pytest.fixture()
-def adbc_store(tmp_path):
+def adbc_store(tmp_path: Path) -> AdbcADKStore:
     """Create ADBC ADK store with SQLite backend."""
     db_path = tmp_path / "test_adk.db"
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
@@ -18,13 +21,13 @@ def adbc_store(tmp_path):
     return store
 
 
-def test_create_tables_idempotent(adbc_store):
+def test_create_tables_idempotent(adbc_store: Any) -> None:
     """Test that create_tables can be called multiple times safely."""
     adbc_store.create_tables()
     adbc_store.create_tables()
 
 
-def test_table_names_validation(tmp_path):
+def test_table_names_validation(tmp_path: Path) -> None:
     """Test that invalid table names are rejected."""
     db_path = tmp_path / "test_validation.db"
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
@@ -43,7 +46,7 @@ def test_table_names_validation(tmp_path):
         AdbcADKStore(config, session_table=long_name, events_table="events")
 
 
-def test_operations_before_create_tables(tmp_path):
+def test_operations_before_create_tables(tmp_path: Path) -> None:
     """Test operations gracefully handle missing tables."""
     db_path = tmp_path / "test_no_tables.db"
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
@@ -59,7 +62,7 @@ def test_operations_before_create_tables(tmp_path):
     assert events == []
 
 
-def test_custom_table_names(tmp_path):
+def test_custom_table_names(tmp_path: Path) -> None:
     """Test using custom table names."""
     db_path = tmp_path / "test_custom.db"
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
@@ -74,7 +77,7 @@ def test_custom_table_names(tmp_path):
     assert retrieved is not None
 
 
-def test_unicode_in_fields(adbc_store):
+def test_unicode_in_fields(adbc_store: Any) -> None:
     """Test Unicode characters in various fields."""
     session_id = "unicode-session"
     app_name = "测试应用"
@@ -100,7 +103,7 @@ def test_unicode_in_fields(adbc_store):
     assert event["content"]["text"] == "こんにちは 🌍"
 
 
-def test_special_characters_in_json(adbc_store):
+def test_special_characters_in_json(adbc_store: Any) -> None:
     """Test special characters in JSON fields."""
     session_id = "special-chars"
     state = {
@@ -117,7 +120,7 @@ def test_special_characters_in_json(adbc_store):
     assert retrieved["state"] == state
 
 
-def test_very_long_strings(adbc_store):
+def test_very_long_strings(adbc_store: Any) -> None:
     """Test handling very long strings in VARCHAR fields."""
     long_id = "x" * 127
     long_app = "a" * 127
@@ -129,7 +132,7 @@ def test_very_long_strings(adbc_store):
     assert session["user_id"] == long_user
 
 
-def test_session_state_with_deeply_nested_data(adbc_store):
+def test_session_state_with_deeply_nested_data(adbc_store: Any) -> None:
     """Test deeply nested JSON structures."""
     session_id = "deep-nest"
     deeply_nested = {"level1": {"level2": {"level3": {"level4": {"level5": {"value": "deep"}}}}}}
@@ -141,7 +144,7 @@ def test_session_state_with_deeply_nested_data(adbc_store):
     assert retrieved["state"]["level1"]["level2"]["level3"]["level4"]["level5"]["value"] == "deep"
 
 
-def test_concurrent_session_updates(adbc_store):
+def test_concurrent_session_updates(adbc_store: Any) -> None:
     """Test multiple updates to the same session."""
     session_id = "concurrent-test"
     adbc_store.create_session(session_id, "app", "user", {"version": 1})
@@ -154,7 +157,7 @@ def test_concurrent_session_updates(adbc_store):
     assert final_session["state"]["version"] == 11
 
 
-def test_event_with_none_values(adbc_store):
+def test_event_with_none_values(adbc_store: Any) -> None:
     """Test creating event with explicit None values."""
     session_id = "none-test"
     adbc_store.create_session(session_id, "app", "user", {})
@@ -188,7 +191,7 @@ def test_event_with_none_values(adbc_store):
     assert event["interrupted"] is None
 
 
-def test_list_sessions_with_same_user_different_apps(adbc_store):
+def test_list_sessions_with_same_user_different_apps(adbc_store: Any) -> None:
     """Test listing sessions doesn't mix data across apps."""
     user_id = "user-123"
     app1 = "app1"
@@ -205,17 +208,17 @@ def test_list_sessions_with_same_user_different_apps(adbc_store):
     assert len(app2_sessions) == 1
 
 
-def test_delete_nonexistent_session(adbc_store):
+def test_delete_nonexistent_session(adbc_store: Any) -> None:
     """Test deleting a session that doesn't exist."""
     adbc_store.delete_session("nonexistent-session")
 
 
-def test_update_nonexistent_session(adbc_store):
+def test_update_nonexistent_session(adbc_store: Any) -> None:
     """Test updating a session that doesn't exist."""
     adbc_store.update_session_state("nonexistent-session", {"data": "test"})
 
 
-def test_drop_and_recreate_tables(adbc_store):
+def test_drop_and_recreate_tables(adbc_store: Any) -> None:
     """Test dropping and recreating tables."""
     session_id = "test-session"
     adbc_store.create_session(session_id, "app", "user", {"data": "test"})
@@ -236,7 +239,7 @@ def test_drop_and_recreate_tables(adbc_store):
     assert session is None
 
 
-def test_json_with_escaped_characters(adbc_store):
+def test_json_with_escaped_characters(adbc_store: Any) -> None:
     """Test JSON serialization of escaped characters."""
     session_id = "escaped-json"
     state = {"escaped": r"test\nvalue\t", "quotes": r'"quoted"'}

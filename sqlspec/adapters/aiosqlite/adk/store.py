@@ -228,7 +228,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -237,7 +237,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
-            user_fk: Optional FK value for user_fk_column.
+            owner_id: Optional owner ID value for owner_id_column.
 
         Returns:
             Created session record.
@@ -250,13 +250,14 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         now_julian = _datetime_to_julian(now)
         state_json = to_json(state) if state else None
 
-        if self._user_fk_column_name:
+        params: tuple[Any, ...]
+        if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table}
-            (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+            (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """
-            params = (session_id, app_name, user_id, user_fk, state_json, now_julian, now_julian)
+            params = (session_id, app_name, user_id, owner_id, state_json, now_julian, now_julian)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)

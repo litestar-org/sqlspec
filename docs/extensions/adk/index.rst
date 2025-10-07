@@ -56,6 +56,7 @@ Developer-Friendly Design
 - **Simple API**: Clean, intuitive interface matching ADK patterns
 - **Type Safety**: Full type hints and runtime type checking
 - **Flexible Schema**: Customizable table names for multi-tenant deployments
+- **Owner ID Columns**: Optional foreign keys linking sessions to user tables with cascade deletes
 - **Rich Metadata**: JSON storage for content, grounding, and custom data
 
 Performance Optimized
@@ -208,6 +209,12 @@ See the following runnable examples in the ``docs/examples/`` directory:
 
       Managing multiple applications and users with proper session isolation.
 
+   .. grid-item-card:: 🔗 Owner ID Column Example
+      :link: /examples/adk_duckdb_user_fk
+      :link-type: doc
+
+      Link sessions to user tables with foreign keys and cascade deletes.
+
 Use Cases
 =========
 
@@ -260,6 +267,31 @@ Isolate sessions by application and user with custom table names:
        session_table="tenant_b_sessions",
        events_table="tenant_b_events"
    )
+
+Or use owner ID columns for referential integrity:
+
+.. code-block:: python
+
+   # Link sessions to tenants table with cascade delete
+   store = AsyncpgADKStore(
+       config,
+       owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+   )
+   await store.create_tables()
+
+   # Create session linked to tenant
+   session = await store.create_session(
+       session_id="session-1",
+       app_name="analytics",
+       user_id="alice",
+       state={},
+       owner_id=1  # Tenant ID
+   )
+
+   # Deleting the tenant automatically removes all its sessions
+   async with config.provide_connection() as conn:
+       await conn.execute("DELETE FROM tenants WHERE id = 1")
+   # session-1 is automatically deleted via CASCADE
 
 Session Analytics
 -----------------

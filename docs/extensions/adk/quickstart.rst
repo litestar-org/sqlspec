@@ -287,6 +287,310 @@ For multi-tenant deployments, use custom table names per tenant:
    await store_b.create_tables()
    service_b = SQLSpecSessionService(store_b)
 
+User Foreign Key Column
+========================
+
+Link ADK sessions to your application's user table with referential integrity using the ``owner_id_column`` parameter.
+This feature enables database-enforced relationships between sessions and users, automatic cascade deletes, and
+multi-tenant isolation.
+
+Why Use Owner ID Columns?
+-------------------------
+
+**Benefits:**
+
+- **Referential Integrity**: Database enforces valid user references
+- **Cascade Deletes**: Automatically remove sessions when users are deleted
+- **Multi-Tenancy**: Isolate sessions by tenant/organization
+- **Query Efficiency**: Join sessions with user data in a single query
+- **Data Consistency**: Prevent orphaned sessions
+
+Basic Usage
+-----------
+
+The ``owner_id_column`` parameter accepts a full column DDL definition:
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
+
+   config = AsyncpgConfig(pool_config={
+       "dsn": "postgresql://user:password@localhost:5432/mydb"
+   })
+
+   # Create store with owner ID column
+   store = AsyncpgADKStore(
+       config,
+       owner_id_column="account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"
+   )
+   await store.create_tables()
+
+   # Create session with user FK value
+   session = await store.create_session(
+       session_id="session-123",
+       app_name="my_agent",
+       user_id="alice@example.com",
+       state={"theme": "dark"},
+       owner_id="550e8400-e29b-41d4-a716-446655440000"  # UUID of owner
+   )
+
+Database-Specific Examples
+---------------------------
+
+PostgreSQL with UUID
+^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
+
+   store = AsyncpgADKStore(
+       config,
+       owner_id_column="account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"
+   )
+   await store.create_tables()
+
+   # Use UUID type for owner_id
+   import uuid
+   user_uuid = uuid.UUID("550e8400-e29b-41d4-a716-446655440000")
+
+   session = await store.create_session(
+       session_id="session-1",
+       app_name="app",
+       user_id="alice",
+       state={},
+       owner_id=user_uuid
+   )
+
+MySQL with BIGINT
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncmy import AsyncmyConfig
+   from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
+
+   store = AsyncmyADKStore(
+       config,
+       owner_id_column="user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE"
+   )
+   await store.create_tables()
+
+   session = await store.create_session(
+       session_id="session-1",
+       app_name="app",
+       user_id="alice",
+       state={},
+       owner_id=12345  # Integer user ID
+   )
+
+SQLite with INTEGER
+^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from sqlspec.adapters.sqlite import SqliteConfig
+   from sqlspec.adapters.sqlite.adk import SqliteADKStore
+
+   store = SqliteADKStore(
+       config,
+       owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+   )
+   store.create_tables()
+
+   session = store.create_session(
+       session_id="session-1",
+       app_name="app",
+       user_id="alice",
+       state={},
+       owner_id=1
+   )
+
+Oracle with NUMBER
+^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from sqlspec.adapters.oracledb import OracleConfig
+   from sqlspec.adapters.oracledb.adk import OracleADKStore
+
+   store = OracleADKStore(
+       config,
+       owner_id_column="user_id NUMBER(10) REFERENCES users(id) ON DELETE CASCADE"
+   )
+   await store.create_tables()
+
+   session = await store.create_session(
+       session_id="session-1",
+       app_name="app",
+       user_id="alice",
+       state={},
+       owner_id=12345
+   )
+
+Multi-Tenant Example
+---------------------
+
+Complete example linking sessions to tenants:
+
+.. code-block:: python
+
+   from sqlspec.adapters.duckdb import DuckDBConfig
+   from sqlspec.adapters.duckdb.adk import DuckdbADKStore
+
+   config = DuckDBConfig(pool_config={"database": "multi_tenant.ddb"})
+
+   # Create tenants table
+   with config.provide_connection() as conn:
+       conn.execute("""
+           CREATE TABLE tenants (
+               id INTEGER PRIMARY KEY,
+               name VARCHAR NOT NULL
+           )
+       """)
+       conn.execute("INSERT INTO tenants (id, name) VALUES (1, 'Acme Corp')")
+       conn.execute("INSERT INTO tenants (id, name) VALUES (2, 'Initech')")
+
+   # Create store with tenant FK
+   store = DuckdbADKStore(
+       config,
+       owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+   )
+   store.create_tables()
+
+   # Create sessions for different tenants
+   session_acme = store.create_session(
+       session_id="session-acme-1",
+       app_name="analytics",
+       user_id="alice",
+       state={"workspace": "dashboard"},
+       owner_id=1  # Acme Corp
+   )
+
+   session_initech = store.create_session(
+       session_id="session-initech-1",
+       app_name="analytics",
+       user_id="bob",
+       state={"workspace": "reports"},
+       owner_id=2  # Initech
+   )
+
+   # Query sessions with tenant info
+   with config.provide_connection() as conn:
+       cursor = conn.execute("""
+           SELECT s.id, s.user_id, t.name as tenant_name
+           FROM adk_sessions s
+           JOIN tenants t ON s.tenant_id = t.id
+       """)
+       for row in cursor.fetchall():
+           print(f"Session {row[0]} - User: {row[1]}, Tenant: {row[2]}")
+
+.. seealso::
+
+   :doc:`/examples/adk_duckdb_user_fk`
+      Complete runnable multi-tenant example with owner ID column
+
+Cascade Delete Behavior
+------------------------
+
+When configured with ``ON DELETE CASCADE``, deleting a user automatically removes all their sessions:
+
+.. code-block:: python
+
+   # Create session linked to user
+   await store.create_session(
+       session_id="session-1",
+       app_name="app",
+       user_id="alice",
+       state={},
+       owner_id=user_uuid
+   )
+
+   # Verify session exists
+   session = await store.get_session("session-1")
+   assert session is not None
+
+   # Delete user from your application
+   async with config.provide_connection() as conn:
+       await conn.execute("DELETE FROM users WHERE id = $1", user_uuid)
+
+   # Session automatically deleted by CASCADE
+   session = await store.get_session("session-1")
+   assert session is None  # Automatically removed
+
+Nullable Foreign Keys
+---------------------
+
+Use nullable FK columns for optional user relationships:
+
+.. code-block:: python
+
+   store = AsyncpgADKStore(
+       config,
+       owner_id_column="workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL"
+   )
+   await store.create_tables()
+
+   # Create session without FK (NULL value)
+   session = await store.create_session(
+       session_id="session-1",
+       app_name="app",
+       user_id="alice",
+       state={}
+       # owner_id not provided - will be NULL
+   )
+
+   # Create session with FK
+   session = await store.create_session(
+       session_id="session-2",
+       app_name="app",
+       user_id="bob",
+       state={},
+       owner_id=workspace_uuid
+   )
+
+Configuration via Extension Config
+-----------------------------------
+
+For migrations and programmatic configuration, use ``extension_config``:
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+   config = AsyncpgConfig(
+       pool_config={"dsn": "postgresql://..."},
+       extension_config={
+           "adk": {
+               "session_table": "adk_sessions",
+               "events_table": "adk_events",
+               "owner_id_column": "account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"
+           }
+       }
+   )
+
+This is especially useful with the migration system (see :doc:`migrations`).
+
+Column Name Extraction
+----------------------
+
+The store automatically extracts the column name from your DDL:
+
+.. code-block:: python
+
+   store = AsyncpgADKStore(
+       config,
+       owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)"
+   )
+
+   print(store.owner_id_column_name)  # "tenant_id"
+   print(store.owner_id_column_ddl)   # Full DDL string
+
+The column name is used in INSERT and SELECT statements, while the full DDL
+is used in CREATE TABLE statements.
+
 Event Filtering
 ===============
 

@@ -67,7 +67,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         config: "AdbcConfig",
         session_table: str = "adk_sessions",
         events_table: str = "adk_events",
-        user_fk_column: "str | None" = None,
+        owner_id_column: "str | None" = None,
     ) -> None:
         """Initialize ADBC ADK store.
 
@@ -75,10 +75,15 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             config: AdbcConfig instance (any ADBC driver).
             session_table: Name of the sessions table.
             events_table: Name of the events table.
-            user_fk_column: Optional FK column DDL for multi-tenancy.
+            owner_id_column: Optional owner ID column DDL for multi-tenancy.
         """
-        super().__init__(config, session_table, events_table, user_fk_column)
+        super().__init__(config, session_table, events_table, owner_id_column)
         self._dialect = self._detect_dialect()
+
+    @property
+    def dialect(self) -> str:
+        """Return the detected database dialect."""
+        return self._dialect
 
     def _detect_dialect(self) -> str:
         """Detect ADBC driver dialect from connection config.
@@ -180,12 +185,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             SQL to create sessions table optimized for PostgreSQL.
         """
-        user_fk_ddl = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{user_fk_ddl},
+            user_id VARCHAR(128) NOT NULL{owner_id_ddl},
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -198,12 +203,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             SQL to create sessions table optimized for SQLite.
         """
-        user_fk_ddl = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id TEXT PRIMARY KEY,
             app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL{user_fk_ddl},
+            user_id TEXT NOT NULL{owner_id_ddl},
             state TEXT NOT NULL DEFAULT '{{}}',
             create_time REAL NOT NULL,
             update_time REAL NOT NULL
@@ -216,12 +221,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             SQL to create sessions table optimized for DuckDB.
         """
-        user_fk_ddl = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{user_fk_ddl},
+            user_id VARCHAR(128) NOT NULL{owner_id_ddl},
             state JSON NOT NULL,
             create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -234,12 +239,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             SQL to create sessions table optimized for Snowflake.
         """
-        user_fk_ddl = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR PRIMARY KEY,
             app_name VARCHAR NOT NULL,
-            user_id VARCHAR NOT NULL{user_fk_ddl},
+            user_id VARCHAR NOT NULL{owner_id_ddl},
             state VARIANT NOT NULL,
             create_time TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
             update_time TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
@@ -252,12 +257,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             SQL to create sessions table using generic types.
         """
-        user_fk_ddl = f", {self._user_fk_column_ddl}" if self._user_fk_column_ddl else ""
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{user_fk_ddl},
+            user_id VARCHAR(128) NOT NULL{owner_id_ddl},
             state TEXT NOT NULL DEFAULT '{{}}',
             create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -476,7 +481,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 cursor.execute(events_idx)
                 conn.commit()
             finally:
-                cursor.close()
+                cursor.close()  # type: ignore[no-untyped-call]
 
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
@@ -498,7 +503,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             logger.debug("Foreign key enforcement not supported or already enabled")
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -507,20 +512,21 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
-            user_fk: Optional FK value for user_fk_column (can be None for nullable columns).
+            owner_id: Optional owner ID value for owner_id_column (can be None for nullable columns).
 
         Returns:
             Created session record.
         """
         state_json = self._serialize_state(state)
 
-        if self._user_fk_column_name:
+        params: tuple[Any, ...]
+        if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table}
-            (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+            (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """
-            params = (session_id, app_name, user_id, user_fk, state_json)
+            params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
@@ -534,7 +540,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 cursor.execute(sql, params)
                 conn.commit()
             finally:
-                cursor.close()
+                cursor.close()  # type: ignore[no-untyped-call]
 
         return self.get_session(session_id)  # type: ignore[return-value]
 
@@ -575,7 +581,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                         update_time=row[5],
                     )
                 finally:
-                    cursor.close()
+                    cursor.close()  # type: ignore[no-untyped-call]
         except Exception as e:
             error_msg = str(e).lower()
             if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
@@ -606,7 +612,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 cursor.execute(sql, (state_json, session_id))
                 conn.commit()
             finally:
-                cursor.close()
+                cursor.close()  # type: ignore[no-untyped-call]
 
     def delete_session(self, session_id: str) -> None:
         """Delete session and all associated events (cascade).
@@ -626,7 +632,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 cursor.execute(sql, (session_id,))
                 conn.commit()
             finally:
-                cursor.close()
+                cursor.close()  # type: ignore[no-untyped-call]
 
     def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
         """List all sessions for a user in an app.
@@ -667,7 +673,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                         for row in rows
                     ]
                 finally:
-                    cursor.close()
+                    cursor.close()  # type: ignore[no-untyped-call]
         except Exception as e:
             error_msg = str(e).lower()
             if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
@@ -758,7 +764,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 )
                 conn.commit()
             finally:
-                cursor.close()
+                cursor.close()  # type: ignore[no-untyped-call]
 
         events = self.list_events(session_id)
         for event in events:
@@ -823,7 +829,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                         for row in rows
                     ]
                 finally:
-                    cursor.close()
+                    cursor.close()  # type: ignore[no-untyped-call]
         except Exception as e:
             error_msg = str(e).lower()
             if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):

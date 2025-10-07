@@ -44,7 +44,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         config: DuckDBConfig instance.
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
-        user_fk_column: Optional FK column DDL. Defaults to None.
+        owner_id_column: Optional owner ID column DDL. Defaults to None.
 
     Example:
         from sqlspec.adapters.duckdb import DuckDBConfig
@@ -78,7 +78,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         config: "DuckDBConfig",
         session_table: str = "adk_sessions",
         events_table: str = "adk_events",
-        user_fk_column: "str | None" = None,
+        owner_id_column: "str | None" = None,
     ) -> None:
         """Initialize DuckDB ADK store.
 
@@ -86,9 +86,9 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             config: DuckDBConfig instance.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
-            user_fk_column: Optional FK column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
+            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
         """
-        super().__init__(config, session_table, events_table, user_fk_column)
+        super().__init__(config, session_table, events_table, owner_id_column)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get DuckDB CREATE TABLE SQL for sessions.
@@ -101,19 +101,19 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             - JSON type for state storage (DuckDB native)
             - TIMESTAMP for create_time and update_time
             - CURRENT_TIMESTAMP for defaults
-            - Optional user FK column for multi-tenant scenarios
+            - Optional owner ID column for multi-tenant scenarios
             - Composite index on (app_name, user_id) for listing
             - Index on update_time DESC for recent session queries
         """
-        user_fk_line = ""
-        if self._user_fk_column_ddl:
-            user_fk_line = f",\n            {self._user_fk_column_ddl}"
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR PRIMARY KEY,
             app_name VARCHAR NOT NULL,
-            user_id VARCHAR NOT NULL{user_fk_line},
+            user_id VARCHAR NOT NULL{owner_id_line},
             state JSON NOT NULL,
             create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -182,7 +182,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -191,7 +191,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
-            user_fk: Optional FK value for user_fk_column (if configured).
+            owner_id: Optional owner ID value for owner_id_column (if configured).
 
         Returns:
             Created session record.
@@ -203,13 +203,14 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
 
-        if self._user_fk_column_name:
+        params: tuple[Any, ...]
+        if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table}
-            (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+            (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """
-            params = (session_id, app_name, user_id, user_fk, state_json, now, now)
+            params = (session_id, app_name, user_id, owner_id, state_json, now, now)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)

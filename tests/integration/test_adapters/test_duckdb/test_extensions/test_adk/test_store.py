@@ -1,5 +1,6 @@
 """Integration tests for DuckDB ADK session store."""
 
+from collections.abc import Generator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,7 +13,7 @@ pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
 
 @pytest.fixture
-def duckdb_adk_store(tmp_path: Path, worker_id: str) -> DuckdbADKStore:
+def duckdb_adk_store(tmp_path: Path, worker_id: str) -> "Generator[DuckdbADKStore, None, None]":
     """Create DuckDB ADK store with temporary file-based database.
 
     Args:
@@ -389,9 +390,9 @@ def test_concurrent_session_updates(duckdb_adk_store: DuckdbADKStore) -> None:
     assert final_session["state"]["counter"] == 10
 
 
-def test_user_fk_column_with_integer(tmp_path: Path, worker_id: str) -> None:
-    """Test user FK column with INTEGER type."""
-    db_path = tmp_path / f"test_user_fk_int_{worker_id}.duckdb"
+def test_owner_id_column_with_integer(tmp_path: Path, worker_id: str) -> None:
+    """Test owner ID column with INTEGER type."""
+    db_path = tmp_path / f"test_owner_id_int_{worker_id}.duckdb"
     try:
         config = DuckDBConfig(pool_config={"database": str(db_path)})
 
@@ -404,15 +405,15 @@ def test_user_fk_column_with_integer(tmp_path: Path, worker_id: str) -> None:
             config,
             session_table="sessions_with_tenant",
             events_table="events_with_tenant",
-            user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)",
+            owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)",
         )
         store.create_tables()
 
-        assert store.user_fk_column_name == "tenant_id"
-        assert store.user_fk_column_ddl == "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"
+        assert store.owner_id_column_name == "tenant_id"
+        assert store.owner_id_column_ddl == "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"
 
         session = store.create_session(
-            session_id="session-tenant-1", app_name="test-app", user_id="user-001", state={"data": "test"}, user_fk=1
+            session_id="session-tenant-1", app_name="test-app", user_id="user-001", state={"data": "test"}, owner_id=1
         )
 
         assert session["id"] == "session-tenant-1"
@@ -427,9 +428,9 @@ def test_user_fk_column_with_integer(tmp_path: Path, worker_id: str) -> None:
             db_path.unlink()
 
 
-def test_user_fk_column_with_ubigint(tmp_path: Path, worker_id: str) -> None:
-    """Test user FK column with DuckDB UBIGINT type."""
-    db_path = tmp_path / f"test_user_fk_ubigint_{worker_id}.duckdb"
+def test_owner_id_column_with_ubigint(tmp_path: Path, worker_id: str) -> None:
+    """Test owner ID column with DuckDB UBIGINT type."""
+    db_path = tmp_path / f"test_owner_id_ubigint_{worker_id}.duckdb"
     try:
         config = DuckDBConfig(pool_config={"database": str(db_path)})
 
@@ -442,24 +443,24 @@ def test_user_fk_column_with_ubigint(tmp_path: Path, worker_id: str) -> None:
             config,
             session_table="sessions_with_user",
             events_table="events_with_user",
-            user_fk_column="user_fk UBIGINT REFERENCES users(id)",
+            owner_id_column="owner_id UBIGINT REFERENCES users(id)",
         )
         store.create_tables()
 
-        assert store.user_fk_column_name == "user_fk"
+        assert store.owner_id_column_name == "owner_id"
 
         session = store.create_session(
             session_id="session-user-1",
             app_name="test-app",
             user_id="user-001",
             state={"data": "test"},
-            user_fk=18446744073709551615,
+            owner_id=18446744073709551615,
         )
 
         assert session["id"] == "session-user-1"
 
         with config.provide_connection() as conn:
-            cursor = conn.execute("SELECT user_fk FROM sessions_with_user WHERE id = ?", ("session-user-1",))
+            cursor = conn.execute("SELECT owner_id FROM sessions_with_user WHERE id = ?", ("session-user-1",))
             row = cursor.fetchone()
             assert row is not None
             assert row[0] == 18446744073709551615
@@ -468,9 +469,9 @@ def test_user_fk_column_with_ubigint(tmp_path: Path, worker_id: str) -> None:
             db_path.unlink()
 
 
-def test_user_fk_column_foreign_key_constraint(tmp_path: Path, worker_id: str) -> None:
+def test_owner_id_column_foreign_key_constraint(tmp_path: Path, worker_id: str) -> None:
     """Test that FK constraint is enforced."""
-    db_path = tmp_path / f"test_user_fk_constraint_{worker_id}.duckdb"
+    db_path = tmp_path / f"test_owner_id_constraint_{worker_id}.duckdb"
     try:
         config = DuckDBConfig(pool_config={"database": str(db_path)})
 
@@ -483,12 +484,12 @@ def test_user_fk_column_foreign_key_constraint(tmp_path: Path, worker_id: str) -
             config,
             session_table="sessions_with_org",
             events_table="events_with_org",
-            user_fk_column="org_id INTEGER NOT NULL REFERENCES organizations(id)",
+            owner_id_column="org_id INTEGER NOT NULL REFERENCES organizations(id)",
         )
         store.create_tables()
 
         store.create_session(
-            session_id="session-org-1", app_name="test-app", user_id="user-001", state={"data": "test"}, user_fk=100
+            session_id="session-org-1", app_name="test-app", user_id="user-001", state={"data": "test"}, owner_id=100
         )
 
         with pytest.raises(Exception) as exc_info:
@@ -497,7 +498,7 @@ def test_user_fk_column_foreign_key_constraint(tmp_path: Path, worker_id: str) -
                 app_name="test-app",
                 user_id="user-002",
                 state={"data": "test"},
-                user_fk=999,
+                owner_id=999,
             )
 
         assert "FOREIGN KEY constraint" in str(exc_info.value) or "Constraint Error" in str(exc_info.value)
@@ -506,9 +507,9 @@ def test_user_fk_column_foreign_key_constraint(tmp_path: Path, worker_id: str) -
             db_path.unlink()
 
 
-def test_user_fk_column_without_value(tmp_path: Path, worker_id: str) -> None:
-    """Test creating session without user_fk when column is configured but nullable."""
-    db_path = tmp_path / f"test_user_fk_nullable_{worker_id}.duckdb"
+def test_owner_id_column_without_value(tmp_path: Path, worker_id: str) -> None:
+    """Test creating session without owner_id when column is configured but nullable."""
+    db_path = tmp_path / f"test_owner_id_nullable_{worker_id}.duckdb"
     try:
         config = DuckDBConfig(pool_config={"database": str(db_path)})
 
@@ -520,12 +521,12 @@ def test_user_fk_column_without_value(tmp_path: Path, worker_id: str) -> None:
             config,
             session_table="sessions_nullable_fk",
             events_table="events_nullable_fk",
-            user_fk_column="account_id INTEGER REFERENCES accounts(id)",
+            owner_id_column="account_id INTEGER REFERENCES accounts(id)",
         )
         store.create_tables()
 
         session = store.create_session(
-            session_id="session-no-fk", app_name="test-app", user_id="user-001", state={"data": "test"}, user_fk=None
+            session_id="session-no-fk", app_name="test-app", user_id="user-001", state={"data": "test"}, owner_id=None
         )
 
         assert session["id"] == "session-no-fk"
@@ -537,9 +538,9 @@ def test_user_fk_column_without_value(tmp_path: Path, worker_id: str) -> None:
             db_path.unlink()
 
 
-def test_user_fk_column_with_varchar(tmp_path: Path, worker_id: str) -> None:
-    """Test user FK column with VARCHAR type."""
-    db_path = tmp_path / f"test_user_fk_varchar_{worker_id}.duckdb"
+def test_owner_id_column_with_varchar(tmp_path: Path, worker_id: str) -> None:
+    """Test owner ID column with VARCHAR type."""
+    db_path = tmp_path / f"test_owner_id_varchar_{worker_id}.duckdb"
     try:
         config = DuckDBConfig(pool_config={"database": str(db_path)})
 
@@ -552,7 +553,7 @@ def test_user_fk_column_with_varchar(tmp_path: Path, worker_id: str) -> None:
             config,
             session_table="sessions_with_company",
             events_table="events_with_company",
-            user_fk_column="company_code VARCHAR NOT NULL REFERENCES companies(code)",
+            owner_id_column="company_code VARCHAR NOT NULL REFERENCES companies(code)",
         )
         store.create_tables()
 
@@ -561,7 +562,7 @@ def test_user_fk_column_with_varchar(tmp_path: Path, worker_id: str) -> None:
             app_name="test-app",
             user_id="user-001",
             state={"data": "test"},
-            user_fk="ACME",
+            owner_id="ACME",
         )
 
         assert session["id"] == "session-company-1"
@@ -576,9 +577,9 @@ def test_user_fk_column_with_varchar(tmp_path: Path, worker_id: str) -> None:
             db_path.unlink()
 
 
-def test_user_fk_column_multiple_sessions(tmp_path: Path, worker_id: str) -> None:
+def test_owner_id_column_multiple_sessions(tmp_path: Path, worker_id: str) -> None:
     """Test multiple sessions with same FK value."""
-    db_path = tmp_path / f"test_user_fk_multiple_{worker_id}.duckdb"
+    db_path = tmp_path / f"test_owner_id_multiple_{worker_id}.duckdb"
     try:
         config = DuckDBConfig(pool_config={"database": str(db_path)})
 
@@ -591,13 +592,17 @@ def test_user_fk_column_multiple_sessions(tmp_path: Path, worker_id: str) -> Non
             config,
             session_table="sessions_with_dept",
             events_table="events_with_dept",
-            user_fk_column="dept_id INTEGER NOT NULL REFERENCES departments(id)",
+            owner_id_column="dept_id INTEGER NOT NULL REFERENCES departments(id)",
         )
         store.create_tables()
 
         for i in range(5):
             store.create_session(
-                session_id=f"session-dept-{i}", app_name="test-app", user_id=f"user-{i}", state={"index": i}, user_fk=10
+                session_id=f"session-dept-{i}",
+                app_name="test-app",
+                user_id=f"user-{i}",
+                state={"index": i},
+                owner_id=10,
             )
 
         with config.provide_connection() as conn:
@@ -610,9 +615,9 @@ def test_user_fk_column_multiple_sessions(tmp_path: Path, worker_id: str) -> Non
             db_path.unlink()
 
 
-def test_user_fk_column_query_by_fk(tmp_path: Path, worker_id: str) -> None:
+def test_owner_id_column_query_by_fk(tmp_path: Path, worker_id: str) -> None:
     """Test querying sessions by FK column value."""
-    db_path = tmp_path / f"test_user_fk_query_{worker_id}.duckdb"
+    db_path = tmp_path / f"test_owner_id_query_{worker_id}.duckdb"
     try:
         config = DuckDBConfig(pool_config={"database": str(db_path)})
 
@@ -625,13 +630,13 @@ def test_user_fk_column_query_by_fk(tmp_path: Path, worker_id: str) -> None:
             config,
             session_table="sessions_with_project",
             events_table="events_with_project",
-            user_fk_column="project_id INTEGER NOT NULL REFERENCES projects(id)",
+            owner_id_column="project_id INTEGER NOT NULL REFERENCES projects(id)",
         )
         store.create_tables()
 
-        store.create_session("s1", "app", "u1", {"val": 1}, user_fk=1)
-        store.create_session("s2", "app", "u2", {"val": 2}, user_fk=1)
-        store.create_session("s3", "app", "u3", {"val": 3}, user_fk=2)
+        store.create_session("s1", "app", "u1", {"val": 1}, owner_id=1)
+        store.create_session("s2", "app", "u2", {"val": 2}, owner_id=1)
+        store.create_session("s3", "app", "u3", {"val": 3}, owner_id=2)
 
         with config.provide_connection() as conn:
             cursor = conn.execute("SELECT id FROM sessions_with_project WHERE project_id = ? ORDER BY id", (1,))

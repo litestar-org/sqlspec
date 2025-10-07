@@ -4,15 +4,17 @@ Tests verify:
 - LOB reading works correctly (Oracle returns LOB objects)
 - JSON/CLOB types used optimally based on Oracle version
 - NUMBER(1) boolean conversion
-- user_fk_column support with Oracle NUMBER FK
+- owner_id_column support with Oracle NUMBER FK
 - FK constraint validation
 """
 
 import pickle
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
+from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore, OracleSyncADKStore
 
 pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.oracledb, pytest.mark.integration]
@@ -23,21 +25,21 @@ class TestOracleAsyncLOBHandling:
     """Test LOB reading in async store."""
 
     @pytest.fixture()
-    async def oracle_store_async(self, oracle_async_config):
+    async def oracle_store_async(self, oracle_async_config: OracleAsyncConfig) -> Any:
         """Create async Oracle ADK store."""
         store = OracleAsyncADKStore(oracle_async_config)
         await store.create_tables()
         yield store
         async with oracle_async_config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():
+            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     await cursor.execute(stmt)
                 except Exception:
                     pass
             await conn.commit()
 
-    async def test_state_lob_deserialization(self, oracle_store_async):
+    async def test_state_lob_deserialization(self, oracle_store_async: Any) -> None:
         """Test state CLOB/BLOB is correctly deserialized."""
         session_id = "lob-test-session"
         app_name = "test-app"
@@ -52,7 +54,7 @@ class TestOracleAsyncLOBHandling:
         assert retrieved["state"] == state
         assert retrieved["state"]["large_field"] == "x" * 10000
 
-    async def test_event_content_lob_deserialization(self, oracle_store_async):
+    async def test_event_content_lob_deserialization(self, oracle_store_async: Any) -> None:
         """Test event content CLOB is correctly deserialized."""
         from sqlspec.extensions.adk._types import EventRecord
 
@@ -82,7 +84,7 @@ class TestOracleAsyncLOBHandling:
             "interrupted": False,
             "error_code": None,
             "error_message": None,
-            "invocation_id": None,
+            "invocation_id": "",
             "branch": None,
             "long_running_tool_ids_json": None,
         }
@@ -95,7 +97,7 @@ class TestOracleAsyncLOBHandling:
         assert events[0]["grounding_metadata"] == grounding_metadata
         assert events[0]["custom_metadata"] == custom_metadata
 
-    async def test_actions_blob_handling(self, oracle_store_async):
+    async def test_actions_blob_handling(self, oracle_store_async: Any) -> None:
         """Test actions BLOB is correctly read and unpickled."""
         from sqlspec.extensions.adk._types import EventRecord
 
@@ -124,7 +126,7 @@ class TestOracleAsyncLOBHandling:
             "interrupted": None,
             "error_code": None,
             "error_message": None,
-            "invocation_id": None,
+            "invocation_id": "",
             "branch": None,
             "long_running_tool_ids_json": None,
         }
@@ -143,21 +145,21 @@ class TestOracleSyncLOBHandling:
     """Test LOB reading in sync store."""
 
     @pytest.fixture()
-    def oracle_store_sync(self, oracle_sync_config):
+    def oracle_store_sync(self, oracle_sync_config: OracleSyncConfig) -> Any:
         """Create sync Oracle ADK store."""
         store = OracleSyncADKStore(oracle_sync_config)
         store.create_tables()
         yield store
         with oracle_sync_config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():
+            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     cursor.execute(stmt)
                 except Exception:
                     pass
             conn.commit()
 
-    def test_state_lob_deserialization_sync(self, oracle_store_sync):
+    def test_state_lob_deserialization_sync(self, oracle_store_sync: Any) -> None:
         """Test state CLOB/BLOB is correctly deserialized in sync mode."""
         session_id = "lob-test-session-sync"
         app_name = "test-app"
@@ -177,21 +179,21 @@ class TestOracleBooleanConversion:
     """Test NUMBER(1) boolean conversion."""
 
     @pytest.fixture()
-    async def oracle_store_async(self, oracle_async_config):
+    async def oracle_store_async(self, oracle_async_config: OracleAsyncConfig) -> Any:
         """Create async Oracle ADK store."""
         store = OracleAsyncADKStore(oracle_async_config)
         await store.create_tables()
         yield store
         async with oracle_async_config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():
+            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     await cursor.execute(stmt)
                 except Exception:
                     pass
             await conn.commit()
 
-    async def test_boolean_fields_conversion(self, oracle_store_async):
+    async def test_boolean_fields_conversion(self, oracle_store_async: Any) -> None:
         """Test partial, turn_complete, interrupted converted to NUMBER(1)."""
         from sqlspec.extensions.adk._types import EventRecord
 
@@ -217,7 +219,7 @@ class TestOracleBooleanConversion:
             "interrupted": True,
             "error_code": None,
             "error_message": None,
-            "invocation_id": None,
+            "invocation_id": "",
             "branch": None,
             "long_running_tool_ids_json": None,
         }
@@ -230,7 +232,7 @@ class TestOracleBooleanConversion:
         assert events[0]["turn_complete"] is False
         assert events[0]["interrupted"] is True
 
-    async def test_boolean_fields_none_values(self, oracle_store_async):
+    async def test_boolean_fields_none_values(self, oracle_store_async: Any) -> None:
         """Test None values for boolean fields."""
         from sqlspec.extensions.adk._types import EventRecord
 
@@ -256,7 +258,7 @@ class TestOracleBooleanConversion:
             "interrupted": None,
             "error_code": None,
             "error_message": None,
-            "invocation_id": None,
+            "invocation_id": "",
             "branch": None,
             "long_running_tool_ids_json": None,
         }
@@ -272,10 +274,10 @@ class TestOracleBooleanConversion:
 
 @pytest.mark.oracledb
 class TestOracleUserFKColumn:
-    """Test user_fk_column support with Oracle NUMBER FK."""
+    """Test owner_id_column support with Oracle NUMBER FK."""
 
     @pytest.fixture()
-    async def oracle_config_with_tenant_table(self, oracle_async_config):
+    async def oracle_config_with_tenant_table(self, oracle_async_config: OracleAsyncConfig) -> Any:
         """Create tenant table for FK testing."""
         async with oracle_async_config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -320,35 +322,35 @@ class TestOracleUserFKColumn:
                 pass
 
     @pytest.fixture()
-    async def oracle_store_with_fk(self, oracle_config_with_tenant_table):
-        """Create async Oracle ADK store with user_fk_column."""
+    async def oracle_store_with_fk(self, oracle_config_with_tenant_table: Any) -> Any:
+        """Create async Oracle ADK store with owner_id_column."""
         store = OracleAsyncADKStore(
-            oracle_config_with_tenant_table, user_fk_column="tenant_id NUMBER(10) NOT NULL REFERENCES tenants(id)"
+            oracle_config_with_tenant_table, owner_id_column="tenant_id NUMBER(10) NOT NULL REFERENCES tenants(id)"
         )
         await store.create_tables()
         yield store
         async with oracle_config_with_tenant_table.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():
+            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     await cursor.execute(stmt)
                 except Exception:
                     pass
             await conn.commit()
 
-    async def test_create_session_with_user_fk(self, oracle_store_with_fk):
-        """Test creating session with user_fk parameter."""
+    async def test_create_session_with_owner_id(self, oracle_store_with_fk: Any) -> None:
+        """Test creating session with owner_id parameter."""
         session_id = "fk-session-1"
         app_name = "test-app"
         user_id = "user-123"
         state = {"data": "test"}
         tenant_id = 1
 
-        session = await oracle_store_with_fk.create_session(session_id, app_name, user_id, state, user_fk=tenant_id)
+        session = await oracle_store_with_fk.create_session(session_id, app_name, user_id, state, owner_id=tenant_id)
         assert session["id"] == session_id
         assert session["state"] == state
 
-    async def test_user_fk_constraint_validation(self, oracle_store_with_fk):
+    async def test_owner_id_constraint_validation(self, oracle_store_with_fk: Any) -> None:
         """Test FK constraint is enforced (invalid FK should fail)."""
         import oracledb
 
@@ -359,10 +361,10 @@ class TestOracleUserFKColumn:
         invalid_tenant_id = 9999
 
         with pytest.raises(oracledb.IntegrityError):
-            await oracle_store_with_fk.create_session(session_id, app_name, user_id, state, user_fk=invalid_tenant_id)
+            await oracle_store_with_fk.create_session(session_id, app_name, user_id, state, owner_id=invalid_tenant_id)
 
-    async def test_create_session_without_user_fk_when_required(self, oracle_store_with_fk):
-        """Test creating session without user_fk when column has NOT NULL."""
+    async def test_create_session_without_owner_id_when_required(self, oracle_store_with_fk: Any) -> None:
+        """Test creating session without owner_id when column has NOT NULL."""
         import oracledb
 
         session_id = "fk-missing-session"
@@ -371,18 +373,20 @@ class TestOracleUserFKColumn:
         state = {"data": "test"}
 
         with pytest.raises(oracledb.IntegrityError):
-            await oracle_store_with_fk.create_session(session_id, app_name, user_id, state, user_fk=None)
+            await oracle_store_with_fk.create_session(session_id, app_name, user_id, state, owner_id=None)
 
-    async def test_fk_column_name_parsing(self, oracle_async_config):
-        """Test _user_fk_column_name is correctly parsed from DDL."""
-        store = OracleAsyncADKStore(oracle_async_config, user_fk_column="account_id NUMBER(19) REFERENCES accounts(id)")
-        assert store.user_fk_column_name == "account_id"
-        assert store.user_fk_column_ddl == "account_id NUMBER(19) REFERENCES accounts(id)"
+    async def test_fk_column_name_parsing(self, oracle_async_config: OracleAsyncConfig) -> None:
+        """Test _owner_id_column_name is correctly parsed from DDL."""
+        store = OracleAsyncADKStore(
+            oracle_async_config, owner_id_column="account_id NUMBER(19) REFERENCES accounts(id)"
+        )
+        assert store.owner_id_column_name == "account_id"
+        assert store.owner_id_column_ddl == "account_id NUMBER(19) REFERENCES accounts(id)"
 
         store2 = OracleAsyncADKStore(
-            oracle_async_config, user_fk_column="org_uuid RAW(16) REFERENCES organizations(id)"
+            oracle_async_config, owner_id_column="org_uuid RAW(16) REFERENCES organizations(id)"
         )
-        assert store2.user_fk_column_name == "org_uuid"
+        assert store2.owner_id_column_name == "org_uuid"
 
 
 @pytest.mark.oracledb
@@ -390,27 +394,27 @@ class TestOracleJSONStorageTypes:
     """Test JSON storage type detection and usage."""
 
     @pytest.fixture()
-    async def oracle_store_async(self, oracle_async_config):
+    async def oracle_store_async(self, oracle_async_config: OracleAsyncConfig) -> Any:
         """Create async Oracle ADK store."""
         store = OracleAsyncADKStore(oracle_async_config)
         await store.create_tables()
         yield store
         async with oracle_async_config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():
+            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     await cursor.execute(stmt)
                 except Exception:
                     pass
             await conn.commit()
 
-    async def test_json_storage_type_detection(self, oracle_store_async):
+    async def test_json_storage_type_detection(self, oracle_store_async: Any) -> None:
         """Test JSON storage type is detected correctly."""
         storage_type = await oracle_store_async._detect_json_storage_type()
 
         assert storage_type in ["json", "blob_json", "clob_json", "blob_plain"]
 
-    async def test_json_fields_stored_and_retrieved(self, oracle_store_async):
+    async def test_json_fields_stored_and_retrieved(self, oracle_store_async: Any) -> None:
         """Test JSON fields use appropriate CLOB/BLOB/JSON storage."""
         session_id = "json-test-session"
         app_name = "test-app"
@@ -435,10 +439,10 @@ class TestOracleJSONStorageTypes:
 
 @pytest.mark.oracledb
 class TestOracleSyncUserFKColumn:
-    """Test user_fk_column support in sync store."""
+    """Test owner_id_column support in sync store."""
 
     @pytest.fixture()
-    def oracle_config_with_users_table(self, oracle_sync_config):
+    def oracle_config_with_users_table(self, oracle_sync_config: OracleSyncConfig) -> Any:
         """Create users table for FK testing."""
         with oracle_sync_config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -483,31 +487,31 @@ class TestOracleSyncUserFKColumn:
                 pass
 
     @pytest.fixture()
-    def oracle_store_sync_with_fk(self, oracle_config_with_users_table):
-        """Create sync Oracle ADK store with user_fk_column."""
+    def oracle_store_sync_with_fk(self, oracle_config_with_users_table: Any) -> Any:
+        """Create sync Oracle ADK store with owner_id_column."""
         store = OracleSyncADKStore(
-            oracle_config_with_users_table, user_fk_column="owner_id NUMBER(19) REFERENCES users(id) ON DELETE CASCADE"
+            oracle_config_with_users_table, owner_id_column="owner_id NUMBER(19) REFERENCES users(id) ON DELETE CASCADE"
         )
         store.create_tables()
         yield store
         with oracle_config_with_users_table.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():
+            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     cursor.execute(stmt)
                 except Exception:
                     pass
             conn.commit()
 
-    def test_create_session_with_user_fk_sync(self, oracle_store_sync_with_fk):
-        """Test creating session with user_fk in sync mode."""
+    def test_create_session_with_owner_id_sync(self, oracle_store_sync_with_fk: Any) -> None:
+        """Test creating session with owner_id in sync mode."""
         session_id = "sync-fk-session"
         app_name = "test-app"
         user_id = "alice"
         state = {"data": "sync test"}
         owner_id = 100
 
-        session = oracle_store_sync_with_fk.create_session(session_id, app_name, user_id, state, user_fk=owner_id)
+        session = oracle_store_sync_with_fk.create_session(session_id, app_name, user_id, state, owner_id=owner_id)
         assert session["id"] == session_id
         assert session["state"] == state
 

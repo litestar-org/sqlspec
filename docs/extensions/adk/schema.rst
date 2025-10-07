@@ -54,6 +54,10 @@ Field Definitions
      - VARCHAR(128)
      - No
      - User identifier owning the session.
+   * - ``<owner_id_column>``
+     - (Configurable)
+     - Depends
+     - **Optional**: Custom FK column to link sessions to your user table. See :ref:`user-fk-column-feature`.
    * - ``state``
      - JSON/JSONB
      - No
@@ -66,6 +70,46 @@ Field Definitions
      - TIMESTAMP
      - No
      - Last update timestamp (UTC, auto-updated)
+
+.. _user-fk-column-feature:
+
+User Foreign Key Column (Optional)
+-----------------------------------
+
+The sessions table can include an **optional owner ID column** to link sessions to your
+application's user table. This enables:
+
+- **Referential integrity**: Database enforces valid user references
+- **Cascade deletes**: Automatically remove sessions when users are deleted
+- **Multi-tenancy**: Isolate sessions by tenant/organization/workspace
+- **Join queries**: Efficiently query sessions with user metadata
+
+Configuration:
+  The ``owner_id_column`` parameter accepts a complete column DDL definition:
+
+  .. code-block:: python
+
+     store = AsyncpgADKStore(
+         config,
+         owner_id_column="account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"
+     )
+
+Column Name Parsing:
+  The first word of the DDL is extracted as the column name for INSERT/SELECT operations.
+  The entire DDL is used verbatim in CREATE TABLE statements.
+
+Format:
+  ``"column_name TYPE [NOT NULL] REFERENCES table(column) [ON DELETE ...]"``
+
+Examples by Database:
+
+- **PostgreSQL**: ``"account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"``
+- **MySQL**: ``"user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE"``
+- **SQLite**: ``"tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"``
+- **Oracle**: ``"user_id NUMBER(10) REFERENCES users(id) ON DELETE CASCADE"``
+- **Nullable**: ``"workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL"``
+
+See :doc:`quickstart` for complete usage examples.
 
 Indexes
 -------
@@ -96,6 +140,8 @@ Database-Specific Schema
 PostgreSQL
 ^^^^^^^^^^
 
+**Base Schema (without owner ID column):**
+
 .. code-block:: sql
 
    CREATE TABLE adk_sessions (
@@ -117,12 +163,29 @@ PostgreSQL
        ON adk_sessions USING GIN (state)
        WHERE state != '{}'::jsonb;
 
+**With Owner ID Column:**
+
+.. code-block:: sql
+
+   CREATE TABLE adk_sessions (
+       id VARCHAR(128) PRIMARY KEY,
+       app_name VARCHAR(128) NOT NULL,
+       user_id VARCHAR(128) NOT NULL,
+       account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       state JSONB NOT NULL DEFAULT '{}'::jsonb,
+       create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+   ) WITH (fillfactor = 80);
+
+   -- Indexes...
+
 **Notes:**
 
 - ``JSONB`` type for efficient JSON operations
 - ``TIMESTAMPTZ`` for timezone-aware timestamps
 - ``FILLFACTOR 80`` leaves space for HOT updates
 - Partial GIN index excludes empty states
+- User FK column is inserted after ``user_id`` when configured
 
 MySQL
 ^^^^^

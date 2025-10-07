@@ -87,7 +87,7 @@ The plugin provides dependency injection for connections, pools, and sessions:
 Commit Modes
 ^^^^^^^^^^^^
 
-The plugin supports different transaction commit strategies:
+The plugin supports different transaction commit strategies configured via ``extension_config``:
 
 **Manual Commit Mode (Default)**
 
@@ -96,38 +96,47 @@ You control transaction boundaries explicitly:
 .. code-block:: python
 
    from litestar import post
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.driver import AsyncDriverAdapterBase
+
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://..."},
+           extension_config={
+               "litestar": {"commit_mode": "manual"}  # Default
+           }
+       )
+   )
 
    @post("/users")
    async def create_user(
        data: dict,
        db_session: AsyncDriverAdapterBase
    ) -> dict:
-       try:
-           await db_session.begin()
-
+       async with db_session.begin_transaction():
            result = await db_session.execute(
                "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
                data["name"],
                data["email"]
            )
-
-           await db_session.commit()
            return result.one()
-       except Exception:
-           await db_session.rollback()
-           raise
 
 **Autocommit Mode**
 
-Automatically commits on successful requests:
+Automatically commits on successful requests (2xx responses):
 
 .. code-block:: python
 
-   from sqlspec.extensions.litestar import SQLSpecPlugin
-
-   plugin = SQLSpecPlugin(
-       config=config,
-       commit_mode="autocommit"  # Commits on HTTP 2xx responses
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://..."},
+           extension_config={
+               "litestar": {"commit_mode": "autocommit"}  # Auto-commit on 2xx
+           }
+       )
    )
 
    @post("/users")
@@ -150,67 +159,89 @@ Commits on both 2xx and 3xx responses:
 
 .. code-block:: python
 
-   plugin = SQLSpecPlugin(
-       config=config,
-       commit_mode="autocommit_include_redirect"
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://..."},
+           extension_config={
+               "litestar": {"commit_mode": "autocommit_include_redirect"}
+           }
+       )
    )
 
 Custom Dependency Keys
 ^^^^^^^^^^^^^^^^^^^^^^
 
-Customize the dependency injection keys:
+Customize the dependency injection keys via ``extension_config``:
 
 .. code-block:: python
 
-   plugin = SQLSpecPlugin(
-       config=config,
-       connection_key="database",      # Default: "db_connection"
-       pool_key="db_pool",             # Default: "db_pool"
-       session_key="session",          # Default: "db_session"
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.driver import AsyncDriverAdapterBase
+
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://..."},
+           extension_config={
+               "litestar": {
+                   "connection_key": "database",    # Default: "db_connection"
+                   "pool_key": "db_pool",           # Default: "db_pool"
+                   "session_key": "session",        # Default: "db_session"
+               }
+           }
+       )
    )
 
    @get("/users")
    async def list_users(session: AsyncDriverAdapterBase) -> list:
        result = await session.execute("SELECT * FROM users")
-       return result.rows
+       return result.data
 
 Multiple Database Configurations
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The plugin supports multiple database configurations:
+The plugin supports multiple database configurations through a single SQLSpec instance:
 
 .. code-block:: python
 
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.driver import AsyncDriverAdapterBase
    from sqlspec.extensions.litestar import SQLSpecPlugin
 
+   spec = SQLSpec()
+
    # Main database
-   main_db = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/main"},
-       extension_config={
-           "litestar": {
-               "session_key": "main_db",
-               "connection_key": "main_db_connection",
+   main_db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://localhost/main"},
+           extension_config={
+               "litestar": {
+                   "session_key": "main_db",
+                   "connection_key": "main_db_connection",
+               }
            }
-       }
+       )
    )
 
    # Analytics database
-   analytics_db = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/analytics"},
-       extension_config={
-           "litestar": {
-               "session_key": "analytics_db",
-               "connection_key": "analytics_connection",
+   analytics_db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://localhost/analytics"},
+           extension_config={
+               "litestar": {
+                   "session_key": "analytics_db",
+                   "connection_key": "analytics_connection",
+               }
            }
-       }
+       )
    )
 
-   # Create plugins
+   # Create single plugin with all configs
    app = Litestar(
-       plugins=[
-           SQLSpecPlugin(config=main_db),
-           SQLSpecPlugin(config=analytics_db),
-       ]
+       plugins=[SQLSpecPlugin(sqlspec=spec)]
    )
 
    # Use in handlers
@@ -234,30 +265,35 @@ Use SQLSpec as a session backend for Litestar:
 .. code-block:: python
 
    from litestar import Litestar
-   from litestar.middleware.session import SessionMiddleware
-   from sqlspec.extensions.litestar import SQLSpecPlugin, BaseSQLSpecStore
+   from litestar.middleware.session.server_side import ServerSideSessionConfig
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.adapters.asyncpg.litestar import AsyncpgStore
+   from sqlspec.extensions.litestar import SQLSpecPlugin
 
-   # Configure with session backend
+   # Configure database with session support
    spec = SQLSpec()
    db = spec.add_config(
        AsyncpgConfig(
            pool_config={"dsn": "postgresql://localhost/db"},
+           extension_config={
+               "litestar": {"session_table": "litestar_sessions"}
+           },
            migration_config={
                "script_location": "migrations",
-               "include_extensions": ["litestar"],  # Include session table migrations
+               "include_extensions": ["litestar"]
            }
        )
    )
-   sqlspec_plugin = SQLSpecPlugin(sqlspec=spec)
 
-   # Session middleware with SQLSpec backend
+   # Create session store using adapter-specific class
+   store = AsyncpgStore(db, table_name="litestar_sessions")
+
+   # Configure Litestar with plugin and session middleware
    app = Litestar(
-       plugins=[plugin],
+       plugins=[SQLSpecPlugin(sqlspec=spec)],
        middleware=[
-           SessionMiddleware(
-               backend=BaseSQLSpecStore(config=config),
-               secret=b"your-secret-key"
-           )
+           ServerSideSessionConfig(store=store).middleware
        ]
    )
 
@@ -269,27 +305,44 @@ The plugin provides CLI commands for database management:
 .. code-block:: bash
 
    # Generate migration
-   litestar database revision --autogenerate -m "Add users table"
+   litestar db migrations generate -m "Add users table"
 
-   # Apply migrations
-   litestar database upgrade head
+   # Apply migrations (includes extension migrations)
+   litestar db migrations upgrade
 
    # Rollback migration
-   litestar database downgrade -1
+   litestar db migrations downgrade
 
-   # Show current version
-   litestar database current
+   # Show current migration version
+   litestar db migrations current
+
+   # Show migration history (verbose)
+   litestar db migrations current --verbose
+
+.. note::
+
+   Extension migrations (like Litestar session tables) are included automatically when ``include_extensions`` contains ``"litestar"`` in your migration config.
 
 Correlation Middleware
 ^^^^^^^^^^^^^^^^^^^^^^
 
-Enable request correlation tracking:
+Enable request correlation tracking via ``extension_config``:
 
 .. code-block:: python
 
-   plugin = SQLSpecPlugin(
-       config=config,
-       enable_correlation_middleware=True
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://..."},
+           extension_config={
+               "litestar": {
+                   "enable_correlation_middleware": True  # Default: True
+               }
+           }
+       )
    )
 
    # Queries will include correlation IDs in logs
@@ -654,10 +707,18 @@ Best Practices
 .. code-block:: python
 
    # Use autocommit for simple CRUD
-   plugin = SQLSpecPlugin(config=config, commit_mode="autocommit")
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://..."},
+           extension_config={
+               "litestar": {"commit_mode": "autocommit"}
+           }
+       )
+   )
 
    # Manual transactions for complex operations
-   async with db.begin_transaction():
+   async with db_session.begin_transaction():
        # Multiple operations
        pass
 

@@ -19,7 +19,7 @@ class ADKConfig(TypedDict, total=False):
                 "adk": {
                     "session_table": "my_sessions",
                     "events_table": "my_events",
-                    "user_fk_column": "tenant_id INTEGER REFERENCES tenants(id)"
+                    "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
                 }
             }
         )
@@ -47,8 +47,8 @@ class ADKConfig(TypedDict, total=False):
         "tenant_acme_events"
     """
 
-    user_fk_column: NotRequired[str]
-    """Optional foreign key column definition to link sessions to your user table.
+    owner_id_column: NotRequired[str]
+    """Optional owner ID column definition to link sessions to a user, tenant, team, or other entity.
 
     Format: "column_name TYPE [NOT NULL] REFERENCES table(column) [options...]"
 

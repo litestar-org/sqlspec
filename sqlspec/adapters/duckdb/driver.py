@@ -4,7 +4,7 @@ import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
 
-import duckdb  # type: ignore[import-untyped]
+import duckdb
 from sqlglot import exp
 
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary

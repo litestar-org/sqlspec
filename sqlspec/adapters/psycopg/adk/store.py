@@ -1,6 +1,6 @@
 """Psycopg ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from psycopg import errors
 from psycopg import sql as pg_sql
@@ -11,6 +11,8 @@ from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+    from psycopg.abc import Query
 
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
@@ -38,7 +40,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         config: PsycopgAsyncConfig instance.
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
-        user_fk_column: Optional FK column DDL. Defaults to None.
+        owner_id_column: Optional owner ID column DDL. Defaults to None.
 
     Example:
         from sqlspec.adapters.psycopg import PsycopgAsyncConfig
@@ -66,7 +68,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         config: "PsycopgAsyncConfig",
         session_table: str = "adk_sessions",
         events_table: str = "adk_events",
-        user_fk_column: "str | None" = None,
+        owner_id_column: "str | None" = None,
     ) -> None:
         """Initialize Psycopg ADK store.
 
@@ -74,9 +76,9 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             config: PsycopgAsyncConfig instance.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
-            user_fk_column: Optional FK column DDL.
+            owner_id_column: Optional owner ID column DDL.
         """
-        super().__init__(config, session_table, events_table, user_fk_column)
+        super().__init__(config, session_table, events_table, owner_id_column)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.
@@ -92,17 +94,17 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             - Composite index on (app_name, user_id) for listing
             - Index on update_time DESC for recent session queries
             - Partial GIN index on state for JSONB queries (only non-empty)
-            - Optional user FK column for multi-tenancy or user references
+            - Optional owner ID column for multi-tenancy or user references
         """
-        user_fk_line = ""
-        if self._user_fk_column_ddl:
-            user_fk_line = f",\n            {self._user_fk_column_ddl}"
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{user_fk_line},
+            user_id VARCHAR(128) NOT NULL{owner_id_line},
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -177,12 +179,12 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(self._get_create_sessions_table_sql())
-            await cur.execute(self._get_create_events_table_sql())
+            await cur.execute(cast("Query", self._get_create_sessions_table_sql()))
+            await cur.execute(cast("Query", self._get_create_events_table_sql()))
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -191,7 +193,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
-            user_fk: Optional FK value for user_fk_column (if configured).
+            owner_id: Optional owner ID value for owner_id_column (if configured).
 
         Returns:
             Created session record.
@@ -199,16 +201,17 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         Notes:
             Uses CURRENT_TIMESTAMP for create_time and update_time.
             State is wrapped with Jsonb() for PostgreSQL type safety.
-            If user_fk_column is configured, user_fk value must be provided.
+            If owner_id_column is configured, owner_id value must be provided.
         """
-        if self._user_fk_column_name:
+        params: tuple[Any, ...]
+        if self._owner_id_column_name:
             query = pg_sql.SQL("""
-            INSERT INTO {table} (id, app_name, user_id, {user_fk_col}, state, create_time, update_time)
+            INSERT INTO {table} (id, app_name, user_id, {owner_id_col}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """).format(
-                table=pg_sql.Identifier(self._session_table), user_fk_col=pg_sql.Identifier(self._user_fk_column_name)
+                table=pg_sql.Identifier(self._session_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
             )
-            params = (session_id, app_name, user_id, user_fk, Jsonb(state))
+            params = (session_id, app_name, user_id, owner_id, Jsonb(state))
         else:
             query = pg_sql.SQL("""
             INSERT INTO {table} (id, app_name, user_id, state, create_time, update_time)
@@ -409,11 +412,11 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = " LIMIT %s" if limit else ""
         if limit:
             params.append(limit)
 
-        query = pg_sql.SQL("""
+        query = pg_sql.SQL(
+            """
         SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
                long_running_tool_ids_json, branch, timestamp, content,
                grounding_metadata, custom_metadata, partial, turn_complete,
@@ -421,10 +424,11 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         FROM {table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
-        """).format(
+        """
+        ).format(
             table=pg_sql.Identifier(self._events_table),
-            where_clause=pg_sql.SQL(where_clause),
-            limit_clause=pg_sql.SQL(limit_clause),
+            where_clause=pg_sql.SQL(where_clause),  # pyright: ignore[reportArgumentType]
+            limit_clause=pg_sql.SQL(" LIMIT %s" if limit else ""),  # pyright: ignore[reportArgumentType]
         )
 
         try:
@@ -478,7 +482,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         config: PsycopgSyncConfig instance.
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
-        user_fk_column: Optional FK column DDL. Defaults to None.
+        owner_id_column: Optional owner ID column DDL. Defaults to None.
 
     Example:
         from sqlspec.adapters.psycopg import PsycopgSyncConfig
@@ -506,7 +510,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         config: "PsycopgSyncConfig",
         session_table: str = "adk_sessions",
         events_table: str = "adk_events",
-        user_fk_column: "str | None" = None,
+        owner_id_column: "str | None" = None,
     ) -> None:
         """Initialize Psycopg synchronous ADK store.
 
@@ -514,9 +518,9 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             config: PsycopgSyncConfig instance.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
-            user_fk_column: Optional FK column DDL.
+            owner_id_column: Optional owner ID column DDL.
         """
-        super().__init__(config, session_table, events_table, user_fk_column)
+        super().__init__(config, session_table, events_table, owner_id_column)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.
@@ -532,17 +536,17 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             - Composite index on (app_name, user_id) for listing
             - Index on update_time DESC for recent session queries
             - Partial GIN index on state for JSONB queries (only non-empty)
-            - Optional user FK column for multi-tenancy or user references
+            - Optional owner ID column for multi-tenancy or user references
         """
-        user_fk_line = ""
-        if self._user_fk_column_ddl:
-            user_fk_line = f",\n            {self._user_fk_column_ddl}"
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{user_fk_line},
+            user_id VARCHAR(128) NOT NULL{owner_id_line},
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -617,12 +621,12 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(self._get_create_sessions_table_sql())
-            cur.execute(self._get_create_events_table_sql())
+            cur.execute(cast("Query", self._get_create_sessions_table_sql()))
+            cur.execute(cast("Query", self._get_create_events_table_sql()))
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -631,7 +635,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
-            user_fk: Optional FK value for user_fk_column (if configured).
+            owner_id: Optional owner ID value for owner_id_column (if configured).
 
         Returns:
             Created session record.
@@ -639,16 +643,17 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         Notes:
             Uses CURRENT_TIMESTAMP for create_time and update_time.
             State is wrapped with Jsonb() for PostgreSQL type safety.
-            If user_fk_column is configured, user_fk value must be provided.
+            If owner_id_column is configured, owner_id value must be provided.
         """
-        if self._user_fk_column_name:
+        params: tuple[Any, ...]
+        if self._owner_id_column_name:
             query = pg_sql.SQL("""
-            INSERT INTO {table} (id, app_name, user_id, {user_fk_col}, state, create_time, update_time)
+            INSERT INTO {table} (id, app_name, user_id, {owner_id_col}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """).format(
-                table=pg_sql.Identifier(self._session_table), user_fk_col=pg_sql.Identifier(self._user_fk_column_name)
+                table=pg_sql.Identifier(self._session_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
             )
-            params = (session_id, app_name, user_id, user_fk, Jsonb(state))
+            params = (session_id, app_name, user_id, owner_id, Jsonb(state))
         else:
             query = pg_sql.SQL("""
             INSERT INTO {table} (id, app_name, user_id, state, create_time, update_time)

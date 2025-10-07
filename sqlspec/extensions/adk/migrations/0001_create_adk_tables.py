@@ -1,6 +1,6 @@
 """Create ADK session and events tables migration using store DDL definitions."""
 
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
@@ -89,27 +89,32 @@ def _raise_store_import_failed(store_path: str, error: ImportError) -> NoReturn:
     raise SQLSpecError(msg) from error
 
 
-def _get_store_config(context: "MigrationContext | None") -> "dict[str, str | None]":
+def _get_store_config(context: "MigrationContext | None") -> "dict[str, Any]":
     """Extract ADK store configuration from migration context.
 
     Args:
         context: Migration context with config.
 
     Returns:
-        Dict with session_table, events_table, and user_fk_column (if provided).
+        Dict with session_table, events_table, and owner_id_column (if provided).
 
     Notes:
         Reads from context.config.extension_config["adk"].
+        session_table and events_table always have default values.
+        owner_id_column may be None.
     """
     if context and context.config and hasattr(context.config, "extension_config"):
         adk_config = context.config.extension_config.get("adk", {})
-        return {
-            "session_table": adk_config.get("session_table", "adk_sessions"),
-            "events_table": adk_config.get("events_table", "adk_events"),
-            "user_fk_column": adk_config.get("user_fk_column"),
+        result: dict[str, Any] = {
+            "session_table": adk_config.get("session_table") or "adk_sessions",
+            "events_table": adk_config.get("events_table") or "adk_events",
         }
+        owner_id = adk_config.get("owner_id_column")
+        if owner_id is not None:
+            result["owner_id_column"] = owner_id
+        return result
 
-    return {"session_table": "adk_sessions", "events_table": "adk_events", "user_fk_column": None}
+    return {"session_table": "adk_sessions", "events_table": "adk_events"}
 
 
 async def up(context: "MigrationContext | None" = None) -> "list[str]":
@@ -127,8 +132,8 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
 
     Notes:
         Reads configuration from context.config.extension_config["adk"] if available.
-        Supports custom table names and optional user_fk_column for linking
-        sessions to user tables.
+        Supports custom table names and optional owner_id_column for linking
+        sessions to owner tables (users, tenants, teams, etc.).
     """
     if context is None or context.config is None:
         _raise_missing_config()

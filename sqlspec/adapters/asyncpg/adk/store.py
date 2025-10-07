@@ -1,9 +1,10 @@
 """AsyncPG ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Any, Final
 
 import asyncpg
 
+from sqlspec.config import AsyncConfigT
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 
@@ -16,10 +17,8 @@ __all__ = ("AsyncpgADKStore",)
 
 POSTGRES_TABLE_NOT_FOUND_ERROR: Final = "42P01"
 
-PostgresConfigT = TypeVar("PostgresConfigT")
 
-
-class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
+class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
     """PostgreSQL ADK store base class for all PostgreSQL drivers.
 
     Implements session and event storage for Google Agent Development Kit
@@ -40,7 +39,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         config: PostgreSQL database config (AsyncpgConfig, PsycopgAsyncConfig, or PsqlpyConfig).
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
-        user_fk_column: Optional FK column DDL for user references. Defaults to None.
+        owner_id_column: Optional owner ID column DDL for owner references. Defaults to None.
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -52,7 +51,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
 
         store_with_fk = AsyncpgADKStore(
             config,
-            user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+            owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
         )
         await store_with_fk.create_tables()
 
@@ -65,17 +64,17 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         - GIN index on state for JSONB queries (partial index)
         - FILLFACTOR 80 leaves space for HOT updates
         - Generic over PostgresConfigT to support all PostgreSQL drivers
-        - User FK column enables multi-tenant isolation with referential integrity
+        - Owner ID column enables multi-tenant isolation with referential integrity
     """
 
     __slots__ = ()
 
     def __init__(
         self,
-        config: PostgresConfigT,
+        config: AsyncConfigT,
         session_table: str = "adk_sessions",
         events_table: str = "adk_events",
-        user_fk_column: "str | None" = None,
+        owner_id_column: "str | None" = None,
     ) -> None:
         """Initialize AsyncPG ADK store.
 
@@ -83,9 +82,9 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
             config: PostgreSQL database config (AsyncpgConfig, PsycopgAsyncConfig, or PsqlpyConfig).
             session_table: Name of the sessions table.
             events_table: Name of the events table.
-            user_fk_column: Optional FK column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
+            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
         """
-        super().__init__(config, session_table, events_table, user_fk_column)
+        super().__init__(config, session_table, events_table, owner_id_column)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.
@@ -101,17 +100,17 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
             - Composite index on (app_name, user_id) for listing
             - Index on update_time DESC for recent session queries
             - Partial GIN index on state for JSONB queries (only non-empty)
-            - Optional user FK column for multi-tenancy or user references
+            - Optional owner ID column for multi-tenancy or owner references
         """
-        user_fk_line = ""
-        if self._user_fk_column_ddl:
-            user_fk_line = f",\n            {self._user_fk_column_ddl}"
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{user_fk_line},
+            user_id VARCHAR(128) NOT NULL{owner_id_line},
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -185,13 +184,13 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self.config.provide_connection() as conn:
             await conn.execute(self._get_create_sessions_table_sql())
             await conn.execute(self._get_create_events_table_sql())
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -200,7 +199,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
-            user_fk: Optional FK value for user_fk_column (if configured).
+            owner_id: Optional owner ID value for owner_id_column (if configured).
 
         Returns:
             Created session record.
@@ -208,16 +207,16 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         Notes:
             Uses CURRENT_TIMESTAMP for create_time and update_time.
             State is passed as dict and asyncpg converts to JSONB automatically.
-            If user_fk_column is configured, user_fk value must be provided.
+            If owner_id_column is configured, owner_id value must be provided.
         """
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            if self._user_fk_column_name:
+        async with self.config.provide_connection() as conn:
+            if self._owner_id_column_name:
                 sql = f"""
                 INSERT INTO {self._session_table}
-                (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+                (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
                 VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """
-                await conn.execute(sql, session_id, app_name, user_id, user_fk, state)
+                await conn.execute(sql, session_id, app_name, user_id, owner_id, state)
             else:
                 sql = f"""
                 INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
@@ -247,7 +246,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self.config.provide_connection() as conn:
                 row = await conn.fetchrow(sql, session_id)
 
                 if row is None:
@@ -281,7 +280,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         WHERE id = $2
         """
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self.config.provide_connection() as conn:
             await conn.execute(sql, state, session_id)
 
     async def delete_session(self, session_id: str) -> None:
@@ -295,7 +294,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         """
         sql = f"DELETE FROM {self._session_table} WHERE id = $1"
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self.config.provide_connection() as conn:
             await conn.execute(sql, session_id)
 
     async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
@@ -319,7 +318,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self.config.provide_connection() as conn:
                 rows = await conn.fetch(sql, app_name, user_id)
 
                 return [
@@ -361,7 +360,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         )
         """
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self.config.provide_connection() as conn:
             await conn.execute(
                 sql,
                 event_record["id"],
@@ -424,7 +423,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[PostgresConfigT]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self.config.provide_connection() as conn:
                 rows = await conn.fetch(sql, *params)
 
                 return [

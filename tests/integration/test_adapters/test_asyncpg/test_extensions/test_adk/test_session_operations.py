@@ -1,12 +1,14 @@
 """Tests for AsyncPG ADK store session operations."""
 
+from typing import Any
+
 import pytest
 
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncpg, pytest.mark.integration]
 
 
 @pytest.mark.asyncio
-async def test_create_session(asyncpg_adk_store):
+async def test_create_session(asyncpg_adk_store: Any) -> None:
     """Test creating a new session."""
     session_id = "session-123"
     app_name = "test-app"
@@ -22,7 +24,7 @@ async def test_create_session(asyncpg_adk_store):
 
 
 @pytest.mark.asyncio
-async def test_get_session(asyncpg_adk_store):
+async def test_get_session(asyncpg_adk_store: Any) -> None:
     """Test retrieving a session by ID."""
     session_id = "session-get"
     app_name = "test-app"
@@ -41,14 +43,14 @@ async def test_get_session(asyncpg_adk_store):
 
 
 @pytest.mark.asyncio
-async def test_get_nonexistent_session(asyncpg_adk_store):
+async def test_get_nonexistent_session(asyncpg_adk_store: Any) -> None:
     """Test retrieving a session that doesn't exist."""
     result = await asyncpg_adk_store.get_session("nonexistent")
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_update_session_state(asyncpg_adk_store):
+async def test_update_session_state(asyncpg_adk_store: Any) -> None:
     """Test updating session state."""
     session_id = "session-update"
     app_name = "test-app"
@@ -66,7 +68,7 @@ async def test_update_session_state(asyncpg_adk_store):
 
 
 @pytest.mark.asyncio
-async def test_list_sessions(asyncpg_adk_store):
+async def test_list_sessions(asyncpg_adk_store: Any) -> None:
     """Test listing sessions for an app and user."""
     app_name = "list-test-app"
     user_id = "user-list"
@@ -83,14 +85,14 @@ async def test_list_sessions(asyncpg_adk_store):
 
 
 @pytest.mark.asyncio
-async def test_list_sessions_empty(asyncpg_adk_store):
+async def test_list_sessions_empty(asyncpg_adk_store: Any) -> None:
     """Test listing sessions when none exist."""
     sessions = await asyncpg_adk_store.list_sessions("nonexistent-app", "nonexistent-user")
     assert sessions == []
 
 
 @pytest.mark.asyncio
-async def test_delete_session(asyncpg_adk_store):
+async def test_delete_session(asyncpg_adk_store: Any) -> None:
     """Test deleting a session."""
     session_id = "session-delete"
     app_name = "test-app"
@@ -105,13 +107,13 @@ async def test_delete_session(asyncpg_adk_store):
 
 
 @pytest.mark.asyncio
-async def test_delete_nonexistent_session(asyncpg_adk_store):
+async def test_delete_nonexistent_session(asyncpg_adk_store: Any) -> None:
     """Test deleting a session that doesn't exist doesn't raise error."""
     await asyncpg_adk_store.delete_session("nonexistent")
 
 
 @pytest.mark.asyncio
-async def test_session_timestamps(asyncpg_adk_store):
+async def test_session_timestamps(asyncpg_adk_store: Any) -> None:
     """Test that create_time and update_time are set correctly."""
     session_id = "session-timestamps"
     session = await asyncpg_adk_store.create_session(session_id, "app", "user", {"test": True})
@@ -122,7 +124,7 @@ async def test_session_timestamps(asyncpg_adk_store):
 
 
 @pytest.mark.asyncio
-async def test_complex_jsonb_state(asyncpg_adk_store):
+async def test_complex_jsonb_state(asyncpg_adk_store: Any) -> None:
     """Test storing complex nested JSONB state."""
     session_id = "session-complex"
     complex_state = {

@@ -152,7 +152,7 @@ async def test_delete_session_cascade(asyncmy_adk_store: AsyncmyADKStore) -> Non
         "timestamp": datetime.now(timezone.utc),
         "content": {"text": "Hello"},
     }
-    await asyncmy_adk_store.append_event(event_record)
+    await asyncmy_adk_store.append_event(event_record)  # type: ignore[arg-type]
 
     events_before = await asyncmy_adk_store.get_events(session_id)
     assert len(events_before) == 1
@@ -202,14 +202,16 @@ async def test_append_and_get_events(asyncmy_adk_store: AsyncmyADKStore) -> None
         "turn_complete": True,
     }
 
-    await asyncmy_adk_store.append_event(event1)
-    await asyncmy_adk_store.append_event(event2)
+    await asyncmy_adk_store.append_event(event1)  # type: ignore[arg-type]
+    await asyncmy_adk_store.append_event(event2)  # type: ignore[arg-type]
 
     events = await asyncmy_adk_store.get_events(session_id)
 
     assert len(events) == 2
     assert events[0]["id"] == "event-001"
     assert events[1]["id"] == "event-002"
+    assert events[0]["content"] is not None
+    assert events[1]["content"] is not None
     assert events[0]["content"]["text"] == "Hello"
     assert events[1]["content"]["text"] == "Hi there"
     assert isinstance(events[0]["actions"], bytes)
@@ -238,17 +240,18 @@ async def test_timestamp_precision(asyncmy_adk_store: AsyncmyADKStore) -> None:
         "actions": b"",
         "timestamp": event_time,
     }
-    await asyncmy_adk_store.append_event(event)
+    await asyncmy_adk_store.append_event(event)  # type: ignore[arg-type]
 
     events = await asyncmy_adk_store.get_events(session_id)
     assert len(events) == 1
     assert hasattr(events[0]["timestamp"], "microsecond")
 
 
-async def test_user_fk_column_creation(asyncmy_adk_store_with_fk: AsyncmyADKStore) -> None:
-    """Test user FK column is created correctly."""
-    assert asyncmy_adk_store_with_fk.user_fk_column_name == "tenant_id"
-    assert "tenant_id" in asyncmy_adk_store_with_fk.user_fk_column_ddl
+async def test_owner_id_column_creation(asyncmy_adk_store_with_fk: AsyncmyADKStore) -> None:
+    """Test owner ID column is created correctly."""
+    assert asyncmy_adk_store_with_fk.owner_id_column_name == "tenant_id"
+    assert asyncmy_adk_store_with_fk.owner_id_column_ddl is not None
+    assert "tenant_id" in asyncmy_adk_store_with_fk.owner_id_column_ddl
 
     config = asyncmy_adk_store_with_fk.config
 
@@ -266,14 +269,14 @@ async def test_user_fk_column_creation(asyncmy_adk_store_with_fk: AsyncmyADKStor
         assert result[1] == "bigint"
 
 
-async def test_user_fk_constraint_enforcement(asyncmy_adk_store_with_fk: AsyncmyADKStore) -> None:
+async def test_owner_id_constraint_enforcement(asyncmy_adk_store_with_fk: AsyncmyADKStore) -> None:
     """Test FK constraint enforces referential integrity."""
     session_id = "session-fk-001"
     app_name = "test-app"
     user_id = "user-fk"
 
     await asyncmy_adk_store_with_fk.create_session(
-        session_id=session_id, app_name=app_name, user_id=user_id, state={"tenant": "one"}, user_fk=1
+        session_id=session_id, app_name=app_name, user_id=user_id, state={"tenant": "one"}, owner_id=1
     )
 
     session = await asyncmy_adk_store_with_fk.get_session(session_id)
@@ -281,16 +284,16 @@ async def test_user_fk_constraint_enforcement(asyncmy_adk_store_with_fk: Asyncmy
 
     with pytest.raises(Exception):
         await asyncmy_adk_store_with_fk.create_session(
-            session_id="invalid-fk", app_name=app_name, user_id=user_id, state={"tenant": "invalid"}, user_fk=999
+            session_id="invalid-fk", app_name=app_name, user_id=user_id, state={"tenant": "invalid"}, owner_id=999
         )
 
 
-async def test_user_fk_cascade_delete(asyncmy_adk_store_with_fk: AsyncmyADKStore) -> None:
+async def test_owner_id_cascade_delete(asyncmy_adk_store_with_fk: AsyncmyADKStore) -> None:
     """Test CASCADE DELETE when parent tenant is deleted."""
     config = asyncmy_adk_store_with_fk.config
 
     await asyncmy_adk_store_with_fk.create_session(
-        session_id="tenant1-session", app_name="test-app", user_id="user1", state={"data": "test"}, user_fk=1
+        session_id="tenant1-session", app_name="test-app", user_id="user1", state={"data": "test"}, owner_id=1
     )
 
     session_before = await asyncmy_adk_store_with_fk.get_session("tenant1-session")
@@ -309,9 +312,9 @@ async def test_multi_tenant_isolation(asyncmy_adk_store_with_fk: AsyncmyADKStore
     app_name = "test-app"
     user_id = "user-shared"
 
-    await asyncmy_adk_store_with_fk.create_session("tenant1-s1", app_name, user_id, {"tenant": "one"}, user_fk=1)
-    await asyncmy_adk_store_with_fk.create_session("tenant1-s2", app_name, user_id, {"tenant": "one"}, user_fk=1)
-    await asyncmy_adk_store_with_fk.create_session("tenant2-s1", app_name, user_id, {"tenant": "two"}, user_fk=2)
+    await asyncmy_adk_store_with_fk.create_session("tenant1-s1", app_name, user_id, {"tenant": "one"}, owner_id=1)
+    await asyncmy_adk_store_with_fk.create_session("tenant1-s2", app_name, user_id, {"tenant": "one"}, owner_id=1)
+    await asyncmy_adk_store_with_fk.create_session("tenant2-s1", app_name, user_id, {"tenant": "two"}, owner_id=2)
 
     config = asyncmy_adk_store_with_fk.config
     async with config.provide_connection() as conn, conn.cursor() as cursor:

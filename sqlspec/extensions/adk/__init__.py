@@ -22,7 +22,7 @@ Example (with extension_config):
             "adk": {
                 "session_table": "my_sessions",
                 "events_table": "my_events",
-                "user_fk_column": "tenant_id INTEGER REFERENCES tenants(id)"
+                "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
             }
         }
     )

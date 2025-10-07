@@ -1,12 +1,14 @@
 """BigQuery-specific ADK store tests."""
 
+from typing import Any
+
 import pytest
 
 pytestmark = [pytest.mark.xdist_group("bigquery"), pytest.mark.bigquery, pytest.mark.integration]
 
 
 @pytest.mark.asyncio
-async def test_partitioning_and_clustering(bigquery_adk_store, bigquery_service):
+async def test_partitioning_and_clustering(bigquery_adk_store: Any, bigquery_service: Any) -> None:
     """Test that tables are created with proper partitioning and clustering."""
     import asyncio
     from datetime import datetime, timezone
@@ -48,7 +50,7 @@ async def test_partitioning_and_clustering(bigquery_adk_store, bigquery_service)
 
 
 @pytest.mark.asyncio
-async def test_json_type_storage(bigquery_adk_store, session_fixture):
+async def test_json_type_storage(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test that JSON type is properly used for state and metadata."""
     complex_state = {"nested": {"deep": {"value": 123}}, "array": [1, 2, 3], "boolean": True, "null": None}
 
@@ -60,7 +62,7 @@ async def test_json_type_storage(bigquery_adk_store, session_fixture):
 
 
 @pytest.mark.asyncio
-async def test_timestamp_precision(bigquery_adk_store):
+async def test_timestamp_precision(bigquery_adk_store: Any) -> None:
     """Test that BigQuery TIMESTAMP preserves microsecond precision."""
     import asyncio
 
@@ -79,7 +81,7 @@ async def test_timestamp_precision(bigquery_adk_store):
 
 
 @pytest.mark.asyncio
-async def test_bytes_storage(bigquery_adk_store, session_fixture):
+async def test_bytes_storage(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test that BYTES type properly stores binary data."""
     from datetime import datetime, timezone
 
@@ -116,7 +118,7 @@ async def test_bytes_storage(bigquery_adk_store, session_fixture):
 
 
 @pytest.mark.asyncio
-async def test_cost_optimization_query_patterns(bigquery_adk_store):
+async def test_cost_optimization_query_patterns(bigquery_adk_store: Any) -> None:
     """Test that queries use clustering for cost optimization."""
     await bigquery_adk_store.create_session("s1", "app1", "user1", {"test": True})
     await bigquery_adk_store.create_session("s2", "app1", "user1", {"test": True})
@@ -130,7 +132,7 @@ async def test_cost_optimization_query_patterns(bigquery_adk_store):
 
 
 @pytest.mark.asyncio
-async def test_dataset_qualification(bigquery_service):
+async def test_dataset_qualification(bigquery_service: Any) -> None:
     """Test that table names are properly qualified with dataset."""
     from google.api_core.client_options import ClientOptions
     from google.auth.credentials import AnonymousCredentials
@@ -142,8 +144,8 @@ async def test_dataset_qualification(bigquery_service):
         connection_config={
             "project": bigquery_service.project,
             "dataset_id": bigquery_service.dataset,
-            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
-            "credentials": AnonymousCredentials(),
+            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),  # type: ignore[no-untyped-call]
+            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
         }
     )
 
@@ -152,12 +154,12 @@ async def test_dataset_qualification(bigquery_service):
     expected_sessions = f"`{bigquery_service.dataset}.adk_sessions`"
     expected_events = f"`{bigquery_service.dataset}.adk_events`"
 
-    assert store._get_full_table_name("adk_sessions") == expected_sessions
-    assert store._get_full_table_name("adk_events") == expected_events
+    assert store._get_full_table_name("adk_sessions") == expected_sessions  # pyright: ignore[reportPrivateUsage]
+    assert store._get_full_table_name("adk_events") == expected_events  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.asyncio
-async def test_manual_cascade_delete(bigquery_adk_store, session_fixture):
+async def test_manual_cascade_delete(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test manual cascade delete (BigQuery doesn't have foreign keys)."""
     from datetime import datetime, timezone
 

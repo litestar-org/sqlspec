@@ -1,6 +1,8 @@
 """Tests for ADBC ADK store event operations."""
 
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -11,7 +13,7 @@ pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.i
 
 
 @pytest.fixture()
-def adbc_store(tmp_path):
+def adbc_store(tmp_path: Path) -> AdbcADKStore:
     """Create ADBC ADK store with SQLite backend."""
     db_path = tmp_path / "test_adk.db"
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
@@ -21,7 +23,7 @@ def adbc_store(tmp_path):
 
 
 @pytest.fixture()
-def session_fixture(adbc_store):
+def session_fixture(adbc_store: Any) -> dict[str, str]:
     """Create a test session."""
     session_id = "test-session"
     app_name = "test-app"
@@ -31,7 +33,7 @@ def session_fixture(adbc_store):
     return {"session_id": session_id, "app_name": app_name, "user_id": user_id}
 
 
-def test_create_event(adbc_store, session_fixture):
+def test_create_event(adbc_store: Any, session_fixture: Any) -> None:
     """Test creating a new event."""
     event_id = "event-1"
     event = adbc_store.create_event(
@@ -52,7 +54,7 @@ def test_create_event(adbc_store, session_fixture):
     assert event["timestamp"] is not None
 
 
-def test_list_events(adbc_store, session_fixture):
+def test_list_events(adbc_store: Any, session_fixture: Any) -> None:
     """Test listing events for a session."""
     adbc_store.create_event(
         event_id="event-1",
@@ -78,13 +80,13 @@ def test_list_events(adbc_store, session_fixture):
     assert events[1]["id"] == "event-2"
 
 
-def test_list_events_empty(adbc_store, session_fixture):
+def test_list_events_empty(adbc_store: Any, session_fixture: Any) -> None:
     """Test listing events when none exist."""
     events = adbc_store.list_events(session_fixture["session_id"])
     assert events == []
 
 
-def test_event_with_all_fields(adbc_store, session_fixture):
+def test_event_with_all_fields(adbc_store: Any, session_fixture: Any) -> None:
     """Test creating event with all optional fields."""
     timestamp = datetime.now(timezone.utc)
     event = adbc_store.create_event(
@@ -123,7 +125,7 @@ def test_event_with_all_fields(adbc_store, session_fixture):
     assert event["error_message"] == "No errors"
 
 
-def test_event_with_minimal_fields(adbc_store, session_fixture):
+def test_event_with_minimal_fields(adbc_store: Any, session_fixture: Any) -> None:
     """Test creating event with only required fields."""
     event = adbc_store.create_event(
         event_id="minimal-event",
@@ -141,7 +143,7 @@ def test_event_with_minimal_fields(adbc_store, session_fixture):
     assert event["content"] is None
 
 
-def test_event_boolean_fields(adbc_store, session_fixture):
+def test_event_boolean_fields(adbc_store: Any, session_fixture: Any) -> None:
     """Test event boolean field conversion."""
     event_true = adbc_store.create_event(
         event_id="event-true",
@@ -183,7 +185,7 @@ def test_event_boolean_fields(adbc_store, session_fixture):
     assert event_none["interrupted"] is None
 
 
-def test_event_json_fields(adbc_store, session_fixture):
+def test_event_json_fields(adbc_store: Any, session_fixture: Any) -> None:
     """Test event JSON field serialization and deserialization."""
     complex_content = {"nested": {"data": "value"}, "list": [1, 2, 3], "null": None}
     complex_grounding = {"sources": [{"title": "Doc", "url": "http://example.com"}]}
@@ -211,7 +213,7 @@ def test_event_json_fields(adbc_store, session_fixture):
     assert retrieved["custom_metadata"] == complex_custom
 
 
-def test_event_ordering(adbc_store, session_fixture):
+def test_event_ordering(adbc_store: Any, session_fixture: Any) -> None:
     """Test that events are ordered by timestamp ASC."""
     import time
 
@@ -250,7 +252,7 @@ def test_event_ordering(adbc_store, session_fixture):
     assert events[1]["timestamp"] < events[2]["timestamp"]
 
 
-def test_delete_session_cascades_events(adbc_store, session_fixture, tmp_path):
+def test_delete_session_cascades_events(adbc_store: Any, session_fixture: Any, tmp_path: Path) -> None:
     """Test that deleting a session cascades to delete events.
 
     Note: SQLite with ADBC requires foreign key enforcement to be explicitly
@@ -286,7 +288,7 @@ def test_delete_session_cascades_events(adbc_store, session_fixture, tmp_path):
     # with separate connections per operation
 
 
-def test_event_with_empty_actions(adbc_store, session_fixture):
+def test_event_with_empty_actions(adbc_store: Any, session_fixture: Any) -> None:
     """Test creating event with empty actions bytes."""
     event = adbc_store.create_event(
         event_id="empty-actions",
@@ -302,7 +304,7 @@ def test_event_with_empty_actions(adbc_store, session_fixture):
     assert events[0]["actions"] == b""
 
 
-def test_event_with_large_actions(adbc_store, session_fixture):
+def test_event_with_large_actions(adbc_store: Any, session_fixture: Any) -> None:
     """Test creating event with large actions BLOB."""
     large_actions = b"x" * 10000
 

@@ -80,8 +80,10 @@ Here's a simple example of creating a Litestar application with SQLSpec integrat
        )
        return result.one()
 
-   # Configure database
+   # 1. Create SQLSpec instance
    spec = SQLSpec()
+
+   # 2. Configure database
    db = spec.add_config(
        AsyncpgConfig(
            pool_config={"dsn": "postgresql://localhost/mydb"},
@@ -91,7 +93,7 @@ Here's a simple example of creating a Litestar application with SQLSpec integrat
        )
    )
 
-   # Create Litestar app with plugin
+   # 3. Create Litestar app with plugin
    app = Litestar(
        route_handlers=[list_users, create_user],
        plugins=[SQLSpecPlugin(sqlspec=spec)]
@@ -240,16 +242,16 @@ Store user sessions in the database:
    from sqlspec.adapters.asyncpg.litestar import AsyncpgStore
    from sqlspec.extensions.litestar import SQLSpecPlugin
 
-   # Create SQLSpec instance
+   # 1. Create SQLSpec instance
    spec = SQLSpec()
 
-   # Add database configuration
-   config = spec.add_config(
+   # 2. Add database configuration
+   db = spec.add_config(
        AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/mydb"})
    )
 
-   # Create session store backed by PostgreSQL
-   store = AsyncpgStore(config)
+   # 3. Create session store backed by PostgreSQL
+   store = AsyncpgStore(db)
 
    @post("/login")
    async def login(data: dict, connection: ASGIConnection) -> dict:

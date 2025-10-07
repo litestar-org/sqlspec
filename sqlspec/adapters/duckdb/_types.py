@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from duckdb import DuckDBPyConnection  # type: ignore[import-untyped]
+from duckdb import DuckDBPyConnection
 
 if TYPE_CHECKING:
     from typing import TypeAlias

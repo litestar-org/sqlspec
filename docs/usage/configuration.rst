@@ -436,10 +436,13 @@ Basic Migration Config
 
    config = AsyncpgConfig(
        pool_config={"dsn": "postgresql://localhost/db"},
+       extension_config={
+           "litestar": {"session_table": "custom_sessions"}  # Extension settings
+       },
        migration_config={
            "script_location": "migrations",     # Migration directory
            "version_table": "alembic_version",  # Version tracking table
-           "include_extensions": ["litestar"],  # Include extension migrations
+           "include_extensions": ["litestar"],  # Simple string list only
        }
    )
 
@@ -447,14 +450,31 @@ Basic Migration Config
 
 .. code-block:: bash
 
-   # Generate migration
-   sqlspec database revision --autogenerate -m "Add users table"
+   # Create migration
+   sqlspec --config myapp.config make-migrations -m "Add users table"
 
    # Apply migrations
-   sqlspec database upgrade head
+   sqlspec --config myapp.config upgrade
 
    # Rollback
-   sqlspec database downgrade -1
+   sqlspec --config myapp.config downgrade -1
+
+Extension Migration Versioning
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Extension migrations are automatically prefixed to prevent version collisions with user migrations:
+
+.. code-block:: text
+
+   # User migrations
+   0001_initial.py           → version: 0001
+   0002_add_users.py         → version: 0002
+
+   # Extension migrations (automatic prefix)
+   ext_adk_0001              → ADK tables migration
+   ext_litestar_0001         → Litestar session table migration
+
+This ensures extension migrations never conflict with your application migrations in the version tracking table.
 
 Extension Configuration
 -----------------------

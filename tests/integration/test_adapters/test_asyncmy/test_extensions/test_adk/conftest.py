@@ -49,7 +49,7 @@ async def asyncmy_adk_store(mysql_service: MySQLService) -> "AsyncGenerator[Asyn
 
 @pytest.fixture
 async def asyncmy_adk_store_with_fk(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyADKStore, None]":
-    """Create AsyncMY ADK store with user FK column.
+    """Create AsyncMY ADK store with owner ID column.
 
     Args:
         mysql_service: Pytest fixture providing MySQL connection config.
@@ -88,7 +88,7 @@ async def asyncmy_adk_store_with_fk(mysql_service: MySQLService) -> "AsyncGenera
         config,
         session_table="test_fk_sessions",
         events_table="test_fk_events",
-        user_fk_column="tenant_id BIGINT NOT NULL REFERENCES test_tenants(id) ON DELETE CASCADE",
+        owner_id_column="tenant_id BIGINT NOT NULL REFERENCES test_tenants(id) ON DELETE CASCADE",
     )
     await store.create_tables()
 

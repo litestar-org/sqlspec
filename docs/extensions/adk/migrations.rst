@@ -54,7 +54,8 @@ Setting Up Migrations
        extension_config={
            "adk": {
                "session_table": "adk_sessions",
-               "events_table": "adk_events"
+               "events_table": "adk_events",
+               "owner_id_column": "account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"
            }
        },
        migration_config={
@@ -63,24 +64,30 @@ Setting Up Migrations
        }
    )
 
+.. note::
+
+   **Version Prefixing**: ADK migrations are automatically prefixed with ``ext_adk_``
+   to prevent version conflicts. For example, ``0001_create_adk_tables.py`` becomes
+   ``ext_adk_0001`` in the database tracking table (``ddl_migrations``).
+
+.. note::
+
+   **Owner ID Column Support**: The migration system automatically includes the
+   ``owner_id_column`` configuration when creating tables. The column is added to
+   the sessions table DDL if specified in ``extension_config["adk"]["owner_id_column"]``.
+
 **2. Initialize Migration Directory:**
 
 .. code-block:: bash
 
    # Using SQLSpec CLI
-   sqlspec migration init
-
-   # This creates:
-   migrations/
-   ├── env.py
-   ├── script.py.mako
-   └── versions/
+   sqlspec --config myapp.config init
 
 **3. Generate Initial Migration:**
 
 .. code-block:: bash
 
-   sqlspec migration revision --message "Create ADK tables"
+   sqlspec --config myapp.config make-migrations -m "Create ADK tables"
 
 This creates a migration file in ``migrations/versions/``.
 
@@ -127,10 +134,10 @@ This creates a migration file in ``migrations/versions/``.
 .. code-block:: bash
 
    # Apply migration
-   sqlspec migration upgrade head
+   sqlspec --config myapp.config upgrade
 
    # Rollback migration
-   sqlspec migration downgrade -1
+   sqlspec --config myapp.config downgrade -1
 
 Built-In Migration Template
 ============================
@@ -216,6 +223,140 @@ Configure custom table names via ``extension_config``:
    )
 
 The migration system reads these settings and creates tables with custom names.
+
+.. warning::
+
+   **Configuration Location**: Extension settings must be in ``extension_config``,
+   NOT in ``migration_config``. The following is INCORRECT:
+
+   .. code-block:: python
+
+      # ❌ WRONG - Don't put extension settings in migration_config
+      migration_config={
+          "include_extensions": [
+              {"name": "adk", "session_table": "custom"}  # NO LONGER SUPPORTED
+          ]
+      }
+
+      # ✅ CORRECT - Use extension_config
+      extension_config={
+          "adk": {"session_table": "custom"}
+      },
+      migration_config={
+          "include_extensions": ["adk"]  # Simple string only
+      }
+
+Owner ID Column in Migrations
+=============================
+
+To include a owner ID column in your ADK tables, configure it in ``extension_config``:
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+   config = AsyncpgConfig(
+       pool_config={"dsn": "postgresql://..."},
+       extension_config={
+           "adk": {
+               "session_table": "adk_sessions",
+               "events_table": "adk_events",
+               "owner_id_column": "account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"
+           }
+       },
+       migration_config={
+           "script_location": "migrations",
+           "include_extensions": ["adk"]
+       }
+   )
+
+The migration will automatically create the sessions table with the owner ID column.
+
+Prerequisites
+-------------
+
+Ensure the referenced table exists **before** running the ADK migration:
+
+.. code-block:: python
+
+   """Create users table migration."""
+
+   async def up(context):
+       """Create users table."""
+       return ["""
+           CREATE TABLE users (
+               id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+               email VARCHAR(255) NOT NULL UNIQUE,
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )
+       """]
+
+   async def down(context):
+       """Drop users table."""
+       return ["DROP TABLE IF EXISTS users CASCADE"]
+
+Run this migration **before** the ADK migration to ensure the foreign key reference is valid.
+
+Migration Order
+---------------
+
+When using owner ID columns, ensure migrations run in this order:
+
+1. Create referenced table (e.g., ``users``, ``tenants``)
+2. Create ADK tables with FK column (``ext_adk_0001``)
+3. Any subsequent schema changes
+
+.. code-block:: bash
+
+   # Example migration sequence
+   sqlspec --config myapp.config upgrade
+
+   # Migrations applied:
+   # 1. 0001_create_users
+   # 2. ext_adk_0001_create_adk_tables  (with owner ID column)
+
+Database-Specific Examples
+---------------------------
+
+PostgreSQL with UUID FK:
+
+.. code-block:: python
+
+   extension_config={
+       "adk": {
+           "owner_id_column": "account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"
+       }
+   }
+
+MySQL with BIGINT FK:
+
+.. code-block:: python
+
+   extension_config={
+       "adk": {
+           "owner_id_column": "user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE"
+       }
+   }
+
+SQLite with INTEGER FK:
+
+.. code-block:: python
+
+   extension_config={
+       "adk": {
+           "owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+       }
+   }
+
+Oracle with NUMBER FK:
+
+.. code-block:: python
+
+   extension_config={
+       "adk": {
+           "owner_id_column": "user_id NUMBER(10) REFERENCES users(id) ON DELETE CASCADE"
+       }
+   }
 
 Multi-Tenant Migrations
 ========================
@@ -494,7 +635,7 @@ PostgreSQL automatically rolls back failed migrations. For MySQL:
 .. code-block:: bash
 
    # Manually revert
-   sqlspec migration downgrade -1
+   sqlspec --config myapp.config downgrade -1
 
 Table Already Exists
 --------------------

@@ -6,7 +6,7 @@ import time
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import duckdb  # type: ignore[import-untyped]
+import duckdb
 
 from sqlspec.adapters.duckdb._types import DuckDBConnection
 

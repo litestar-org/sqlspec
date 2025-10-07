@@ -49,22 +49,36 @@ Basic Setup
    from sqlspec.adapters.asyncpg.litestar import AsyncpgStore
    from sqlspec.extensions.litestar import SQLSpecPlugin
 
-   # Configure database
+   # 1. Create SQLSpec instance
    spec = SQLSpec()
+
+   # 2. Add database configuration
    db = spec.add_config(
        AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/mydb"})
    )
 
-   # Create session store
+   # 3. Create session store (uses the config instance)
    store = AsyncpgStore(db, table_name="sessions")
 
-   # Configure Litestar
+   # 4. Configure Litestar application
    app = Litestar(
        plugins=[SQLSpecPlugin(sqlspec=spec)],
        middleware=[
            ServerSideSessionConfig(store=store).middleware
        ]
    )
+
+.. important::
+
+   **Initialization Order**:
+
+   1. Create ``SQLSpec()`` instance
+   2. Add database config with ``spec.add_config()``
+   3. Create session store with the config instance
+   4. Pass ``SQLSpecPlugin(sqlspec=spec)`` to Litestar
+   5. Add session middleware with the store
+
+   The store requires a config instance returned from ``add_config()``, not the ``SQLSpec`` instance itself.
 
 Using Sessions
 ==============
@@ -328,27 +342,55 @@ Secure Session Data
 Migration Management
 ====================
 
-Session tables can be managed via SQLSpec migrations:
+Session tables can be managed via SQLSpec migrations. The configuration must be added properly through the SQLSpec instance:
 
 .. code-block:: python
 
-   config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/mydb"},
-       extension_config={
-           "litestar": {"session_table": "custom_sessions"}
-       },
-       migration_config={
-           "script_location": "migrations",
-           "include_extensions": ["litestar"]
-       }
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.extensions.litestar import SQLSpecPlugin
+
+   # Configure database with extension and migration settings
+   spec = SQLSpec()
+   db = spec.add_config(
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://localhost/mydb"},
+           extension_config={
+               "litestar": {"session_table": "custom_sessions"}
+           },
+           migration_config={
+               "script_location": "migrations",
+               "include_extensions": ["litestar"]
+           }
+       )
    )
 
-Generate migration:
+   # Create Litestar app with plugin
+   app = Litestar(
+       plugins=[SQLSpecPlugin(sqlspec=spec)],
+       middleware=[...]
+   )
+
+.. note::
+
+   **Extension Migration Prefixes**: Litestar session migrations are automatically versioned with the ``ext_litestar_`` prefix (e.g., ``ext_litestar_0001``, ``ext_litestar_0002``). This prevents version conflicts with your application migrations.
+
+   **Extension vs Application Migrations**:
+   - Application migrations: ``0001_initial.py`` → version ``0001``
+   - Litestar extension migrations: ``0001_create_session.py`` → version ``ext_litestar_0001``
+
+Generate and apply migrations:
 
 .. code-block:: bash
 
+   # Generate migration
    litestar db migrations generate -m "add session storage"
+
+   # Apply migrations (includes extension migrations)
    litestar db migrations upgrade
+
+   # Check migration status
+   litestar db migrations current --verbose
 
 See Also
 ========

@@ -46,8 +46,6 @@ class SQLSpecSessionService(BaseSessionService):
         )
     """
 
-    __slots__ = ("_store",)
-
     def __init__(self, store: "BaseAsyncADKStore") -> None:
         """Initialize the session service.
 

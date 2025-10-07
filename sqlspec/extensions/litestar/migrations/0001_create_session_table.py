@@ -102,8 +102,8 @@ def _get_table_name(context: "MigrationContext | None") -> str:
         Reads from context.config.extension_config["litestar"].
     """
     if context and context.config and hasattr(context.config, "extension_config"):
-        litestar_config = context.config.extension_config.get("litestar", {})
-        return litestar_config.get("session_table", "litestar_session")
+        litestar_config: dict[str, str] = context.config.extension_config.get("litestar", {})
+        return str(litestar_config.get("session_table", "litestar_session"))
 
     return "litestar_session"
 

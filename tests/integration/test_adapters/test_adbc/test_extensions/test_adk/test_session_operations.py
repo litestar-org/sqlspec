@@ -1,5 +1,8 @@
 """Tests for ADBC ADK store session operations."""
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
@@ -9,7 +12,7 @@ pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.i
 
 
 @pytest.fixture()
-def adbc_store(tmp_path):
+def adbc_store(tmp_path: Path) -> AdbcADKStore:
     """Create ADBC ADK store with SQLite backend."""
     db_path = tmp_path / "test_adk.db"
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
@@ -18,7 +21,7 @@ def adbc_store(tmp_path):
     return store
 
 
-def test_create_session(adbc_store):
+def test_create_session(adbc_store: Any) -> None:
     """Test creating a new session."""
     session_id = "test-session-1"
     app_name = "test-app"
@@ -35,7 +38,7 @@ def test_create_session(adbc_store):
     assert session["update_time"] is not None
 
 
-def test_get_session(adbc_store):
+def test_get_session(adbc_store: Any) -> None:
     """Test retrieving a session by ID."""
     session_id = "test-session-2"
     app_name = "test-app"
@@ -50,13 +53,13 @@ def test_get_session(adbc_store):
     assert retrieved["state"] == state
 
 
-def test_get_nonexistent_session(adbc_store):
+def test_get_nonexistent_session(adbc_store: Any) -> None:
     """Test retrieving a session that doesn't exist."""
     result = adbc_store.get_session("nonexistent-id")
     assert result is None
 
 
-def test_update_session_state(adbc_store):
+def test_update_session_state(adbc_store: Any) -> None:
     """Test updating session state."""
     session_id = "test-session-3"
     app_name = "test-app"
@@ -74,7 +77,7 @@ def test_update_session_state(adbc_store):
     assert updated["state"] != initial_state
 
 
-def test_delete_session(adbc_store):
+def test_delete_session(adbc_store: Any) -> None:
     """Test deleting a session."""
     session_id = "test-session-4"
     app_name = "test-app"
@@ -88,7 +91,7 @@ def test_delete_session(adbc_store):
     assert adbc_store.get_session(session_id) is None
 
 
-def test_list_sessions(adbc_store):
+def test_list_sessions(adbc_store: Any) -> None:
     """Test listing sessions for an app and user."""
     app_name = "test-app"
     user_id = "user-123"
@@ -104,13 +107,13 @@ def test_list_sessions(adbc_store):
     assert session_ids == {"session-1", "session-2"}
 
 
-def test_list_sessions_empty(adbc_store):
+def test_list_sessions_empty(adbc_store: Any) -> None:
     """Test listing sessions when none exist."""
     sessions = adbc_store.list_sessions("nonexistent-app", "nonexistent-user")
     assert sessions == []
 
 
-def test_session_state_with_complex_data(adbc_store):
+def test_session_state_with_complex_data(adbc_store: Any) -> None:
     """Test session state with nested complex data structures."""
     session_id = "complex-session"
     app_name = "test-app"
@@ -130,12 +133,12 @@ def test_session_state_with_complex_data(adbc_store):
     assert retrieved["state"] == complex_state
 
 
-def test_session_state_empty_dict(adbc_store):
+def test_session_state_empty_dict(adbc_store: Any) -> None:
     """Test creating session with empty state dictionary."""
     session_id = "empty-state-session"
     app_name = "test-app"
     user_id = "user-123"
-    empty_state = {}
+    empty_state: dict[str, Any] = {}
 
     session = adbc_store.create_session(session_id, app_name, user_id, empty_state)
     assert session["state"] == empty_state
@@ -145,7 +148,7 @@ def test_session_state_empty_dict(adbc_store):
     assert retrieved["state"] == empty_state
 
 
-def test_multiple_users_same_app(adbc_store):
+def test_multiple_users_same_app(adbc_store: Any) -> None:
     """Test sessions for multiple users in the same app."""
     app_name = "test-app"
     user1 = "user-1"
@@ -164,7 +167,7 @@ def test_multiple_users_same_app(adbc_store):
     assert all(s["user_id"] == user2 for s in user2_sessions)
 
 
-def test_session_ordering(adbc_store):
+def test_session_ordering(adbc_store: Any) -> None:
     """Test that sessions are ordered by update_time DESC."""
     app_name = "test-app"
     user_id = "user-123"

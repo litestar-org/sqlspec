@@ -1,6 +1,6 @@
 """DuckDB ADK Store with User FK Column Example.
 
-This example demonstrates how to use the user_fk_column parameter
+This example demonstrates how to use the owner_id_column parameter
 in DuckDB ADK store for multi-tenant session management.
 """
 
@@ -13,7 +13,7 @@ __all__ = ("main",)
 
 
 def main() -> None:
-    """Demonstrate user FK column support in DuckDB ADK store."""
+    """Demonstrate owner ID column support in DuckDB ADK store."""
     db_path = Path("multi_tenant_sessions.ddb")
 
     try:
@@ -39,12 +39,12 @@ def main() -> None:
             config,
             session_table="adk_sessions",
             events_table="adk_events",
-            user_fk_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)",
+            owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)",
         )
         store.create_tables()
 
-        print(f"User FK column name: {store.user_fk_column_name}")
-        print(f"User FK column DDL: {store.user_fk_column_ddl}")
+        print(f"User FK column name: {store.owner_id_column_name}")
+        print(f"User FK column DDL: {store.owner_id_column_ddl}")
         print()
 
         session1 = store.create_session(
@@ -52,7 +52,7 @@ def main() -> None:
             app_name="analytics-app",
             user_id="user-alice",
             state={"workspace": "dashboard", "theme": "dark"},
-            user_fk=1,
+            owner_id=1,
         )
         print(f"Created session for Acme Corp: {session1['id']}")
 
@@ -61,7 +61,7 @@ def main() -> None:
             app_name="analytics-app",
             user_id="user-bob",
             state={"workspace": "reports", "theme": "light"},
-            user_fk=2,
+            owner_id=2,
         )
         print(f"Created session for Initech: {session2['id']}")
 
@@ -91,7 +91,7 @@ def main() -> None:
         print("\nTrying to create session with invalid tenant_id...")
         try:
             store.create_session(
-                session_id="session-invalid", app_name="analytics-app", user_id="user-charlie", state={}, user_fk=999
+                session_id="session-invalid", app_name="analytics-app", user_id="user-charlie", state={}, owner_id=999
             )
         except Exception as e:
             print(f"Foreign key constraint violation (expected): {type(e).__name__}")

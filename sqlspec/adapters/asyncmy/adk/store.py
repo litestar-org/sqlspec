@@ -58,7 +58,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         config: "AsyncmyConfig",
         session_table: str = "adk_sessions",
         events_table: str = "adk_events",
-        user_fk_column: "str | None" = None,
+        owner_id_column: "str | None" = None,
     ) -> None:
         """Initialize AsyncMy ADK store.
 
@@ -66,9 +66,40 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             config: AsyncmyConfig instance.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
-            user_fk_column: Optional FK column DDL (e.g., "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE").
+            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE").
         """
-        super().__init__(config, session_table, events_table, user_fk_column)
+        super().__init__(config, session_table, events_table, owner_id_column)
+
+    def _parse_owner_id_column_for_mysql(self, column_ddl: str) -> "tuple[str, str]":
+        """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.
+
+        MySQL ignores inline REFERENCES syntax in column definitions.
+        This method extracts the column definition and creates a separate
+        FOREIGN KEY constraint.
+
+        Args:
+            column_ddl: Column DDL like "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+
+        Returns:
+            Tuple of (column_definition, foreign_key_constraint)
+
+        Example:
+            Input: "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+            Output: ("tenant_id BIGINT NOT NULL", "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE")
+        """
+        import re
+
+        references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
+
+        if not references_match:
+            return (column_ddl.strip(), "")
+
+        col_def = column_ddl[: references_match.start()].strip()
+        fk_clause = references_match.group(1).strip()
+        col_name = col_def.split()[0]
+        fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
+
+        return (col_def, fk_constraint)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for sessions.
@@ -83,21 +114,29 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             - AUTO-UPDATE on update_time
             - Composite index on (app_name, user_id) for listing
             - Index on update_time DESC for recent session queries
-            - Optional user FK column for multi-tenancy
+            - Optional owner ID column for multi-tenancy
+            - MySQL requires explicit FOREIGN KEY syntax (inline REFERENCES is ignored)
         """
-        user_fk_col = f"{self._user_fk_column_ddl}," if self._user_fk_column_ddl else ""
+        owner_id_col = ""
+        fk_constraint = ""
+
+        if self._owner_id_column_ddl:
+            col_def, fk_def = self._parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
+            owner_id_col = f"{col_def},"
+            if fk_def:
+                fk_constraint = f",\n            {fk_def}"
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
-            {user_fk_col}
+            {owner_id_col}
             state JSON NOT NULL,
             create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
             INDEX idx_{self._session_table}_app_user (app_name, user_id),
-            INDEX idx_{self._session_table}_update_time (update_time DESC)
+            INDEX idx_{self._session_table}_update_time (update_time DESC){fk_constraint}
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
 
@@ -162,7 +201,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -171,7 +210,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
-            user_fk: Optional FK value for user_fk_column (if configured).
+            owner_id: Optional owner ID value for owner_id_column (if configured).
 
         Returns:
             Created session record.
@@ -179,16 +218,17 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         Notes:
             Uses INSERT with UTC_TIMESTAMP(6) for create_time and update_time.
             State is JSON-serialized before insertion.
-            If user_fk_column is configured, user_fk must be provided.
+            If owner_id_column is configured, owner_id must be provided.
         """
         state_json = json.dumps(state)
 
-        if self._user_fk_column_name:
+        params: tuple[Any, ...]
+        if self._owner_id_column_name:
             sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+            INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
-            params = (session_id, app_name, user_id, user_fk, state_json)
+            params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)

@@ -379,11 +379,7 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
                 continue
 
             ext_name = ext_config
-            ext_options = {}
-
-            if hasattr(self.config, "extension_config"):
-                ext_options = self.config.extension_config.get(ext_name, {})
-
+            ext_options = getattr(self.config, "extension_config", {}).get(ext_name, {})
             configs[ext_name] = ext_options
 
         return configs

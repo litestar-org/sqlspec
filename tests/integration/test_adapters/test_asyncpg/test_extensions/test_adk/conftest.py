@@ -31,6 +31,8 @@ async def asyncpg_adk_store(postgres_service: PostgresService) -> "AsyncGenerato
             "user": postgres_service.user,
             "password": postgres_service.password,
             "database": postgres_service.database,
+            "max_size": 20,
+            "min_size": 5,
         }
     )
 

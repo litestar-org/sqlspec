@@ -99,7 +99,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         config: SqliteConfig instance.
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
-        user_fk_column: Optional FK column DDL for multi-tenant or user references. Defaults to None.
+        owner_id_column: Optional owner ID column DDL for multi-tenant or owner references. Defaults to None.
 
     Example:
         from sqlspec.adapters.sqlite import SqliteConfig
@@ -124,7 +124,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         config: "SqliteConfig",
         session_table: str = "adk_sessions",
         events_table: str = "adk_events",
-        user_fk_column: "str | None" = None,
+        owner_id_column: "str | None" = None,
     ) -> None:
         """Initialize SQLite ADK store.
 
@@ -132,9 +132,9 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             config: SqliteConfig instance.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
-            user_fk_column: Optional FK column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE").
+            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE").
         """
-        super().__init__(config, session_table, events_table, user_fk_column)
+        super().__init__(config, session_table, events_table, owner_id_column)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL for sessions.
@@ -145,19 +145,19 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         Notes:
             - TEXT for IDs, names, and JSON state
             - REAL for Julian Day timestamps
-            - Optional user FK column for multi-tenant scenarios
+            - Optional owner ID column for multi-tenant scenarios
             - Composite index on (app_name, user_id)
             - Index on update_time DESC for recent session queries
         """
-        user_fk_line = ""
-        if self._user_fk_column_ddl:
-            user_fk_line = f",\n            {self._user_fk_column_ddl}"
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id TEXT PRIMARY KEY,
             app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL{user_fk_line},
+            user_id TEXT NOT NULL{owner_id_line},
             state TEXT NOT NULL DEFAULT '{{}}',
             create_time REAL NOT NULL,
             update_time REAL NOT NULL
@@ -244,20 +244,21 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         await async_(self._create_tables)()
 
     def _create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Synchronous implementation of create_session."""
         now = datetime.now(timezone.utc)
         now_julian = _datetime_to_julian(now)
         state_json = to_json(state) if state else None
 
-        if self._user_fk_column_name:
+        params: tuple[Any, ...]
+        if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table}
-            (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+            (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """
-            params = (session_id, app_name, user_id, user_fk, state_json, now_julian, now_julian)
+            params = (session_id, app_name, user_id, owner_id, state_json, now_julian, now_julian)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
@@ -275,7 +276,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         )
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -284,7 +285,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
-            user_fk: Optional foreign key value for user FK column.
+            owner_id: Optional owner ID value for owner ID column.
 
         Returns:
             Created session record.
@@ -292,9 +293,9 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         Notes:
             Uses Julian Day for create_time and update_time.
             State is JSON-serialized before insertion.
-            If user_fk_column is configured, user_fk is inserted into that column.
+            If owner_id_column is configured, owner_id is inserted into that column.
         """
-        return await async_(self._create_session)(session_id, app_name, user_id, state, user_fk)
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
     def _get_session(self, session_id: str) -> "SessionRecord | None":
         """Synchronous implementation of get_session."""

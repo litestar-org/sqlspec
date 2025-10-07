@@ -1,6 +1,7 @@
 """Tests for BigQuery ADK store event operations."""
 
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -8,7 +9,7 @@ pytestmark = [pytest.mark.xdist_group("bigquery"), pytest.mark.bigquery, pytest.
 
 
 @pytest.mark.asyncio
-async def test_append_event(bigquery_adk_store, session_fixture):
+async def test_append_event(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test appending an event to a session."""
     from sqlspec.extensions.adk._types import EventRecord
 
@@ -42,7 +43,7 @@ async def test_append_event(bigquery_adk_store, session_fixture):
 
 
 @pytest.mark.asyncio
-async def test_get_events(bigquery_adk_store, session_fixture):
+async def test_get_events(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test retrieving events for a session."""
     from sqlspec.extensions.adk._types import EventRecord
 
@@ -99,14 +100,14 @@ async def test_get_events(bigquery_adk_store, session_fixture):
 
 
 @pytest.mark.asyncio
-async def test_get_events_empty(bigquery_adk_store, session_fixture):
+async def test_get_events_empty(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test retrieving events when none exist."""
     events = await bigquery_adk_store.get_events(session_fixture["session_id"])
     assert events == []
 
 
 @pytest.mark.asyncio
-async def test_get_events_with_after_timestamp(bigquery_adk_store, session_fixture):
+async def test_get_events_with_after_timestamp(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test retrieving events after a specific timestamp."""
     import asyncio
 
@@ -169,7 +170,7 @@ async def test_get_events_with_after_timestamp(bigquery_adk_store, session_fixtu
 
 
 @pytest.mark.asyncio
-async def test_get_events_with_limit(bigquery_adk_store, session_fixture):
+async def test_get_events_with_limit(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test retrieving limited number of events."""
     from sqlspec.extensions.adk._types import EventRecord
 
@@ -202,7 +203,7 @@ async def test_get_events_with_limit(bigquery_adk_store, session_fixture):
 
 
 @pytest.mark.asyncio
-async def test_event_with_all_fields(bigquery_adk_store, session_fixture):
+async def test_event_with_all_fields(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test event with all optional fields populated."""
     from sqlspec.extensions.adk._types import EventRecord
 
@@ -249,7 +250,7 @@ async def test_event_with_all_fields(bigquery_adk_store, session_fixture):
 
 
 @pytest.mark.asyncio
-async def test_delete_session_cascades_events(bigquery_adk_store, session_fixture):
+async def test_delete_session_cascades_events(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test that deleting a session deletes associated events."""
     from sqlspec.extensions.adk._types import EventRecord
 
@@ -286,7 +287,7 @@ async def test_delete_session_cascades_events(bigquery_adk_store, session_fixtur
 
 
 @pytest.mark.asyncio
-async def test_event_json_fields(bigquery_adk_store, session_fixture):
+async def test_event_json_fields(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test event JSON field serialization and deserialization."""
     from sqlspec.extensions.adk._types import EventRecord
 

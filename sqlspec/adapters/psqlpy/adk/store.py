@@ -38,7 +38,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         config: PsqlpyConfig database configuration.
         session_table: Name of the sessions table. Defaults to "adk_sessions".
         events_table: Name of the events table. Defaults to "adk_events".
-        user_fk_column: Optional FK column DDL. Defaults to None.
+        owner_id_column: Optional owner ID column DDL. Defaults to None.
 
     Example:
         from sqlspec.adapters.psqlpy import PsqlpyConfig
@@ -65,7 +65,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         config: "PsqlpyConfig",
         session_table: str = "adk_sessions",
         events_table: str = "adk_events",
-        user_fk_column: "str | None" = None,
+        owner_id_column: "str | None" = None,
     ) -> None:
         """Initialize Psqlpy ADK store.
 
@@ -73,9 +73,9 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             config: PsqlpyConfig instance.
             session_table: Name of the sessions table.
             events_table: Name of the events table.
-            user_fk_column: Optional FK column DDL.
+            owner_id_column: Optional owner ID column DDL.
         """
-        super().__init__(config, session_table, events_table, user_fk_column)
+        super().__init__(config, session_table, events_table, owner_id_column)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.
@@ -91,17 +91,17 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             - Composite index on (app_name, user_id) for listing
             - Index on update_time DESC for recent session queries
             - Partial GIN index on state for JSONB queries (only non-empty)
-            - Optional user FK column for multi-tenancy or user references
+            - Optional owner ID column for multi-tenancy or user references
         """
-        user_fk_line = ""
-        if self._user_fk_column_ddl:
-            user_fk_line = f",\n            {self._user_fk_column_ddl}"
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{user_fk_line},
+            user_id VARCHAR(128) NOT NULL{owner_id_line},
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -196,7 +196,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", user_fk: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
 
@@ -205,7 +205,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             app_name: Application name.
             user_id: User identifier.
             state: Initial session state.
-            user_fk: Optional FK value for user_fk_column (if configured).
+            owner_id: Optional owner ID value for owner_id_column (if configured).
 
         Returns:
             Created session record.
@@ -213,16 +213,16 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         Notes:
             Uses CURRENT_TIMESTAMP for create_time and update_time.
             State is passed as dict and psqlpy converts to JSONB automatically.
-            If user_fk_column is configured, user_fk value must be provided.
+            If owner_id_column is configured, owner_id value must be provided.
         """
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            if self._user_fk_column_name:
+            if self._owner_id_column_name:
                 sql = f"""
                 INSERT INTO {self._session_table}
-                (id, app_name, user_id, {self._user_fk_column_name}, state, create_time, update_time)
+                (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
                 VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """
-                await conn.execute(sql, [session_id, app_name, user_id, user_fk, state])
+                await conn.execute(sql, [session_id, app_name, user_id, owner_id, state])
             else:
                 sql = f"""
                 INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
