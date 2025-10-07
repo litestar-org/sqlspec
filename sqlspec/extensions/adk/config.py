@@ -90,3 +90,34 @@ class ADKConfig(TypedDict, total=False):
         - Database validates the DDL syntax (fail-fast on errors)
         - Works with all database dialects (PostgreSQL, MySQL, SQLite, Oracle, etc.)
     """
+
+    in_memory: NotRequired[bool]
+    """Enable in-memory table storage (Oracle-specific). Default: False.
+
+    When enabled, tables are created with the INMEMORY clause for Oracle Database,
+    which stores table data in columnar format in memory for faster query performance.
+
+    This is an Oracle-specific feature that requires:
+        - Oracle Database 12.1.0.2 or higher
+        - Database In-Memory option license (Enterprise Edition)
+        - Sufficient INMEMORY_SIZE configured in the database instance
+
+    Other database adapters ignore this setting.
+
+    Examples:
+        Oracle with in-memory enabled:
+            config = OracleAsyncConfig(
+                pool_config={"dsn": "oracle://..."},
+                extension_config={
+                    "adk": {
+                        "in_memory": True
+                    }
+                }
+            )
+
+    Notes:
+        - Improves query performance for analytics (10-100x faster)
+        - Tables created with INMEMORY clause
+        - Requires Oracle Database In-Memory option license
+        - Ignored by non-Oracle adapters
+    """

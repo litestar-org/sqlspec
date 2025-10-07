@@ -32,11 +32,11 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from contextlib import AbstractAsyncContextManager
 
-    from click import Group
     from litestar import Litestar
     from litestar.config.app import AppConfig
     from litestar.datastructures.state import State
     from litestar.types import BeforeMessageSendHookHandler, Scope
+    from rich_click import Group
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.loader import SQLFileLoader

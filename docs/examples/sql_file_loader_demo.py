@@ -212,14 +212,12 @@ def database_integration_example() -> None:
             """)
             )
 
-            get_user_sql = spec.get_sql("get_user_by_id")
-            result = session.execute(get_user_sql.bind(user_id=1))
+            result = session.execute(spec.get_sql("get_user_by_id"), user_id=1)
             print("[green]Get user by ID result:[/green]")
             for row in result.data:
                 print(f"  [yellow]-[/yellow] {row['username']} ({row['email']})")
 
-            list_users_sql = spec.get_sql("list_active_users")
-            result = session.execute(list_users_sql.bind(limit=10, offset=0))
+            result = session.execute(spec.get_sql("list_active_users"), limit=10, offset=0)
             print("\n[green]Active users:[/green]")
             for row in result.data:
                 print(f"  [yellow]-[/yellow] {row['username']} (last login: {row['last_login'] or 'Never'})")

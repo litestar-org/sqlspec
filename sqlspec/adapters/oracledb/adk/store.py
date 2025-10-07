@@ -103,7 +103,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         - Configuration is read from config.extension_config["adk"]
     """
 
-    __slots__ = ("_json_storage_type",)
+    __slots__ = ("_in_memory", "_json_storage_type")
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         """Initialize Oracle ADK store.
@@ -116,9 +116,16 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             - session_table: Sessions table name (default: "adk_sessions")
             - events_table: Events table name (default: "adk_events")
             - owner_id_column: Optional owner FK column DDL (default: None)
+            - in_memory: Enable INMEMORY clause (default: False)
         """
         super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
+
+        if hasattr(config, "extension_config") and config.extension_config:
+            adk_config = config.extension_config.get("adk", {})
+            self._in_memory: bool = bool(adk_config.get("in_memory", False))
+        else:
+            self._in_memory: bool = False
 
     async def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
@@ -287,6 +294,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             state_column = "state BLOB NOT NULL"
 
         owner_id_column_sql = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        inmemory_clause = " INMEMORY" if self._in_memory else ""
 
         return f"""
         BEGIN
@@ -297,7 +305,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 {state_column},
                 create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{owner_id_column_sql}
-            )';
+            ){inmemory_clause}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -335,6 +343,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 custom_metadata BLOB
             """
 
+        inmemory_clause = " INMEMORY" if self._in_memory else ""
+
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
@@ -356,7 +366,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 error_message VARCHAR2(1024),
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
                     REFERENCES {self._session_table}(id) ON DELETE CASCADE
-            )';
+            ){inmemory_clause}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -942,7 +952,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         - Configuration is read from config.extension_config["adk"]
     """
 
-    __slots__ = ("_json_storage_type",)
+    __slots__ = ("_in_memory", "_json_storage_type")
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         """Initialize Oracle synchronous ADK store.
@@ -955,9 +965,16 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             - session_table: Sessions table name (default: "adk_sessions")
             - events_table: Events table name (default: "adk_events")
             - owner_id_column: Optional owner FK column DDL (default: None)
+            - in_memory: Enable INMEMORY clause (default: False)
         """
         super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
+
+        if hasattr(config, "extension_config") and config.extension_config:
+            adk_config = config.extension_config.get("adk", {})
+            self._in_memory: bool = bool(adk_config.get("in_memory", False))
+        else:
+            self._in_memory: bool = False
 
     def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
@@ -1126,6 +1143,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             state_column = "state BLOB NOT NULL"
 
         owner_id_column_sql = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        inmemory_clause = " INMEMORY" if self._in_memory else ""
 
         return f"""
         BEGIN
@@ -1136,7 +1154,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 {state_column},
                 create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{owner_id_column_sql}
-            )';
+            ){inmemory_clause}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -1174,6 +1192,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 custom_metadata BLOB
             """
 
+        inmemory_clause = " INMEMORY" if self._in_memory else ""
+
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
@@ -1195,7 +1215,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 error_message VARCHAR2(1024),
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
                     REFERENCES {self._session_table}(id) ON DELETE CASCADE
-            )';
+            ){inmemory_clause}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN

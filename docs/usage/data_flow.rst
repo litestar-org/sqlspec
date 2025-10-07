@@ -16,35 +16,39 @@ High-Level Flow Diagram
 
 .. mermaid::
 
-   graph TD
-      subgraph "1. User Input"
-         A[SQL String or QueryBuilder] --> B[SQL Object Creation]
-      end
+   sequenceDiagram
+       autonumber
+       actor User
+       participant SQL as SQL Object
+       participant Core as SQLSpec Core
+       participant Driver as Database Driver
+       participant DB as Database
+       participant Result as SQLResult
 
-      subgraph "2. SQLSpec Core Pipeline"
-         B --> C[Parameter Extraction]
-         C --> D[AST Generation via SQLGlot]
-         D --> E{Validation}
-         E --> F{Transformation}
-         F --> G[SQL Compilation]
-      end
+       Note over User,SQL: Stage 1: SQL Creation
+       User->>SQL: Create SQL statement<br/>(string/builder/file)
+       SQL->>SQL: Store parameters<br/>Initialize lazy flags
 
-      subgraph "3. Driver & Database"
-         G --> H[Driver Execution]
-         H --> I[DBAPI Connection]
-         I --> J[(Database)]
-         J --> K[Raw Results]
-      end
+       Note over SQL,Core: Stage 2: Core Processing Pipeline
+       SQL->>Core: Trigger compilation
+       Core->>Core: Extract parameters
+       Core->>Core: Parse to AST (SQLGlot)
+       Core->>Core: Validate SQL
+       Core->>Core: Transform AST
+       Core->>Core: Compile to dialect
 
-      subgraph "4. Result Handling"
-         K --> L[SQLResult Object]
-         L --> M{Schema Mapping}
-         M --> N[Typed Python Objects]
-      end
+       Note over Core,DB: Stage 3: Database Execution
+       Core->>Driver: Pass compiled SQL + params
+       Driver->>Driver: Convert parameter style
+       Driver->>DB: Execute query
+       DB-->>Driver: Return raw results
 
-      style E fill:#f9f,stroke:#333,stroke-width:2px
-      style F fill:#9f9,stroke:#333,stroke-width:2px
-      style M fill:#9ff,stroke:#333,stroke-width:2px
+       Note over Driver,Result: Stage 4: Result Processing
+       Driver->>Result: Create SQLResult object
+       Result->>Result: Map to schema types
+       Result-->>User: Return typed Python objects
+
+       Note right of Result: Supports: Pydantic,<br/>msgspec, attrs,<br/>dataclasses, TypedDict
 
 Detailed Execution Stages
 --------------------------
@@ -70,11 +74,11 @@ The execution flow begins when you create a SQL object. SQLSpec accepts multiple
 
 .. code-block:: python
 
-   from sqlspec import sql as sql_factory
+   from sqlspec import sql
 
    # Build SQL programmatically
-   query = sql_factory.select("id", "name", "email").from_("users").where("status = ?")
-   sql = SQL(query, "active")
+   query = sql.select("id", "name", "email").from_("users").where("status = ?", "active")
+
 
 **From SQL Files**
 

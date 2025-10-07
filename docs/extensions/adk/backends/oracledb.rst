@@ -239,13 +239,217 @@ Oracle connection pooling is **mandatory** for production:
 Custom Table Names
 ------------------
 
+Configure custom table names via ``extension_config``:
+
 .. code-block:: python
 
-   store = OracleAsyncADKStore(
-       config,
-       session_table="agent_sessions",
-       events_table="agent_events"
+   config = OracleAsyncConfig(
+       pool_config={"dsn": "oracle://..."},
+       extension_config={
+           "adk": {
+               "session_table": "agent_sessions",
+               "events_table": "agent_events"
+           }
+       }
    )
+   store = OracleAsyncADKStore(config)
+
+Oracle In-Memory Tables
+------------------------
+
+Oracle Database In-Memory Column Store enables dramatic performance improvements for analytics and queries on ADK session data. When enabled, tables are stored in columnar format in memory for 10-100x faster read performance.
+
+.. warning::
+
+   **Licensing Required**: Oracle Database In-Memory is a **separately licensed option** for Oracle Database Enterprise Edition:
+
+   - Oracle Database 12.1.0.2 or higher required
+   - Oracle Database In-Memory option license ($23,000 per processor)
+   - Sufficient ``INMEMORY_SIZE`` configured in the database instance
+
+   Using ``in_memory=True`` without proper licensing will result in **ORA-00439** or **ORA-62142** errors.
+
+Configuration
+~~~~~~~~~~~~~
+
+Enable In-Memory via ``extension_config``:
+
+.. code-block:: python
+
+   from sqlspec.adapters.oracledb import OracleAsyncConfig
+   from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore
+
+   config = OracleAsyncConfig(
+       pool_config={
+           "user": "agent_user",
+           "password": "secure_password",
+           "dsn": "oracle.example.com:1521/XEPDB1",
+           "min": 5,
+           "max": 20,
+       },
+       extension_config={
+           "adk": {
+               "in_memory": True  # Enable In-Memory Column Store
+           }
+       }
+   )
+
+   store = OracleAsyncADKStore(config)
+   await store.create_tables()
+
+**Generated DDL:**
+
+.. code-block:: sql
+
+   CREATE TABLE adk_sessions (
+       id VARCHAR2(128) PRIMARY KEY,
+       app_name VARCHAR2(128) NOT NULL,
+       user_id VARCHAR2(128) NOT NULL,
+       state JSON NOT NULL,
+       create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+       update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+   ) INMEMORY;
+
+   CREATE TABLE adk_events (
+       id VARCHAR2(128) PRIMARY KEY,
+       session_id VARCHAR2(128) NOT NULL,
+       -- ... other columns ...
+       CONSTRAINT fk_adk_events_session FOREIGN KEY (session_id)
+           REFERENCES adk_sessions(id) ON DELETE CASCADE
+   ) INMEMORY;
+
+Performance Benefits
+~~~~~~~~~~~~~~~~~~~~
+
+In-Memory Column Store provides significant performance improvements for:
+
+- **Analytical queries** aggregating session data (``COUNT``, ``AVG``, ``SUM``)
+- **Complex filtering** with JSON state queries
+- **Large scans** across thousands or millions of sessions
+- **Real-time analytics** on active sessions without impacting OLTP
+
+**Performance Comparison:**
+
+.. code-block:: sql
+
+   -- Query 1 million sessions for analytics
+   SELECT app_name, COUNT(*) as session_count,
+          AVG(EXTRACT(EPOCH FROM (update_time - create_time))) as avg_duration_sec
+   FROM adk_sessions
+   WHERE create_time >= SYSTIMESTAMP - INTERVAL '7' DAY
+   GROUP BY app_name;
+
+   -- Without In-Memory: 8-12 seconds (row format scan)
+   -- With In-Memory:    200-500 ms (columnar scan with SIMD)
+
+**Performance gain**: 10-30x faster for typical analytical workloads.
+
+Database Requirements
+~~~~~~~~~~~~~~~~~~~~~
+
+**Oracle Version**: Oracle Database 12.1.0.2 or higher (19c+ recommended)
+
+**Instance Configuration**: The database instance must have ``INMEMORY_SIZE`` configured:
+
+.. code-block:: sql
+
+   -- Check current setting
+   SELECT value FROM v$parameter WHERE name = 'inmemory_size';
+
+   -- Set INMEMORY_SIZE (requires restart)
+   ALTER SYSTEM SET INMEMORY_SIZE=2G SCOPE=SPFILE;
+   -- Restart database
+
+**Minimum Size**: At least 100 MB per table (recommend 1-2 GB for production).
+
+Verification
+~~~~~~~~~~~~
+
+After table creation, verify In-Memory status:
+
+.. code-block:: python
+
+   async with config.provide_connection() as conn:
+       cursor = conn.cursor()
+
+       # Check In-Memory status
+       await cursor.execute("""
+           SELECT table_name, inmemory, inmemory_priority
+           FROM user_tables
+           WHERE table_name IN ('ADK_SESSIONS', 'ADK_EVENTS')
+       """)
+
+       for row in cursor.fetchall():
+           print(f"Table: {row[0]}, In-Memory: {row[1]}, Priority: {row[2]}")
+
+**Expected Output:**
+
+.. code-block:: text
+
+   Table: ADK_SESSIONS, In-Memory: ENABLED, Priority: NONE
+   Table: ADK_EVENTS, In-Memory: ENABLED, Priority: NONE
+
+Use Cases
+~~~~~~~~~
+
+**When to Use In-Memory:**
+
+✅ **Analytics on session data**
+   - Dashboard queries aggregating thousands of sessions
+   - Real-time reporting on AI agent usage patterns
+   - Session duration analysis and user behavior insights
+
+✅ **Large-scale deployments**
+   - Millions of sessions with frequent analytical queries
+   - Multi-tenant platforms with cross-tenant analytics
+   - Historical session analysis without impacting OLTP performance
+
+✅ **Complex filtering**
+   - JSON state queries (``WHERE JSON_VALUE(state, '$.key') = 'value'``)
+   - Multi-column filtering across large datasets
+   - Ad-hoc analytics and data science queries
+
+**When NOT to Use In-Memory:**
+
+❌ **Small deployments**
+   - < 10,000 sessions (overhead not justified)
+   - Primarily OLTP workload (inserts/updates)
+   - No analytics requirements
+
+❌ **Budget constraints**
+   - Licensing cost prohibitive ($23K+ per processor)
+   - Can achieve performance through standard indexes
+
+❌ **No In-Memory license**
+   - Tables will fail to create with ORA-00439 or ORA-62142
+
+Troubleshooting
+~~~~~~~~~~~~~~~
+
+**ORA-00439: Feature not enabled: Database In-Memory**
+
+**Cause**: In-Memory option not licensed or not enabled.
+
+**Solution**:
+
+1. Verify licensing with Oracle
+2. Check ``INMEMORY_SIZE`` is set:
+
+   .. code-block:: sql
+
+      SELECT value FROM v$parameter WHERE name = 'inmemory_size';
+
+3. If ``0``, set and restart:
+
+   .. code-block:: sql
+
+      ALTER SYSTEM SET INMEMORY_SIZE=2G SCOPE=SPFILE;
+
+**ORA-62142: INMEMORY column store not available**
+
+**Cause**: Database instance doesn't have In-Memory configured.
+
+**Solution**: Same as ORA-00439 - configure ``INMEMORY_SIZE``.
 
 Schema
 ======

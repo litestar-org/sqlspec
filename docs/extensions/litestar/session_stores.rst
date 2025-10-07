@@ -232,11 +232,36 @@ SQLite (Aiosqlite)
    CREATE INDEX IF NOT EXISTS idx_litestar_session_expires_at
    ON litestar_session(expires_at) WHERE expires_at IS NOT NULL;
 
+Oracle Database (OracleDB)
+---------------------------
+
+.. code-block:: sql
+
+   CREATE TABLE litestar_session (
+       session_id VARCHAR2(255) PRIMARY KEY,
+       data BLOB NOT NULL,
+       expires_at TIMESTAMP WITH TIME ZONE,
+       created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+       updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+   );
+
+   CREATE INDEX idx_litestar_session_expires_at
+   ON litestar_session(expires_at);
+
+Features:
+
+- ``TIMESTAMP WITH TIME ZONE`` for global timezone awareness
+- ``BLOB`` for efficient binary session data storage
+- ``MERGE`` statements for atomic UPSERT operations
+- Audit columns with ``SYSTIMESTAMP`` defaults
+
 Store Configuration
 ===================
 
 Custom Table Name
 -----------------
+
+Configure custom table names via ``extension_config``:
 
 .. code-block:: python
 
@@ -247,14 +272,182 @@ Custom Table Name
    # Create SQLSpec instance and add configuration
    spec = SQLSpec()
    config = spec.add_config(
-       AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/mydb"})
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://localhost/mydb"},
+           extension_config={
+               "litestar": {
+                   "session_table": "custom_sessions"
+               }
+           }
+       )
    )
 
-   # Create store with custom table name
-   store = AsyncpgStore(
-       config=config,
-       table_name="custom_sessions"  # Default: "litestar_session"
+   store = AsyncpgStore(config)
+
+Oracle In-Memory Sessions (Enterprise Feature)
+-----------------------------------------------
+
+Oracle Database In-Memory Column Store can dramatically improve session lookup performance for high-traffic applications. When enabled, session tables are stored in columnar format in memory for 10-100x faster reads.
+
+.. warning::
+
+   **Licensing Required**: Oracle Database In-Memory is a **separately licensed option** for Oracle Database Enterprise Edition:
+
+   - Oracle Database 12.1.0.2 or higher required
+   - Oracle Database In-Memory option license ($23,000 per processor)
+   - Sufficient ``INMEMORY_SIZE`` configured in the database instance
+
+   Using ``in_memory=True`` without proper licensing will result in **ORA-00439** or **ORA-62142** errors.
+
+Configuration
+~~~~~~~~~~~~~
+
+Enable In-Memory for Oracle session stores via ``extension_config``:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.oracledb import OracleAsyncConfig
+   from sqlspec.adapters.oracledb.litestar import OracleAsyncStore
+   from litestar import Litestar
+   from litestar.middleware.session.server_side import ServerSideSessionConfig
+   from sqlspec.extensions.litestar import SQLSpecPlugin
+
+   # Configure Oracle with In-Memory enabled
+   spec = SQLSpec()
+   config = spec.add_config(
+       OracleAsyncConfig(
+           pool_config={
+               "user": "app_user",
+               "password": "secure_password",
+               "dsn": "oracle.example.com:1521/XEPDB1",
+               "min": 5,
+               "max": 20,
+           },
+           extension_config={
+               "litestar": {
+                   "session_table": "app_sessions",
+                   "in_memory": True  # Enable In-Memory Column Store
+               }
+           }
+       )
    )
+
+   # Create In-Memory session store
+   store = OracleAsyncStore(config)
+
+   # Configure Litestar application
+   app = Litestar(
+       plugins=[SQLSpecPlugin(sqlspec=spec)],
+       middleware=[
+           ServerSideSessionConfig(store=store).middleware
+       ]
+   )
+
+**Generated DDL:**
+
+.. code-block:: sql
+
+   CREATE TABLE app_sessions (
+       session_id VARCHAR2(255) PRIMARY KEY,
+       data BLOB NOT NULL,
+       expires_at TIMESTAMP WITH TIME ZONE,
+       created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+       updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+   ) INMEMORY;
+
+Performance Benefits
+~~~~~~~~~~~~~~~~~~~~
+
+In-Memory Column Store significantly improves session operations:
+
+- **Session lookups**: 10-50x faster for ``get()`` operations
+- **Expiration queries**: Faster ``delete_expired()`` execution
+- **Concurrent reads**: Reduced I/O contention for high-traffic sites
+- **Real-time analytics**: Fast session counting and user analytics
+
+**Use Cases:**
+
+✅ **High-traffic web applications**
+   - Thousands of concurrent users
+   - Frequent session read operations
+   - Session-heavy workloads
+
+✅ **Real-time session analytics**
+   - Active user counting
+   - Session duration tracking
+   - User behavior analysis
+
+❌ **Small applications** (< 1,000 concurrent users)
+   - Overhead not justified
+   - Standard indexes sufficient
+
+❌ **Budget constraints**
+   - In-Memory license costs $23K+ per processor
+
+Database Requirements
+~~~~~~~~~~~~~~~~~~~~~
+
+**Oracle Version**: Oracle Database 12.1.0.2+ (19c+ recommended)
+
+**Instance Configuration**: Configure ``INMEMORY_SIZE``:
+
+.. code-block:: sql
+
+   -- Check current setting
+   SELECT value FROM v$parameter WHERE name = 'inmemory_size';
+
+   -- Set INMEMORY_SIZE (requires restart)
+   ALTER SYSTEM SET INMEMORY_SIZE=1G SCOPE=SPFILE;
+   -- Restart database
+
+**Recommended Size**: 500 MB - 2 GB for session stores.
+
+Verification
+~~~~~~~~~~~~
+
+Verify In-Memory status after table creation:
+
+.. code-block:: python
+
+   from sqlspec.adapters.oracledb import OracleAsyncConfig
+
+   config = OracleAsyncConfig(pool_config={"dsn": "..."})
+
+   async with config.provide_connection() as conn:
+       cursor = conn.cursor()
+
+       # Check In-Memory status
+       await cursor.execute("""
+           SELECT table_name, inmemory
+           FROM user_tables
+           WHERE table_name = 'APP_SESSIONS'
+       """)
+
+       row = await cursor.fetchone()
+       print(f"Table: {row[0]}, In-Memory: {row[1]}")
+
+**Expected Output:**
+
+.. code-block:: text
+
+   Table: APP_SESSIONS, In-Memory: ENABLED
+
+Troubleshooting
+~~~~~~~~~~~~~~~
+
+**ORA-00439: Feature not enabled: Database In-Memory**
+
+**Solution**: Verify In-Memory license and configure ``INMEMORY_SIZE``:
+
+.. code-block:: sql
+
+   ALTER SYSTEM SET INMEMORY_SIZE=1G SCOPE=SPFILE;
+   -- Restart database
+
+**ORA-62142: INMEMORY column store not available**
+
+**Solution**: Same as ORA-00439 - configure ``INMEMORY_SIZE`` and restart.
 
 Implementation Differences
 ==========================

@@ -29,44 +29,55 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
     - Optional In-Memory Column Store support (requires Oracle Database In-Memory license)
 
     Args:
-        config: OracleAsyncConfig instance.
-        table_name: Name of the session table. Defaults to "litestar_session".
-        use_in_memory: Enable Oracle Database In-Memory Column Store for faster queries.
-            Requires Oracle Database In-Memory license (paid feature). Defaults to False.
+        config: OracleAsyncConfig with extension_config["litestar"] settings.
 
     Example:
         from sqlspec.adapters.oracledb import OracleAsyncConfig
         from sqlspec.adapters.oracledb.litestar.store import OracleAsyncStore
 
-        config = OracleAsyncConfig(pool_config={"dsn": "oracle://..."})
+        config = OracleAsyncConfig(
+            pool_config={"dsn": "oracle://..."},
+            extension_config={
+                "litestar": {
+                    "session_table": "my_sessions",
+                    "in_memory": True
+                }
+            }
+        )
         store = OracleAsyncStore(config)
         await store.create_table()
 
-        config_inmem = OracleAsyncConfig(pool_config={"dsn": "oracle://..."})
-        store_inmem = OracleAsyncStore(config_inmem, use_in_memory=True)
-        await store_inmem.create_table()
-
     Notes:
-        When use_in_memory=True, the table is created with INMEMORY clause for
+        Configuration is read from config.extension_config["litestar"]:
+        - session_table: Session table name (default: "litestar_session")
+        - in_memory: Enable INMEMORY clause (default: False, Oracle-specific)
+
+        When in_memory=True, the table is created with INMEMORY clause for
         faster read operations. This requires Oracle Database 12.1.0.2+ with the
         Database In-Memory option licensed. If In-Memory is not available, the
         table creation will fail with ORA-00439 or ORA-62142.
     """
 
-    __slots__ = ("_use_in_memory",)
+    __slots__ = ("_in_memory",)
 
-    def __init__(
-        self, config: "OracleAsyncConfig", table_name: str = "litestar_session", use_in_memory: bool = False
-    ) -> None:
+    def __init__(self, config: "OracleAsyncConfig") -> None:
         """Initialize Oracle session store.
 
         Args:
             config: OracleAsyncConfig instance.
-            table_name: Name of the session table.
-            use_in_memory: Enable In-Memory Column Store (requires license).
+
+        Notes:
+            Configuration is read from config.extension_config["litestar"]:
+            - session_table: Session table name (default: "litestar_session")
+            - in_memory: Enable INMEMORY clause (default: False)
         """
         super().__init__(config)
-        self._use_in_memory = use_in_memory
+
+        if hasattr(config, "extension_config") and config.extension_config:
+            litestar_config = config.extension_config.get("litestar", {})
+            self._in_memory: bool = bool(litestar_config.get("in_memory", False))
+        else:
+            self._in_memory: bool = False
 
     def _get_create_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema.
@@ -80,9 +91,9 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             - BLOB type for data storage (Oracle native binary type)
             - Audit columns (created_at, updated_at) help with debugging
             - Table name is internally controlled, not user input (S608 suppressed)
-            - INMEMORY clause added when use_in_memory=True for faster reads
+            - INMEMORY clause added when in_memory=True for faster reads
         """
-        inmemory_clause = "INMEMORY" if self._use_in_memory else ""
+        inmemory_clause = "INMEMORY" if self._in_memory else ""
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
@@ -397,40 +408,55 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         as it provides native async operations without threading overhead.
 
     Args:
-        config: OracleSyncConfig instance.
-        table_name: Name of the session table. Defaults to "litestar_session".
-        use_in_memory: Enable Oracle Database In-Memory Column Store for faster queries.
-            Requires Oracle Database In-Memory license (paid feature). Defaults to False.
+        config: OracleSyncConfig with extension_config["litestar"] settings.
 
     Example:
         from sqlspec.adapters.oracledb import OracleSyncConfig
         from sqlspec.adapters.oracledb.litestar.store import OracleSyncStore
 
-        config = OracleSyncConfig(pool_config={"dsn": "oracle://..."})
+        config = OracleSyncConfig(
+            pool_config={"dsn": "oracle://..."},
+            extension_config={
+                "litestar": {
+                    "session_table": "my_sessions",
+                    "in_memory": True
+                }
+            }
+        )
         store = OracleSyncStore(config)
         await store.create_table()
 
     Notes:
-        When use_in_memory=True, the table is created with INMEMORY clause for
+        Configuration is read from config.extension_config["litestar"]:
+        - session_table: Session table name (default: "litestar_session")
+        - in_memory: Enable INMEMORY clause (default: False, Oracle-specific)
+
+        When in_memory=True, the table is created with INMEMORY clause for
         faster read operations. This requires Oracle Database 12.1.0.2+ with the
         Database In-Memory option licensed. If In-Memory is not available, the
         table creation will fail with ORA-00439 or ORA-62142.
     """
 
-    __slots__ = ("_use_in_memory",)
+    __slots__ = ("_in_memory",)
 
-    def __init__(
-        self, config: "OracleSyncConfig", table_name: str = "litestar_session", use_in_memory: bool = False
-    ) -> None:
+    def __init__(self, config: "OracleSyncConfig") -> None:
         """Initialize Oracle sync session store.
 
         Args:
             config: OracleSyncConfig instance.
-            table_name: Name of the session table.
-            use_in_memory: Enable In-Memory Column Store (requires license).
+
+        Notes:
+            Configuration is read from config.extension_config["litestar"]:
+            - session_table: Session table name (default: "litestar_session")
+            - in_memory: Enable INMEMORY clause (default: False)
         """
         super().__init__(config)
-        self._use_in_memory = use_in_memory
+
+        if hasattr(config, "extension_config") and config.extension_config:
+            litestar_config = config.extension_config.get("litestar", {})
+            self._in_memory: bool = bool(litestar_config.get("in_memory", False))
+        else:
+            self._in_memory: bool = False
 
     def _get_create_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema.
@@ -444,9 +470,9 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             - BLOB type for data storage (Oracle native binary type)
             - Audit columns (created_at, updated_at) help with debugging
             - Table name is internally controlled, not user input (S608 suppressed)
-            - INMEMORY clause added when use_in_memory=True for faster reads
+            - INMEMORY clause added when in_memory=True for faster reads
         """
-        inmemory_clause = "INMEMORY" if self._use_in_memory else ""
+        inmemory_clause = "INMEMORY" if self._in_memory else ""
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (

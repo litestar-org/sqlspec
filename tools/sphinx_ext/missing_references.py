@@ -170,7 +170,7 @@ def _resolve_serialization_reference(target: str) -> bool:
 
 
 def _resolve_click_reference(target: str) -> bool:
-    """Attempt to resolve Click references.
+    """Attempt to resolve Click and rich-click references.
 
     Args:
         target: The target class/attribute name
@@ -179,13 +179,20 @@ def _resolve_click_reference(target: str) -> bool:
         bool: True if reference exists, False otherwise
     """
     try:
-        import click
+        import rich_click as click
 
         if target == "Group":
             return True
         return hasattr(click, target)
     except ImportError:
-        return False
+        try:
+            import click
+
+            if target == "Group":
+                return True
+            return hasattr(click, target)
+        except ImportError:
+            return False
 
 
 def on_warn_missing_reference(app: Sphinx, domain: str, node: Node) -> bool | None:
