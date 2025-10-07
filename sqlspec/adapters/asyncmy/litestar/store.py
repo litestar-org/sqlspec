@@ -29,7 +29,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
     Args:
         config: AsyncmyConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.asyncmy import AsyncmyConfig
@@ -46,12 +45,14 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "AsyncmyConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "AsyncmyConfig") -> None:
         """Initialize AsyncMy session store.
 
         Args:
             config: AsyncmyConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 

@@ -19,9 +19,10 @@ async def adbc_store(postgres_service: PostgresService) -> AsyncGenerator[ADBCSt
     config = AdbcConfig(
         connection_config={
             "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
+        },
+        extension_config={"litestar": {"session_table": "test_adbc_sessions"}},
     )
-    store = ADBCStore(config, table_name="test_adbc_sessions")
+    store = ADBCStore(config)
     await store.create_table()
     yield store
     try:

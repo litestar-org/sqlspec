@@ -25,9 +25,10 @@ async def oracle_sync_store(oracle_23ai_service: OracleService) -> AsyncGenerato
             "password": oracle_23ai_service.password,
             "min": 1,
             "max": 5,
-        }
+        },
+        extension_config={"litestar": {"session_table": "test_sessions_sync"}},
     )
-    store: OracleSyncStore = OracleSyncStore(config, table_name="test_sessions_sync")
+    store: OracleSyncStore = OracleSyncStore(config)
     try:
         await store.create_table()
         yield store

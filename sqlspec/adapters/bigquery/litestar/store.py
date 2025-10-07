@@ -38,7 +38,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
     Args:
         config: BigQueryConfig instance.
-        table_name: Name of the session table. Defaults to "litestar_session".
 
     Example:
         from sqlspec.adapters.bigquery import BigQueryConfig
@@ -51,12 +50,14 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "BigQueryConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "BigQueryConfig") -> None:
         """Initialize BigQuery session store.
 
         Args:
             config: BigQueryConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 

@@ -27,7 +27,6 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
     Args:
         config: PsqlpyConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.psqlpy import PsqlpyConfig
@@ -40,12 +39,14 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "PsqlpyConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "PsqlpyConfig") -> None:
         """Initialize Psqlpy session store.
 
         Args:
             config: PsqlpyConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 

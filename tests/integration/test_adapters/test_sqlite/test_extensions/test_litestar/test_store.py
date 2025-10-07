@@ -15,8 +15,11 @@ pytestmark = [pytest.mark.sqlite, pytest.mark.integration]
 @pytest.fixture
 async def sqlite_store() -> AsyncGenerator[SQLiteStore, None]:
     """Create SQLite store with shared in-memory database."""
-    config = SqliteConfig(pool_config={"database": "file:test_sessions_mem?mode=memory&cache=shared", "uri": True})
-    store = SQLiteStore(config, table_name="test_sessions")
+    config = SqliteConfig(
+        pool_config={"database": "file:test_sessions_mem?mode=memory&cache=shared", "uri": True},
+        extension_config={"litestar": {"session_table": "test_sessions"}},
+    )
+    store = SQLiteStore(config)
     await store.create_table()
     yield store
     await store.delete_all()

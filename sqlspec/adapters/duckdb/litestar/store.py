@@ -36,7 +36,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
 
     Args:
         config: DuckDBConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.duckdb import DuckDBConfig
@@ -49,12 +48,14 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "DuckDBConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "DuckDBConfig") -> None:
         """Initialize DuckDB session store.
 
         Args:
             config: DuckDBConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 

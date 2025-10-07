@@ -29,7 +29,6 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
     Args:
         config: AiosqliteConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.aiosqlite import AiosqliteConfig
@@ -42,12 +41,14 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "AiosqliteConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "AiosqliteConfig") -> None:
         """Initialize AioSQLite session store.
 
         Args:
             config: AiosqliteConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 

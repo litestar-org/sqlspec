@@ -31,7 +31,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
     Args:
         config: PsycopgAsyncConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.psycopg import PsycopgAsyncConfig
@@ -44,12 +43,14 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "PsycopgAsyncConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "PsycopgAsyncConfig") -> None:
         """Initialize Psycopg async session store.
 
         Args:
             config: PsycopgAsyncConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -297,7 +298,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
 
     Args:
         config: PsycopgSyncConfig instance.
-        table_name: Name of the session table. Defaults to "litestar_session".
 
     Example:
         from sqlspec.adapters.psycopg import PsycopgSyncConfig
@@ -310,12 +310,14 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "PsycopgSyncConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "PsycopgSyncConfig") -> None:
         """Initialize Psycopg sync session store.
 
         Args:
             config: PsycopgSyncConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 

@@ -48,7 +48,6 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
     Args:
         config: AdbcConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.adbc import AdbcConfig
@@ -65,12 +64,14 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
     __slots__ = ("_dialect",)
 
-    def __init__(self, config: "AdbcConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "AdbcConfig") -> None:
         """Initialize ADBC session store.
 
         Args:
             config: AdbcConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
         self._dialect: str | None = None
