@@ -140,7 +140,7 @@ Optional Dependencies
 Type-Safe Result Mapping
 ------------------------
 
-For enhanced type safety with result mapping:
+For type safety with result mapping:
 
 .. code-block:: bash
 
@@ -238,7 +238,7 @@ Start development databases:
 Next Steps
 ==========
 
-Now that the ADK extension is installed, proceed to the :doc:`quickstart` guide to create your first session-backed agent!
+With the ADK extension installed, proceed to the :doc:`quickstart` guide to create your first session-backed agent!
 
 See Also
 ========

@@ -140,7 +140,7 @@ Optional Dependencies
 Type-Safe Result Mapping
 ------------------------
 
-For enhanced type safety with result mapping:
+For type safety with result mapping:
 
 .. code-block:: bash
 
@@ -243,7 +243,7 @@ Start development databases:
 Next Steps
 ==========
 
-Now that the Litestar extension is installed, proceed to the :doc:`quickstart` guide to create your first Litestar application with SQLSpec!
+With the Litestar extension installed, proceed to the :doc:`quickstart` guide to create your first Litestar application with SQLSpec!
 
 See Also
 ========

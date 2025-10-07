@@ -110,7 +110,7 @@ Psycopg
 
 **Features:**
 
-- Modern PostgreSQL adapter (psycopg3)
+- PostgreSQL adapter (psycopg3)
 - Both sync and async support
 - Same SQL schema as AsyncPG
 - Row factory for direct TypedDict conversion

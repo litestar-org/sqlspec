@@ -619,7 +619,7 @@ Retrieve only recent events:
 Next Steps
 ==========
 
-Now that you understand the basics:
+To learn more:
 
 - :doc:`api` - Explore the complete API reference
 - :doc:`adapters` - Learn about database-specific features

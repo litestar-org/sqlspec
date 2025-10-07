@@ -475,7 +475,7 @@ Comparison: Psqlpy vs Other PostgreSQL Drivers
      - Built-in (Python)
      - asyncpg-pool or pgbouncer
    * - Maturity
-     - Newer
+     - Evolving
      - Very Mature
      - Very Mature
    * - Community

@@ -338,7 +338,7 @@ AIOSQLite runs SQLite operations in a thread pool to provide async access:
 WAL Mode for Better Concurrency
 --------------------------------
 
-**Enable Write-Ahead Logging (WAL) mode** for improved concurrent read/write performance:
+**Enable Write-Ahead Logging (WAL) mode** for better concurrent read/write performance:
 
 .. code-block:: python
 
@@ -355,7 +355,7 @@ WAL Mode for Better Concurrency
 **Trade-offs:**
 
 - Slightly more disk I/O
-- Requires file system that supports WAL (most modern systems)
+- Requires file system that supports WAL (supported on most systems)
 
 Performance Tuning PRAGMAs
 ---------------------------

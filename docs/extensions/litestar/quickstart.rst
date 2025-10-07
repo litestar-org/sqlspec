@@ -366,7 +366,7 @@ Commits on both 2XX and 3XX responses:
 Next Steps
 ==========
 
-Now that you understand the basics:
+To learn more:
 
 - :doc:`dependency_injection` - Learn about all dependency injection options
 - :doc:`transactions` - Explore transaction management patterns

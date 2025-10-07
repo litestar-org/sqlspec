@@ -5,7 +5,7 @@ Psycopg Backend
 Overview
 ========
 
-Psycopg3 is the modern, redesigned PostgreSQL adapter that provides both **synchronous and asynchronous**
+Psycopg3 is a redesigned PostgreSQL adapter that provides both **synchronous and asynchronous**
 database access with native support for PostgreSQL-specific features like JSONB, server-side cursors,
 and the COPY protocol.
 
@@ -17,7 +17,7 @@ and the COPY protocol.
 - **Binary Protocol**: Efficient binary data transfer by default
 - **Connection Pooling**: Built-in ``psycopg_pool`` with async support
 - **Server-Side Cursors**: Memory-efficient processing of large result sets
-- **Modern Design**: Complete rewrite from psycopg2 with improved API
+- **Contemporary Design**: Fully redesigned API for PostgreSQL
 
 **Ideal Use Cases:**
 
@@ -25,7 +25,7 @@ and the COPY protocol.
 - PostgreSQL-first applications leveraging JSONB features
 - Production systems needing robust connection pooling
 - Projects prioritizing type safety and explicit type handling
-- Migration from psycopg2 to modern async-capable adapter
+- Async-capable adapter with dual sync/async support
 
 .. warning::
 
@@ -729,7 +729,7 @@ Psycopg3 vs Psqlpy
      - Rust-based
    * - Maturity
      - Stable, production-ready
-     - Newer, evolving
+     - Evolving
    * - JSONB Handling
      - ``Jsonb()`` wrapper
      - Direct dict insertion
@@ -753,7 +753,7 @@ When to Choose Psycopg3
 
 - Need both async AND sync database access
 - Want explicit type safety with JSONB operations
-- Migrating from psycopg2 to modern async adapter
+- Require dual-mode async/sync adapter capabilities
 - Prefer PostgreSQL's official SQL composition tools
 - Building applications with mixed sync/async components
 - Value ecosystem maturity and stability
@@ -769,8 +769,8 @@ When to Choose Psycopg3
 
 - Need cutting-edge Rust performance
 - Building high-throughput data pipelines
-- Want modern Rust safety guarantees
-- Can tolerate newer, evolving ecosystem
+- Want Rust safety guarantees
+- Can work with an evolving ecosystem
 
 Troubleshooting
 ===============

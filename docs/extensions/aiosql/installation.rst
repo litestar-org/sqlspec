@@ -162,7 +162,7 @@ Run aiosql integration tests:
 Next Steps
 ==========
 
-Now that the aiosql integration is installed, proceed to the :doc:`quickstart` guide!
+With the aiosql integration installed, proceed to the :doc:`quickstart` guide!
 
 See Also
 ========
