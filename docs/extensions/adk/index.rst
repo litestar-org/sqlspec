@@ -186,16 +186,10 @@ See the following runnable examples in the ``docs/examples/`` directory:
       Basic session management with PostgreSQL using AsyncPG driver - the recommended production setup.
 
    .. grid-item-card:: 📗 Basic SQLite Example
-      :link: /examples/adk_basic_sqlite
+      :link: /examples/adk_basic_aiosqlite
       :link-type: doc
 
       SQLite example for local development and testing with minimal setup.
-
-   .. grid-item-card:: 📙 Basic MySQL Example
-      :link: /examples/adk_basic_mysql
-      :link-type: doc
-
-      Session management with MySQL/MariaDB using the AsyncMy driver.
 
    .. grid-item-card:: 🌐 Litestar Web Integration
       :link: /examples/adk_litestar_asyncpg

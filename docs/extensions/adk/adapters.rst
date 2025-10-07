@@ -178,7 +178,7 @@ AsyncMy
 
 .. seealso::
 
-   :doc:`/examples/adk_basic_mysql`
+   :doc:`/examples/adk_basic_aiosqlite`
       Complete runnable example using AsyncMy with MySQL/MariaDB
 
 **Features:**
@@ -254,7 +254,7 @@ SQLite (Sync)
 
 .. seealso::
 
-   :doc:`/examples/adk_basic_sqlite`
+   :doc:`/examples/adk_basic_aiosqlite`
       Complete runnable example using SQLite for local development
 
 **Features:**
@@ -815,7 +815,6 @@ See Also
 - :doc:`backends/adbc` - ADBC backend guide
 - :doc:`backends/bigquery` - BigQuery backend guide
 - :doc:`/examples/adk_basic_asyncpg` - PostgreSQL example
-- :doc:`/examples/adk_basic_bigquery` - BigQuery example
-- :doc:`/examples/adk_basic_mysql` - MySQL example
-- :doc:`/examples/adk_basic_sqlite` - SQLite example
+- :doc:`/examples/adk_basic_aiosqlite` - SQLite example
+- :doc:`/examples/adk_litestar_asyncpg` - Litestar integration example
 - :doc:`/examples/adk_multi_tenant` - Multi-tenant deployment example
