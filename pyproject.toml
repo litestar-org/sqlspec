@@ -484,6 +484,7 @@ split-on-trailing-comma = false
 "docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127"]
 "docs/examples/**" = ["T201"]
 "sqlspec/builder/mixins/**/*.*" = ["SLF001"]
+"sqlspec/extensions/adk/converters.py" = ["S403"]
 "tests/**/*.*" = [
   "A",
   "ARG",

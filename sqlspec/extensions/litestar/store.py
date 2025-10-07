@@ -78,7 +78,7 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
             Table name for the session store.
         """
         if hasattr(self._config, "extension_config"):
-            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
+            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
             litestar_config: dict[str, Any] = extension_config.get("litestar", {})
             return str(litestar_config.get("session_table", "litestar_session"))
         return "litestar_session"

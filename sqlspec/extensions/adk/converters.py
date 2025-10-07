@@ -1,4 +1,3 @@
-# ruff: noqa: S403
 """Conversion functions between ADK models and database records."""
 
 import json
