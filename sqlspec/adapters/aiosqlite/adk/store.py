@@ -94,15 +94,21 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
     - Efficient upserts using INSERT OR REPLACE
 
     Args:
-        config: AiosqliteConfig instance.
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
+        config: AiosqliteConfig with extension_config["adk"] settings.
 
     Example:
         from sqlspec.adapters.aiosqlite import AiosqliteConfig
         from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 
-        config = AiosqliteConfig(pool_config={"database": ":memory:"})
+        config = AiosqliteConfig(
+            pool_config={"database": ":memory:"},
+            extension_config={
+                "adk": {
+                    "session_table": "my_sessions",
+                    "events_table": "my_events"
+                }
+            }
+        )
         store = AiosqliteADKStore(config)
         await store.create_tables()
 
@@ -112,21 +118,23 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         - Timestamps as REAL (Julian day: julianday('now'))
         - BLOB for pre-serialized actions from Google ADK
         - PRAGMA foreign_keys = ON (enable per connection)
+        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
 
-    def __init__(
-        self, config: "AiosqliteConfig", session_table: str = "adk_sessions", events_table: str = "adk_events"
-    ) -> None:
+    def __init__(self, config: "AiosqliteConfig") -> None:
         """Initialize Aiosqlite ADK store.
 
         Args:
             config: AiosqliteConfig instance.
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
         """
-        super().__init__(config, session_table, events_table)
+        super().__init__(config)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL for sessions.

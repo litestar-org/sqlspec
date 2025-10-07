@@ -73,20 +73,23 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     - Efficient upserts using MERGE statement
 
     Args:
-        config: OracleAsyncConfig instance.
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
-        owner_id_column: Optional owner ID column DDL. Defaults to None.
+        config: OracleAsyncConfig with extension_config["adk"] settings.
 
     Example:
         from sqlspec.adapters.oracledb import OracleAsyncConfig
         from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore
 
-        config = OracleAsyncConfig(pool_config={"dsn": "oracle://..."})
-        store = OracleAsyncADKStore(
-            config,
-            owner_id_column="tenant_id NUMBER(10) REFERENCES tenants(id)"
+        config = OracleAsyncConfig(
+            pool_config={"dsn": "oracle://..."},
+            extension_config={
+                "adk": {
+                    "session_table": "my_sessions",
+                    "events_table": "my_events",
+                    "owner_id_column": "tenant_id NUMBER(10) REFERENCES tenants(id)"
+                }
+            }
         )
+        store = OracleAsyncADKStore(config)
         await store.create_tables()
 
     Notes:
@@ -97,26 +100,24 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         - Named parameters using :param_name
         - State merging handled at application level
         - owner_id_column supports NUMBER, VARCHAR2, RAW for Oracle FK types
+        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ("_json_storage_type",)
 
-    def __init__(
-        self,
-        config: "OracleAsyncConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: "OracleAsyncConfig") -> None:
         """Initialize Oracle ADK store.
 
         Args:
             config: OracleAsyncConfig instance.
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            owner_id_column: Optional owner ID column DDL.
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        super().__init__(config, session_table, events_table, owner_id_column)
+        super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
 
     async def _detect_json_storage_type(self) -> JSONStorageType:
@@ -911,20 +912,23 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
     - Efficient upserts using MERGE statement
 
     Args:
-        config: OracleSyncConfig instance.
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
-        owner_id_column: Optional owner ID column DDL. Defaults to None.
+        config: OracleSyncConfig with extension_config["adk"] settings.
 
     Example:
         from sqlspec.adapters.oracledb import OracleSyncConfig
         from sqlspec.adapters.oracledb.adk import OracleSyncADKStore
 
-        config = OracleSyncConfig(pool_config={"dsn": "oracle://..."})
-        store = OracleSyncADKStore(
-            config,
-            owner_id_column="account_id NUMBER(19) REFERENCES accounts(id)"
+        config = OracleSyncConfig(
+            pool_config={"dsn": "oracle://..."},
+            extension_config={
+                "adk": {
+                    "session_table": "my_sessions",
+                    "events_table": "my_events",
+                    "owner_id_column": "account_id NUMBER(19) REFERENCES accounts(id)"
+                }
+            }
         )
+        store = OracleSyncADKStore(config)
         store.create_tables()
 
     Notes:
@@ -935,26 +939,24 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         - Named parameters using :param_name
         - State merging handled at application level
         - owner_id_column supports NUMBER, VARCHAR2, RAW for Oracle FK types
+        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ("_json_storage_type",)
 
-    def __init__(
-        self,
-        config: "OracleSyncConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: "OracleSyncConfig") -> None:
         """Initialize Oracle synchronous ADK store.
 
         Args:
             config: OracleSyncConfig instance.
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            owner_id_column: Optional owner ID column DDL.
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        super().__init__(config, session_table, events_table, owner_id_column)
+        super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
 
     def _detect_json_storage_type(self) -> JSONStorageType:

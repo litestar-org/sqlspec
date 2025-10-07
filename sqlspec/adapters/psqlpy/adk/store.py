@@ -35,16 +35,22 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     - HOT updates with FILLFACTOR 80
 
     Args:
-        config: PsqlpyConfig database configuration.
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
-        owner_id_column: Optional owner ID column DDL. Defaults to None.
+        config: PsqlpyConfig with extension_config["adk"] settings.
 
     Example:
         from sqlspec.adapters.psqlpy import PsqlpyConfig
         from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
 
-        config = PsqlpyConfig(pool_config={"dsn": "postgresql://..."})
+        config = PsqlpyConfig(
+            pool_config={"dsn": "postgresql://..."},
+            extension_config={
+                "adk": {
+                    "session_table": "my_sessions",
+                    "events_table": "my_events",
+                    "owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+                }
+            }
+        )
         store = PsqlpyADKStore(config)
         await store.create_tables()
 
@@ -56,26 +62,24 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         - GIN index on state for JSONB queries (partial index)
         - FILLFACTOR 80 leaves space for HOT updates
         - Uses PostgreSQL numeric parameter style ($1, $2, $3)
+        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
 
-    def __init__(
-        self,
-        config: "PsqlpyConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: "PsqlpyConfig") -> None:
         """Initialize Psqlpy ADK store.
 
         Args:
             config: PsqlpyConfig instance.
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            owner_id_column: Optional owner ID column DDL.
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        super().__init__(config, session_table, events_table, owner_id_column)
+        super().__init__(config)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.

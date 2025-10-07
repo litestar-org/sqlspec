@@ -2,7 +2,7 @@
 
 import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sqlspec.utils.logging import get_logger
 
@@ -123,10 +123,10 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         """
         self._config = config
         store_config = self._get_store_config_from_extension()
-        self._session_table = store_config["session_table"]
-        self._events_table = store_config["events_table"]
-        self._owner_id_column_ddl = store_config.get("owner_id_column")
-        self._owner_id_column_name = (
+        self._session_table: str = str(store_config["session_table"])
+        self._events_table: str = str(store_config["events_table"])
+        self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
+        self._owner_id_column_name: str | None = (
             _parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
         _validate_table_name(self._session_table)
@@ -139,7 +139,8 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
             Dict with session_table, events_table, and optionally owner_id_column.
         """
         if hasattr(self._config, "extension_config"):
-            adk_config = self._config.extension_config.get("adk", {})
+            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
+            adk_config: dict[str, Any] = extension_config.get("adk", {})
             result: dict[str, Any] = {
                 "session_table": adk_config.get("session_table") or "adk_sessions",
                 "events_table": adk_config.get("events_table") or "adk_events",
@@ -341,10 +342,10 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         """
         self._config = config
         store_config = self._get_store_config_from_extension()
-        self._session_table = store_config["session_table"]
-        self._events_table = store_config["events_table"]
-        self._owner_id_column_ddl = store_config.get("owner_id_column")
-        self._owner_id_column_name = (
+        self._session_table: str = str(store_config["session_table"])
+        self._events_table: str = str(store_config["events_table"])
+        self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
+        self._owner_id_column_name: str | None = (
             _parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
         _validate_table_name(self._session_table)
@@ -357,7 +358,8 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
             Dict with session_table, events_table, and optionally owner_id_column.
         """
         if hasattr(self._config, "extension_config"):
-            adk_config = self._config.extension_config.get("adk", {})
+            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
+            adk_config: dict[str, Any] = extension_config.get("adk", {})
             result: dict[str, Any] = {
                 "session_table": adk_config.get("session_table") or "adk_sessions",
                 "events_table": adk_config.get("events_table") or "adk_events",

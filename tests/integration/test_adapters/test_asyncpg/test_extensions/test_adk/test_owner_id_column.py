@@ -20,10 +20,7 @@ def _make_config_with_owner_id(
 ) -> AsyncpgConfig:
     """Helper to create config with ADK extension config."""
     extension_config: dict[str, dict[str, Any]] = {
-        "adk": {
-            "session_table": session_table,
-            "events_table": events_table,
-        }
+        "adk": {"session_table": session_table, "events_table": events_table}
     }
     if owner_id_column is not None:
         extension_config["adk"]["owner_id_column"] = owner_id_column
@@ -171,9 +168,7 @@ async def test_create_session_with_owner_id(tenants_table: Any, postgres_service
 
 async def test_create_session_without_owner_id_when_configured(tenants_table: Any, postgres_service: Any) -> None:
     """Test that creating session without owner_id when configured uses original SQL."""
-    config = _make_config_with_owner_id(
-        postgres_service, owner_id_column="tenant_id INTEGER REFERENCES tenants(id)"
-    )
+    config = _make_config_with_owner_id(postgres_service, owner_id_column="tenant_id INTEGER REFERENCES tenants(id)")
     store = AsyncpgADKStore(config)
     try:
         await store.create_tables()

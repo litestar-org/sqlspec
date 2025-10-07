@@ -96,16 +96,22 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
     - Efficient upserts using INSERT OR REPLACE
 
     Args:
-        config: SqliteConfig instance.
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
-        owner_id_column: Optional owner ID column DDL for multi-tenant or owner references. Defaults to None.
+        config: SqliteConfig instance with extension_config["adk"] settings.
 
     Example:
         from sqlspec.adapters.sqlite import SqliteConfig
         from sqlspec.adapters.sqlite.adk import SqliteADKStore
 
-        config = SqliteConfig(database=":memory:")
+        config = SqliteConfig(
+            database=":memory:",
+            extension_config={
+                "adk": {
+                    "session_table": "my_sessions",
+                    "events_table": "my_events",
+                    "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE"
+                }
+            }
+        )
         store = SqliteADKStore(config)
         await store.create_tables()
 
@@ -115,26 +121,24 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         - Timestamps as REAL (Julian day: julianday('now'))
         - BLOB for pre-serialized actions from Google ADK
         - PRAGMA foreign_keys = ON (enable per connection)
+        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
 
-    def __init__(
-        self,
-        config: "SqliteConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: "SqliteConfig") -> None:
         """Initialize SQLite ADK store.
 
         Args:
             config: SqliteConfig instance.
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE").
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        super().__init__(config, session_table, events_table, owner_id_column)
+        super().__init__(config)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL for sessions.

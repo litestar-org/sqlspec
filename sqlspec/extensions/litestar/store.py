@@ -3,7 +3,7 @@
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sqlspec.utils.logging import get_logger
 
@@ -78,7 +78,8 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
             Table name for the session store.
         """
         if hasattr(self._config, "extension_config"):
-            litestar_config: dict[str, str] = self._config.extension_config.get("litestar", {})
+            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
+            litestar_config: dict[str, Any] = extension_config.get("litestar", {})
             return str(litestar_config.get("session_table", "litestar_session"))
         return "litestar_session"
 

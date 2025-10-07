@@ -37,15 +37,22 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
     - Database-agnostic SQL (supports multiple backends)
 
     Args:
-        config: AdbcConfig instance (any ADBC driver).
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
+        config: AdbcConfig with extension_config["adk"] settings.
 
     Example:
         from sqlspec.adapters.adbc import AdbcConfig
         from sqlspec.adapters.adbc.adk import AdbcADKStore
 
-        config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
+        config = AdbcConfig(
+            connection_config={"driver_name": "sqlite", "uri": ":memory:"},
+            extension_config={
+                "adk": {
+                    "session_table": "my_sessions",
+                    "events_table": "my_events",
+                    "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
+                }
+            }
+        )
         store = AdbcADKStore(config)
         store.create_tables()
 
@@ -58,26 +65,24 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         - Uses dialect-agnostic SQL for maximum compatibility
         - State and JSON fields use to_json/from_json for serialization
         - ADBC drivers handle parameter binding automatically
+        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ("_dialect",)
 
-    def __init__(
-        self,
-        config: "AdbcConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: "AdbcConfig") -> None:
         """Initialize ADBC ADK store.
 
         Args:
             config: AdbcConfig instance (any ADBC driver).
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            owner_id_column: Optional owner ID column DDL for multi-tenancy.
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        super().__init__(config, session_table, events_table, owner_id_column)
+        super().__init__(config)
         self._dialect = self._detect_dialect()
 
     @property

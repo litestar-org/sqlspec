@@ -34,11 +34,7 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
     - Manual cascade delete pattern (no foreign key support)
 
     Args:
-        config: BigQueryConfig instance.
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
-        dataset_id: Optional dataset ID. If not provided, uses config's dataset_id.
-        owner_id_column: Optional owner ID column DDL. Defaults to None.
+        config: BigQueryConfig with extension_config["adk"] settings.
 
     Example:
         from sqlspec.adapters.bigquery import BigQueryConfig
@@ -48,16 +44,17 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
             connection_config={
                 "project": "my-project",
                 "dataset_id": "my_dataset",
+            },
+            extension_config={
+                "adk": {
+                    "session_table": "my_sessions",
+                    "events_table": "my_events",
+                    "owner_id_column": "tenant_id INT64 NOT NULL"
+                }
             }
         )
         store = BigQueryADKStore(config)
         await store.create_tables()
-
-        store_with_fk = BigQueryADKStore(
-            config,
-            owner_id_column="tenant_id INT64 NOT NULL"
-        )
-        await store_with_fk.create_tables()
 
     Notes:
         - JSON type for state, content, and metadata (native BigQuery JSON)
@@ -68,29 +65,25 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         - Uses to_json/from_json for serialization to JSON columns
         - BigQuery has eventual consistency - handle appropriately
         - No true foreign keys but implements cascade delete pattern
+        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ("_dataset_id",)
 
-    def __init__(
-        self,
-        config: "BigQueryConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        dataset_id: "str | None" = None,
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: "BigQueryConfig") -> None:
         """Initialize BigQuery ADK store.
 
         Args:
             config: BigQueryConfig instance.
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            dataset_id: Optional dataset ID override.
-            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id INT64 NOT NULL").
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        super().__init__(config, session_table, events_table, owner_id_column)
-        self._dataset_id = dataset_id or config.connection_config.get("dataset_id")
+        super().__init__(config)
+        self._dataset_id = config.connection_config.get("dataset_id")
 
     def _get_full_table_name(self, table_name: str) -> str:
         """Get fully qualified table name for BigQuery.

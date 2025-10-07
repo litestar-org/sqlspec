@@ -41,16 +41,22 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
     - Columnar storage for analytical queries
 
     Args:
-        config: DuckDBConfig instance.
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
-        owner_id_column: Optional owner ID column DDL. Defaults to None.
+        config: DuckDBConfig with extension_config["adk"] settings.
 
     Example:
         from sqlspec.adapters.duckdb import DuckDBConfig
         from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 
-        config = DuckDBConfig(database="sessions.ddb")
+        config = DuckDBConfig(
+            database="sessions.ddb",
+            extension_config={
+                "adk": {
+                    "session_table": "my_sessions",
+                    "events_table": "my_events",
+                    "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
+                }
+            }
+        )
         store = DuckdbADKStore(config)
         store.create_tables()
 
@@ -69,26 +75,24 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         - Columnar storage provides excellent analytical query performance
         - DuckDB doesn't support CASCADE in foreign keys (manual cascade required)
         - Optimized for OLAP workloads; for high-concurrency writes use PostgreSQL
+        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
 
-    def __init__(
-        self,
-        config: "DuckDBConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: "DuckDBConfig") -> None:
         """Initialize DuckDB ADK store.
 
         Args:
             config: DuckDBConfig instance.
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        super().__init__(config, session_table, events_table, owner_id_column)
+        super().__init__(config)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get DuckDB CREATE TABLE SQL for sessions.

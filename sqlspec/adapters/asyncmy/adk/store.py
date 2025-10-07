@@ -32,15 +32,22 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
     - Efficient upserts using ON DUPLICATE KEY UPDATE
 
     Args:
-        config: AsyncmyConfig instance.
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
+        config: AsyncmyConfig with extension_config["adk"] settings.
 
     Example:
         from sqlspec.adapters.asyncmy import AsyncmyConfig
         from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
 
-        config = AsyncmyConfig(pool_config={"host": "localhost", ...})
+        config = AsyncmyConfig(
+            pool_config={"host": "localhost", ...},
+            extension_config={
+                "adk": {
+                    "session_table": "my_sessions",
+                    "events_table": "my_events",
+                    "owner_id_column": "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+                }
+            }
+        )
         store = AsyncmyADKStore(config)
         await store.create_tables()
 
@@ -49,26 +56,24 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         - TIMESTAMP(6) provides microsecond precision
         - InnoDB engine required for foreign key support
         - State merging handled at application level
+        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
 
-    def __init__(
-        self,
-        config: "AsyncmyConfig",
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: "AsyncmyConfig") -> None:
         """Initialize AsyncMy ADK store.
 
         Args:
             config: AsyncmyConfig instance.
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE").
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        super().__init__(config, session_table, events_table, owner_id_column)
+        super().__init__(config)
 
     def _parse_owner_id_column_for_mysql(self, column_ddl: str) -> "tuple[str, str]":
         """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.
