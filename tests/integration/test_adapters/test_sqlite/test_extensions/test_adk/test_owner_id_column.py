@@ -108,9 +108,13 @@ async def test_owner_id_column_integer_reference(
     _create_tenants_table(sqlite_config)
     tenant_id = _insert_tenant(sqlite_config, "tenant_alpha")
 
-    store = SqliteADKStore(
-        sqlite_config, owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={
+            "adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"}
+        },
     )
+    store = SqliteADKStore(config_with_extension)
     await store.create_tables()
 
     session = await store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
@@ -136,7 +140,11 @@ async def test_owner_id_column_text_reference(
     username = "alice"
     _insert_user(sqlite_config, username, "alice@example.com")
 
-    store = SqliteADKStore(sqlite_config, owner_id_column="user_ref TEXT REFERENCES users(username) ON DELETE CASCADE")
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={"adk": {"owner_id_column": "user_ref TEXT REFERENCES users(username) ON DELETE CASCADE"}},
+    )
+    store = SqliteADKStore(config_with_extension)
     await store.create_tables()
 
     session = await store.create_session(session_id, app_name, user_id, initial_state, owner_id=username)
@@ -156,9 +164,13 @@ async def test_owner_id_column_cascade_delete(
     _create_tenants_table(sqlite_config)
     tenant_id = _insert_tenant(sqlite_config, "tenant_beta")
 
-    store = SqliteADKStore(
-        sqlite_config, owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={
+            "adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"}
+        },
     )
+    store = SqliteADKStore(config_with_extension)
     await store.create_tables()
 
     await store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
@@ -181,7 +193,11 @@ async def test_owner_id_column_constraint_violation(
     """Test FK constraint violation with invalid tenant_id."""
     _create_tenants_table(sqlite_config)
 
-    store = SqliteADKStore(sqlite_config, owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)")
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={"adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"}},
+    )
+    store = SqliteADKStore(config_with_extension)
     await store.create_tables()
 
     invalid_tenant_id = 99999
@@ -198,7 +214,11 @@ async def test_owner_id_column_not_null_constraint(
     """Test NOT NULL constraint on owner ID column."""
     _create_tenants_table(sqlite_config)
 
-    store = SqliteADKStore(sqlite_config, owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)")
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={"adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"}},
+    )
+    store = SqliteADKStore(config_with_extension)
     await store.create_tables()
 
     with pytest.raises(Exception) as exc_info:
@@ -214,7 +234,11 @@ async def test_owner_id_column_nullable(
     _create_tenants_table(sqlite_config)
     tenant_id = _insert_tenant(sqlite_config, "tenant_gamma")
 
-    store = SqliteADKStore(sqlite_config, owner_id_column="tenant_id INTEGER REFERENCES tenants(id)")
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={"adk": {"owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"}},
+    )
+    store = SqliteADKStore(config_with_extension)
     await store.create_tables()
 
     session_without_fk = await store.create_session(str(uuid.uuid4()), app_name, user_id, initial_state, owner_id=None)
@@ -248,7 +272,11 @@ async def test_foreign_keys_pragma_enabled(
     _create_tenants_table(sqlite_config)
     tenant_id = _insert_tenant(sqlite_config, "tenant_delta")
 
-    store = SqliteADKStore(sqlite_config, owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)")
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={"adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"}},
+    )
+    store = SqliteADKStore(config_with_extension)
     await store.create_tables()
 
     await store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
@@ -267,9 +295,13 @@ async def test_multi_tenant_isolation(
     tenant1_id = _insert_tenant(sqlite_config, "tenant_one")
     tenant2_id = _insert_tenant(sqlite_config, "tenant_two")
 
-    store = SqliteADKStore(
-        sqlite_config, owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={
+            "adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"}
+        },
     )
+    store = SqliteADKStore(config_with_extension)
     await store.create_tables()
 
     session1_id = str(uuid.uuid4())
@@ -300,9 +332,13 @@ async def test_multi_tenant_isolation(
 
 async def test_owner_id_column_ddl_extraction(sqlite_config: SqliteConfig) -> None:
     """Test that column name is correctly extracted from DDL."""
-    store = SqliteADKStore(
-        sqlite_config, owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={
+            "adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"}
+        },
     )
+    store = SqliteADKStore(config_with_extension)
 
     assert store._owner_id_column_name == "tenant_id"  # pyright: ignore[reportPrivateUsage]
     assert store._owner_id_column_ddl == "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"  # pyright: ignore[reportPrivateUsage]
@@ -314,7 +350,11 @@ async def test_create_session_without_fk_when_not_required(
     """Test creating session without owner_id when column is nullable."""
     _create_tenants_table(sqlite_config)
 
-    store = SqliteADKStore(sqlite_config, owner_id_column="tenant_id INTEGER REFERENCES tenants(id)")
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={"adk": {"owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"}},
+    )
+    store = SqliteADKStore(config_with_extension)
     await store.create_tables()
 
     session = await store.create_session(session_id, app_name, user_id, initial_state)
@@ -330,9 +370,13 @@ async def test_owner_id_with_default_value(
     _create_tenants_table(sqlite_config)
     default_tenant_id = _insert_tenant(sqlite_config, "default_tenant")
 
-    store = SqliteADKStore(
-        sqlite_config, owner_id_column=f"tenant_id INTEGER DEFAULT {default_tenant_id} REFERENCES tenants(id)"
+    config_with_extension = SqliteConfig(
+        pool_config=sqlite_config.pool_config,
+        extension_config={
+            "adk": {"owner_id_column": f"tenant_id INTEGER DEFAULT {default_tenant_id} REFERENCES tenants(id)"}
+        },
     )
+    store = SqliteADKStore(config_with_extension)
     await store.create_tables()
 
     session = await store.create_session(session_id, app_name, user_id, initial_state)

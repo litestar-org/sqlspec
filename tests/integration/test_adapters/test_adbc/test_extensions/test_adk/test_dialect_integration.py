@@ -188,9 +188,9 @@ def test_snowflake_dialect_creates_variant_columns() -> None:
 def test_sqlite_with_owner_id_column(tmp_path: Path) -> None:
     """Test SQLite with owner ID column creates proper constraints."""
     db_path = tmp_path / "sqlite_fk_test.db"
-    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
+    base_config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
 
-    with config.provide_connection() as conn:
+    with base_config.provide_connection() as conn:
         cursor = conn.cursor()
         try:
             cursor.execute("PRAGMA foreign_keys = ON")
@@ -200,7 +200,11 @@ def test_sqlite_with_owner_id_column(tmp_path: Path) -> None:
         finally:
             cursor.close()  # type: ignore[no-untyped-call]
 
-    store = AdbcADKStore(config, owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)")
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+        extension_config={"adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"}},
+    )
+    store = AdbcADKStore(config)
     store.create_tables()
 
     session = store.create_session("s1", "app", "user", {"data": "test"}, owner_id=1)

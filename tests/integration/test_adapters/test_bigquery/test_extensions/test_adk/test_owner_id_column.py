@@ -22,9 +22,10 @@ async def bigquery_adk_store_with_fk(bigquery_service: Any) -> "AsyncGenerator[A
             "dataset_id": bigquery_service.dataset,
             "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),  # type: ignore[no-untyped-call]
             "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        }
+        },
+        extension_config={"adk": {"owner_id_column": "tenant_id INT64 NOT NULL"}},
     )
-    store = BigQueryADKStore(config, dataset_id=bigquery_service.dataset, owner_id_column="tenant_id INT64 NOT NULL")
+    store = BigQueryADKStore(config)
     await store.create_tables()
     yield store
 
@@ -71,10 +72,11 @@ async def test_owner_id_column_name_parsed(bigquery_service: Any) -> None:
             "dataset_id": bigquery_service.dataset,
             "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),  # type: ignore[no-untyped-call]
             "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        }
+        },
+        extension_config={"adk": {"owner_id_column": "account_id STRING"}},
     )
 
-    store = BigQueryADKStore(config, dataset_id=bigquery_service.dataset, owner_id_column="account_id STRING")
+    store = BigQueryADKStore(config)
 
     assert store._owner_id_column_name == "account_id"  # pyright: ignore[reportPrivateUsage]
     assert store._owner_id_column_ddl == "account_id STRING"  # pyright: ignore[reportPrivateUsage]
@@ -90,19 +92,29 @@ async def test_bigquery_no_fk_enforcement(bigquery_adk_store_with_fk: Any) -> No
 
 async def test_owner_id_column_with_different_types(bigquery_service: Any) -> None:
     """Test owner_id_column with different BigQuery types."""
-    config = BigQueryConfig(
+    config_int = BigQueryConfig(
         connection_config={
             "project": bigquery_service.project,
             "dataset_id": bigquery_service.dataset,
             "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),  # type: ignore[no-untyped-call]
             "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        }
+        },
+        extension_config={"adk": {"owner_id_column": "org_id INT64 NOT NULL"}},
     )
 
-    store_int = BigQueryADKStore(config, dataset_id=bigquery_service.dataset, owner_id_column="org_id INT64 NOT NULL")
+    store_int = BigQueryADKStore(config_int)
     ddl_int = store_int._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
     assert "org_id INT64 NOT NULL" in ddl_int
 
-    store_string = BigQueryADKStore(config, dataset_id=bigquery_service.dataset, owner_id_column="tenant_uuid STRING")
+    config_string = BigQueryConfig(
+        connection_config={
+            "project": bigquery_service.project,
+            "dataset_id": bigquery_service.dataset,
+            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),  # type: ignore[no-untyped-call]
+            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
+        },
+        extension_config={"adk": {"owner_id_column": "tenant_uuid STRING"}},
+    )
+    store_string = BigQueryADKStore(config_string)
     ddl_string = store_string._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
     assert "tenant_uuid STRING" in ddl_string

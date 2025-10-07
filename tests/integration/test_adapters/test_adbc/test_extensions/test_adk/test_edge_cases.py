@@ -30,20 +30,35 @@ def test_create_tables_idempotent(adbc_store: Any) -> None:
 def test_table_names_validation(tmp_path: Path) -> None:
     """Test that invalid table names are rejected."""
     db_path = tmp_path / "test_validation.db"
-    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
 
     with pytest.raises(ValueError, match="Table name cannot be empty"):
-        AdbcADKStore(config, session_table="", events_table="events")
+        config = AdbcConfig(
+            connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+            extension_config={"adk": {"session_table": "", "events_table": "events"}},
+        )
+        AdbcADKStore(config)
 
     with pytest.raises(ValueError, match="Invalid table name"):
-        AdbcADKStore(config, session_table="invalid-name", events_table="events")
+        config = AdbcConfig(
+            connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+            extension_config={"adk": {"session_table": "invalid-name", "events_table": "events"}},
+        )
+        AdbcADKStore(config)
 
     with pytest.raises(ValueError, match="Invalid table name"):
-        AdbcADKStore(config, session_table="1_starts_with_number", events_table="events")
+        config = AdbcConfig(
+            connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+            extension_config={"adk": {"session_table": "1_starts_with_number", "events_table": "events"}},
+        )
+        AdbcADKStore(config)
 
     with pytest.raises(ValueError, match="Table name too long"):
         long_name = "a" * 100
-        AdbcADKStore(config, session_table=long_name, events_table="events")
+        config = AdbcConfig(
+            connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+            extension_config={"adk": {"session_table": long_name, "events_table": "events"}},
+        )
+        AdbcADKStore(config)
 
 
 def test_operations_before_create_tables(tmp_path: Path) -> None:
@@ -65,8 +80,11 @@ def test_operations_before_create_tables(tmp_path: Path) -> None:
 def test_custom_table_names(tmp_path: Path) -> None:
     """Test using custom table names."""
     db_path = tmp_path / "test_custom.db"
-    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
-    store = AdbcADKStore(config, session_table="custom_sessions", events_table="custom_events")
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+        extension_config={"adk": {"session_table": "custom_sessions", "events_table": "custom_events"}},
+    )
+    store = AdbcADKStore(config)
     store.create_tables()
 
     session_id = "test"

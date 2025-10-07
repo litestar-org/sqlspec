@@ -29,8 +29,11 @@ def duckdb_adk_store(tmp_path: Path, worker_id: str) -> "Generator[DuckdbADKStor
     """
     db_path = tmp_path / f"test_adk_{worker_id}.duckdb"
     try:
-        config = DuckDBConfig(pool_config={"database": str(db_path)})
-        store = DuckdbADKStore(config, session_table="test_sessions", events_table="test_events")
+        config = DuckDBConfig(
+            pool_config={"database": str(db_path)},
+            extension_config={"adk": {"session_table": "test_sessions", "events_table": "test_events"}},
+        )
+        store = DuckdbADKStore(config)
         store.create_tables()
         yield store
     finally:
@@ -401,12 +404,17 @@ def test_owner_id_column_with_integer(tmp_path: Path, worker_id: str) -> None:
             conn.execute("INSERT INTO tenants (id, name) VALUES (1, 'Tenant A'), (2, 'Tenant B')")
             conn.commit()
 
-        store = DuckdbADKStore(
-            config,
-            session_table="sessions_with_tenant",
-            events_table="events_with_tenant",
-            owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id)",
+        config_with_extension = DuckDBConfig(
+            pool_config={"database": str(db_path)},
+            extension_config={
+                "adk": {
+                    "session_table": "sessions_with_tenant",
+                    "events_table": "events_with_tenant",
+                    "owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id)",
+                }
+            },
         )
+        store = DuckdbADKStore(config_with_extension)
         store.create_tables()
 
         assert store.owner_id_column_name == "tenant_id"
@@ -439,12 +447,17 @@ def test_owner_id_column_with_ubigint(tmp_path: Path, worker_id: str) -> None:
             conn.execute("INSERT INTO users (id, email) VALUES (18446744073709551615, 'user@example.com')")
             conn.commit()
 
-        store = DuckdbADKStore(
-            config,
-            session_table="sessions_with_user",
-            events_table="events_with_user",
-            owner_id_column="owner_id UBIGINT REFERENCES users(id)",
+        config_with_extension = DuckDBConfig(
+            pool_config={"database": str(db_path)},
+            extension_config={
+                "adk": {
+                    "session_table": "sessions_with_user",
+                    "events_table": "events_with_user",
+                    "owner_id_column": "owner_id UBIGINT REFERENCES users(id)",
+                }
+            },
         )
+        store = DuckdbADKStore(config_with_extension)
         store.create_tables()
 
         assert store.owner_id_column_name == "owner_id"
@@ -480,12 +493,17 @@ def test_owner_id_column_foreign_key_constraint(tmp_path: Path, worker_id: str) 
             conn.execute("INSERT INTO organizations (id, name) VALUES (100, 'Org A')")
             conn.commit()
 
-        store = DuckdbADKStore(
-            config,
-            session_table="sessions_with_org",
-            events_table="events_with_org",
-            owner_id_column="org_id INTEGER NOT NULL REFERENCES organizations(id)",
+        config_with_extension = DuckDBConfig(
+            pool_config={"database": str(db_path)},
+            extension_config={
+                "adk": {
+                    "session_table": "sessions_with_org",
+                    "events_table": "events_with_org",
+                    "owner_id_column": "org_id INTEGER NOT NULL REFERENCES organizations(id)",
+                }
+            },
         )
+        store = DuckdbADKStore(config_with_extension)
         store.create_tables()
 
         store.create_session(
@@ -517,12 +535,17 @@ def test_owner_id_column_without_value(tmp_path: Path, worker_id: str) -> None:
             conn.execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, name VARCHAR)")
             conn.commit()
 
-        store = DuckdbADKStore(
-            config,
-            session_table="sessions_nullable_fk",
-            events_table="events_nullable_fk",
-            owner_id_column="account_id INTEGER REFERENCES accounts(id)",
+        config_with_extension = DuckDBConfig(
+            pool_config={"database": str(db_path)},
+            extension_config={
+                "adk": {
+                    "session_table": "sessions_nullable_fk",
+                    "events_table": "events_nullable_fk",
+                    "owner_id_column": "account_id INTEGER REFERENCES accounts(id)",
+                }
+            },
         )
+        store = DuckdbADKStore(config_with_extension)
         store.create_tables()
 
         session = store.create_session(
@@ -549,12 +572,17 @@ def test_owner_id_column_with_varchar(tmp_path: Path, worker_id: str) -> None:
             conn.execute("INSERT INTO companies (code, name) VALUES ('ACME', 'Acme Corp'), ('INIT', 'Initech')")
             conn.commit()
 
-        store = DuckdbADKStore(
-            config,
-            session_table="sessions_with_company",
-            events_table="events_with_company",
-            owner_id_column="company_code VARCHAR NOT NULL REFERENCES companies(code)",
+        config_with_extension = DuckDBConfig(
+            pool_config={"database": str(db_path)},
+            extension_config={
+                "adk": {
+                    "session_table": "sessions_with_company",
+                    "events_table": "events_with_company",
+                    "owner_id_column": "company_code VARCHAR NOT NULL REFERENCES companies(code)",
+                }
+            },
         )
+        store = DuckdbADKStore(config_with_extension)
         store.create_tables()
 
         session = store.create_session(
@@ -588,12 +616,17 @@ def test_owner_id_column_multiple_sessions(tmp_path: Path, worker_id: str) -> No
             conn.execute("INSERT INTO departments (id, name) VALUES (10, 'Engineering'), (20, 'Sales')")
             conn.commit()
 
-        store = DuckdbADKStore(
-            config,
-            session_table="sessions_with_dept",
-            events_table="events_with_dept",
-            owner_id_column="dept_id INTEGER NOT NULL REFERENCES departments(id)",
+        config_with_extension = DuckDBConfig(
+            pool_config={"database": str(db_path)},
+            extension_config={
+                "adk": {
+                    "session_table": "sessions_with_dept",
+                    "events_table": "events_with_dept",
+                    "owner_id_column": "dept_id INTEGER NOT NULL REFERENCES departments(id)",
+                }
+            },
         )
+        store = DuckdbADKStore(config_with_extension)
         store.create_tables()
 
         for i in range(5):
@@ -626,12 +659,17 @@ def test_owner_id_column_query_by_fk(tmp_path: Path, worker_id: str) -> None:
             conn.execute("INSERT INTO projects (id, name) VALUES (1, 'Project Alpha'), (2, 'Project Beta')")
             conn.commit()
 
-        store = DuckdbADKStore(
-            config,
-            session_table="sessions_with_project",
-            events_table="events_with_project",
-            owner_id_column="project_id INTEGER NOT NULL REFERENCES projects(id)",
+        config_with_extension = DuckDBConfig(
+            pool_config={"database": str(db_path)},
+            extension_config={
+                "adk": {
+                    "session_table": "sessions_with_project",
+                    "events_table": "events_with_project",
+                    "owner_id_column": "project_id INTEGER NOT NULL REFERENCES projects(id)",
+                }
+            },
         )
+        store = DuckdbADKStore(config_with_extension)
         store.create_tables()
 
         store.create_session("s1", "app", "u1", {"val": 1}, owner_id=1)

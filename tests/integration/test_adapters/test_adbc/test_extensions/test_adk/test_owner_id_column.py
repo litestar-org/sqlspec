@@ -12,9 +12,12 @@ pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.i
 def adbc_store_with_fk(tmp_path):  # type: ignore[no-untyped-def]
     """Create ADBC ADK store with owner ID column (SQLite)."""
     db_path = tmp_path / "test_fk.db"
-    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+        extension_config={"adk": {"owner_id_column": "tenant_id INTEGER"}},
+    )
 
-    store = AdbcADKStore(config, owner_id_column="tenant_id INTEGER")
+    store = AdbcADKStore(config)
 
     with config.provide_connection() as conn:
         cursor = conn.cursor()
@@ -81,8 +84,13 @@ def test_create_session_no_fk_column_configured(adbc_store_no_fk):  # type: igno
 
 def test_owner_id_column_name_parsed_correctly() -> None:
     """Test owner ID column name is parsed correctly."""
-    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
-    store = AdbcADKStore(config, owner_id_column="organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE")
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite", "uri": ":memory:"},
+        extension_config={
+            "adk": {"owner_id_column": "organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE"}
+        },
+    )
+    store = AdbcADKStore(config)
 
     assert store.owner_id_column_name == "organization_id"
     assert store.owner_id_column_ddl and "UUID REFERENCES" in store.owner_id_column_ddl
@@ -90,9 +98,12 @@ def test_owner_id_column_name_parsed_correctly() -> None:
 
 def test_owner_id_column_complex_ddl() -> None:
     """Test complex owner ID column DDL is preserved."""
-    config = AdbcConfig(connection_config={"driver_name": "postgresql", "uri": ":memory:"})
     complex_ddl = "workspace_id UUID NOT NULL DEFAULT gen_random_uuid() REFERENCES workspaces(id)"
-    store = AdbcADKStore(config, owner_id_column=complex_ddl)
+    config = AdbcConfig(
+        connection_config={"driver_name": "postgresql", "uri": ":memory:"},
+        extension_config={"adk": {"owner_id_column": complex_ddl}},
+    )
+    store = AdbcADKStore(config)
 
     assert store.owner_id_column_name == "workspace_id"
     assert store._owner_id_column_ddl == complex_ddl  # pyright: ignore[reportPrivateUsage]
@@ -115,8 +126,11 @@ def test_multiple_tenants_isolation(adbc_store_with_fk):  # type: ignore[no-unty
 
 def test_owner_id_properties() -> None:
     """Test owner ID column properties are accessible."""
-    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
-    store = AdbcADKStore(config, owner_id_column="tenant_id INTEGER")
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite", "uri": ":memory:"},
+        extension_config={"adk": {"owner_id_column": "tenant_id INTEGER"}},
+    )
+    store = AdbcADKStore(config)
 
     assert store.owner_id_column_name == "tenant_id"
     assert store.owner_id_column_ddl == "tenant_id INTEGER"

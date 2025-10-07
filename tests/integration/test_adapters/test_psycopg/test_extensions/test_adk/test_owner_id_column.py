@@ -20,14 +20,16 @@ async def psycopg_async_store_with_fk(postgres_service: "PostgresService") -> "A
     config = PsycopgAsyncConfig(
         pool_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
+        },
+        extension_config={
+            "adk": {
+                "session_table": "test_sessions_fk",
+                "events_table": "test_events_fk",
+                "owner_id_column": "tenant_id INTEGER NOT NULL",
+            }
+        },
     )
-    store = PsycopgAsyncADKStore(
-        config,
-        session_table="test_sessions_fk",
-        events_table="test_events_fk",
-        owner_id_column="tenant_id INTEGER NOT NULL",
-    )
+    store = PsycopgAsyncADKStore(config)
     await store.create_tables()
     yield store
 
@@ -45,14 +47,16 @@ def psycopg_sync_store_with_fk(postgres_service: "PostgresService") -> "Generato
     config = PsycopgSyncConfig(
         pool_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
+        },
+        extension_config={
+            "adk": {
+                "session_table": "test_sessions_sync_fk",
+                "events_table": "test_events_sync_fk",
+                "owner_id_column": "account_id VARCHAR(64) NOT NULL",
+            }
+        },
     )
-    store = PsycopgSyncADKStore(
-        config,
-        session_table="test_sessions_sync_fk",
-        events_table="test_events_sync_fk",
-        owner_id_column="account_id VARCHAR(64) NOT NULL",
-    )
+    store = PsycopgSyncADKStore(config)
     store.create_tables()
     yield store
 
@@ -81,14 +85,16 @@ async def test_async_store_inherits_owner_id_column(postgres_service: "PostgresS
     config = PsycopgAsyncConfig(
         pool_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
+        },
+        extension_config={
+            "adk": {
+                "session_table": "test_inherit_async",
+                "events_table": "test_events_inherit_async",
+                "owner_id_column": "org_id UUID",
+            }
+        },
     )
-    store = PsycopgAsyncADKStore(
-        config,
-        session_table="test_inherit_async",
-        events_table="test_events_inherit_async",
-        owner_id_column="org_id UUID",
-    )
+    store = PsycopgAsyncADKStore(config)
 
     assert hasattr(store, "_owner_id_column_ddl")
     assert hasattr(store, "_owner_id_column_name")
@@ -104,14 +110,16 @@ def test_sync_store_inherits_owner_id_column(postgres_service: "PostgresService"
     config = PsycopgSyncConfig(
         pool_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
+        },
+        extension_config={
+            "adk": {
+                "session_table": "test_inherit_sync",
+                "events_table": "test_events_inherit_sync",
+                "owner_id_column": "company_id BIGINT",
+            }
+        },
     )
-    store = PsycopgSyncADKStore(
-        config,
-        session_table="test_inherit_sync",
-        events_table="test_events_inherit_sync",
-        owner_id_column="company_id BIGINT",
-    )
+    store = PsycopgSyncADKStore(config)
 
     assert hasattr(store, "_owner_id_column_ddl")
     assert hasattr(store, "_owner_id_column_name")
@@ -127,9 +135,10 @@ async def test_async_store_without_owner_id_column(postgres_service: "PostgresSe
     config = PsycopgAsyncConfig(
         pool_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
+        },
+        extension_config={"adk": {"session_table": "test_no_fk_async", "events_table": "test_events_no_fk_async"}},
     )
-    store = PsycopgAsyncADKStore(config, session_table="test_no_fk_async", events_table="test_events_no_fk_async")
+    store = PsycopgAsyncADKStore(config)
 
     assert store.owner_id_column_ddl is None
     assert store.owner_id_column_name is None
@@ -143,9 +152,10 @@ def test_sync_store_without_owner_id_column(postgres_service: "PostgresService")
     config = PsycopgSyncConfig(
         pool_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
+        },
+        extension_config={"adk": {"session_table": "test_no_fk_sync", "events_table": "test_events_no_fk_sync"}},
     )
-    store = PsycopgSyncADKStore(config, session_table="test_no_fk_sync", events_table="test_events_no_fk_sync")
+    store = PsycopgSyncADKStore(config)
 
     assert store.owner_id_column_ddl is None
     assert store.owner_id_column_name is None

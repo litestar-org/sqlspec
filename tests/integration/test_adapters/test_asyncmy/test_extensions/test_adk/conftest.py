@@ -33,10 +33,11 @@ async def asyncmy_adk_store(mysql_service: MySQLService) -> "AsyncGenerator[Asyn
             "autocommit": False,
             "minsize": 1,
             "maxsize": 5,
-        }
+        },
+        extension_config={"adk": {"session_table": "test_sessions", "events_table": "test_events"}},
     )
 
-    store = AsyncmyADKStore(config, session_table="test_sessions", events_table="test_events")
+    store = AsyncmyADKStore(config)
     await store.create_tables()
 
     yield store
@@ -71,7 +72,14 @@ async def asyncmy_adk_store_with_fk(mysql_service: MySQLService) -> "AsyncGenera
             "autocommit": False,
             "minsize": 1,
             "maxsize": 5,
-        }
+        },
+        extension_config={
+            "adk": {
+                "session_table": "test_fk_sessions",
+                "events_table": "test_fk_events",
+                "owner_id_column": "tenant_id BIGINT NOT NULL REFERENCES test_tenants(id) ON DELETE CASCADE",
+            }
+        },
     )
 
     async with config.provide_connection() as conn, conn.cursor() as cursor:
@@ -84,12 +92,7 @@ async def asyncmy_adk_store_with_fk(mysql_service: MySQLService) -> "AsyncGenera
         await cursor.execute("INSERT INTO test_tenants (name) VALUES ('tenant1'), ('tenant2')")
         await conn.commit()
 
-    store = AsyncmyADKStore(
-        config,
-        session_table="test_fk_sessions",
-        events_table="test_fk_events",
-        owner_id_column="tenant_id BIGINT NOT NULL REFERENCES test_tenants(id) ON DELETE CASCADE",
-    )
+    store = AsyncmyADKStore(config)
     await store.create_tables()
 
     yield store

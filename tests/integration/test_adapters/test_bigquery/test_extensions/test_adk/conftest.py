@@ -22,7 +22,7 @@ async def bigquery_adk_store(bigquery_service: Any) -> "AsyncGenerator[Any, None
             "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
         }
     )
-    store = BigQueryADKStore(config, dataset_id=bigquery_service.dataset)
+    store = BigQueryADKStore(config)
     await store.create_tables()
     yield store
 

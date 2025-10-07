@@ -139,7 +139,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
             Dict with session_table, events_table, and optionally owner_id_column.
         """
         if hasattr(self._config, "extension_config"):
-            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
+            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
             adk_config: dict[str, Any] = extension_config.get("adk", {})
             result: dict[str, Any] = {
                 "session_table": adk_config.get("session_table") or "adk_sessions",
@@ -358,7 +358,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
             Dict with session_table, events_table, and optionally owner_id_column.
         """
         if hasattr(self._config, "extension_config"):
-            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
+            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
             adk_config: dict[str, Any] = extension_config.get("adk", {})
             result: dict[str, Any] = {
                 "session_table": adk_config.get("session_table") or "adk_sessions",

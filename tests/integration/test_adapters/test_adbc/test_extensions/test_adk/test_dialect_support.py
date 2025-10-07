@@ -141,8 +141,11 @@ def test_ddl_dispatch_uses_correct_dialect() -> None:
 
 def test_owner_id_column_included_in_sessions_ddl() -> None:
     """Test owner ID column is included in sessions DDL."""
-    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
-    store = AdbcADKStore(config, owner_id_column="tenant_id INTEGER NOT NULL")
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite", "uri": ":memory:"},
+        extension_config={"adk": {"owner_id_column": "tenant_id INTEGER NOT NULL"}},
+    )
+    store = AdbcADKStore(config)
 
     ddl = store._get_sessions_ddl_sqlite()  # pyright: ignore[reportPrivateUsage]
     assert "tenant_id INTEGER NOT NULL" in ddl
@@ -159,8 +162,13 @@ def test_owner_id_column_not_included_when_none() -> None:
 
 def test_owner_id_column_postgresql() -> None:
     """Test owner ID column works with PostgreSQL dialect."""
-    config = AdbcConfig(connection_config={"driver_name": "postgresql", "uri": ":memory:"})
-    store = AdbcADKStore(config, owner_id_column="organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE")
+    config = AdbcConfig(
+        connection_config={"driver_name": "postgresql", "uri": ":memory:"},
+        extension_config={
+            "adk": {"owner_id_column": "organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE"}
+        },
+    )
+    store = AdbcADKStore(config)
 
     ddl = store._get_sessions_ddl_postgresql()  # pyright: ignore[reportPrivateUsage]
     assert "organization_id UUID REFERENCES organizations(id)" in ddl
@@ -168,8 +176,11 @@ def test_owner_id_column_postgresql() -> None:
 
 def test_owner_id_column_duckdb() -> None:
     """Test owner ID column works with DuckDB dialect."""
-    config = AdbcConfig(connection_config={"driver_name": "duckdb", "uri": ":memory:"})
-    store = AdbcADKStore(config, owner_id_column="workspace_id VARCHAR(128) NOT NULL")
+    config = AdbcConfig(
+        connection_config={"driver_name": "duckdb", "uri": ":memory:"},
+        extension_config={"adk": {"owner_id_column": "workspace_id VARCHAR(128) NOT NULL"}},
+    )
+    store = AdbcADKStore(config)
 
     ddl = store._get_sessions_ddl_duckdb()  # pyright: ignore[reportPrivateUsage]
     assert "workspace_id VARCHAR(128) NOT NULL" in ddl
@@ -177,8 +188,11 @@ def test_owner_id_column_duckdb() -> None:
 
 def test_owner_id_column_snowflake() -> None:
     """Test owner ID column works with Snowflake dialect."""
-    config = AdbcConfig(connection_config={"driver_name": "snowflake", "uri": "snowflake://test"})
-    store = AdbcADKStore(config, owner_id_column="account_id VARCHAR NOT NULL")
+    config = AdbcConfig(
+        connection_config={"driver_name": "snowflake", "uri": "snowflake://test"},
+        extension_config={"adk": {"owner_id_column": "account_id VARCHAR NOT NULL"}},
+    )
+    store = AdbcADKStore(config)
 
     ddl = store._get_sessions_ddl_snowflake()  # pyright: ignore[reportPrivateUsage]
     assert "account_id VARCHAR NOT NULL" in ddl

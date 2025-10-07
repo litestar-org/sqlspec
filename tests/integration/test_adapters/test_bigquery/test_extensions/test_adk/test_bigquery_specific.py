@@ -143,7 +143,7 @@ async def test_dataset_qualification(bigquery_service: Any) -> None:
         }
     )
 
-    store = BigQueryADKStore(config, dataset_id=bigquery_service.dataset)
+    store = BigQueryADKStore(config)
 
     expected_sessions = f"`{bigquery_service.dataset}.adk_sessions`"
     expected_events = f"`{bigquery_service.dataset}.adk_events`"

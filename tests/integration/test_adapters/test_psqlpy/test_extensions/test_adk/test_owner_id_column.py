@@ -18,13 +18,17 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.postgres, pytest.
 async def psqlpy_store_with_fk(postgres_service: "PostgresService") -> "AsyncGenerator[PsqlpyADKStore, None]":
     """Create Psqlpy ADK store with owner_id_column configured."""
     dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    config = PsqlpyConfig(pool_config={"dsn": dsn, "max_db_pool_size": 5})
-    store = PsqlpyADKStore(
-        config,
-        session_table="test_sessions_fk",
-        events_table="test_events_fk",
-        owner_id_column="tenant_id INTEGER NOT NULL",
+    config = PsqlpyConfig(
+        pool_config={"dsn": dsn, "max_db_pool_size": 5},
+        extension_config={
+            "adk": {
+                "session_table": "test_sessions_fk",
+                "events_table": "test_events_fk",
+                "owner_id_column": "tenant_id INTEGER NOT NULL",
+            }
+        },
     )
+    store = PsqlpyADKStore(config)
     await store.create_tables()
     yield store
 
@@ -44,10 +48,17 @@ async def test_store_owner_id_column_initialization(psqlpy_store_with_fk: Psqlpy
 async def test_store_inherits_owner_id_column(postgres_service: "PostgresService") -> None:
     """Test that store correctly inherits owner_id_column from base class."""
     dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    config = PsqlpyConfig(pool_config={"dsn": dsn, "max_db_pool_size": 5})
-    store = PsqlpyADKStore(
-        config, session_table="test_inherit", events_table="test_events_inherit", owner_id_column="org_id UUID"
+    config = PsqlpyConfig(
+        pool_config={"dsn": dsn, "max_db_pool_size": 5},
+        extension_config={
+            "adk": {
+                "session_table": "test_inherit",
+                "events_table": "test_events_inherit",
+                "owner_id_column": "org_id UUID",
+            }
+        },
     )
+    store = PsqlpyADKStore(config)
 
     assert hasattr(store, "_owner_id_column_ddl")
     assert hasattr(store, "_owner_id_column_name")
@@ -60,8 +71,11 @@ async def test_store_inherits_owner_id_column(postgres_service: "PostgresService
 async def test_store_without_owner_id_column(postgres_service: "PostgresService") -> None:
     """Test that store works without owner_id_column (default behavior)."""
     dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    config = PsqlpyConfig(pool_config={"dsn": dsn, "max_db_pool_size": 5})
-    store = PsqlpyADKStore(config, session_table="test_no_fk", events_table="test_events_no_fk")
+    config = PsqlpyConfig(
+        pool_config={"dsn": dsn, "max_db_pool_size": 5},
+        extension_config={"adk": {"session_table": "test_no_fk", "events_table": "test_events_no_fk"}},
+    )
+    store = PsqlpyADKStore(config)
 
     assert store.owner_id_column_ddl is None
     assert store.owner_id_column_name is None

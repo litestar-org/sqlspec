@@ -324,12 +324,15 @@ class TestOracleUserFKColumn:
     @pytest.fixture()
     async def oracle_store_with_fk(self, oracle_config_with_tenant_table: Any) -> Any:
         """Create async Oracle ADK store with owner_id_column."""
-        store = OracleAsyncADKStore(
-            oracle_config_with_tenant_table, owner_id_column="tenant_id NUMBER(10) NOT NULL REFERENCES tenants(id)"
+        base_config = oracle_config_with_tenant_table
+        config_with_extension = OracleAsyncConfig(
+            pool_config=base_config.pool_config,
+            extension_config={"adk": {"owner_id_column": "tenant_id NUMBER(10) NOT NULL REFERENCES tenants(id)"}},
         )
+        store = OracleAsyncADKStore(config_with_extension)
         await store.create_tables()
         yield store
-        async with oracle_config_with_tenant_table.provide_connection() as conn:
+        async with config_with_extension.provide_connection() as conn:
             cursor = conn.cursor()
             for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
@@ -377,15 +380,19 @@ class TestOracleUserFKColumn:
 
     async def test_fk_column_name_parsing(self, oracle_async_config: OracleAsyncConfig) -> None:
         """Test _owner_id_column_name is correctly parsed from DDL."""
-        store = OracleAsyncADKStore(
-            oracle_async_config, owner_id_column="account_id NUMBER(19) REFERENCES accounts(id)"
+        config_with_extension = OracleAsyncConfig(
+            pool_config=oracle_async_config.pool_config,
+            extension_config={"adk": {"owner_id_column": "account_id NUMBER(19) REFERENCES accounts(id)"}},
         )
+        store = OracleAsyncADKStore(config_with_extension)
         assert store.owner_id_column_name == "account_id"
         assert store.owner_id_column_ddl == "account_id NUMBER(19) REFERENCES accounts(id)"
 
-        store2 = OracleAsyncADKStore(
-            oracle_async_config, owner_id_column="org_uuid RAW(16) REFERENCES organizations(id)"
+        config_with_extension2 = OracleAsyncConfig(
+            pool_config=oracle_async_config.pool_config,
+            extension_config={"adk": {"owner_id_column": "org_uuid RAW(16) REFERENCES organizations(id)"}},
         )
+        store2 = OracleAsyncADKStore(config_with_extension2)
         assert store2.owner_id_column_name == "org_uuid"
 
 
@@ -489,12 +496,15 @@ class TestOracleSyncUserFKColumn:
     @pytest.fixture()
     def oracle_store_sync_with_fk(self, oracle_config_with_users_table: Any) -> Any:
         """Create sync Oracle ADK store with owner_id_column."""
-        store = OracleSyncADKStore(
-            oracle_config_with_users_table, owner_id_column="owner_id NUMBER(19) REFERENCES users(id) ON DELETE CASCADE"
+        base_config = oracle_config_with_users_table
+        config_with_extension = OracleSyncConfig(
+            pool_config=base_config.pool_config,
+            extension_config={"adk": {"owner_id_column": "owner_id NUMBER(19) REFERENCES users(id) ON DELETE CASCADE"}},
         )
+        store = OracleSyncADKStore(config_with_extension)
         store.create_tables()
         yield store
-        with oracle_config_with_users_table.provide_connection() as conn:
+        with config_with_extension.provide_connection() as conn:
             cursor = conn.cursor()
             for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
