@@ -260,7 +260,7 @@ For type-safe results, define Pydantic models:
        )
        return result.one()
 
-Now your IDE provides autocomplete and type checking for the returned user!
+Your IDE provides autocomplete and type checking for the returned user!
 
 Database Setup
 ==============
@@ -285,6 +285,9 @@ You can use Litestar CLI to manage migrations:
 
    # Apply migrations
    litestar db migrations upgrade
+
+   # Rollback migration (if needed)
+   litestar db migrations downgrade
 
 Commit Modes
 ============
