@@ -27,24 +27,24 @@ This extension implements Litestar's plugin protocol, allowing database connecti
 Key Features
 ============
 
-Production-Ready Integration
------------------------------
+Production Features
+-------------------
 
 - **Dependency Injection**: Automatic injection of connections, pools, and sessions
 - **Transaction Management**: Three commit modes (manual, autocommit, autocommit with redirects)
 - **Connection Pooling**: Built-in connection management via SQLSpec adapters
 - **Async/Sync Support**: Works with async and sync Litestar handlers
 
-Developer-Friendly Design
--------------------------
+Development Features
+--------------------
 
 - **Type Safety**: Full type hints for all injected dependencies
 - **Multi-Database Support**: Configure multiple databases with unique dependency keys
 - **CLI Integration**: Database management commands via Litestar CLI
 - **Session Storage**: Database-backed session stores for server-side sessions
 
-Performance Optimized
----------------------
+Performance Features
+--------------------
 
 - **Connection Reuse**: Efficient connection pooling per request
 - **Statement Caching**: Automatically caches prepared statements

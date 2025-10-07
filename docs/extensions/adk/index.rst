@@ -42,16 +42,16 @@ This extension implements ADK's ``BaseSessionService`` protocol, allowing AI age
 Key Features
 ============
 
-Production-Ready Storage
-------------------------
+Production Features
+-------------------
 
 - **Multiple Database Backends**: PostgreSQL, MySQL, SQLite, Oracle, DuckDB
 - **ACID Transactions**: Reliable storage with database guarantees
 - **Connection Pooling**: Built-in connection management via SQLSpec adapters
 - **Async/Sync Support**: Native async drivers and sync adapters with async wrappers
 
-Developer-Friendly Design
--------------------------
+Development Features
+--------------------
 
 - **Simple API**: Clean, intuitive interface matching ADK patterns
 - **Type Safety**: Full type hints and runtime type checking
@@ -59,8 +59,8 @@ Developer-Friendly Design
 - **Owner ID Columns**: Optional foreign keys linking sessions to user tables with cascade deletes
 - **Rich Metadata**: JSON storage for content, grounding, and custom data
 
-Performance Optimized
----------------------
+Performance Features
+--------------------
 
 - **Indexed Queries**: Composite indexes on common query patterns
 - **Efficient JSON Storage**: JSONB (PostgreSQL) or native JSON types

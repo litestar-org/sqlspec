@@ -9,7 +9,7 @@ AsyncPG is a high-performance, async-native PostgreSQL driver for Python, writte
 
 **Key Features:**
 
-- **Blazing Fast**: Written in Cython, 3-5x faster than other PostgreSQL drivers
+- **High Performance**: Written in Cython, 3-5x faster than other PostgreSQL drivers
 - **Native Async**: Pure asyncio implementation, no thread pool overhead
 - **Connection Pooling**: Built-in sophisticated connection pool management
 - **Native JSONB**: Direct dict to/from JSONB conversion without manual serialization
