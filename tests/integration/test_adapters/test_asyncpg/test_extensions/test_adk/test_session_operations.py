@@ -2,6 +2,8 @@
 
 import pytest
 
+pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncpg, pytest.mark.integration]
+
 
 @pytest.mark.asyncio
 async def test_create_session(asyncpg_adk_store):

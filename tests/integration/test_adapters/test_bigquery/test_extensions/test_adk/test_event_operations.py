@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+pytestmark = [pytest.mark.xdist_group("bigquery"), pytest.mark.bigquery, pytest.mark.integration]
+
 
 @pytest.mark.asyncio
 async def test_append_event(bigquery_adk_store, session_fixture):

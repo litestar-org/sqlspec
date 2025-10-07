@@ -93,14 +93,18 @@ def _get_table_name(context: "MigrationContext | None") -> str:
     """Extract table name from migration context.
 
     Args:
-        context: Migration context with extension config.
+        context: Migration context with config.
 
     Returns:
         Table name for the session store.
+
+    Notes:
+        Reads from context.config.extension_config["litestar"].
     """
-    if context and context.extension_config:
-        table_name: str = context.extension_config.get("session_table", "litestar_session")
-        return table_name
+    if context and context.config and hasattr(context.config, "extension_config"):
+        litestar_config = context.config.extension_config.get("litestar", {})
+        return litestar_config.get("session_table", "litestar_session")
+
     return "litestar_session"
 
 

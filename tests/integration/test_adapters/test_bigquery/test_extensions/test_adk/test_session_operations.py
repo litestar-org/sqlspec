@@ -2,6 +2,8 @@
 
 import pytest
 
+pytestmark = [pytest.mark.xdist_group("bigquery"), pytest.mark.bigquery, pytest.mark.integration]
+
 
 @pytest.mark.asyncio
 async def test_create_session(bigquery_adk_store):

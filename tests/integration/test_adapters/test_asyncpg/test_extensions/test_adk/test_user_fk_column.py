@@ -6,6 +6,8 @@ import pytest
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
+pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncpg, pytest.mark.integration]
+
 
 @pytest.fixture
 async def asyncpg_config_for_fk(postgres_service):

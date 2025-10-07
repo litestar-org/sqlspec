@@ -5,6 +5,8 @@ import pytest
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKStore
 
+pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
+
 
 @pytest.fixture()
 def adbc_store(tmp_path):

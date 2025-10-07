@@ -1,7 +1,11 @@
 """Tests for ADBC ADK store dialect-specific DDL generation."""
 
+import pytest
+
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKStore
+
+pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 
 
 def test_detect_dialect_postgresql():

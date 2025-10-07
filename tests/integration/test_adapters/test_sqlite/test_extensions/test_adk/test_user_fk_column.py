@@ -13,7 +13,7 @@ import pytest
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk.store import SqliteADKStore
 
-pytestmark = pytest.mark.sqlite
+pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.sqlite, pytest.mark.integration]
 
 
 def _create_tenants_table(config: SqliteConfig) -> None:

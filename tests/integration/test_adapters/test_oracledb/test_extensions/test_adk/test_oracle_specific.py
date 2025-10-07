@@ -15,6 +15,8 @@ import pytest
 
 from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore, OracleSyncADKStore
 
+pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.oracledb, pytest.mark.integration]
+
 
 @pytest.mark.oracledb
 class TestOracleAsyncLOBHandling:

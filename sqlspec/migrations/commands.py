@@ -118,7 +118,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
 
             for version, file_path in pending:
-                migration = self.runner.load_migration(file_path)
+                migration = self.runner.load_migration(file_path, version)
 
                 console.print(f"\n[cyan]Applying {version}:[/] {migration['description']}")
 
@@ -166,7 +166,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 if version not in all_files:
                     console.print(f"[red]Migration file not found for {version}[/]")
                     continue
-                migration = self.runner.load_migration(all_files[version])
+                migration = self.runner.load_migration(all_files[version], version)
                 console.print(f"\n[cyan]Reverting {version}:[/] {migration['description']}")
                 try:
                     _, execution_time = self.runner.execute_downgrade(driver, migration)
@@ -294,7 +294,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 return
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
             for version, file_path in pending:
-                migration = await self.runner.load_migration(file_path)
+                migration = await self.runner.load_migration(file_path, version)
                 console.print(f"\n[cyan]Applying {version}:[/] {migration['description']}")
                 try:
                     _, execution_time = await self.runner.execute_upgrade(driver, migration)
@@ -340,7 +340,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     console.print(f"[red]Migration file not found for {version}[/]")
                     continue
 
-                migration = await self.runner.load_migration(all_files[version])
+                migration = await self.runner.load_migration(all_files[version], version)
                 console.print(f"\n[cyan]Reverting {version}:[/] {migration['description']}")
 
                 try:

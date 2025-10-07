@@ -93,29 +93,20 @@ def _get_store_config(context: "MigrationContext | None") -> "dict[str, str | No
     """Extract ADK store configuration from migration context.
 
     Args:
-        context: Migration context with config or extension_config.
+        context: Migration context with config.
 
     Returns:
         Dict with session_table, events_table, and user_fk_column (if provided).
 
     Notes:
-        Reads from context.config.extension_config["adk"] first (preferred),
-        then falls back to context.extension_config for backwards compatibility.
+        Reads from context.config.extension_config["adk"].
     """
     if context and context.config and hasattr(context.config, "extension_config"):
         adk_config = context.config.extension_config.get("adk", {})
-        if adk_config:
-            return {
-                "session_table": adk_config.get("session_table", "adk_sessions"),
-                "events_table": adk_config.get("events_table", "adk_events"),
-                "user_fk_column": adk_config.get("user_fk_column"),
-            }
-
-    if context and context.extension_config:
         return {
-            "session_table": context.extension_config.get("session_table", "adk_sessions"),
-            "events_table": context.extension_config.get("events_table", "adk_events"),
-            "user_fk_column": context.extension_config.get("user_fk_column"),
+            "session_table": adk_config.get("session_table", "adk_sessions"),
+            "events_table": adk_config.get("events_table", "adk_events"),
+            "user_fk_column": adk_config.get("user_fk_column"),
         }
 
     return {"session_table": "adk_sessions", "events_table": "adk_events", "user_fk_column": None}

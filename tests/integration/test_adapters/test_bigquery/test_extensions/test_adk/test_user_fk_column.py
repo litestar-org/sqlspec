@@ -7,6 +7,8 @@ from google.auth.credentials import AnonymousCredentials
 from sqlspec.adapters.bigquery.adk import BigQueryADKStore
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 
+pytestmark = [pytest.mark.xdist_group("bigquery"), pytest.mark.bigquery, pytest.mark.integration]
+
 
 @pytest.fixture
 async def bigquery_adk_store_with_fk(bigquery_service):

@@ -1,14 +1,29 @@
 """AsyncPG ADK test fixtures."""
 
+from collections.abc import AsyncGenerator
+
 import pytest
+from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
 
 @pytest.fixture
-async def asyncpg_adk_store(postgres_service):
-    """Create AsyncPG ADK store with test database."""
+async def asyncpg_adk_store(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgADKStore, None]":
+    """Create AsyncPG ADK store with test database.
+
+    Args:
+        postgres_service: Pytest fixture providing PostgreSQL connection config.
+
+    Yields:
+        Configured AsyncPG ADK store instance.
+
+    Notes:
+        Uses pytest-databases PostgreSQL container for testing.
+        Tables are created before test and cleaned up after.
+        Pool is properly closed to avoid threading issues.
+    """
     config = AsyncpgConfig(
         pool_config={
             "host": postgres_service.host,
@@ -18,19 +33,31 @@ async def asyncpg_adk_store(postgres_service):
             "database": postgres_service.database,
         }
     )
-    store = AsyncpgADKStore(config)
-    await store.create_tables()
 
-    yield store
+    try:
+        store = AsyncpgADKStore(config)
+        await store.create_tables()
 
-    async with config.provide_connection() as conn:
-        await conn.execute("DROP TABLE IF EXISTS adk_events CASCADE")
-        await conn.execute("DROP TABLE IF EXISTS adk_sessions CASCADE")
+        yield store
+
+        async with config.provide_connection() as conn:
+            await conn.execute("DROP TABLE IF EXISTS adk_events CASCADE")
+            await conn.execute("DROP TABLE IF EXISTS adk_sessions CASCADE")
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
 @pytest.fixture
-async def session_fixture(asyncpg_adk_store):
-    """Create a test session."""
+async def session_fixture(asyncpg_adk_store: AsyncpgADKStore) -> dict[str, str]:
+    """Create a test session.
+
+    Args:
+        asyncpg_adk_store: AsyncPG ADK store fixture.
+
+    Returns:
+        Dictionary with session metadata.
+    """
     session_id = "test-session"
     app_name = "test-app"
     user_id = "user-123"

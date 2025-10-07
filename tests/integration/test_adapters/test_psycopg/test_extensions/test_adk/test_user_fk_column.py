@@ -10,7 +10,7 @@ from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfi
 if TYPE_CHECKING:
     from pytest_databases.docker.postgres import PostgresService
 
-pytestmark = [pytest.mark.postgres, pytest.mark.integration]
+pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.postgres, pytest.mark.integration]
 
 
 @pytest.fixture
