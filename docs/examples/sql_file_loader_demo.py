@@ -1,16 +1,25 @@
+# /// script
+# dependencies = [
+#   "sqlspec[sqlite]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
+
 """SQL File Loader Example.
 
-This example demonstrates how to use the SQL file loader to manage
-SQL statements from files with aiosql-style named queries.
+This example demonstrates how to use SQLSpec's integrated SQL file loader
+to manage SQL statements from files with aiosql-style named queries.
 """
 
 import tempfile
 from pathlib import Path
 
+from rich import print
+
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.core.statement import SQL
-from sqlspec.loader import SQLFileLoader
 
 __all__ = (
     "basic_loader_example",
@@ -108,99 +117,77 @@ LIMIT 10;
 
 def basic_loader_example() -> None:
     """Demonstrate basic SQL file loader usage."""
-    print("=== Basic SQL File Loader Example ===\n")
+    print("[bold cyan]=== Basic SQL File Loader Example ===[/bold cyan]\n")
 
-    # Create SQL files in a temporary directory
     with tempfile.TemporaryDirectory() as temp_dir:
         base_dir = Path(temp_dir)
         setup_sql_files(base_dir)
 
-        # Initialize loader
-        loader = SQLFileLoader()
+        spec = SQLSpec()
 
-        # Load SQL files
         sql_dir = base_dir / "sql"
-        loader.load_sql(sql_dir / "users.sql", sql_dir / "products.sql", sql_dir / "analytics.sql")
+        spec.load_sql_files(sql_dir / "users.sql", sql_dir / "products.sql", sql_dir / "analytics.sql")
 
-        # List available queries
-        queries = loader.list_queries()
-        print(f"Available queries: {', '.join(queries)}\n")
+        queries = spec.list_sql_queries()
+        print(f"[green]Available queries:[/green] {', '.join(queries)}\n")
 
-        # Get SQL by query name
-        user_sql = loader.get_sql("get_user_by_id", user_id=123)
-        print(f"SQL object created with parameters: {user_sql.parameters}")
-        print(f"SQL content: {str(user_sql)[:50]}...\n")
+        user_sql = spec.get_sql("get_user_by_id")
+        print(f"[yellow]SQL object created:[/yellow] {user_sql.sql[:50]}...\n")
 
-        # Add a query directly
-        loader.add_named_sql("custom_health_check", "SELECT 'OK' as status, NOW() as timestamp")
+        spec.add_named_sql("custom_health_check", "SELECT 'OK' as status")
 
-        # Get the custom query
-        health_sql = loader.get_sql("custom_health_check")
-        print(f"Custom query added: {health_sql!s}\n")
+        health_sql = spec.get_sql("custom_health_check")
+        print(f"[green]Custom query added:[/green] {health_sql!s}\n")
 
-        # Get file info for a query
-        file_info = loader.get_file_for_query("get_user_by_id")
-        if file_info:
-            print(f"Query 'get_user_by_id' is from file: {file_info.path}")
-            print(f"File checksum: {file_info.checksum}\n")
+        files = spec.get_sql_files()
+        if files:
+            print(f"[magenta]Loaded files:[/magenta] {len(files)} SQL files")
 
 
 def caching_example() -> None:
     """Demonstrate caching behavior."""
-    print("=== Caching Example ===\n")
+    print("[bold cyan]=== Caching Example ===[/bold cyan]\n")
 
     with tempfile.TemporaryDirectory() as temp_dir:
         base_dir = Path(temp_dir)
         setup_sql_files(base_dir)
 
-        # Create loader
-        loader = SQLFileLoader()
+        spec = SQLSpec()
         sql_file = base_dir / "sql" / "users.sql"
 
-        # First load - reads from disk
-        print("First load (from disk)...")
-        loader.load_sql(sql_file)
-        file1 = loader.get_file(str(sql_file))
+        print("[yellow]First load (from disk)...[/yellow]")
+        spec.load_sql_files(sql_file)
+        queries_before = len(spec.list_sql_queries())
+        print(f"[green]Loaded {queries_before} queries[/green]")
 
-        # Second load - uses cache (file already loaded)
-        print("Second load (from cache)...")
-        loader.load_sql(sql_file)
-        file2 = loader.get_file(str(sql_file))
+        print("\n[yellow]Second load (from cache)...[/yellow]")
+        spec.load_sql_files(sql_file)
+        print("[green]Using cached data[/green]")
 
-        print(f"Same file object from cache: {file1 is file2}")
+        print("\n[yellow]Clearing cache...[/yellow]")
+        spec.clear_sql_cache()
+        print("[green]Cache cleared[/green]")
 
-        # Clear cache and reload
-        print("\nClearing cache...")
-        loader.clear_cache()
-        print("Cache cleared")
+        print(f"[magenta]Queries after clear:[/magenta] {len(spec.list_sql_queries())}")
 
-        # After clearing, queries are gone
-        print(f"Queries after clear: {loader.list_queries()}")
-
-        # Reload the file
-        loader.load_sql(sql_file)
-        print(f"Queries after reload: {len(loader.list_queries())} queries loaded\n")
+        spec.load_sql_files(sql_file)
+        print(f"[green]Queries after reload:[/green] {len(spec.list_sql_queries())} queries loaded\n")
 
 
 def database_integration_example() -> None:
     """Demonstrate using loaded SQL files with SQLSpec database connections."""
-    print("=== Database Integration Example ===\n")
+    print("[bold cyan]=== Database Integration Example ===[/bold cyan]\n")
 
     with tempfile.TemporaryDirectory() as temp_dir:
         base_dir = Path(temp_dir)
         setup_sql_files(base_dir)
 
-        # Initialize SQLSpec and register database
-        sqlspec = SQLSpec()
-        db = sqlspec.add_config(SqliteConfig())
+        spec = SQLSpec()
+        db = spec.add_config(SqliteConfig())
 
-        # Initialize loader and load SQL files
-        loader = SQLFileLoader()
-        loader.load_sql(base_dir / "sql" / "users.sql")
+        spec.load_sql_files(base_dir / "sql" / "users.sql")
 
-        # Create tables
-        with sqlspec.provide_session(db) as session:
-            # Create users table
+        with spec.provide_session(db) as session:
             session.execute(
                 SQL("""
                 CREATE TABLE users (
@@ -215,7 +202,6 @@ def database_integration_example() -> None:
             """)
             )
 
-            # Insert test data
             session.execute(
                 SQL("""
                 INSERT INTO users (username, email, is_active)
@@ -226,123 +212,108 @@ def database_integration_example() -> None:
             """)
             )
 
-            # Get and execute a query
-            get_user_sql = loader.get_sql("get_user_by_id", user_id=1)
-
-            result = session.execute(get_user_sql)
-            print("Get user by ID result:")
+            get_user_sql = spec.get_sql("get_user_by_id")
+            result = session.execute(get_user_sql.bind(user_id=1))
+            print("[green]Get user by ID result:[/green]")
             for row in result.data:
-                print(f"  - {row['username']} ({row['email']})")
+                print(f"  [yellow]-[/yellow] {row['username']} ({row['email']})")
 
-            # Execute another query
-            list_users_sql = loader.get_sql("list_active_users", limit=10, offset=0)
-
-            result = session.execute(list_users_sql)
-            print("\nActive users:")
+            list_users_sql = spec.get_sql("list_active_users")
+            result = session.execute(list_users_sql.bind(limit=10, offset=0))
+            print("\n[green]Active users:[/green]")
             for row in result.data:
-                print(f"  - {row['username']} (last login: {row['last_login'] or 'Never'})")
+                print(f"  [yellow]-[/yellow] {row['username']} (last login: {row['last_login'] or 'Never'})")
 
 
 def mixed_source_example() -> None:
     """Demonstrate mixing file-loaded and directly-added queries."""
-    print("=== Mixed Source Example ===\n")
+    print("[bold cyan]=== Mixed Source Example ===[/bold cyan]\n")
 
     with tempfile.TemporaryDirectory() as temp_dir:
         base_dir = Path(temp_dir)
         setup_sql_files(base_dir)
 
-        # Initialize loader
-        loader = SQLFileLoader()
+        spec = SQLSpec()
 
-        # Load from files
-        loader.load_sql(base_dir / "sql" / "users.sql")
-        print(f"Loaded queries from file: {', '.join(loader.list_queries())}")
+        spec.load_sql_files(base_dir / "sql" / "users.sql")
+        print(f"[green]Loaded queries from file:[/green] {', '.join(spec.list_sql_queries())}")
 
-        # Add runtime queries
-        loader.add_named_sql("health_check", "SELECT 'OK' as status")
-        loader.add_named_sql("version_check", "SELECT version()")
-        loader.add_named_sql(
+        spec.add_named_sql("health_check", "SELECT 'OK' as status")
+        spec.add_named_sql("version_check", "SELECT sqlite_version()")
+        spec.add_named_sql(
             "table_count",
             """
             SELECT COUNT(*) as count
-            FROM information_schema.tables
-            WHERE table_schema = 'public'
+            FROM sqlite_master
+            WHERE type = 'table'
         """,
         )
 
-        print(f"\nAll queries after adding runtime SQL: {', '.join(loader.list_queries())}")
+        print(f"\n[green]All queries after adding runtime SQL:[/green] {', '.join(spec.list_sql_queries())}")
 
-        # Show source of queries
-        print("\nQuery sources:")
+        print("\n[magenta]Query check:[/magenta]")
         for query in ["get_user_by_id", "health_check", "version_check"]:
-            source_file = loader.get_file_for_query(query)
-            if source_file:
-                print(f"  - {query}: from file {source_file.path}")
-            else:
-                print(f"  - {query}: directly added")
+            exists = spec.has_sql_query(query)
+            status = "[green]exists[/green]" if exists else "[red]not found[/red]"
+            print(f"  [yellow]-[/yellow] {query}: {status}")
 
 
 def storage_backend_example() -> None:
     """Demonstrate loading from different storage backends."""
-    print("=== Storage Backend Example ===\n")
+    print("[bold cyan]=== Storage Backend Example ===[/bold cyan]\n")
 
     with tempfile.TemporaryDirectory() as temp_dir:
         base_dir = Path(temp_dir)
 
-        # Create a SQL file with queries
         sql_file = base_dir / "queries.sql"
         sql_file.write_text(
             """
 -- name: count_records
-SELECT COUNT(*) as total FROM :table_name;
+SELECT COUNT(*) as total FROM sqlite_master;
 
 -- name: find_by_status
 SELECT * FROM records WHERE status = :status;
 
 -- name: update_timestamp
-UPDATE records SET updated_at = NOW() WHERE id = :record_id;
+UPDATE records SET updated_at = datetime('now') WHERE id = :record_id;
 """.strip()
         )
 
-        # Initialize loader
-        loader = SQLFileLoader()
+        spec = SQLSpec()
 
-        # Load from local file path
-        print("Loading from local file path:")
-        loader.load_sql(sql_file)
-        print(f"Loaded queries: {', '.join(loader.list_queries())}")
+        print("[yellow]Loading from local file path:[/yellow]")
+        spec.load_sql_files(sql_file)
+        print(f"[green]Loaded queries:[/green] {', '.join(spec.list_sql_queries())}")
 
-        # You can also load from URIs (if storage backend is configured)
-        # Example with file:// URI
         file_uri = f"file://{sql_file}"
-        loader2 = SQLFileLoader()
-        loader2.load_sql(file_uri)
-        print(f"\nLoaded from file URI: {', '.join(loader2.list_queries())}")
+        spec2 = SQLSpec()
+        spec2.load_sql_files(file_uri)
+        print(f"\n[green]Loaded from file URI:[/green] {', '.join(spec2.list_sql_queries())}")
 
-        # Get SQL with parameters
-        count_sql = loader.get_sql("count_records", table_name="users")
-        print(f"\nGenerated SQL: {count_sql!s}")
-        print(f"Parameters: {count_sql.parameters}")
+        count_sql = spec.get_sql("count_records")
+        print(f"\n[yellow]Generated SQL:[/yellow] {count_sql!s}")
+        print(f"[magenta]Dialect:[/magenta] {count_sql.dialect or 'default'}")
 
 
 def main() -> None:
     """Run all examples."""
+    print("[bold blue]SQLSpec SQL File Loader Demo[/bold blue]\n")
+
     basic_loader_example()
-    print("\n" + "=" * 50 + "\n")
+    print("\n" + "[dim]" + "=" * 50 + "[/dim]\n")
 
     caching_example()
-    print("\n" + "=" * 50 + "\n")
+    print("\n" + "[dim]" + "=" * 50 + "[/dim]\n")
 
     mixed_source_example()
-    print("\n" + "=" * 50 + "\n")
+    print("\n" + "[dim]" + "=" * 50 + "[/dim]\n")
 
     storage_backend_example()
-    print("\n" + "=" * 50 + "\n")
+    print("\n" + "[dim]" + "=" * 50 + "[/dim]\n")
 
-    # Run database integration example
     database_integration_example()
 
-    print("\nExamples completed!")
+    print("\n[bold green]✅ Examples completed![/bold green]")
 
 
 if __name__ == "__main__":

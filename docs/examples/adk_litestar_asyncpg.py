@@ -11,10 +11,9 @@ Features:
 
 Requirements:
     - PostgreSQL running locally (default port 5432)
-    - pip install sqlspec[asyncpg,adk,litestar] google-genai litestar[standard]
 
 Usage:
-    python docs/examples/adk_litestar_asyncpg.py
+    uv run --with litestar litestar --app docs.examples.adk_litestar_asyncpg:app run --reload
 
     Then test with:
         curl http://localhost:8000/health
@@ -23,16 +22,26 @@ Usage:
         curl http://localhost:8000/sessions/chatbot/alice
 """
 
+# /// script
+# dependencies = [
+#   "sqlspec[asyncpg,adk,litestar]",
+#   "rich",
+#   "google-genai",
+#   "litestar[standard]",
+# ]
+# requires-python = ">=3.10"
+# ///
+
 from datetime import datetime, timezone
 from typing import Any
 
-import uvicorn
 from google.adk.events.event import Event
 from google.genai import types
 from litestar import Litestar, get, post
 from litestar.datastructures import State
 from litestar.status_codes import HTTP_200_OK, HTTP_201_CREATED
 from msgspec import Struct
+from rich import print
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
@@ -232,8 +241,8 @@ async def startup_hook(app: Litestar) -> None:
     service = SQLSpecSessionService(store)
     app.state.adk_service = service
 
-    print("✅ ADK tables initialized in PostgreSQL")
-    print("🚀 ADK Session API ready")
+    print("[green]✅ ADK tables initialized in PostgreSQL[/green]")
+    print("[green]🚀 ADK Session API ready[/green]")
 
 
 app = Litestar(
@@ -246,17 +255,15 @@ app = Litestar(
 
 def main() -> None:
     """Run the Litestar application."""
-    print("=== Litestar ADK Integration Example ===")
-    print("Starting server on http://localhost:8000")
-    print("\nAvailable endpoints:")
-    print("  GET  /health")
-    print("  POST /sessions")
-    print("  GET  /sessions/{app_name}/{user_id}")
-    print("  GET  /sessions/{app_name}/{user_id}/{session_id}")
-    print("  POST /sessions/{app_name}/{user_id}/{session_id}/events")
-    print("\nPress Ctrl+C to stop\n")
-
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    print("[bold magenta]=== Litestar ADK Integration Example ===[/bold magenta]")
+    print("\n[yellow]⚠️  This example should be run with the Litestar CLI:[/yellow]")
+    print("[cyan]uv run --with litestar litestar --app docs.examples.adk_litestar_asyncpg:app run --reload[/cyan]")
+    print("\n[bold]Available endpoints:[/bold]")
+    print("  [cyan]GET[/cyan]  /health")
+    print("  [cyan]POST[/cyan] /sessions")
+    print("  [cyan]GET[/cyan]  /sessions/{app_name}/{user_id}")
+    print("  [cyan]GET[/cyan]  /sessions/{app_name}/{user_id}/{session_id}")
+    print("  [cyan]POST[/cyan] /sessions/{app_name}/{user_id}/{session_id}/events")
 
 
 if __name__ == "__main__":
