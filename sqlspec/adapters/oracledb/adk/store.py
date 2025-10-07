@@ -312,6 +312,26 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     RAISE;
                 END IF;
         END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_app_user
+                ON {self._session_table}(app_name, user_id)';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_update_time
+                ON {self._session_table}(update_time DESC)';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
         """
 
     def _get_create_events_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
@@ -367,6 +387,16 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
                     REFERENCES {self._session_table}(id) ON DELETE CASCADE
             ){inmemory_clause}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
+                ON {self._events_table}(session_id, timestamp ASC)';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -471,7 +501,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._events_table}_session';
             EXCEPTION
                 WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
+                    IF SQLCODE != -1418 THEN
                         RAISE;
                     END IF;
             END;
@@ -481,7 +511,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._session_table}_update_time';
             EXCEPTION
                 WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
+                    IF SQLCODE != -1418 THEN
                         RAISE;
                     END IF;
             END;
@@ -491,7 +521,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._session_table}_app_user';
             EXCEPTION
                 WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
+                    IF SQLCODE != -1418 THEN
                         RAISE;
                     END IF;
             END;
@@ -533,49 +563,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(self._get_create_sessions_table_sql_for_type(storage_type))
             await conn.commit()
 
-            sessions_idx_app_user = f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_app_user
-                    ON {self._session_table}(app_name, user_id)';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -955 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """
-            await cursor.execute(sessions_idx_app_user)
-            await conn.commit()
-
-            sessions_idx_update = f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_update_time
-                    ON {self._session_table}(update_time DESC)';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -955 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """
-            await cursor.execute(sessions_idx_update)
-            await conn.commit()
-
             await cursor.execute(self._get_create_events_table_sql_for_type(storage_type))
-            await conn.commit()
-
-            events_idx = f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
-                    ON {self._events_table}(session_id, timestamp ASC)';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -955 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """
-            await cursor.execute(events_idx)
             await conn.commit()
 
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
@@ -1161,6 +1149,26 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                     RAISE;
                 END IF;
         END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_app_user
+                ON {self._session_table}(app_name, user_id)';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_update_time
+                ON {self._session_table}(update_time DESC)';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
         """
 
     def _get_create_events_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
@@ -1216,6 +1224,16 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
                     REFERENCES {self._session_table}(id) ON DELETE CASCADE
             ){inmemory_clause}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
+                ON {self._events_table}(session_id, timestamp ASC)';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -1320,7 +1338,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._events_table}_session';
             EXCEPTION
                 WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
+                    IF SQLCODE != -1418 THEN
                         RAISE;
                     END IF;
             END;
@@ -1330,7 +1348,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._session_table}_update_time';
             EXCEPTION
                 WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
+                    IF SQLCODE != -1418 THEN
                         RAISE;
                     END IF;
             END;
@@ -1340,7 +1358,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._session_table}_app_user';
             EXCEPTION
                 WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
+                    IF SQLCODE != -1418 THEN
                         RAISE;
                     END IF;
             END;
@@ -1382,49 +1400,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(self._get_create_sessions_table_sql_for_type(storage_type))
             conn.commit()
 
-            sessions_idx_app_user = f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_app_user
-                    ON {self._session_table}(app_name, user_id)';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -955 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """
-            cursor.execute(sessions_idx_app_user)
-            conn.commit()
-
-            sessions_idx_update = f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_update_time
-                    ON {self._session_table}(update_time DESC)';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -955 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """
-            cursor.execute(sessions_idx_update)
-            conn.commit()
-
             cursor.execute(self._get_create_events_table_sql_for_type(storage_type))
-            conn.commit()
-
-            events_idx = f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
-                    ON {self._events_table}(session_id, timestamp ASC)';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -955 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """
-            cursor.execute(events_idx)
             conn.commit()
 
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)

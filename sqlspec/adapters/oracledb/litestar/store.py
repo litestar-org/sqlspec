@@ -87,7 +87,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         Notes:
             - Uses TIMESTAMP WITH TIME ZONE for timezone-aware expiration timestamps
-            - Partial index WHERE expires_at IS NOT NULL reduces index size/maintenance
+            - Index on expires_at for efficient cleanup queries
             - BLOB type for data storage (Oracle native binary type)
             - Audit columns (created_at, updated_at) help with debugging
             - Table name is internally controlled, not user input (S608 suppressed)
@@ -109,6 +109,16 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                     RAISE;
                 END IF;
         END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._table_name}_expires_at
+                ON {self._table_name}(expires_at)';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
         """
 
     def _get_drop_table_sql(self) -> "list[str]":
@@ -123,7 +133,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._table_name}_expires_at';
             EXCEPTION
                 WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
+                    IF SQLCODE != -1418 THEN
                         RAISE;
                     END IF;
             END;
@@ -147,23 +157,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         async with conn_context as conn:
             cursor = conn.cursor()
             await cursor.execute(sql)
-            await conn.commit()
-
-        index_sql = f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._table_name}_expires_at
-                ON {self._table_name}(expires_at)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn:
-            cursor = conn.cursor()
-            await cursor.execute(index_sql)
             await conn.commit()
 
         logger.debug("Created session table: %s", self._table_name)
@@ -466,7 +459,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
         Notes:
             - Uses TIMESTAMP WITH TIME ZONE for timezone-aware expiration timestamps
-            - Partial index WHERE expires_at IS NOT NULL reduces index size/maintenance
+            - Index on expires_at for efficient cleanup queries
             - BLOB type for data storage (Oracle native binary type)
             - Audit columns (created_at, updated_at) help with debugging
             - Table name is internally controlled, not user input (S608 suppressed)
@@ -488,6 +481,16 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                     RAISE;
                 END IF;
         END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._table_name}_expires_at
+                ON {self._table_name}(expires_at)';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
         """
 
     def _get_drop_table_sql(self) -> "list[str]":
@@ -502,7 +505,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._table_name}_expires_at';
             EXCEPTION
                 WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
+                    IF SQLCODE != -1418 THEN
                         RAISE;
                     END IF;
             END;
@@ -525,22 +528,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(sql)
-            conn.commit()
-
-        index_sql = f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._table_name}_expires_at
-                ON {self._table_name}(expires_at)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(index_sql)
             conn.commit()
 
         logger.debug("Created session table: %s", self._table_name)

@@ -131,7 +131,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
                 except Exception as e:
                     console.print(f"[red]✗ Failed: {e}[/]")
-                    raise
+                    return
 
     def downgrade(self, revision: str = "-1") -> None:
         """Downgrade to a target revision.
@@ -174,7 +174,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
                 except Exception as e:
                     console.print(f"[red]✗ Failed: {e}[/]")
-                    raise
+                    return
 
     def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
@@ -304,7 +304,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     console.print(f"[green]✓ Applied in {execution_time}ms[/]")
                 except Exception as e:
                     console.print(f"[red]✗ Failed: {e}[/]")
-                    raise
+                    return
 
     async def downgrade(self, revision: str = "-1") -> None:
         """Downgrade to a target revision.
@@ -349,7 +349,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
                 except Exception as e:
                     console.print(f"[red]✗ Failed: {e}[/]")
-                    raise
+                    return
 
     async def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
