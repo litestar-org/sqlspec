@@ -141,9 +141,11 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         if hasattr(self._config, "extension_config"):
             extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
             adk_config: dict[str, Any] = extension_config.get("adk", {})
+            session_table = adk_config.get("session_table")
+            events_table = adk_config.get("events_table")
             result: dict[str, Any] = {
-                "session_table": adk_config.get("session_table") or "adk_sessions",
-                "events_table": adk_config.get("events_table") or "adk_events",
+                "session_table": session_table if session_table is not None else "adk_sessions",
+                "events_table": events_table if events_table is not None else "adk_events",
             }
             owner_id = adk_config.get("owner_id_column")
             if owner_id is not None:
@@ -360,9 +362,11 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         if hasattr(self._config, "extension_config"):
             extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)  # pyright: ignore
             adk_config: dict[str, Any] = extension_config.get("adk", {})
+            session_table = adk_config.get("session_table")
+            events_table = adk_config.get("events_table")
             result: dict[str, Any] = {
-                "session_table": adk_config.get("session_table") or "adk_sessions",
-                "events_table": adk_config.get("events_table") or "adk_events",
+                "session_table": session_table if session_table is not None else "adk_sessions",
+                "events_table": events_table if events_table is not None else "adk_events",
             }
             owner_id = adk_config.get("owner_id_column")
             if owner_id is not None:
