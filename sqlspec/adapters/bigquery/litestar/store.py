@@ -58,7 +58,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             config: BigQueryConfig instance.
             table_name: Name of the session table.
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get BigQuery CREATE TABLE SQL with optimized schema.

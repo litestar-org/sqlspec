@@ -53,7 +53,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             config: AsyncmyConfig instance.
             table_name: Name of the session table.
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL with optimized schema.

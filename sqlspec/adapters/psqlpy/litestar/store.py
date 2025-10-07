@@ -47,7 +47,7 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
             config: PsqlpyConfig instance.
             table_name: Name of the session table.
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.

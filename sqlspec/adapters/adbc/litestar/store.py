@@ -72,7 +72,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
             config: AdbcConfig instance.
             table_name: Name of the session table.
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
         self._dialect: str | None = None
 
     def _get_dialect(self) -> str:

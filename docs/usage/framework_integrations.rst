@@ -773,7 +773,6 @@ Testing with Framework Integration
            """)
            yield session
 
-   @pytest.mark.asyncio
    async def test_create_user(test_db):
        result = await test_db.execute(
            "INSERT INTO users (name) VALUES ($1) RETURNING id",

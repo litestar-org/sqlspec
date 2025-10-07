@@ -98,36 +98,57 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
     in each adapter directory (e.g., sqlspec/adapters/asyncpg/adk/store.py).
 
     Args:
-        config: SQLSpec database configuration (async).
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
-        owner_id_column: Optional owner ID column definition. Defaults to None.
+        config: SQLSpec database configuration with extension_config["adk"] settings.
+
+    Notes:
+        Configuration is read from config.extension_config["adk"]:
+        - session_table: Sessions table name (default: "adk_sessions")
+        - events_table: Events table name (default: "adk_events")
+        - owner_id_column: Optional owner FK column DDL (default: None)
     """
 
     __slots__ = ("_config", "_events_table", "_owner_id_column_ddl", "_owner_id_column_name", "_session_table")
 
-    def __init__(
-        self,
-        config: ConfigT,
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: ConfigT) -> None:
         """Initialize the ADK store.
 
         Args:
             config: SQLSpec database configuration.
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
+
+        Notes:
+            Reads configuration from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        _validate_table_name(session_table)
-        _validate_table_name(events_table)
         self._config = config
-        self._session_table = session_table
-        self._events_table = events_table
-        self._owner_id_column_ddl = owner_id_column
-        self._owner_id_column_name = _parse_owner_id_column(owner_id_column) if owner_id_column else None
+        store_config = self._get_store_config_from_extension()
+        self._session_table = store_config["session_table"]
+        self._events_table = store_config["events_table"]
+        self._owner_id_column_ddl = store_config.get("owner_id_column")
+        self._owner_id_column_name = (
+            _parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+        )
+        _validate_table_name(self._session_table)
+        _validate_table_name(self._events_table)
+
+    def _get_store_config_from_extension(self) -> "dict[str, Any]":
+        """Extract ADK store configuration from config.extension_config.
+
+        Returns:
+            Dict with session_table, events_table, and optionally owner_id_column.
+        """
+        if hasattr(self._config, "extension_config"):
+            adk_config = self._config.extension_config.get("adk", {})
+            result: dict[str, Any] = {
+                "session_table": adk_config.get("session_table") or "adk_sessions",
+                "events_table": adk_config.get("events_table") or "adk_events",
+            }
+            owner_id = adk_config.get("owner_id_column")
+            if owner_id is not None:
+                result["owner_id_column"] = owner_id
+            return result
+        return {"session_table": "adk_sessions", "events_table": "adk_events"}
 
     @property
     def config(self) -> ConfigT:
@@ -295,36 +316,57 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
     in each adapter directory (e.g., sqlspec/adapters/sqlite/adk/store.py).
 
     Args:
-        config: SQLSpec database configuration (sync).
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
-        owner_id_column: Optional owner ID column definition. Defaults to None.
+        config: SQLSpec database configuration with extension_config["adk"] settings.
+
+    Notes:
+        Configuration is read from config.extension_config["adk"]:
+        - session_table: Sessions table name (default: "adk_sessions")
+        - events_table: Events table name (default: "adk_events")
+        - owner_id_column: Optional owner FK column DDL (default: None)
     """
 
     __slots__ = ("_config", "_events_table", "_owner_id_column_ddl", "_owner_id_column_name", "_session_table")
 
-    def __init__(
-        self,
-        config: ConfigT,
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: ConfigT) -> None:
         """Initialize the sync ADK store.
 
         Args:
             config: SQLSpec database configuration.
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
+
+        Notes:
+            Reads configuration from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        _validate_table_name(session_table)
-        _validate_table_name(events_table)
         self._config = config
-        self._session_table = session_table
-        self._events_table = events_table
-        self._owner_id_column_ddl = owner_id_column
-        self._owner_id_column_name = _parse_owner_id_column(owner_id_column) if owner_id_column else None
+        store_config = self._get_store_config_from_extension()
+        self._session_table = store_config["session_table"]
+        self._events_table = store_config["events_table"]
+        self._owner_id_column_ddl = store_config.get("owner_id_column")
+        self._owner_id_column_name = (
+            _parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+        )
+        _validate_table_name(self._session_table)
+        _validate_table_name(self._events_table)
+
+    def _get_store_config_from_extension(self) -> "dict[str, Any]":
+        """Extract ADK store configuration from config.extension_config.
+
+        Returns:
+            Dict with session_table, events_table, and optionally owner_id_column.
+        """
+        if hasattr(self._config, "extension_config"):
+            adk_config = self._config.extension_config.get("adk", {})
+            result: dict[str, Any] = {
+                "session_table": adk_config.get("session_table") or "adk_sessions",
+                "events_table": adk_config.get("events_table") or "adk_events",
+            }
+            owner_id = adk_config.get("owner_id_column")
+            if owner_id is not None:
+                result["owner_id_column"] = owner_id
+            return result
+        return {"session_table": "adk_sessions", "events_table": "adk_events"}
 
     @property
     def config(self) -> ConfigT:

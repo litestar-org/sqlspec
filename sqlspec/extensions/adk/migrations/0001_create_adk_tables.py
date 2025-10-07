@@ -1,6 +1,6 @@
 """Create ADK session and events tables migration using store DDL definitions."""
 
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
@@ -89,34 +89,6 @@ def _raise_store_import_failed(store_path: str, error: ImportError) -> NoReturn:
     raise SQLSpecError(msg) from error
 
 
-def _get_store_config(context: "MigrationContext | None") -> "dict[str, Any]":
-    """Extract ADK store configuration from migration context.
-
-    Args:
-        context: Migration context with config.
-
-    Returns:
-        Dict with session_table, events_table, and owner_id_column (if provided).
-
-    Notes:
-        Reads from context.config.extension_config["adk"].
-        session_table and events_table always have default values.
-        owner_id_column may be None.
-    """
-    if context and context.config and hasattr(context.config, "extension_config"):
-        adk_config = context.config.extension_config.get("adk", {})
-        result: dict[str, Any] = {
-            "session_table": adk_config.get("session_table") or "adk_sessions",
-            "events_table": adk_config.get("events_table") or "adk_events",
-        }
-        owner_id = adk_config.get("owner_id_column")
-        if owner_id is not None:
-            result["owner_id_column"] = owner_id
-        return result
-
-    return {"session_table": "adk_sessions", "events_table": "adk_events"}
-
-
 async def up(context: "MigrationContext | None" = None) -> "list[str]":
     """Create the ADK session and events tables using store DDL definitions.
 
@@ -131,17 +103,15 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
         List of SQL statements to execute for upgrade.
 
     Notes:
-        Reads configuration from context.config.extension_config["adk"] if available.
+        Configuration is read from context.config.extension_config["adk"].
         Supports custom table names and optional owner_id_column for linking
         sessions to owner tables (users, tenants, teams, etc.).
     """
     if context is None or context.config is None:
         _raise_missing_config()
 
-    store_config = _get_store_config(context)
     store_class = _get_store_class(context)
-
-    store_instance = store_class(config=context.config, **store_config)
+    store_instance = store_class(config=context.config)
 
     return [
         store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
@@ -161,13 +131,14 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
 
     Returns:
         List of SQL statements to execute for downgrade.
+
+    Notes:
+        Configuration is read from context.config.extension_config["adk"].
     """
     if context is None or context.config is None:
         _raise_missing_config()
 
-    store_config = _get_store_config(context)
     store_class = _get_store_class(context)
-
-    store_instance = store_class(config=context.config, **store_config)
+    store_instance = store_class(config=context.config)
 
     return store_instance._get_drop_tables_sql()  # pyright: ignore[reportPrivateUsage]

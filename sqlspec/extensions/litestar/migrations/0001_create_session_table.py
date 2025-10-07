@@ -89,25 +89,6 @@ def _raise_store_import_failed(store_path: str, error: ImportError) -> NoReturn:
     raise SQLSpecError(msg) from error
 
 
-def _get_table_name(context: "MigrationContext | None") -> str:
-    """Extract table name from migration context.
-
-    Args:
-        context: Migration context with config.
-
-    Returns:
-        Table name for the session store.
-
-    Notes:
-        Reads from context.config.extension_config["litestar"].
-    """
-    if context and context.config and hasattr(context.config, "extension_config"):
-        litestar_config: dict[str, str] = context.config.extension_config.get("litestar", {})
-        return str(litestar_config.get("session_table", "litestar_session"))
-
-    return "litestar_session"
-
-
 async def up(context: "MigrationContext | None" = None) -> "list[str]":
     """Create the litestar session table using store DDL definitions.
 
@@ -120,12 +101,14 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
 
     Returns:
         List of SQL statements to execute for upgrade.
+
+    Notes:
+        Table configuration is read from context.config.extension_config["litestar"].
     """
-    table_name = _get_table_name(context)
     store_class = _get_store_class(context)
     if context is None or context.config is None:
         _raise_missing_config()
-    store = store_class(config=context.config, table_name=table_name)
+    store = store_class(config=context.config)
 
     return [store._get_create_table_sql()]  # pyright: ignore[reportPrivateUsage]
 
@@ -142,11 +125,13 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
 
     Returns:
         List of SQL statements to execute for downgrade.
+
+    Notes:
+        Table configuration is read from context.config.extension_config["litestar"].
     """
-    table_name = _get_table_name(context)
     store_class = _get_store_class(context)
     if context is None or context.config is None:
         _raise_missing_config()
-    store = store_class(config=context.config, table_name=table_name)
+    store = store_class(config=context.config)
 
     return store._get_drop_table_sql()  # pyright: ignore[reportPrivateUsage]

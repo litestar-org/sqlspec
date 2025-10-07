@@ -7,7 +7,6 @@ import pytest
 pytestmark = [pytest.mark.xdist_group("bigquery"), pytest.mark.bigquery, pytest.mark.integration]
 
 
-@pytest.mark.asyncio
 async def test_partitioning_and_clustering(bigquery_adk_store: Any, bigquery_service: Any) -> None:
     """Test that tables are created with proper partitioning and clustering."""
     import asyncio
@@ -49,7 +48,6 @@ async def test_partitioning_and_clustering(bigquery_adk_store: Any, bigquery_ser
     assert len(events) == 1
 
 
-@pytest.mark.asyncio
 async def test_json_type_storage(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test that JSON type is properly used for state and metadata."""
     complex_state = {"nested": {"deep": {"value": 123}}, "array": [1, 2, 3], "boolean": True, "null": None}
@@ -61,7 +59,6 @@ async def test_json_type_storage(bigquery_adk_store: Any, session_fixture: Any) 
     assert retrieved["state"] == complex_state
 
 
-@pytest.mark.asyncio
 async def test_timestamp_precision(bigquery_adk_store: Any) -> None:
     """Test that BigQuery TIMESTAMP preserves microsecond precision."""
     import asyncio
@@ -80,7 +77,6 @@ async def test_timestamp_precision(bigquery_adk_store: Any) -> None:
     assert (create_time_2 - create_time_1).total_seconds() < 1
 
 
-@pytest.mark.asyncio
 async def test_bytes_storage(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test that BYTES type properly stores binary data."""
     from datetime import datetime, timezone
@@ -117,7 +113,6 @@ async def test_bytes_storage(bigquery_adk_store: Any, session_fixture: Any) -> N
     assert events[0]["actions"] == large_actions
 
 
-@pytest.mark.asyncio
 async def test_cost_optimization_query_patterns(bigquery_adk_store: Any) -> None:
     """Test that queries use clustering for cost optimization."""
     await bigquery_adk_store.create_session("s1", "app1", "user1", {"test": True})
@@ -131,7 +126,6 @@ async def test_cost_optimization_query_patterns(bigquery_adk_store: Any) -> None
     assert len(sessions_app2) == 1
 
 
-@pytest.mark.asyncio
 async def test_dataset_qualification(bigquery_service: Any) -> None:
     """Test that table names are properly qualified with dataset."""
     from google.api_core.client_options import ClientOptions
@@ -158,7 +152,6 @@ async def test_dataset_qualification(bigquery_service: Any) -> None:
     assert store._get_full_table_name("adk_events") == expected_events  # pyright: ignore[reportPrivateUsage]
 
 
-@pytest.mark.asyncio
 async def test_manual_cascade_delete(bigquery_adk_store: Any, session_fixture: Any) -> None:
     """Test manual cascade delete (BigQuery doesn't have foreign keys)."""
     from datetime import datetime, timezone

@@ -7,7 +7,6 @@ import pytest
 pytestmark = [pytest.mark.xdist_group("bigquery"), pytest.mark.bigquery, pytest.mark.integration]
 
 
-@pytest.mark.asyncio
 async def test_create_session(bigquery_adk_store: Any) -> None:
     """Test creating a new session."""
     session_id = "session-123"
@@ -23,7 +22,6 @@ async def test_create_session(bigquery_adk_store: Any) -> None:
     assert session["state"] == state
 
 
-@pytest.mark.asyncio
 async def test_get_session(bigquery_adk_store: Any) -> None:
     """Test retrieving a session by ID."""
     session_id = "session-get"
@@ -42,14 +40,12 @@ async def test_get_session(bigquery_adk_store: Any) -> None:
     assert retrieved["state"] == state
 
 
-@pytest.mark.asyncio
 async def test_get_nonexistent_session(bigquery_adk_store: Any) -> None:
     """Test retrieving a session that doesn't exist."""
     result = await bigquery_adk_store.get_session("nonexistent")
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_update_session_state(bigquery_adk_store: Any) -> None:
     """Test updating session state."""
     session_id = "session-update"
@@ -67,7 +63,6 @@ async def test_update_session_state(bigquery_adk_store: Any) -> None:
     assert retrieved["state"] == updated_state
 
 
-@pytest.mark.asyncio
 async def test_list_sessions(bigquery_adk_store: Any) -> None:
     """Test listing sessions for an app and user."""
     app_name = "list-test-app"
@@ -84,14 +79,12 @@ async def test_list_sessions(bigquery_adk_store: Any) -> None:
     assert session_ids == {"session-1", "session-2"}
 
 
-@pytest.mark.asyncio
 async def test_list_sessions_empty(bigquery_adk_store: Any) -> None:
     """Test listing sessions when none exist."""
     sessions = await bigquery_adk_store.list_sessions("nonexistent-app", "nonexistent-user")
     assert sessions == []
 
 
-@pytest.mark.asyncio
 async def test_delete_session(bigquery_adk_store: Any) -> None:
     """Test deleting a session."""
     session_id = "session-delete"
@@ -106,7 +99,6 @@ async def test_delete_session(bigquery_adk_store: Any) -> None:
     assert retrieved is None
 
 
-@pytest.mark.asyncio
 async def test_session_with_complex_state(bigquery_adk_store: Any) -> None:
     """Test session with complex nested state."""
     session_id = "complex-session"
@@ -119,7 +111,6 @@ async def test_session_with_complex_state(bigquery_adk_store: Any) -> None:
     assert retrieved["state"] == complex_state
 
 
-@pytest.mark.asyncio
 async def test_session_with_empty_state(bigquery_adk_store: Any) -> None:
     """Test session with empty state."""
     session_id = "empty-state"
@@ -131,7 +122,6 @@ async def test_session_with_empty_state(bigquery_adk_store: Any) -> None:
     assert retrieved["state"] == {}
 
 
-@pytest.mark.asyncio
 async def test_session_timestamps(bigquery_adk_store: Any) -> None:
     """Test that session timestamps are set correctly."""
     import asyncio

@@ -25,28 +25,32 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
     - Efficient cleanup of expired sessions
 
     Args:
-        config: AsyncpgConfig instance.
-        table_name: Name of the session table. Defaults to "litestar_session".
+        config: AsyncpgConfig instance with extension_config["litestar"] settings.
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
         from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
 
-        config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+        config = AsyncpgConfig(
+            pool_config={"dsn": "postgresql://..."},
+            extension_config={"litestar": {"session_table": "my_sessions"}}
+        )
         store = AsyncpgStore(config)
         await store.create_table()
     """
 
     __slots__ = ()
 
-    def __init__(self, config: "AsyncpgConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "AsyncpgConfig") -> None:
         """Initialize AsyncPG session store.
 
         Args:
             config: AsyncpgConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.

@@ -65,7 +65,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             table_name: Name of the session table.
             use_in_memory: Enable In-Memory Column Store (requires license).
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
         self._use_in_memory = use_in_memory
 
     def _get_create_table_sql(self) -> str:
@@ -429,7 +429,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             table_name: Name of the session table.
             use_in_memory: Enable In-Memory Column Store (requires license).
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
         self._use_in_memory = use_in_memory
 
     def _get_create_table_sql(self) -> str:

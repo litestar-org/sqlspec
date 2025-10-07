@@ -36,24 +36,24 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
     - Optional user FK column for multi-tenancy
 
     Args:
-        config: PostgreSQL database config (AsyncpgConfig, PsycopgAsyncConfig, or PsqlpyConfig).
-        session_table: Name of the sessions table. Defaults to "adk_sessions".
-        events_table: Name of the events table. Defaults to "adk_events".
-        owner_id_column: Optional owner ID column DDL for owner references. Defaults to None.
+        config: PostgreSQL database config with extension_config["adk"] settings.
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
         from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 
-        config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+        config = AsyncpgConfig(
+            pool_config={"dsn": "postgresql://..."},
+            extension_config={
+                "adk": {
+                    "session_table": "my_sessions",
+                    "events_table": "my_events",
+                    "owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+                }
+            }
+        )
         store = AsyncpgADKStore(config)
         await store.create_tables()
-
-        store_with_fk = AsyncpgADKStore(
-            config,
-            owner_id_column="tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
-        )
-        await store_with_fk.create_tables()
 
     Notes:
         - PostgreSQL JSONB type used for state (more efficient than JSON)
@@ -65,26 +65,24 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         - FILLFACTOR 80 leaves space for HOT updates
         - Generic over PostgresConfigT to support all PostgreSQL drivers
         - Owner ID column enables multi-tenant isolation with referential integrity
+        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
 
-    def __init__(
-        self,
-        config: AsyncConfigT,
-        session_table: str = "adk_sessions",
-        events_table: str = "adk_events",
-        owner_id_column: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: AsyncConfigT) -> None:
         """Initialize AsyncPG ADK store.
 
         Args:
-            config: PostgreSQL database config (AsyncpgConfig, PsycopgAsyncConfig, or PsqlpyConfig).
-            session_table: Name of the sessions table.
-            events_table: Name of the events table.
-            owner_id_column: Optional owner ID column DDL (e.g., "tenant_id INTEGER REFERENCES tenants(id)").
+            config: PostgreSQL database config.
+
+        Notes:
+            Configuration is read from config.extension_config["adk"]:
+            - session_table: Sessions table name (default: "adk_sessions")
+            - events_table: Events table name (default: "adk_events")
+            - owner_id_column: Optional owner FK column DDL (default: None)
         """
-        super().__init__(config, session_table, events_table, owner_id_column)
+        super().__init__(config)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.

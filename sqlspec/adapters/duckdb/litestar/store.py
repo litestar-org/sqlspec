@@ -56,7 +56,7 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
             config: DuckDBConfig instance.
             table_name: Name of the session table.
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get DuckDB CREATE TABLE SQL.

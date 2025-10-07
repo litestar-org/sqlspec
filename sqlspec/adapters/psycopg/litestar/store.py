@@ -51,7 +51,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
             config: PsycopgAsyncConfig instance.
             table_name: Name of the session table.
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.
@@ -317,7 +317,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             config: PsycopgSyncConfig instance.
             table_name: Name of the session table.
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.

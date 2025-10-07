@@ -37,30 +37,50 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
     Subclasses must implement dialect-specific SQL queries.
 
     Args:
-        config: SQLSpec database configuration (async or sync).
-        table_name: Name of the session table. Defaults to "litestar_session".
+        config: SQLSpec database configuration with extension_config["litestar"] settings.
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
         from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
 
-        config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+        config = AsyncpgConfig(
+            pool_config={"dsn": "postgresql://..."},
+            extension_config={"litestar": {"session_table": "my_sessions"}}
+        )
         store = AsyncpgStore(config)
         await store.create_table()
+
+    Notes:
+        Configuration is read from config.extension_config["litestar"]:
+        - session_table: Table name (default: "litestar_session")
     """
 
     __slots__ = ("_config", "_table_name")
 
-    def __init__(self, config: ConfigT, table_name: str = "litestar_session") -> None:
+    def __init__(self, config: ConfigT) -> None:
         """Initialize the session store.
 
         Args:
             config: SQLSpec database configuration.
-            table_name: Name of the session table.
+
+        Notes:
+            Reads table_name from config.extension_config["litestar"]["session_table"].
+            Defaults to "litestar_session" if not specified.
         """
-        self._validate_table_name(table_name)
         self._config = config
-        self._table_name = table_name
+        self._table_name = self._get_table_name_from_config()
+        self._validate_table_name(self._table_name)
+
+    def _get_table_name_from_config(self) -> str:
+        """Extract table name from config.extension_config.
+
+        Returns:
+            Table name for the session store.
+        """
+        if hasattr(self._config, "extension_config"):
+            litestar_config: dict[str, str] = self._config.extension_config.get("litestar", {})
+            return str(litestar_config.get("session_table", "litestar_session"))
+        return "litestar_session"
 
     @property
     def config(self) -> ConfigT:
