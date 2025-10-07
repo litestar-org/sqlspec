@@ -26,6 +26,7 @@ Usage:
 from datetime import datetime, timezone
 from typing import Any
 
+import uvicorn
 from google.adk.events.event import Event
 from google.genai import types
 from litestar import Litestar, get, post
@@ -245,8 +246,6 @@ app = Litestar(
 
 def main() -> None:
     """Run the Litestar application."""
-    import uvicorn
-
     print("=== Litestar ADK Integration Example ===")
     print("Starting server on http://localhost:8000")
     print("\nAvailable endpoints:")

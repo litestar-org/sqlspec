@@ -65,9 +65,9 @@ async def run_adk_example() -> None:
     session = await service.create_session(
         app_name="async_chatbot", user_id="async_user_1", state={"mode": "conversational", "language": "en"}
     )
-    print(f"Created session: {session['id']}")
-    print(f"App: {session['app_name']}, User: {session['user_id']}")
-    print(f"Initial state: {session['state']}")
+    print(f"Created session: {session.id}")
+    print(f"App: {session.app_name}, User: {session.user_id}")
+    print(f"Initial state: {session.state}")
 
     print("\n=== Adding Conversation Events (Async) ===")
     user_event = Event(
@@ -108,14 +108,14 @@ async def run_adk_example() -> None:
 
     print("\n=== Retrieving Session with History (Async) ===")
     retrieved_session = await service.get_session(
-        app_name="async_chatbot", user_id="async_user_1", session_id=session["id"]
+        app_name="async_chatbot", user_id="async_user_1", session_id=session.id
     )
 
     if retrieved_session:
-        print(f"Retrieved session: {retrieved_session['id']}")
-        print(f"Event count: {len(retrieved_session['events'])}")
+        print(f"Retrieved session: {retrieved_session.id}")
+        print(f"Event count: {len(retrieved_session.events)}")
         print("\nConversation history:")
-        for idx, event in enumerate(retrieved_session["events"], 1):
+        for idx, event in enumerate(retrieved_session.events, 1):
             author = event.author or "unknown"
             text = event.content.parts[0].text if event.content and event.content.parts else "No content"
             print(f"  {idx}. [{author}]: {text[:80]}{'...' if len(text) > 80 else ''}")  # noqa: PLR2004
@@ -126,10 +126,10 @@ async def run_adk_example() -> None:
     session2 = await service.create_session(
         app_name="async_chatbot", user_id="async_user_1", state={"mode": "analytical", "language": "en"}
     )
-    print(f"Created second session: {session2['id']}")
+    print(f"Created second session: {session2.id}")
 
     sessions = await service.list_sessions(app_name="async_chatbot", user_id="async_user_1")
-    print(f"Total sessions for user 'async_user_1': {len(sessions)}")
+    print(f"Total sessions for user 'async_user_1': {len(sessions.sessions)}")
 
     print("\n=== Async Benefits ===")
     print("With AIOSQLite, all database operations use async/await:")
@@ -147,9 +147,9 @@ async def run_adk_example() -> None:
     print("  4. Keep transactions short to avoid blocking other writers")
 
     print("\n=== Cleanup (Async) ===")
-    await service.delete_session(session["id"])
-    await service.delete_session(session2["id"])
-    print(f"Deleted {2} sessions")
+    await service.delete_session(app_name="async_chatbot", user_id="async_user_1", session_id=session.id)
+    await service.delete_session(app_name="async_chatbot", user_id="async_user_1", session_id=session2.id)
+    print("Deleted 2 sessions")
 
     await config.close_pool()
     print("Closed async connection pool")
