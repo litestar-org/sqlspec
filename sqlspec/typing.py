@@ -98,11 +98,11 @@ ModelT = TypeVar("ModelT", bound="DictLike | StructStub | BaseModelStub | Datacl
 :class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
 """
 RowT = TypeVar("RowT", bound="dict[str, Any]")
-TypedDictT = TypeVar("TypedDictT")
-"""Type variable for TypedDict types.
+SchemaT = TypeVar("SchemaT")
+"""Type variable for schema types (models, TypedDict, dataclasses, etc.).
 
-Unbounded TypeVar specifically for TypedDict support since TypedDict is a special
-typing form and cannot be unified with regular class types in type[...] contexts.
+Unbounded TypeVar for use with schema_type parameter in driver methods.
+Supports all schema types including TypedDict which cannot be bounded to a class hierarchy.
 """
 
 
@@ -131,6 +131,9 @@ ModelDTOT = TypeVar("ModelDTOT", bound="SupportedSchemaModel")
 """Type variable for model DTOs.
 
 :class:`msgspec.Struct`|:class:`pydantic.BaseModel`
+
+.. deprecated:: 0.27.0
+    Use :class:`SchemaT` instead. This TypeVar will be removed in a future version.
 """
 PydanticOrMsgspecT = SupportedSchemaModel
 """Type alias for pydantic or msgspec models.
@@ -243,6 +246,7 @@ __all__ = (
     "PoolT_co",
     "PydanticOrMsgspecT",
     "RowT",
+    "SchemaT",
     "Span",
     "StatementParameters",
     "Status",
@@ -252,7 +256,6 @@ __all__ = (
     "Tracer",
     "TupleRow",
     "TypeAdapter",
-    "TypedDictT",
     "UnsetType",
     "aiosql",
     "attrs_asdict",
