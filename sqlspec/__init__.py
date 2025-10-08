@@ -41,9 +41,9 @@ from sqlspec.typing import (
     ModelT,
     PoolT,
     RowT,
+    SchemaT,
     StatementParameters,
     SupportedSchemaModel,
-    TypedDictT,
 )
 from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
 
@@ -81,6 +81,7 @@ __all__ = (
     "SQLFileLoader",
     "SQLResult",
     "SQLSpec",
+    "SchemaT",
     "Select",
     "Statement",
     "StatementConfig",
@@ -88,7 +89,6 @@ __all__ = (
     "SupportedSchemaModel",
     "SyncDatabaseConfig",
     "SyncDriverAdapterBase",
-    "TypedDictT",
     "Update",
     "__version__",
     "adapters",
