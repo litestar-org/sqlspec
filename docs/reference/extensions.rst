@@ -156,7 +156,7 @@ Plugin
       @get("/users")
       async def get_users(db: AsyncpgDriver) -> list[dict]:
           result = await db.select("SELECT * FROM users")
-          return result.data
+          return result.all()
 
       app = Litestar(route_handlers=[get_users], plugins=[plugin])
 

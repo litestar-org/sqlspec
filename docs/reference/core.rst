@@ -137,23 +137,33 @@ Result Processing
 
    **Attributes:**
 
-   - ``data`` - List of result rows (dicts)
+   - ``data`` - List of result rows (dicts) - prefer using helper methods instead
    - ``rows_affected`` - Number of rows affected by INSERT/UPDATE/DELETE
    - ``columns`` - Column names
    - ``metadata`` - Query metadata
 
-   **Methods:**
+   **Recommended Helper Methods:**
 
    .. code-block:: python
 
       result = await session.execute("SELECT * FROM users")
 
-      # Access data
-      all_rows = result.data
-      first_row = result.get_first()
-      first_row_or_none = result.get_first_or_none()
+      # Get all rows (replaces result.data)
+      all_rows = result.all()
 
-      # Map to types
+      # Get exactly one row (raises if not exactly one)
+      user = result.one()
+
+      # Get one row or None (raises if multiple)
+      user = result.one_or_none()
+
+      # Get first row without validation
+      first_row = result.get_first()
+
+      # Get scalar value (first column of first row)
+      count = result.scalar()
+
+      # Map to typed models
       from pydantic import BaseModel
 
       class User(BaseModel):
@@ -161,12 +171,14 @@ Result Processing
           name: str
           email: str
 
-      users = result.as_type(User)  # List[User]
-      user = result.as_type_one(User)  # User
-      user_or_none = result.as_type_one_or_none(User)  # User | None
+      # Get all rows as typed models
+      users: list[User] = result.all(schema_type=User)
 
-      # Get scalar value
-      count = result.scalar()  # First column of first row
+      # Get exactly one row as typed model
+      user: User = result.one(schema_type=User)
+
+      # Get one or none as typed model
+      user: User | None = result.one_or_none(schema_type=User)
 
 **Type Mapping:**
 

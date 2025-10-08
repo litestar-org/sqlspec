@@ -559,7 +559,8 @@ Query Templates
    # Usage
    user = session.execute(UserQueries.by_id(), 1).one()
    query, params = UserQueries.search({"name": "Alice", "status": "active"})
-   users = session.execute(query, *params).data
+   result = session.execute(query, *params)
+   users = result.all()
 
 Best Practices
 --------------
@@ -623,7 +624,8 @@ Best Practices
        email: str
 
    query = sql.select("id", "name", "email").from_("users")
-   users: list[User] = session.execute(query, schema_type=User).to_schema()
+   result = session.execute(query)
+   users: list[User] = result.all(schema_type=User)
 
 **5. Test Generated SQL**
 

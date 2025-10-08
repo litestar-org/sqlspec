@@ -47,8 +47,9 @@ async def get_version(db_session: AsyncpgDriver) -> dict[str, Any]:
     """Get PostgreSQL version information."""
     result = await db_session.execute(SQL("SELECT version() as version"))
 
-    if result.data:
-        return {"database": "PostgreSQL", "version": result.data[0]["version"][:50] + "..."}
+    version_row = result.one_or_none()
+    if version_row:
+        return {"database": "PostgreSQL", "version": version_row["version"][:50] + "..."}
     return {"error": "Could not retrieve version"}
 
 
@@ -62,8 +63,9 @@ async def list_tables(db_session: AsyncpgDriver) -> dict[str, Any]:
         ORDER BY table_name
         """)
 
-    if result.data:
-        tables = [row["table_name"] for row in result.data]
+    tables_data = result.all()
+    if tables_data:
+        tables = [row["table_name"] for row in tables_data]
         return {"tables": tables, "count": len(tables)}
     return {"tables": [], "count": 0}
 

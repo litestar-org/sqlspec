@@ -199,7 +199,7 @@ Python's built-in SQLite adapter.
 
        # Query
        result = session.execute("SELECT * FROM users")
-       users = result.data
+       users = result.all()
 
 **Features**:
 
@@ -511,12 +511,13 @@ Iterating Results
 
    result = session.execute("SELECT * FROM users")
 
-   # Iterate over rows
-   for user in result.data:
+   # Get all rows and iterate
+   users = result.all()
+   for user in users:
        print(f"{user['name']}: {user['email']}")
 
    # List comprehension
-   names = [user['name'] for user in result.data]
+   names = [user['name'] for user in result.all()]
 
 Schema Mapping
 ^^^^^^^^^^^^^^
@@ -532,17 +533,15 @@ Map results to typed objects automatically.
        name: str
        email: str
 
-   # Execute with schema type
-   result = session.execute(
-       "SELECT id, name, email FROM users",
-       schema_type=User
-   )
+   # Execute query
+   result = session.execute("SELECT id, name, email FROM users")
 
-   # Results are typed User instances
-   users: list[User] = result.to_schema()
+   # Map results to typed User instances
+   users: list[User] = result.all(schema_type=User)
 
    # Or get single typed result
-   user: User = result.one()
+   user_result = session.execute("SELECT id, name, email FROM users WHERE id = ?", 1)
+   user: User = user_result.one(schema_type=User)
 
 Transactions
 ------------
@@ -687,7 +686,7 @@ Drivers like asyncpg automatically prepare frequently-used statements.
 
    # Instead of:
    result = session.execute("SELECT COUNT(*) FROM users")
-   count = result.data[0]["count"]
+   count = result.scalar()
 
    # Use:
    count = session.select_value("SELECT COUNT(*) FROM users")

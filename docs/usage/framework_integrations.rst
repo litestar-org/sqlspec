@@ -197,7 +197,7 @@ Customize the dependency injection keys via ``extension_config``:
    @get("/users")
    async def list_users(session: AsyncDriverAdapterBase) -> list:
        result = await session.execute("SELECT * FROM users")
-       return result.data
+       return result.all()
 
 Multiple Database Configurations
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -66,7 +66,7 @@ Here's a simple example of creating a Litestar application with SQLSpec integrat
    @get("/users")
    async def list_users(db_session: AsyncpgDriver) -> dict:
        result = await db_session.execute("SELECT * FROM users LIMIT 10")
-       return {"users": result.data}
+       return {"users": result.all()}
 
    @post("/users")
    async def create_user(

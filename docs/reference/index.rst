@@ -139,9 +139,10 @@ Common Workflows
 **Processing Results:**
 
 1. Execute query: ``result = await session.execute(sql)``
-2. Access data: ``result.data`` (list of dicts)
-3. Get first row: ``result.get_first()``
-4. Map to models: ``result.as_type(User)``
+2. Get all rows: ``result.all()`` (list of dicts)
+3. Get one row: ``result.one()`` (raises if not exactly one)
+4. Get first row: ``result.get_first()`` (returns first or None)
+5. Map to models: ``result.all(schema_type=User)`` or ``result.one(schema_type=User)``
 
 See Also
 ========

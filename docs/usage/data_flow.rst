@@ -269,15 +269,15 @@ SQLSpec can automatically map results to typed objects:
        email: str
        is_active: Optional[bool] = True
 
-   # Execute with schema type
-   result = session.execute(
-       "SELECT id, name, email, is_active FROM users",
-       schema_type=User
-   )
+   # Execute query
+   result = session.execute("SELECT id, name, email, is_active FROM users")
 
-   # Results are typed User instances
-   users: list[User] = result.to_schema()
-   user: User = result.one()  # Type-safe!
+   # Map results to typed User instances
+   users: list[User] = result.all(schema_type=User)
+
+   # Or get single typed user
+   single_result = session.execute("SELECT id, name, email, is_active FROM users WHERE id = ?", 1)
+   user: User = single_result.one(schema_type=User)  # Type-safe!
 
 **Supported Schema Types**
 

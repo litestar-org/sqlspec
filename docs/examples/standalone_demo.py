@@ -659,16 +659,17 @@ def interactive() -> None:
                             spec_temp.add_config(db_config)
                             with spec_temp.provide_session(type(db_config)) as driver:
                                 result = driver.execute(sql_obj)
-                                if result.data:
-                                    console.print(f"[green]Returned {len(result.data)} rows[/green]")
-                                    if len(result.data) <= MAX_ROWS_TO_DISPLAY:
-                                        for row in result.data:
+                                data = result.all()
+                                if data:
+                                    console.print(f"[green]Returned {len(data)} rows[/green]")
+                                    if len(data) <= MAX_ROWS_TO_DISPLAY:
+                                        for row in data:
                                             console.print(f"  {row}")
                                     else:
                                         console.print("  First 3 rows:")
-                                        for row in result.data[:3]:
+                                        for row in data[:3]:
                                             console.print(f"    {row}")
-                                        console.print(f"  ... and {len(result.data) - 3} more")
+                                        console.print(f"  ... and {len(data) - 3} more")
                         except Exception as e:
                             console.print(f"[yellow]Query built successfully but execution failed: {e}[/yellow]")
 

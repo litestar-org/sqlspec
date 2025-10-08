@@ -350,13 +350,28 @@ class SQLResult(StatementResult):
         """
         return len(self.column_names) if self.column_names else 0
 
-    def get_first(self) -> "dict[str, Any] | None":
+    @overload
+    def get_first(self, *, schema_type: "type[SchemaT]") -> "SchemaT | None": ...
+
+    @overload
+    def get_first(self, *, schema_type: None = None) -> "dict[str, Any] | None": ...
+
+    def get_first(self, *, schema_type: "type[Any] | None" = None) -> Any:
         """Get the first row from the result, if any.
 
+        Args:
+            schema_type: Optional schema type to transform the data into.
+                Supports Pydantic models, dataclasses, msgspec structs, attrs classes, and TypedDict.
+
         Returns:
-            First row or None if no data.
+            First row (optionally transformed to schema_type) or None if no data.
         """
-        return self.data[0] if self.data else None
+        if not self.data:
+            return None
+        row = self.data[0]
+        if schema_type:
+            return to_schema(row, schema_type=schema_type)
+        return row
 
     def get_count(self) -> int:
         """Get the number of rows in the current result set (e.g., a page of data).
@@ -436,19 +451,42 @@ class SQLResult(StatementResult):
         """
         return iter(self.data or [])
 
-    def all(self) -> list[dict[str, Any]]:
+    @overload
+    def all(self, *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+
+    @overload
+    def all(self, *, schema_type: None = None) -> list[dict[str, Any]]: ...
+
+    def all(self, *, schema_type: "type[Any] | None" = None) -> Any:
         """Return all rows as a list.
 
-        Returns:
-            List of all rows in the result
-        """
-        return self.data or []
+        Args:
+            schema_type: Optional schema type to transform the data into.
+                Supports Pydantic models, dataclasses, msgspec structs, attrs classes, and TypedDict.
 
-    def one(self) -> "dict[str, Any]":
+        Returns:
+            List of all rows (optionally transformed to schema_type)
+        """
+        data = self.data or []
+        if schema_type:
+            return to_schema(data, schema_type=schema_type)
+        return data
+
+    @overload
+    def one(self, *, schema_type: "type[SchemaT]") -> "SchemaT": ...
+
+    @overload
+    def one(self, *, schema_type: None = None) -> "dict[str, Any]": ...
+
+    def one(self, *, schema_type: "type[Any] | None" = None) -> Any:
         """Return exactly one row.
 
+        Args:
+            schema_type: Optional schema type to transform the data into.
+                Supports Pydantic models, dataclasses, msgspec structs, attrs classes, and TypedDict.
+
         Returns:
-            The single row
+            The single row (optionally transformed to schema_type)
 
         Raises:
             ValueError: If no results or more than one result
@@ -465,13 +503,26 @@ class SQLResult(StatementResult):
             msg = f"Multiple results found ({data_len}), exactly one row expected"
             raise ValueError(msg)
 
-        return cast("dict[str, Any]", self.data[0])
+        row = cast("dict[str, Any]", self.data[0])
+        if schema_type:
+            return to_schema(row, schema_type=schema_type)
+        return row
 
-    def one_or_none(self) -> "dict[str, Any] | None":
+    @overload
+    def one_or_none(self, *, schema_type: "type[SchemaT]") -> "SchemaT | None": ...
+
+    @overload
+    def one_or_none(self, *, schema_type: None = None) -> "dict[str, Any] | None": ...
+
+    def one_or_none(self, *, schema_type: "type[Any] | None" = None) -> Any:
         """Return at most one row.
 
+        Args:
+            schema_type: Optional schema type to transform the data into.
+                Supports Pydantic models, dataclasses, msgspec structs, attrs classes, and TypedDict.
+
         Returns:
-            The single row or None if no results
+            The single row (optionally transformed to schema_type) or None if no results
 
         Raises:
             ValueError: If more than one result
@@ -486,7 +537,10 @@ class SQLResult(StatementResult):
             msg = f"Multiple results found ({data_len}), at most one row expected"
             raise ValueError(msg)
 
-        return cast("dict[str, Any]", self.data[0])
+        row = cast("dict[str, Any]", self.data[0])
+        if schema_type:
+            return to_schema(row, schema_type=schema_type)
+        return row
 
     def scalar(self) -> Any:
         """Return the first column of the first row.
