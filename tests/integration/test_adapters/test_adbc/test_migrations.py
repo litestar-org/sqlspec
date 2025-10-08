@@ -240,8 +240,15 @@ def down():
 
         (migration_dir / "0001_bad.py").write_text(migration_content)
 
-        with pytest.raises(Exception):
-            commands.upgrade()
+        commands.upgrade()
+
+        with config.provide_session() as driver:
+            try:
+                driver.execute("SELECT version FROM sqlspec_migrations ORDER BY version")
+                msg = "Expected migration table to not exist, but it does"
+                raise AssertionError(msg)
+            except Exception as e:
+                assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
 
 
 @pytest.mark.xdist_group("sqlite")

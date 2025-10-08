@@ -145,7 +145,7 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         Notes:
             - STRING for IDs and text fields
             - BYTES for pickled actions
-            - JSON for content, grounding_metadata, custom_metadata
+            - JSON for content, grounding_metadata, custom_metadata, long_running_tool_ids_json
             - BOOL for boolean flags
             - TIMESTAMP for timezone-aware timestamps
             - Partitioned by DATE(timestamp) for cost optimization
@@ -161,7 +161,7 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
             invocation_id STRING,
             author STRING,
             actions BYTES,
-            long_running_tool_ids_json STRING,
+            long_running_tool_ids_json JSON,
             branch STRING,
             timestamp TIMESTAMP NOT NULL,
             content JSON,

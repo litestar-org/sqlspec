@@ -135,7 +135,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         Notes:
             - VARCHAR for string fields
             - BLOB for pickled actions
-            - JSON for content, grounding_metadata, custom_metadata
+            - JSON for content, grounding_metadata, custom_metadata, long_running_tool_ids_json
             - BOOLEAN for flags
             - Foreign key constraint (DuckDB doesn't support CASCADE)
             - Index on (session_id, timestamp ASC) for ordered event retrieval
@@ -150,7 +150,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             invocation_id VARCHAR,
             author VARCHAR,
             actions BLOB,
-            long_running_tool_ids_json VARCHAR,
+            long_running_tool_ids_json JSON,
             branch VARCHAR,
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             content JSON,

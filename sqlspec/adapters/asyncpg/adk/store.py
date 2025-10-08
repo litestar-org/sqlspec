@@ -135,8 +135,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             - VARCHAR sizes: id(128), session_id(128), invocation_id(256), author(256),
               branch(256), error_code(256), error_message(1024)
             - BYTEA for pickled actions (no size limit)
-            - TEXT for long_running_tool_ids_json
-            - JSONB for content, grounding_metadata, custom_metadata
+            - JSONB for content, grounding_metadata, custom_metadata, long_running_tool_ids_json
             - BOOLEAN for partial, turn_complete, interrupted
             - Foreign key to sessions with CASCADE delete
             - Index on (session_id, timestamp ASC) for ordered event retrieval
@@ -150,7 +149,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             invocation_id VARCHAR(256),
             author VARCHAR(256),
             actions BYTEA,
-            long_running_tool_ids_json TEXT,
+            long_running_tool_ids_json JSONB,
             branch VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             content JSONB,

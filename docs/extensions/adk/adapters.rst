@@ -349,10 +349,13 @@ OracleDB
 
 **Features:**
 
-- Oracle Database 19c+ support
-- CLOB for JSON storage
+- Oracle Database 12c+ support
+- Automatic JSON storage type detection:
+  - Oracle 21c+: Native JSON type
+  - Oracle 12c-20c: BLOB with IS JSON constraint (recommended)
+  - Oracle <12c: Plain BLOB
 - BLOB for binary data
-- TIMESTAMP(6) precision
+- TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
 - Both sync and async modes
 
 **Configuration:**
@@ -373,7 +376,7 @@ OracleDB
    store = OracleADKStore(config)
    await store.create_tables()
 
-**Schema DDL:**
+**Schema DDL (Oracle 21c+ with Native JSON):**
 
 .. code-block:: sql
 
@@ -381,9 +384,25 @@ OracleDB
        id VARCHAR2(128) PRIMARY KEY,
        app_name VARCHAR2(128) NOT NULL,
        user_id VARCHAR2(128) NOT NULL,
-       state CLOB NOT NULL,  -- JSON stored as CLOB
-       create_time TIMESTAMP(6) DEFAULT SYSTIMESTAMP NOT NULL,
-       update_time TIMESTAMP(6) DEFAULT SYSTIMESTAMP NOT NULL
+       state JSON NOT NULL,  -- Native JSON type (Oracle 21c+)
+       create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+       update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+   );
+
+   CREATE INDEX idx_adk_sessions_app_user
+       ON adk_sessions(app_name, user_id);
+
+**Schema DDL (Oracle 12c-20c with BLOB + JSON Constraint):**
+
+.. code-block:: sql
+
+   CREATE TABLE adk_sessions (
+       id VARCHAR2(128) PRIMARY KEY,
+       app_name VARCHAR2(128) NOT NULL,
+       user_id VARCHAR2(128) NOT NULL,
+       state BLOB CHECK (state IS JSON) NOT NULL,  -- BLOB with JSON validation
+       create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+       update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
    );
 
    CREATE INDEX idx_adk_sessions_app_user
@@ -391,10 +410,12 @@ OracleDB
 
 **Notes:**
 
-- JSON stored as CLOB (use ``JSON_VALUE()``, ``JSON_QUERY()`` for queries)
+- **Automatic version detection:** Store automatically uses the best storage type for your Oracle version
+- **JSON storage:** Native JSON (21c+), BLOB with IS JSON (12c-20c), or plain BLOB (<12c)
+- **BLOB preferred over CLOB:** Better performance due to character set independence
 - VARCHAR2 for string fields (max 4000 bytes)
-- BLOB for binary data
 - NUMBER(1) for boolean values (0/1)
+- Use ``JSON_VALUE()``, ``JSON_QUERY()`` for JSON queries
 
 BigQuery Adapter
 ================
@@ -469,7 +490,7 @@ BigQuery
        invocation_id STRING,
        author STRING,
        actions BYTES,
-       long_running_tool_ids_json STRING,
+       long_running_tool_ids_json JSON,
        branch STRING,
        timestamp TIMESTAMP NOT NULL,
        content JSON,
@@ -735,9 +756,9 @@ Adapter Comparison
    * - OracleDB
      - Oracle
      - ✅
-     - CLOB
+     - JSON/BLOB+CHECK
      - Enterprise
-     - Requires 19c+
+     - Auto-detects version
    * - DuckDB
      - DuckDB
      - ❌ (sync)

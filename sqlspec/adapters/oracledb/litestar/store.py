@@ -153,11 +153,8 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql)
-            await conn.commit()
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(sql)
 
         logger.debug("Created session table: %s", self._table_name)
 
@@ -525,10 +522,8 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
         sql = self._get_create_table_sql()
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql)
-            conn.commit()
+        with self._config.provide_session() as driver:
+            driver.execute_script(sql)
 
         logger.debug("Created session table: %s", self._table_name)
 

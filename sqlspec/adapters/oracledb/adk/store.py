@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import oracledb
 
+from sqlspec import SQL
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -29,7 +30,6 @@ class JSONStorageType(str, Enum):
 
     JSON_NATIVE = "json"
     BLOB_JSON = "blob_json"
-    CLOB_JSON = "clob_json"
     BLOB_PLAIN = "blob_plain"
 
 
@@ -191,11 +191,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             state: State dictionary to serialize.
 
         Returns:
-            JSON string for JSON_NATIVE/CLOB_JSON, bytes for BLOB types.
+            JSON string for JSON_NATIVE, bytes for BLOB types.
         """
         storage_type = await self._detect_json_storage_type()
 
-        if storage_type in (JSONStorageType.JSON_NATIVE, JSONStorageType.CLOB_JSON):
+        if storage_type == JSONStorageType.JSON_NATIVE:
             return to_json(state)
 
         return to_json(state, as_bytes=True)
@@ -241,7 +241,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         storage_type = await self._detect_json_storage_type()
 
-        if storage_type in (JSONStorageType.JSON_NATIVE, JSONStorageType.CLOB_JSON):
+        if storage_type == JSONStorageType.JSON_NATIVE:
             return to_json(value)
 
         return to_json(value, as_bytes=True)
@@ -288,8 +288,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             state_column = "state JSON NOT NULL"
         elif storage_type == JSONStorageType.BLOB_JSON:
             state_column = "state BLOB CHECK (state IS JSON) NOT NULL"
-        elif storage_type == JSONStorageType.CLOB_JSON:
-            state_column = "state CLOB CHECK (state IS JSON) NOT NULL"
         else:
             state_column = "state BLOB NOT NULL"
 
@@ -347,20 +345,22 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             json_columns = """
                 content JSON,
                 grounding_metadata JSON,
-                custom_metadata JSON
+                custom_metadata JSON,
+                long_running_tool_ids_json JSON
             """
-        elif storage_type in (JSONStorageType.BLOB_JSON, JSONStorageType.CLOB_JSON):
-            column_type = "BLOB" if storage_type == JSONStorageType.BLOB_JSON else "CLOB"
-            json_columns = f"""
-                content {column_type} CHECK (content IS JSON),
-                grounding_metadata {column_type} CHECK (grounding_metadata IS JSON),
-                custom_metadata {column_type} CHECK (custom_metadata IS JSON)
+        elif storage_type == JSONStorageType.BLOB_JSON:
+            json_columns = """
+                content BLOB CHECK (content IS JSON),
+                grounding_metadata BLOB CHECK (grounding_metadata IS JSON),
+                custom_metadata BLOB CHECK (custom_metadata IS JSON),
+                long_running_tool_ids_json BLOB CHECK (long_running_tool_ids_json IS JSON)
             """
         else:
             json_columns = """
                 content BLOB,
                 grounding_metadata BLOB,
-                custom_metadata BLOB
+                custom_metadata BLOB,
+                long_running_tool_ids_json BLOB
             """
 
         inmemory_clause = " INMEMORY" if self._in_memory else ""
@@ -375,7 +375,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 invocation_id VARCHAR2(256),
                 author VARCHAR2(256),
                 actions BLOB,
-                long_running_tool_ids_json CLOB,
                 branch VARCHAR2(256),
                 timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 {json_columns},
@@ -438,17 +437,20 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
     def _get_create_events_table_sql(self) -> str:
-        """Get Oracle CREATE TABLE SQL for events.
+        """Get Oracle CREATE TABLE SQL for events (legacy method).
 
         Returns:
             SQL statement to create adk_events table with indexes.
 
         Notes:
+            DEPRECATED: Use _get_create_events_table_sql_for_type() instead.
+            This method uses BLOB with IS JSON constraints (12c+ compatible).
+
             - VARCHAR2 sizes: id(128), session_id(128), invocation_id(256), author(256),
               branch(256), error_code(256), error_message(1024)
             - BLOB for pickled actions
-            - CLOB for long_running_tool_ids_json
-            - CLOB with IS JSON for content, grounding_metadata, custom_metadata
+            - BLOB with IS JSON for all JSON fields (content, grounding_metadata,
+              custom_metadata, long_running_tool_ids_json)
             - NUMBER(1) for partial, turn_complete, interrupted
             - Foreign key to sessions with CASCADE delete
             - Index on (session_id, timestamp ASC) for ordered event retrieval
@@ -463,12 +465,12 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 invocation_id VARCHAR2(256),
                 author VARCHAR2(256),
                 actions BLOB,
-                long_running_tool_ids_json CLOB,
                 branch VARCHAR2(256),
                 timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                content CLOB CHECK (content IS JSON),
-                grounding_metadata CLOB CHECK (grounding_metadata IS JSON),
-                custom_metadata CLOB CHECK (custom_metadata IS JSON),
+                content BLOB CHECK (content IS JSON),
+                grounding_metadata BLOB CHECK (grounding_metadata IS JSON),
+                custom_metadata BLOB CHECK (custom_metadata IS JSON),
+                long_running_tool_ids_json BLOB CHECK (long_running_tool_ids_json IS JSON),
                 partial NUMBER(1),
                 turn_complete NUMBER(1),
                 interrupted NUMBER(1),
@@ -558,13 +560,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         storage_type = await self._detect_json_storage_type()
         logger.info("Creating ADK tables with storage type: %s", storage_type)
 
-        async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(self._get_create_sessions_table_sql_for_type(storage_type))
-            await conn.commit()
+        async with self._config.provide_session() as driver:
+            sessions_sql = SQL(self._get_create_sessions_table_sql_for_type(storage_type))
+            await driver.execute_script(sessions_sql)
 
-            await cursor.execute(self._get_create_events_table_sql_for_type(storage_type))
-            await conn.commit()
+            await driver.execute_script(self._get_create_events_table_sql_for_type(storage_type))
 
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
@@ -1028,11 +1028,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             state: State dictionary to serialize.
 
         Returns:
-            JSON string for JSON_NATIVE/CLOB_JSON, bytes for BLOB types.
+            JSON string for JSON_NATIVE, bytes for BLOB types.
         """
         storage_type = self._detect_json_storage_type()
 
-        if storage_type in (JSONStorageType.JSON_NATIVE, JSONStorageType.CLOB_JSON):
+        if storage_type == JSONStorageType.JSON_NATIVE:
             return to_json(state)
 
         return to_json(state, as_bytes=True)
@@ -1078,7 +1078,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
         storage_type = self._detect_json_storage_type()
 
-        if storage_type in (JSONStorageType.JSON_NATIVE, JSONStorageType.CLOB_JSON):
+        if storage_type == JSONStorageType.JSON_NATIVE:
             return to_json(value)
 
         return to_json(value, as_bytes=True)
@@ -1125,8 +1125,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             state_column = "state JSON NOT NULL"
         elif storage_type == JSONStorageType.BLOB_JSON:
             state_column = "state BLOB CHECK (state IS JSON) NOT NULL"
-        elif storage_type == JSONStorageType.CLOB_JSON:
-            state_column = "state CLOB CHECK (state IS JSON) NOT NULL"
         else:
             state_column = "state BLOB NOT NULL"
 
@@ -1184,20 +1182,22 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             json_columns = """
                 content JSON,
                 grounding_metadata JSON,
-                custom_metadata JSON
+                custom_metadata JSON,
+                long_running_tool_ids_json JSON
             """
-        elif storage_type in (JSONStorageType.BLOB_JSON, JSONStorageType.CLOB_JSON):
-            column_type = "BLOB" if storage_type == JSONStorageType.BLOB_JSON else "CLOB"
-            json_columns = f"""
-                content {column_type} CHECK (content IS JSON),
-                grounding_metadata {column_type} CHECK (grounding_metadata IS JSON),
-                custom_metadata {column_type} CHECK (custom_metadata IS JSON)
+        elif storage_type == JSONStorageType.BLOB_JSON:
+            json_columns = """
+                content BLOB CHECK (content IS JSON),
+                grounding_metadata BLOB CHECK (grounding_metadata IS JSON),
+                custom_metadata BLOB CHECK (custom_metadata IS JSON),
+                long_running_tool_ids_json BLOB CHECK (long_running_tool_ids_json IS JSON)
             """
         else:
             json_columns = """
                 content BLOB,
                 grounding_metadata BLOB,
-                custom_metadata BLOB
+                custom_metadata BLOB,
+                long_running_tool_ids_json BLOB
             """
 
         inmemory_clause = " INMEMORY" if self._in_memory else ""
@@ -1212,7 +1212,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 invocation_id VARCHAR2(256),
                 author VARCHAR2(256),
                 actions BLOB,
-                long_running_tool_ids_json CLOB,
                 branch VARCHAR2(256),
                 timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 {json_columns},
@@ -1275,17 +1274,20 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
 
     def _get_create_events_table_sql(self) -> str:
-        """Get Oracle CREATE TABLE SQL for events.
+        """Get Oracle CREATE TABLE SQL for events (legacy method).
 
         Returns:
             SQL statement to create adk_events table with indexes.
 
         Notes:
+            DEPRECATED: Use _get_create_events_table_sql_for_type() instead.
+            This method uses BLOB with IS JSON constraints (12c+ compatible).
+
             - VARCHAR2 sizes: id(128), session_id(128), invocation_id(256), author(256),
               branch(256), error_code(256), error_message(1024)
             - BLOB for pickled actions
-            - CLOB for long_running_tool_ids_json
-            - CLOB with IS JSON for content, grounding_metadata, custom_metadata
+            - BLOB with IS JSON for all JSON fields (content, grounding_metadata,
+              custom_metadata, long_running_tool_ids_json)
             - NUMBER(1) for partial, turn_complete, interrupted
             - Foreign key to sessions with CASCADE delete
             - Index on (session_id, timestamp ASC) for ordered event retrieval
@@ -1300,12 +1302,12 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 invocation_id VARCHAR2(256),
                 author VARCHAR2(256),
                 actions BLOB,
-                long_running_tool_ids_json CLOB,
                 branch VARCHAR2(256),
                 timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                content CLOB CHECK (content IS JSON),
-                grounding_metadata CLOB CHECK (grounding_metadata IS JSON),
-                custom_metadata CLOB CHECK (custom_metadata IS JSON),
+                content BLOB CHECK (content IS JSON),
+                grounding_metadata BLOB CHECK (grounding_metadata IS JSON),
+                custom_metadata BLOB CHECK (custom_metadata IS JSON),
+                long_running_tool_ids_json BLOB CHECK (long_running_tool_ids_json IS JSON),
                 partial NUMBER(1),
                 turn_complete NUMBER(1),
                 interrupted NUMBER(1),
@@ -1395,13 +1397,12 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         storage_type = self._detect_json_storage_type()
         logger.info("Creating ADK tables with storage type: %s", storage_type)
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(self._get_create_sessions_table_sql_for_type(storage_type))
-            conn.commit()
+        with self._config.provide_session() as driver:
+            sessions_sql = SQL(self._get_create_sessions_table_sql_for_type(storage_type))
+            driver.execute_script(sessions_sql)
 
-            cursor.execute(self._get_create_events_table_sql_for_type(storage_type))
-            conn.commit()
+            events_sql = SQL(self._get_create_events_table_sql_for_type(storage_type))
+            driver.execute_script(events_sql)
 
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 

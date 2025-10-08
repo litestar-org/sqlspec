@@ -1753,7 +1753,7 @@ wheels = [
 
 [[package]]
 name = "google-cloud-bigtable"
-version = "2.32.0"
+version = "2.33.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "google-api-core", extra = ["grpc"] },
@@ -1764,9 +1764,9 @@ dependencies = [
     { name = "proto-plus" },
     { name = "protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/88/18/52eaef1e08b1570a56a74bb909345bfae082b6915e482df10de1fb0b341d/google_cloud_bigtable-2.32.0.tar.gz", hash = "sha256:1dcf8a9fae5801164dc184558cd8e9e930485424655faae254e2c7350fa66946", size = 746803, upload-time = "2025-08-06T17:28:54.589Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8c/a7/5111766050f5cfc964f1d6989dff67712a01771f0c26c1f86df069aefad9/google_cloud_bigtable-2.33.0.tar.gz", hash = "sha256:8d25c73dd41cea9436d14c9f03b91f94b05ff4afd47ce9a575bf18f8e6985747", size = 766259, upload-time = "2025-10-07T23:52:10.066Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/89/2e3607c3c6f85954c3351078f3b891e5a2ec6dec9b964e260731818dcaec/google_cloud_bigtable-2.32.0-py3-none-any.whl", hash = "sha256:39881c36a4009703fa046337cf3259da4dd2cbcabe7b95ee5b0b0a8f19c3234e", size = 520438, upload-time = "2025-08-06T17:28:53.27Z" },
+    { url = "https://files.pythonhosted.org/packages/74/35/830da4075900042765f14ed97fb9b59e63aa117f2fcd5d39652e927a51fe/google_cloud_bigtable-2.33.0-py3-none-any.whl", hash = "sha256:cd4f7178cde30113900318ec7e2fd793116752c97e0922c185c69b645a52656d", size = 537029, upload-time = "2025-10-07T23:52:08.036Z" },
 ]
 
 [[package]]
