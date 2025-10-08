@@ -65,3 +65,4 @@ CRUSH.md
 *.md
 !./README.md
 !./CONTRIBUTING.md
+docs-build

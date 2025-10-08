@@ -1,16 +1,15 @@
 name: Documentation Build
 
 on:
-  release:
-    types: [published]
   push:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
-  docs:
-    permissions:
-      contents: write
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,23 +26,25 @@ jobs:
       - name: Build documentation
         run: uv run python tools/build_docs.py docs-build
 
-      - name: Package documentation artifact
-        run: tar -czvf docs-build.tar.gz docs-build
-
-      - name: Upload Release Asset
-        if: github.event_name == 'release'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./docs-build.tar.gz
-          asset_name: docs-build-${{ github.ref_name }}.tar.gz
-          asset_content_type: application/gzip
+          path: docs-build
 
-      - name: Upload 'latest' docs artifact
-        if: github.event_name == 'push'
-        uses: actions/upload-artifact@v4
-        with:
-          name: latest-docs
-          path: docs-build.tar.gz
+  deploy:
+    needs: build
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
