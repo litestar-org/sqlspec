@@ -227,6 +227,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         sql_text = self._get_create_table_sql()
         with self._config.provide_session() as driver:
             driver.execute_script(sql_text)
+            driver.commit()
         logger.debug("Created session table: %s", self._table_name)
 
     def _get_drop_table_sql(self) -> "list[str]":

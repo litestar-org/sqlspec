@@ -98,6 +98,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         sql = self._get_create_table_sql()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
+            await driver.commit()
         logger.debug("Created session table: %s", self._table_name)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
@@ -359,6 +360,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         sql = self._get_create_table_sql()
         with self._config.provide_session() as driver:
             driver.execute_script(sql)
+            driver.commit()
         logger.debug("Created session table: %s", self._table_name)
 
     async def create_table(self) -> None:
