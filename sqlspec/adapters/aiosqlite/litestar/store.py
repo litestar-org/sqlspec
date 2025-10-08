@@ -29,7 +29,6 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
     Args:
         config: AiosqliteConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.aiosqlite import AiosqliteConfig
@@ -42,14 +41,16 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "AiosqliteConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "AiosqliteConfig") -> None:
         """Initialize AioSQLite session store.
 
         Args:
             config: AiosqliteConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL.
@@ -121,8 +122,8 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        async with self._config.provide_connection() as conn:
-            await conn.executescript(sql)
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":

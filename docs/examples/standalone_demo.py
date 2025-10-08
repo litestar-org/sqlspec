@@ -1,4 +1,3 @@
-# type: ignore
 # /// script
 # dependencies = [
 #   "sqlspec[duckdb,performance]",
@@ -8,6 +7,7 @@
 #   "pydantic>=2.0.0",
 #   "click>=8.0.0",
 # ]
+# requires-python = ">=3.10"
 # ///
 
 """SQLSpec Interactive Demo - Showcase of Advanced SQL Generation & Processing
@@ -35,7 +35,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from sqlspec import SQL, StatementConfig, sql
+from sqlspec import SQL, SQLSpec, StatementConfig, sql
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.core.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
 
@@ -111,9 +111,10 @@ class Order(BaseModel):
 
 def create_sample_database() -> Any:
     """Create a sample DuckDB database with realistic data."""
-    config = DuckDBConfig()
+    spec = SQLSpec()
+    db = spec.add_config(DuckDBConfig())
 
-    with config.provide_session() as driver:
+    with spec.provide_session(db) as driver:
         # Create comprehensive schema
         driver.execute(
             SQL("""
@@ -218,7 +219,7 @@ def create_sample_database() -> Any:
                 )
             )
 
-    return config
+    return db
 
 
 def display_header() -> None:
@@ -652,10 +653,11 @@ def interactive() -> None:
 
                     display_sql_with_syntax(sql_obj)
 
-                    # Try to execute if it's a SELECT
                     if str(sql_obj).strip().upper().startswith("SELECT"):
                         try:
-                            with db_config.provide_session() as driver:
+                            spec_temp = SQLSpec()
+                            spec_temp.add_config(db_config)
+                            with spec_temp.provide_session(type(db_config)) as driver:
                                 result = driver.execute(sql_obj)
                                 if result.data:
                                     console.print(f"[green]Returned {len(result.data)} rows[/green]")

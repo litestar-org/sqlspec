@@ -224,40 +224,21 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
 
         return sorted(migrations, key=operator.itemgetter(0))
 
-    def _load_migration_metadata(self, file_path: Path) -> "dict[str, Any]":
+    def _load_migration_metadata(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
         """Load migration metadata from file.
 
         Args:
             file_path: Path to the migration file.
+            version: Optional pre-extracted version (preserves prefixes like ext_adk_0001).
 
         Returns:
             Migration metadata dictionary.
         """
-
-        # Check if this is an extension migration and update context accordingly
-        context_to_use = self.context
-        if context_to_use and file_path.name.startswith("ext_"):
-            # Try to extract extension name from the version
+        if version is None:
             version = self._extract_version(file_path.name)
-            if version and version.startswith("ext_"):
-                # Parse extension name from version like "ext_litestar_0001"
-                min_extension_version_parts = 3
-                parts = version.split("_", 2)
-                if len(parts) >= min_extension_version_parts:
-                    ext_name = parts[1]
-                    if ext_name in self.extension_configs:
-                        # Create a new context with the extension config
-                        from sqlspec.migrations.context import MigrationContext
 
-                        context_to_use = MigrationContext(
-                            dialect=self.context.dialect if self.context else None,
-                            config=self.context.config if self.context else None,
-                            driver=self.context.driver if self.context else None,
-                            metadata=self.context.metadata.copy() if self.context and self.context.metadata else {},
-                            extension_config=self.extension_configs[ext_name],
-                        )
+        context_to_use = self.context
 
-        # For extension migrations, check by path
         for ext_name, ext_path in self.extension_migrations.items():
             if file_path.parent == ext_path:
                 if ext_name in self.extension_configs and self.context:
@@ -276,7 +257,6 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         loader.validate_migration_file(file_path)
         content = file_path.read_text(encoding="utf-8")
         checksum = self._calculate_checksum(content)
-        version = self._extract_version(file_path.name)
         description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
 
         has_upgrade, has_downgrade = True, False
@@ -385,8 +365,8 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
     def _parse_extension_configs(self) -> "dict[str, dict[str, Any]]":
         """Parse extension configurations from include_extensions.
 
-        Supports both string format (extension name) and dict format
-        (extension name with configuration).
+        Reads extension configuration from config.extension_config for each
+        extension listed in include_extensions.
 
         Returns:
             Dictionary mapping extension names to their configurations.
@@ -394,28 +374,12 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
         configs = {}
 
         for ext_config in self.include_extensions:
-            if isinstance(ext_config, str):
-                # Simple string format: just the extension name
-                ext_name = ext_config
-                ext_options = {}
-            elif isinstance(ext_config, dict):
-                # Dict format: {"name": "litestar", "session_table": "custom_sessions"}
-                ext_name_raw = ext_config.get("name")
-                if not ext_name_raw:
-                    logger.warning("Extension configuration missing 'name' field: %s", ext_config)
-                    continue
-                # Assert for type narrowing: ext_name_raw is guaranteed to be str here
-                assert isinstance(ext_name_raw, str)
-                ext_name = ext_name_raw
-                ext_options = {k: v for k, v in ext_config.items() if k != "name"}
-            else:
-                logger.warning("Invalid extension configuration format: %s", ext_config)
+            if not isinstance(ext_config, str):
+                logger.warning("Extension must be a string name, got: %s", ext_config)
                 continue
 
-            # Apply default configurations for known extensions
-            if ext_name == "litestar" and "session_table" not in ext_options:
-                ext_options["session_table"] = "litestar_sessions"
-
+            ext_name = ext_config
+            ext_options = getattr(self.config, "extension_config", {}).get(ext_name, {})
             configs[ext_name] = ext_options
 
         return configs

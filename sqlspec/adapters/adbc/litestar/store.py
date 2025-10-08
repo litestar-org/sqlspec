@@ -48,7 +48,6 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
     Args:
         config: AdbcConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.adbc import AdbcConfig
@@ -65,14 +64,16 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
     __slots__ = ("_dialect",)
 
-    def __init__(self, config: "AdbcConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "AdbcConfig") -> None:
         """Initialize ADBC session store.
 
         Args:
             config: AdbcConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
         self._dialect: str | None = None
 
     def _get_dialect(self) -> str:
@@ -225,10 +226,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         """Synchronous implementation of create_table using ADBC driver."""
         sql_text = self._get_create_table_sql()
         with self._config.provide_session() as driver:
-            for statement in sql_text.strip().split(";"):
-                statement = statement.strip()
-                if statement:
-                    driver.execute(statement)
+            driver.execute_script(sql_text)
             driver.commit()
         logger.debug("Created session table: %s", self._table_name)
 

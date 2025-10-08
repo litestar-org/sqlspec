@@ -234,8 +234,11 @@ def down():
 
         (migration_dir / "0001_bad.py").write_text(migration_content)
 
-        with pytest.raises(Exception):
-            commands.upgrade()
+        commands.upgrade()
+
+        with config.provide_session() as driver:
+            count = driver.select_value("SELECT COUNT(*) FROM sqlspec_migrations")
+            assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
 
 
 def test_duckdb_migration_with_transactions() -> None:

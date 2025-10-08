@@ -23,9 +23,10 @@ async def psycopg_sync_store(postgres_service: PostgresService) -> AsyncGenerato
             "user": postgres_service.user,
             "password": postgres_service.password,
             "dbname": postgres_service.database,
-        }
+        },
+        extension_config={"litestar": {"session_table": "test_psycopg_sync_sessions"}},
     )
-    store = PsycopgSyncStore(config, table_name="test_psycopg_sync_sessions")
+    store = PsycopgSyncStore(config)
     try:
         await store.create_table()
         yield store

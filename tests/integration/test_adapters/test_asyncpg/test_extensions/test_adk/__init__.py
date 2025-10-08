@@ -1,0 +1,1 @@
+"""AsyncPG ADK tests."""

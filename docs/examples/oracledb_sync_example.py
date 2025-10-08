@@ -1,8 +1,17 @@
+# /// script
+# dependencies = [
+#   "sqlspec[oracledb]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating oracledb sync driver usage with query mixins.
 
 This example shows how to use the oracledb sync driver with the development Oracle
 container started by `make infra-up`.
 """
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.oracledb import OracleSyncConfig
@@ -68,55 +77,55 @@ def oracledb_sync_example() -> None:
 
         # Select all departments using query mixin
         departments = driver.select("SELECT * FROM departments ORDER BY budget")
-        print(f"All departments: {departments}")
+        print(f"[cyan]All departments:[/cyan] {departments}")
 
         # Select one department using query mixin
         engineering = driver.select_one("SELECT * FROM departments WHERE name = :1", "Engineering")
-        print(f"Engineering: {engineering}")
+        print(f"[cyan]Engineering:[/cyan] {engineering}")
 
         # Select one or none (no match) using query mixin
         nobody = driver.select_one_or_none("SELECT * FROM departments WHERE name = :1", "Nobody")
-        print(f"Nobody: {nobody}")
+        print(f"[cyan]Nobody:[/cyan] {nobody}")
 
         # Select scalar value using query mixin
         total_budget = driver.select_value("SELECT SUM(budget) FROM departments")
-        print(f"Total budget: ${total_budget:.2f}")
+        print(f"[cyan]Total budget:[/cyan] ${total_budget:.2f}")
 
         # Update
         result = driver.execute("UPDATE departments SET budget = budget * 1.05 WHERE budget < :1", 300000.0)
-        print(f"Gave 5% budget increase to {result.rows_affected} smaller departments")
+        print(f"[yellow]Gave 5% budget increase to {result.rows_affected} smaller departments[/yellow]")
 
         # Delete
         result = driver.execute("DELETE FROM departments WHERE budget < :1", 160000.0)
-        print(f"Removed {result.rows_affected} departments with small budgets")
+        print(f"[yellow]Removed {result.rows_affected} departments with small budgets[/yellow]")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
         query = sql.select("*").from_("departments").where("budget > :1")
         large_depts = driver.select(query, 400000.0)
-        print(f"Large departments: {large_depts}")
+        print(f"[cyan]Large departments:[/cyan] {large_depts}")
 
         # Query builder with LIKE
         query = sql.select("name", "manager_name").from_("departments").where("manager_name LIKE :1").order_by("name")
         managers_with_a = driver.select(query, "A%")
-        print(f"Departments with managers starting with A: {managers_with_a}")
+        print(f"[cyan]Departments with managers starting with A:[/cyan] {managers_with_a}")
 
         # Demonstrate pagination
         page_departments = driver.select(
             "SELECT * FROM departments ORDER BY name OFFSET :1 ROWS FETCH NEXT :2 ROWS ONLY", 0, 2
         )
         total_count = driver.select_value("SELECT COUNT(*) FROM departments")
-        print(f"Page 1: {page_departments}, Total: {total_count}")
+        print(f"[cyan]Page 1:[/cyan] {page_departments}, [cyan]Total:[/cyan] {total_count}")
 
 
 def main() -> None:
     """Run oracledb sync example."""
-    print("=== oracledb (sync) Driver Example ===")
+    print("[bold cyan]=== oracledb (sync) Driver Example ===[/bold cyan]")
     try:
         oracledb_sync_example()
-        print("✅ oracledb sync example completed successfully!")
+        print("[green]✅ oracledb sync example completed successfully![/green]")
     except Exception as e:
-        print(f"❌ oracledb sync example failed: {e}")
-        print("Make sure Oracle is running with: make infra-up")
+        print(f"[red]❌ oracledb sync example failed: {e}[/red]")
+        print("[yellow]Make sure Oracle is running with: make infra-up[/yellow]")
 
 
 if __name__ == "__main__":

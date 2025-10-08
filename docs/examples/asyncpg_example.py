@@ -1,3 +1,10 @@
+# /// script
+# dependencies = [
+#   "sqlspec[asyncpg]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating asyncpg driver usage with query mixins.
 
 This example shows how to use the asyncpg driver with the development PostgreSQL
@@ -5,6 +12,8 @@ container started by `make infra-up`.
 """
 
 import asyncio
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -61,53 +70,53 @@ async def asyncpg_example() -> None:
 
         # Select all products using query mixin
         products = await driver.select("SELECT * FROM products ORDER BY price")
-        print(f"All products: {products}")
+        print(f"[cyan]All products:[/cyan] {products}")
 
         # Select one product using query mixin
         laptop = await driver.select_one("SELECT * FROM products WHERE name = $1", "Laptop")
-        print(f"Laptop: {laptop}")
+        print(f"[cyan]Laptop:[/cyan] {laptop}")
 
         # Select one or none (no match) using query mixin
         nothing = await driver.select_one_or_none("SELECT * FROM products WHERE name = $1", "Nothing")
-        print(f"Nothing: {nothing}")
+        print(f"[cyan]Nothing:[/cyan] {nothing}")
 
         # Select scalar value using query mixin
         avg_price = await driver.select_value("SELECT AVG(price) FROM products")
-        print(f"Average price: ${avg_price:.2f}")
+        print(f"[cyan]Average price:[/cyan] ${avg_price:.2f}")
 
         # Update
         result = await driver.execute("UPDATE products SET price = price * 0.9 WHERE price > $1", 100.0)
-        print(f"Applied 10% discount to {result.rows_affected} expensive products")
+        print(f"[yellow]Applied 10% discount to {result.rows_affected} expensive products[/yellow]")
 
         # Delete
         result = await driver.execute("DELETE FROM products WHERE category = $1", "Office")
-        print(f"Deleted {result.rows_affected} office products")
+        print(f"[yellow]Deleted {result.rows_affected} office products[/yellow]")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
         query = sql.select("*").from_("products").where("category = $1")
         electronics = await driver.select(query, "Electronics")
-        print(f"Electronics: {electronics}")
+        print(f"[cyan]Electronics:[/cyan] {electronics}")
 
         # Query builder with LIKE operator
         query = sql.select("name", "price").from_("products").where("name LIKE $1").order_by("price")
         m_products = await driver.select(query, "M%")
-        print(f"Products starting with M: {m_products}")
+        print(f"[cyan]Products starting with M:[/cyan] {m_products}")
 
         # Demonstrate pagination
         page_products = await driver.select("SELECT * FROM products ORDER BY price LIMIT $1 OFFSET $2", 2, 1)
         total_count = await driver.select_value("SELECT COUNT(*) FROM products")
-        print(f"Page 2: {page_products}, Total: {total_count}")
+        print(f"[cyan]Page 2:[/cyan] {page_products}[cyan], Total:[/cyan] {total_count}")
 
 
 def main() -> None:
     """Run asyncpg example."""
-    print("=== asyncpg Driver Example ===")
+    print("[bold blue]=== asyncpg Driver Example ===[/bold blue]")
     try:
         asyncio.run(asyncpg_example())
-        print("✅ asyncpg example completed successfully!")
+        print("[green]✅ asyncpg example completed successfully![/green]")
     except Exception as e:
-        print(f"❌ asyncpg example failed: {e}")
-        print("Make sure PostgreSQL is running with: make infra-up")
+        print(f"[red]❌ asyncpg example failed: {e}[/red]")
+        print("[yellow]Make sure PostgreSQL is running with: make infra-up[/yellow]")
 
 
 if __name__ == "__main__":

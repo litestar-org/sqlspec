@@ -16,6 +16,7 @@ Source = "https://github.com/litestar-org/sqlspec"
 
 [project.optional-dependencies]
 adbc = ["adbc_driver_manager", "pyarrow"]
+adk = ["google-adk"]
 aioodbc = ["aioodbc"]
 aiosql = ["aiosql"]
 aiosqlite = ["aiosqlite"]
@@ -73,6 +74,11 @@ doc = [
   "sphinx-toolbox>=3.8.1",
   "myst-parser",
   "sphinx-autodoc-typehints",
+  "sphinx-contributors",
+  "numpydoc",
+  "sphinx-autoapi",
+  "sphinx-iconify",
+  "sphinx-docsearch",
 ]
 extras = [
   "adbc_driver_manager",
@@ -478,6 +484,7 @@ split-on-trailing-comma = false
 "docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127"]
 "docs/examples/**" = ["T201"]
 "sqlspec/builder/mixins/**/*.*" = ["SLF001"]
+"sqlspec/extensions/adk/converters.py" = ["S403"]
 "tests/**/*.*" = [
   "A",
   "ARG",

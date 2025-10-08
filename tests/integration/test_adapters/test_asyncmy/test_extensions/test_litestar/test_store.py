@@ -23,9 +23,10 @@ async def asyncmy_store(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyS
             "user": mysql_service.user,
             "password": mysql_service.password,
             "database": mysql_service.db,
-        }
+        },
+        extension_config={"litestar": {"session_table": "test_asyncmy_sessions"}},
     )
-    store = AsyncmyStore(config, table_name="test_asyncmy_sessions")
+    store = AsyncmyStore(config)
     try:
         await store.create_table()
         yield store

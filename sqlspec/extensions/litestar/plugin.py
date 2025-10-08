@@ -32,11 +32,11 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from contextlib import AbstractAsyncContextManager
 
-    from click import Group
     from litestar import Litestar
     from litestar.config.app import AppConfig
     from litestar.datastructures.state import State
     from litestar.types import BeforeMessageSendHookHandler, Scope
+    from rich_click import Group
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.loader import SQLFileLoader
@@ -92,25 +92,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             pool_config={"dsn": "postgresql://localhost/db"},
             extension_config={
                 "litestar": {
-                    "connection_key": "db_connection",
-                    "commit_mode": "autocommit"
+                    "session_table": "custom_sessions"  # Optional custom table name
                 }
             },
             migration_config={
                 "script_location": "migrations",
-                "include_extensions": ["litestar"],
+                "include_extensions": ["litestar"],  # Simple string list only
             }
         )
 
         The session table migration will automatically use the appropriate column types
         for your database dialect (JSONB for PostgreSQL, JSON for MySQL, TEXT for SQLite).
-        Customize the table name via extension_config:
 
-        migration_config={
-            "include_extensions": [
-                {"name": "litestar", "session_table": "custom_sessions"}
-            ]
-        }
+        Extension migrations use the ext_litestar_ prefix (e.g., ext_litestar_0001) to
+        prevent version conflicts with application migrations.
     """
 
     __slots__ = ("_plugin_configs", "_sqlspec")

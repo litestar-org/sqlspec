@@ -1,8 +1,17 @@
+# /// script
+# dependencies = [
+#   "sqlspec[bigquery]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating BigQuery driver usage with query mixins.
 
 This example shows how to use the BigQuery adapter with the development BigQuery
 emulator started by `make infra-up`.
 """
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.bigquery import BigQueryConfig
@@ -68,30 +77,30 @@ def bigquery_example() -> None:
 
         # Select all events using query mixin
         events = driver.select("SELECT * FROM analytics.web_events ORDER BY timestamp")
-        print(f"All events: {events}")
+        print(f"[cyan]All events:[/cyan] {events}")
 
         # Select one event using query mixin
         purchase = driver.select_one("SELECT * FROM analytics.web_events WHERE event_type = ?", "purchase")
-        print(f"Purchase event: {purchase}")
+        print(f"[cyan]Purchase event:[/cyan] {purchase}")
 
         # Select one or none (no match) using query mixin
         nothing = driver.select_one_or_none("SELECT * FROM analytics.web_events WHERE event_type = ?", "nothing")
-        print(f"Nothing: {nothing}")
+        print(f"[cyan]Nothing:[/cyan] {nothing}")
 
         # Select scalar value using query mixin
         total_events = driver.select_value("SELECT COUNT(*) FROM analytics.web_events")
-        print(f"Total events: {total_events}")
+        print(f"[cyan]Total events:[/cyan] {total_events}")
 
         # Update
         result = driver.execute(
             "UPDATE analytics.web_events SET user_agent = ? WHERE user_id = ?", "Updated Browser", "user_123"
         )
-        print(f"Updated {result.rows_affected} events for user_123")
+        print(f"[yellow]Updated {result.rows_affected} events for user_123[/yellow]")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
         query = sql.select("*").from_("analytics.web_events").where("user_id = ?")
         user_events = driver.select(query, "user_456")
-        print(f"User 456 events: {user_events}")
+        print(f"[cyan]User 456 events:[/cyan] {user_events}")
 
         # Query builder with aggregation
         query = (
@@ -101,23 +110,23 @@ def bigquery_example() -> None:
             .group_by("user_id")
         )
         page_views = driver.select(query, "page_view")
-        print(f"Page view counts: {page_views}")
+        print(f"[cyan]Page view counts:[/cyan] {page_views}")
 
         # Demonstrate pagination
         page_events = driver.select("SELECT * FROM analytics.web_events ORDER BY timestamp LIMIT ? OFFSET ?", 2, 1)
         total_count = driver.select_value("SELECT COUNT(*) FROM analytics.web_events")
-        print(f"Page 2: {page_events}, Total: {total_count}")
+        print(f"[cyan]Page 2:[/cyan] {page_events}, [cyan]Total:[/cyan] {total_count}")
 
 
 def main() -> None:
     """Run BigQuery example."""
-    print("=== BigQuery Driver Example ===")
+    print("[bold cyan]=== BigQuery Driver Example ===[/bold cyan]")
     try:
         bigquery_example()
-        print("✅ BigQuery example completed successfully!")
+        print("[green]✅ BigQuery example completed successfully![/green]")
     except Exception as e:
-        print(f"❌ BigQuery example failed: {e}")
-        print("Make sure BigQuery emulator is running with: make infra-up")
+        print(f"[red]❌ BigQuery example failed: {e}[/red]")
+        print("[yellow]Make sure BigQuery emulator is running with: make infra-up[/yellow]")
 
 
 if __name__ == "__main__":

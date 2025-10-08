@@ -5,8 +5,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import rich_click as click
+
 if TYPE_CHECKING:
-    from click import Group
+    from rich_click import Group
 
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
@@ -17,21 +19,9 @@ __all__ = ("add_migration_commands", "get_sqlspec_group")
 def get_sqlspec_group() -> "Group":
     """Get the SQLSpec CLI group.
 
-    Raises:
-        MissingDependencyError: If the `click` package is not installed.
-
     Returns:
         The SQLSpec CLI group.
     """
-    from sqlspec.exceptions import MissingDependencyError
-
-    try:
-        import rich_click as click
-    except ImportError:
-        try:
-            import click  # type: ignore[no-redef]
-        except ImportError as e:
-            raise MissingDependencyError(package="click", install_package="cli") from e
 
     @click.group(name="sqlspec")
     @click.option(
@@ -96,21 +86,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     Args:
         database_group: The database group to add the commands to.
 
-    Raises:
-        MissingDependencyError: If the `click` package is not installed.
-
     Returns:
         The database group with the migration commands added.
     """
-    from sqlspec.exceptions import MissingDependencyError
-
-    try:
-        import rich_click as click
-    except ImportError:
-        try:
-            import click  # type: ignore[no-redef]
-        except ImportError as e:
-            raise MissingDependencyError(package="click", install_package="cli") from e
     from rich import get_console
 
     console = get_console()

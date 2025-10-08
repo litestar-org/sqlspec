@@ -29,7 +29,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
     Args:
         config: AsyncmyConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.asyncmy import AsyncmyConfig
@@ -46,14 +45,16 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "AsyncmyConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "AsyncmyConfig") -> None:
         """Initialize AsyncMy session store.
 
         Args:
             config: AsyncmyConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL with optimized schema.
@@ -96,8 +97,8 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(sql)
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":

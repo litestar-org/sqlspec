@@ -15,8 +15,10 @@ pytestmark = [pytest.mark.aiosqlite, pytest.mark.integration]
 @pytest.fixture
 async def aiosqlite_store() -> "AsyncGenerator[AiosqliteStore, None]":
     """Create AioSQLite store with in-memory database."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
-    store = AiosqliteStore(config, table_name="test_sessions")
+    config = AiosqliteConfig(
+        pool_config={"database": ":memory:"}, extension_config={"litestar": {"session_table": "test_sessions"}}
+    )
+    store = AiosqliteStore(config)
     await store.create_table()
     yield store
     await store.delete_all()

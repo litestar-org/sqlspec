@@ -23,9 +23,10 @@ async def psqlpy_store(postgres_service: PostgresService) -> "AsyncGenerator[Psq
             "username": postgres_service.user,
             "password": postgres_service.password,
             "db_name": postgres_service.database,
-        }
+        },
+        extension_config={"litestar": {"session_table": "test_psqlpy_sessions"}},
     )
-    store = PsqlpyStore(config, table_name="test_psqlpy_sessions")
+    store = PsqlpyStore(config)
     try:
         await store.create_table()
         yield store

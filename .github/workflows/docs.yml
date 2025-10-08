@@ -1,4 +1,4 @@
-name: Documentation Building
+name: Documentation Build
 
 on:
   release:
@@ -24,18 +24,26 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Fetch gh pages
-        run: git fetch origin gh-pages --depth=1
-
-      - name: Build release docs
+      - name: Build documentation
         run: uv run python tools/build_docs.py docs-build
+
+      - name: Package documentation artifact
+        run: tar -czvf docs-build.tar.gz docs-build
+
+      - name: Upload Release Asset
         if: github.event_name == 'release'
-
-      - name: Build dev docs
-        run: uv run python tools/build_docs.py docs-build
-        if: github.event_name == 'push'
-
-      - name: Deploy
-        uses: JamesIves/github-pages-deploy-action@v4
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          folder: docs-build
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./docs-build.tar.gz
+          asset_name: docs-build-${{ github.ref_name }}.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload 'latest' docs artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-docs
+          path: docs-build.tar.gz

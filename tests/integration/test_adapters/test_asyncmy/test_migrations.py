@@ -316,15 +316,11 @@ def down():
 '''
             (migration_dir / "0001_invalid.py").write_text(migration_content)
 
-            with pytest.raises(Exception):
-                await commands.upgrade()
+            await commands.upgrade()
 
             async with config.provide_session() as driver:
-                try:
-                    result = await driver.execute(f"SELECT COUNT(*) as count FROM {migration_table}")
-                    assert result.data[0]["count"] == 0
-                except Exception:
-                    pass
+                count = await driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
+                assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
         finally:
             if config.pool_instance:
                 await config.close_pool()

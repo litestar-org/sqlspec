@@ -1,9 +1,18 @@
 # type: ignore
+# /// script
+# dependencies = [
+#   "sqlspec[sqlite]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating SQLite driver usage with query mixins.
 
 This example shows how to use the SQLite driver directly with its built-in query
 mixin functionality for common database operations.
 """
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.sqlite import SqliteConfig
@@ -39,44 +48,44 @@ def sqlite_example() -> None:
 
         # Select all users using query mixin
         users = driver.select("SELECT * FROM users")
-        print(f"All users: {users}")
+        print(f"[cyan]All users:[/cyan] {users}")
 
         # Select one user using query mixin
         alice = driver.select_one("SELECT * FROM users WHERE name = ?", "Alice")
-        print(f"Alice: {alice}")
+        print(f"[cyan]Alice:[/cyan] {alice}")
 
         # Select one or none (no match) using query mixin
         nobody = driver.select_one_or_none("SELECT * FROM users WHERE name = ?", "Nobody")
-        print(f"Nobody: {nobody}")
+        print(f"[cyan]Nobody:[/cyan] {nobody}")
 
         # Select scalar value using query mixin
         user_count = driver.select_value("SELECT COUNT(*) FROM users")
-        print(f"User count: {user_count}")
+        print(f"[cyan]User count:[/cyan] {user_count}")
 
         # Update
         result = driver.execute("UPDATE users SET email = ? WHERE name = ?", "alice.doe@example.com", "Alice")
-        print(f"Updated {result.rows_affected} rows")
+        print(f"[yellow]Updated {result.rows_affected} rows[/yellow]")
 
         # Delete
         result = driver.execute("DELETE FROM users WHERE name = ?", "Charlie")
-        print(f"Deleted {result.rows_affected} rows")
+        print(f"[yellow]Deleted {result.rows_affected} rows[/yellow]")
 
         # Use query builder with driver - this demonstrates the fix
         query = sql.select("*").from_("users").where("email LIKE ?")
         matching_users = driver.select(query, "%@example.com%")
-        print(f"Matching users: {matching_users}")
+        print(f"[cyan]Matching users:[/cyan] {matching_users}")
 
         # Demonstrate pagination
         page_users = driver.select("SELECT * FROM users ORDER BY id LIMIT ? OFFSET ?", 1, 0)
         total_count = driver.select_value("SELECT COUNT(*) FROM users")
-        print(f"Page 1: {page_users}, Total: {total_count}")
+        print(f"[cyan]Page 1:[/cyan] {page_users}[cyan], Total:[/cyan] {total_count}")
 
 
 def main() -> None:
     """Run SQLite example."""
-    print("=== SQLite Driver Example ===")
+    print("[bold blue]=== SQLite Driver Example ===[/bold blue]")
     sqlite_example()
-    print("✅ SQLite example completed successfully!")
+    print("[green]✅ SQLite example completed successfully![/green]")
 
 
 if __name__ == "__main__":

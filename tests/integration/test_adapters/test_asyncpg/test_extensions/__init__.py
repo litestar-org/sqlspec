@@ -1,1 +1,1 @@
-"""AsyncPG extension integration tests."""
+"""AsyncPG extensions tests."""

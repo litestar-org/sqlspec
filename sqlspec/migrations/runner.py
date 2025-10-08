@@ -139,18 +139,20 @@ class BaseMigrationRunner(ABC):
         """
         return self._get_migration_files_sync()
 
-    def _load_migration_metadata_common(self, file_path: Path) -> "dict[str, Any]":
+    def _load_migration_metadata_common(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
         """Load common migration metadata that doesn't require async operations.
 
         Args:
             file_path: Path to the migration file.
+            version: Optional pre-extracted version (preserves prefixes like ext_adk_0001).
 
         Returns:
             Partial migration metadata dictionary.
         """
         content = file_path.read_text(encoding="utf-8")
         checksum = self._calculate_checksum(content)
-        version = self._extract_version(file_path.name)
+        if version is None:
+            version = self._extract_version(file_path.name)
         description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
 
         return {
@@ -205,17 +207,17 @@ class BaseMigrationRunner(ABC):
 class SyncMigrationRunner(BaseMigrationRunner):
     """Synchronous migration runner with pure sync methods."""
 
-    def load_migration(self, file_path: Path) -> "dict[str, Any]":
+    def load_migration(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
         """Load a migration file and extract its components.
 
         Args:
             file_path: Path to the migration file.
+            version: Optional pre-extracted version (preserves prefixes like ext_adk_0001).
 
         Returns:
             Dictionary containing migration metadata and queries.
         """
-        # Get common metadata
-        metadata = self._load_migration_metadata_common(file_path)
+        metadata = self._load_migration_metadata_common(file_path, version)
         context_to_use = self._get_context_for_migration(file_path)
 
         loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)
@@ -371,17 +373,17 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         """
         return self._get_migration_files_sync()
 
-    async def load_migration(self, file_path: Path) -> "dict[str, Any]":
+    async def load_migration(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
         """Load a migration file and extract its components.
 
         Args:
             file_path: Path to the migration file.
+            version: Optional pre-extracted version (preserves prefixes like ext_adk_0001).
 
         Returns:
             Dictionary containing migration metadata and queries.
         """
-        # Get common metadata
-        metadata = self._load_migration_metadata_common(file_path)
+        metadata = self._load_migration_metadata_common(file_path, version)
         context_to_use = self._get_context_for_migration(file_path)
 
         loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)

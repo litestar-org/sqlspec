@@ -36,7 +36,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
 
     Args:
         config: DuckDBConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.duckdb import DuckDBConfig
@@ -49,14 +48,16 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "DuckDBConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "DuckDBConfig") -> None:
         """Initialize DuckDB session store.
 
         Args:
             config: DuckDBConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get DuckDB CREATE TABLE SQL.
@@ -130,8 +131,8 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
         sql = self._get_create_table_sql()
-        with self._config.provide_connection() as conn:
-            conn.execute(sql)
+        with self._config.provide_session() as driver:
+            driver.execute_script(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def create_table(self) -> None:

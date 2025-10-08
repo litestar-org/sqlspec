@@ -3,14 +3,10 @@
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
+import rich_click as click
 from litestar.cli._utils import LitestarGroup
 
 from sqlspec.cli import add_migration_commands
-
-try:
-    import rich_click as click
-except ImportError:
-    import click  # type: ignore[no-redef]
 
 if TYPE_CHECKING:
     from litestar import Litestar
@@ -39,7 +35,7 @@ def get_database_migration_plugin(app: "Litestar") -> "SQLSpecPlugin":
     raise ImproperConfigurationError(msg)
 
 
-@click.group(cls=LitestarGroup, name="db")
+@click.group(cls=LitestarGroup, name="db", aliases=["database"])
 def database_group(ctx: "click.Context") -> None:
     """Manage SQLSpec database components."""
     ctx.obj = {"app": ctx.obj, "configs": get_database_migration_plugin(ctx.obj.app).config}

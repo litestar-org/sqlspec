@@ -31,7 +31,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
     Args:
         config: PsycopgAsyncConfig instance.
-        table_name: Name of the session table. Defaults to "sessions".
 
     Example:
         from sqlspec.adapters.psycopg import PsycopgAsyncConfig
@@ -44,14 +43,16 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "PsycopgAsyncConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "PsycopgAsyncConfig") -> None:
         """Initialize Psycopg async session store.
 
         Args:
             config: PsycopgAsyncConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.
@@ -95,14 +96,9 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn:
-            async with conn.cursor() as cur:
-                for statement in sql.strip().split(";"):
-                    statement = statement.strip()
-                    if statement:
-                        await cur.execute(statement.encode())
-            await conn.commit()
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(sql)
+            await driver.commit()
         logger.debug("Created session table: %s", self._table_name)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
@@ -297,7 +293,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
 
     Args:
         config: PsycopgSyncConfig instance.
-        table_name: Name of the session table. Defaults to "litestar_session".
 
     Example:
         from sqlspec.adapters.psycopg import PsycopgSyncConfig
@@ -310,14 +305,16 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "PsycopgSyncConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "PsycopgSyncConfig") -> None:
         """Initialize Psycopg sync session store.
 
         Args:
             config: PsycopgSyncConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.
@@ -361,13 +358,9 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
         sql = self._get_create_table_sql()
-        with self._config.provide_connection() as conn:
-            with conn.cursor() as cur:
-                for statement in sql.strip().split(";"):
-                    statement = statement.strip()
-                    if statement:
-                        cur.execute(statement.encode())
-            conn.commit()
+        with self._config.provide_session() as driver:
+            driver.execute_script(sql)
+            driver.commit()
         logger.debug("Created session table: %s", self._table_name)
 
     async def create_table(self) -> None:

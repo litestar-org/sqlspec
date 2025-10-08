@@ -1,8 +1,17 @@
+# /// script
+# dependencies = [
+#   "sqlspec[adbc]",
+#   "rich",
+# ]
+# requires-python = ">=3.10"
+# ///
 """Example demonstrating ADBC driver usage with query mixins.
 
 This example shows how to use the ADBC (Arrow Database Connectivity) driver
 with the development PostgreSQL container started by `make infra-up`.
 """
+
+from rich import print
 
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.adbc import AdbcConfig
@@ -55,19 +64,19 @@ def adbc_example() -> None:
 
         # Select all metrics using query mixin
         metrics = driver.select("SELECT * FROM analytics_data ORDER BY recorded_at")
-        print(f"All metrics: {metrics}")
+        print(f"[cyan]All metrics:[/cyan] {metrics}")
 
         # Select one metric using query mixin
         revenue = driver.select_one("SELECT * FROM analytics_data WHERE metric_name = $1", "revenue")
-        print(f"Revenue metric: {revenue}")
+        print(f"[cyan]Revenue metric:[/cyan] {revenue}")
 
         # Select one or none (no match) using query mixin
         nothing = driver.select_one_or_none("SELECT * FROM analytics_data WHERE metric_name = $1", "nothing")
-        print(f"Nothing: {nothing}")
+        print(f"[cyan]Nothing:[/cyan] {nothing}")
 
         # Select scalar value using query mixin
         avg_value = driver.select_value("SELECT AVG(metric_value) FROM analytics_data WHERE metric_value > $1", 1.0)
-        print(f"Average metric value: {avg_value:.2f}")
+        print(f"[cyan]Average metric value:[/cyan] {avg_value:.2f}")
 
         # Update
         result = driver.execute(
@@ -75,39 +84,39 @@ def adbc_example() -> None:
             '{"updated": true}',
             "bounce_rate",
         )
-        print(f"Updated {result.rows_affected} bounce rate records")
+        print(f"[yellow]Updated {result.rows_affected} bounce rate records[/yellow]")
 
         # Delete
         result = driver.execute("DELETE FROM analytics_data WHERE metric_value < $1", 1.0)
-        print(f"Removed {result.rows_affected} low-value metrics")
+        print(f"[yellow]Removed {result.rows_affected} low-value metrics[/yellow]")
 
         # Use query builder with driver - this demonstrates the QueryBuilder parameter fix
         query = sql.select("*").from_("analytics_data").where("metric_name = $1")
         page_view_metrics = driver.select(query, "page_views")
-        print(f"Page view metrics: {page_view_metrics}")
+        print(f"[cyan]Page view metrics:[/cyan] {page_view_metrics}")
 
         # JSON operations (PostgreSQL-specific) - using raw SQL due to SQLGlot JSON operator conversion
         mobile_metrics = driver.select(
             "SELECT metric_name, metric_value, dimensions->>'device' as device FROM analytics_data WHERE dimensions->>'device' = $1",
             "mobile",
         )
-        print(f"Mobile metrics: {mobile_metrics}")
+        print(f"[cyan]Mobile metrics:[/cyan] {mobile_metrics}")
 
         # Demonstrate pagination
         page_metrics = driver.select("SELECT * FROM analytics_data ORDER BY metric_value DESC LIMIT $1 OFFSET $2", 2, 0)
         total_count = driver.select_value("SELECT COUNT(*) FROM analytics_data")
-        print(f"Page 1: {page_metrics}, Total: {total_count}")
+        print(f"[cyan]Page 1:[/cyan] {page_metrics}, [cyan]Total:[/cyan] {total_count}")
 
 
 def main() -> None:
     """Run ADBC example."""
-    print("=== ADBC (Arrow Database Connectivity) Driver Example ===")
+    print("[bold cyan]=== ADBC (Arrow Database Connectivity) Driver Example ===[/bold cyan]")
     try:
         adbc_example()
-        print("✅ ADBC example completed successfully!")
+        print("[green]✅ ADBC example completed successfully![/green]")
     except Exception as e:
-        print(f"❌ ADBC example failed: {e}")
-        print("Make sure PostgreSQL is running with: make infra-up")
+        print(f"[red]❌ ADBC example failed: {e}[/red]")
+        print("[yellow]Make sure PostgreSQL is running with: make infra-up[/yellow]")
 
 
 if __name__ == "__main__":

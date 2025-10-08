@@ -284,15 +284,15 @@ def down():
 '''
             (migration_dir / "0001_invalid.py").write_text(migration_content)
 
-            with pytest.raises(Exception):
-                await commands.upgrade()
+            await commands.upgrade()
 
             async with config.provide_session() as driver:
                 try:
-                    result = await driver.execute("SELECT COUNT(*) as count FROM sqlspec_migrations")
-                    assert result.data[0]["count"] == 0
-                except Exception:
-                    pass
+                    await driver.execute("SELECT version FROM sqlspec_migrations_psqlpy ORDER BY version")
+                    msg = "Expected migration table to not exist, but it does"
+                    raise AssertionError(msg)
+                except Exception as e:
+                    assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
         finally:
             if config.pool_instance:
                 await config.close_pool()

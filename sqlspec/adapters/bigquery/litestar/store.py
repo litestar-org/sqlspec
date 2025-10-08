@@ -38,7 +38,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
     Args:
         config: BigQueryConfig instance.
-        table_name: Name of the session table. Defaults to "litestar_session".
 
     Example:
         from sqlspec.adapters.bigquery import BigQueryConfig
@@ -51,14 +50,16 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "BigQueryConfig", table_name: str = "litestar_session") -> None:
+    def __init__(self, config: "BigQueryConfig") -> None:
         """Initialize BigQuery session store.
 
         Args:
             config: BigQueryConfig instance.
-            table_name: Name of the session table.
+
+        Notes:
+            Table name is read from config.extension_config["litestar"]["session_table"].
         """
-        super().__init__(config, table_name)
+        super().__init__(config)
 
     def _get_create_table_sql(self) -> str:
         """Get BigQuery CREATE TABLE SQL with optimized schema.
@@ -132,7 +133,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         """Synchronous implementation of create_table."""
         sql = self._get_create_table_sql()
         with self._config.provide_session() as driver:
-            driver.execute(sql)
+            driver.execute_script(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def create_table(self) -> None:
