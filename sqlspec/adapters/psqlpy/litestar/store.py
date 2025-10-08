@@ -92,8 +92,8 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        async with self._config.provide_connection() as conn:
-            await conn.execute_batch(sql)
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":

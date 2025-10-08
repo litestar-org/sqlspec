@@ -131,8 +131,8 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
         sql = self._get_create_table_sql()
-        with self._config.provide_connection() as conn:
-            conn.execute(sql)
+        with self._config.provide_session() as driver:
+            driver.execute_script(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def create_table(self) -> None:

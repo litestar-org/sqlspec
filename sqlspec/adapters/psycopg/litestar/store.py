@@ -96,14 +96,8 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         sql = self._get_create_table_sql()
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn:
-            async with conn.cursor() as cur:
-                for statement in sql.strip().split(";"):
-                    statement = statement.strip()
-                    if statement:
-                        await cur.execute(statement.encode())
-            await conn.commit()
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
@@ -363,13 +357,8 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
         sql = self._get_create_table_sql()
-        with self._config.provide_connection() as conn:
-            with conn.cursor() as cur:
-                for statement in sql.strip().split(";"):
-                    statement = statement.strip()
-                    if statement:
-                        cur.execute(statement.encode())
-            conn.commit()
+        with self._config.provide_session() as driver:
+            driver.execute_script(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def create_table(self) -> None:

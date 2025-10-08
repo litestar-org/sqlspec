@@ -226,11 +226,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         """Synchronous implementation of create_table using ADBC driver."""
         sql_text = self._get_create_table_sql()
         with self._config.provide_session() as driver:
-            for statement in sql_text.strip().split(";"):
-                statement = statement.strip()
-                if statement:
-                    driver.execute(statement)
-            driver.commit()
+            driver.execute_script(sql_text)
         logger.debug("Created session table: %s", self._table_name)
 
     def _get_drop_table_sql(self) -> "list[str]":

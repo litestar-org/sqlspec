@@ -133,7 +133,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         """Synchronous implementation of create_table."""
         sql = self._get_create_table_sql()
         with self._config.provide_session() as driver:
-            driver.execute(sql)
+            driver.execute_script(sql)
         logger.debug("Created session table: %s", self._table_name)
 
     async def create_table(self) -> None:
