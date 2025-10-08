@@ -138,3 +138,64 @@ def test_create_sql_result_iteration() -> None:
     rows = list(result)
     assert len(rows) == 1
     assert rows[0]["name"] == "Alice"
+
+
+def test_sql_result_get_data_with_schema_type() -> None:
+    """Test SQLResult.get_data() with schema_type parameter."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class User:
+        id: int
+        name: str
+        email: str
+
+    sql_stmt = SQL("SELECT * FROM users")
+    test_data: list[dict[str, Any]] = [
+        {"id": 1, "name": "Alice", "email": "alice@example.com"},
+        {"id": 2, "name": "Bob", "email": "bob@example.com"},
+    ]
+
+    result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
+
+    # Without schema_type - returns dicts
+    data_dicts = result.get_data()
+    assert isinstance(data_dicts, list)
+    assert len(data_dicts) == 2
+    assert isinstance(data_dicts[0], dict)
+    assert data_dicts[0]["name"] == "Alice"
+
+    # With schema_type - returns User objects
+    users = result.get_data(schema_type=User)
+    assert isinstance(users, list)
+    assert len(users) == 2
+    assert isinstance(users[0], User)
+    assert users[0].name == "Alice"
+    assert users[0].email == "alice@example.com"
+    assert users[1].name == "Bob"
+
+
+def test_sql_result_get_data_with_typeddict() -> None:
+    """Test SQLResult.get_data() with TypedDict schema_type."""
+    from typing import TypedDict
+
+    class UserDict(TypedDict):
+        id: int
+        name: str
+        email: str
+
+    sql_stmt = SQL("SELECT * FROM users")
+    test_data: list[dict[str, Any]] = [
+        {"id": 1, "name": "Alice", "email": "alice@example.com"},
+        {"id": 2, "name": "Bob", "email": "bob@example.com"},
+    ]
+
+    result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
+
+    # With TypedDict schema_type
+    users = result.get_data(schema_type=UserDict)
+    assert isinstance(users, list)
+    assert len(users) == 2
+    assert isinstance(users[0], dict)  # TypedDict is still a dict at runtime
+    assert users[0]["name"] == "Alice"
+    assert users[1]["name"] == "Bob"

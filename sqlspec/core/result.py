@@ -10,17 +10,19 @@ Classes:
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast, overload
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 from sqlspec.core.compiler import OperationType
+from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from sqlspec.core.statement import SQL
+    from sqlspec.typing import SchemaT
 
 
 __all__ = ("ArrowResult", "SQLResult", "StatementResult")
@@ -267,15 +269,25 @@ class SQLResult(StatementResult):
 
         return False
 
-    def get_data(self) -> "list[dict[str,Any]]":
+    @overload
+    def get_data(self, *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+
+    @overload
+    def get_data(self, *, schema_type: None = None) -> "list[dict[str, Any]]": ...
+
+    def get_data(self, *, schema_type: "type[Any] | None" = None) -> Any:
         """Get the data from the result.
 
         For regular operations, returns the list of rows.
         For script operations, returns a summary dictionary containing
         execution statistics and results.
 
+        Args:
+            schema_type: Optional schema type to transform the data into.
+                Supports Pydantic models, dataclasses, msgspec structs, attrs classes, and TypedDict.
+
         Returns:
-            List of result rows or script summary.
+            List of result rows (optionally transformed to schema_type) or script summary.
         """
         op_type_upper = self.operation_type.upper()
         if op_type_upper == "SCRIPT":
@@ -290,7 +302,10 @@ class SQLResult(StatementResult):
                     "total_rows_affected": self.get_total_rows_affected(),
                 }
             ]
-        return self.data or []
+        data = self.data or []
+        if schema_type:
+            return to_schema(data, schema_type=schema_type)
+        return data
 
     def add_statement_result(self, result: "SQLResult") -> None:
         """Add a statement result to the script execution results.
