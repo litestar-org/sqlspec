@@ -99,6 +99,12 @@ ModelT = TypeVar("ModelT", bound="DictLike | StructStub | BaseModelStub | Datacl
 :class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
 """
 RowT = TypeVar("RowT", bound="dict[str, Any]")
+TypedDictT = TypeVar("TypedDictT")
+"""Type variable for TypedDict types.
+
+Unbounded TypeVar specifically for TypedDict support since TypedDict is a special
+typing form and cannot be unified with regular class types in type[...] contexts.
+"""
 
 
 DictRow: TypeAlias = "dict[str, Any]"
@@ -248,6 +254,7 @@ __all__ = (
     "Tracer",
     "TupleRow",
     "TypeAdapter",
+    "TypedDictT",
     "UnsetType",
     "aiosql",
     "attrs_asdict",
