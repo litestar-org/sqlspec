@@ -13,7 +13,13 @@ from sqlspec.typing import NUMPY_INSTALLED
 if TYPE_CHECKING:
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
-__all__ = ("numpy_converter_in", "numpy_converter_out", "register_numpy_handlers", )
+__all__ = (
+    "_input_type_handler",
+    "_output_type_handler",
+    "numpy_converter_in",
+    "numpy_converter_out",
+    "register_numpy_handlers",
+)
 
 
 logger = logging.getLogger(__name__)

@@ -357,7 +357,7 @@ async def test_batch_insert_numpy_vectors(oracle_numpy_async_config: OracleAsync
         for idx, vec in enumerate(vectors):
             await session.execute("INSERT INTO test_batch VALUES (:1, :2)", (idx + 1, vec))
 
-        results = await session.select_all("SELECT * FROM test_batch ORDER BY id")
+        results = await session.select("SELECT * FROM test_batch ORDER BY id")
 
         assert len(results) == 5
 

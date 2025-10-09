@@ -131,7 +131,7 @@ def test_input_type_handler_registers_numpy_converter() -> None:
     """Test input type handler correctly registers NumPy converter."""
     import numpy as np
 
-    from sqlspec.adapters.oracledb._numpy_handlers import _input_type_handler
+    from sqlspec.adapters.oracledb._numpy_handlers import _input_type_handler  # pyright: ignore[reportPrivateUsage]
 
     mock_cursor = MagicMock()
     mock_var = MagicMock()
@@ -150,7 +150,7 @@ def test_input_type_handler_registers_numpy_converter() -> None:
 
 def test_input_type_handler_returns_none_for_non_numpy() -> None:
     """Test input type handler returns None for non-NumPy values."""
-    from sqlspec.adapters.oracledb._numpy_handlers import _input_type_handler
+    from sqlspec.adapters.oracledb._numpy_handlers import _input_type_handler  # pyright: ignore[reportPrivateUsage]
 
     mock_cursor = MagicMock()
     result = _input_type_handler(mock_cursor, "not an array", 1)
@@ -161,7 +161,7 @@ def test_input_type_handler_returns_none_for_non_numpy() -> None:
 
 def test_output_type_handler_registers_numpy_converter() -> None:
     """Test output type handler correctly registers NumPy converter."""
-    from sqlspec.adapters.oracledb._numpy_handlers import _output_type_handler
+    from sqlspec.adapters.oracledb._numpy_handlers import _output_type_handler  # pyright: ignore[reportPrivateUsage]
 
     mock_cursor = MagicMock()
     mock_cursor.arraysize = 10
@@ -186,7 +186,7 @@ def test_output_type_handler_registers_numpy_converter() -> None:
 
 def test_output_type_handler_returns_none_for_non_vector() -> None:
     """Test output type handler returns None for non-VECTOR columns."""
-    from sqlspec.adapters.oracledb._numpy_handlers import _output_type_handler
+    from sqlspec.adapters.oracledb._numpy_handlers import _output_type_handler  # pyright: ignore[reportPrivateUsage]
 
     mock_cursor = MagicMock()
     mock_metadata = Mock()

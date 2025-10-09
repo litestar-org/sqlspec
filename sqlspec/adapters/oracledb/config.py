@@ -290,7 +290,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if self.driver_features.get("enable_numpy_vectors", False):
             config["session_callback"] = self._init_connection
 
-        return await oracledb.create_pool_async(**config)
+        return oracledb.create_pool_async(**config)
 
     async def _init_connection(self, connection: "OracleAsyncConnection") -> None:
         """Initialize async connection with optional NumPy vector support.
