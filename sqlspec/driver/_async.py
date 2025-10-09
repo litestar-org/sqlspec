@@ -1,7 +1,7 @@
 """Asynchronous driver protocol implementation."""
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Final, NoReturn, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, NoReturn, TypeVar, overload
 
 from sqlspec.core import SQL, Statement
 from sqlspec.driver._common import CommonDriverAttributesMixin, DataDictionaryMixin, ExecutionResult, VersionInfo
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQLResult, StatementConfig, StatementFilter
-    from sqlspec.typing import ModelDTOT, StatementParameters
+    from sqlspec.typing import SchemaT, StatementParameters
 
 _LOGGER_NAME: Final[str] = "sqlspec"
 logger = get_logger(_LOGGER_NAME)
@@ -228,10 +228,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[ModelDTOT]",
+        schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "ModelDTOT": ...
+    ) -> "SchemaT": ...
 
     @overload
     async def select_one(
@@ -249,10 +249,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[ModelDTOT] | None" = None,
+        schema_type: "type[Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "dict[str, Any] | ModelDTOT":
+    ) -> Any:
         """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
@@ -273,10 +273,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[ModelDTOT]",
+        schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "ModelDTOT | None": ...
+    ) -> "SchemaT | None": ...
 
     @overload
     async def select_one_or_none(
@@ -294,10 +294,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[ModelDTOT] | None" = None,
+        schema_type: "type[Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "dict[str, Any] | ModelDTOT | None":
+    ) -> Any:
         """Execute a select statement and return at most one row.
 
         Returns None if no rows are found.
@@ -311,10 +311,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         if data_len > 1:
             self._raise_expected_at_most_one_row(data_len)
         first_row = data[0]
-        return cast(
-            "dict[str, Any] | ModelDTOT | None",
-            self.to_schema(first_row, schema_type=schema_type) if schema_type else first_row,
-        )
+        return self.to_schema(first_row, schema_type=schema_type) if schema_type else first_row
 
     @overload
     async def select(
@@ -322,10 +319,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[ModelDTOT]",
+        schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "list[ModelDTOT]": ...
+    ) -> "list[SchemaT]": ...
 
     @overload
     async def select(
@@ -343,15 +340,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[ModelDTOT] | None" = None,
+        schema_type: "type[Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "list[dict[str, Any]] | list[ModelDTOT]":
+    ) -> Any:
         """Execute a select statement and return all rows."""
         result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        return cast(
-            "list[dict[str, Any]] | list[ModelDTOT]", self.to_schema(result.get_data(), schema_type=schema_type)
-        )
+        return self.to_schema(result.get_data(), schema_type=schema_type)
 
     async def select_value(
         self,
@@ -421,10 +416,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[ModelDTOT]",
+        schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "tuple[list[ModelDTOT], int]": ...
+    ) -> "tuple[list[SchemaT], int]": ...
 
     @overload
     async def select_with_total(
@@ -442,10 +437,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[ModelDTOT] | None" = None,
+        schema_type: "type[Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "tuple[list[dict[str, Any]] | list[ModelDTOT], int]":
+    ) -> Any:
         """Execute a select statement and return both the data and total count.
 
         This method is designed for pagination scenarios where you need both

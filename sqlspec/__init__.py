@@ -41,6 +41,7 @@ from sqlspec.typing import (
     ModelT,
     PoolT,
     RowT,
+    SchemaT,
     StatementParameters,
     SupportedSchemaModel,
 )
@@ -80,6 +81,7 @@ __all__ = (
     "SQLFileLoader",
     "SQLResult",
     "SQLSpec",
+    "SchemaT",
     "Select",
     "Statement",
     "StatementConfig",
