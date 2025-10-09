@@ -33,8 +33,9 @@ class ChatMessage(Struct):
 
 @post("/chat", sync_to_thread=True)
 def duckllm_chat(db_session: DuckDBDriver, data: ChatMessage) -> ChatMessage:
-    results = db_session.execute("SELECT open_prompt(?)", data.message).get_first()
-    return db_session.to_schema(results or {"message": "No response from DuckLLM"}, schema_type=ChatMessage)
+    result = db_session.execute("SELECT open_prompt(?)", data.message)
+    messages = result.get_data(schema_type=ChatMessage)
+    return messages[0] if messages else ChatMessage(message="No response from DuckLLM")
 
 
 spec = SQLSpec()

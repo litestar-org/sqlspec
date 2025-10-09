@@ -89,7 +89,7 @@ Define route handlers that use dependency injection to access the database:
    @get("/users")
    async def list_users(db_session: AsyncpgDriver) -> dict:
        result = await db_session.execute("SELECT * FROM users LIMIT 10")
-       return {"users": result.data}
+       return {"users": result.all()}
 
    @get("/users/{user_id:int}")
    async def get_user(
@@ -184,7 +184,7 @@ Here's a complete working example:
        result = await db_session.execute(
            "SELECT id, name, email FROM users ORDER BY id LIMIT 10"
        )
-       return {"users": result.data}
+       return {"users": result.all()}
 
    @get("/users/{user_id:int}")
    async def get_user(

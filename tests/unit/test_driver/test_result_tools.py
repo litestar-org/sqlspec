@@ -12,14 +12,14 @@ import msgspec
 import pytest
 from typing_extensions import TypedDict
 
-from sqlspec.driver.mixins._result_tools import (
+from sqlspec.driver.mixins._result_tools import ToSchemaMixin
+from sqlspec.typing import NUMPY_INSTALLED
+from sqlspec.utils.schema import (
     _DEFAULT_TYPE_DECODERS,
-    ToSchemaMixin,
     _convert_numpy_to_list,
     _default_msgspec_deserializer,
     _is_list_type_target,
 )
-from sqlspec.typing import NUMPY_INSTALLED
 
 pytestmark = pytest.mark.xdist_group("driver")
 

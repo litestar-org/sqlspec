@@ -69,7 +69,7 @@ Injects the SQLSpec driver instance with full query capabilities (recommended).
    @get("/users")
    async def get_users(db_session: AsyncpgDriver) -> dict:
        result = await db_session.execute("SELECT * FROM users")
-       return {"users": result.data}
+       return {"users": result.all()}
 
 **When to use**: All standard database operations (recommended).
 
@@ -92,7 +92,7 @@ Dependencies are resolved by type annotation:
    async def handler(db_session: AsyncpgDriver) -> dict:
        # SQLSpec injects AsyncpgDriver instance
        result = await db_session.execute("SELECT * FROM users")
-       return {"users": result.data}
+       return {"users": result.all()}
 
 By Dependency Key
 -----------------
@@ -234,7 +234,7 @@ Use specific driver types for better type checking:
        # IDE knows exact driver types
        pg_result = await postgres.execute("SELECT * FROM users")
        duck_result = await duckdb.execute("SELECT * FROM events")
-       return {"pg": pg_result.data, "duck": duck_result.data}
+       return {"pg": pg_result.all(), "duck": duck_result.all()}
 
 Best Practices
 ==============
@@ -252,7 +252,7 @@ Prefer ``db_session`` for standard database operations:
    @get("/users")
    async def get_users(db_session: AsyncpgDriver) -> dict:
        result = await db_session.execute("SELECT * FROM users")
-       return {"users": result.data}
+       return {"users": result.all()}
 
    # Advanced: Use connection only when needed
    @get("/bulk-import")

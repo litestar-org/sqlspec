@@ -62,7 +62,7 @@ Quick Reference
 
    query = sql.select("id", "name", "email").from_("users").where("active = ?")
    result = session.execute(query, True)
-   users = result.data
+   users = result.all()
 
 **Loading from SQL Files**
 
