@@ -2,37 +2,91 @@
 Adapters
 ========
 
-Database adapters provide SQLSpec with the ability to connect to and interact with different database systems. Each adapter consists of configuration classes and driver implementations tailored to specific databases.
+SQLSpec provides database adapters that enable connections to various database systems. Each adapter consists of configuration classes and driver implementations tailored to specific databases, providing a consistent interface while respecting database-specific capabilities.
 
 .. currentmodule:: sqlspec.adapters
 
 Overview
 ========
 
-SQLSpec includes adapters for:
+Available adapters:
 
-- **PostgreSQL**: asyncpg, psycopg (sync/async), psqlpy
-- **SQLite**: sqlite3, aiosqlite
+- **PostgreSQL**: asyncpg, psycopg, psqlpy
+- **SQLite**: sqlite, aiosqlite
 - **MySQL**: asyncmy
 - **DuckDB**: duckdb
-- **Oracle**: oracledb (sync/async)
-- **BigQuery**: google-cloud-bigquery
-- **ADBC**: Arrow Database Connectivity
+- **Oracle**: oracledb
+- **BigQuery**: bigquery
+- **Cross-Database**: ADBC (Arrow Database Connectivity)
 
-Each adapter provides:
+Each adapter implementation includes:
 
-1. **Config class** - Database connection configuration
+1. **Configuration class** - Connection and pool settings
 2. **Driver class** - Query execution and transaction management
 3. **Type mappings** - Database-specific type conversions
-4. **Parameter style** - Proper parameter binding (?, $1, :name, etc.)
+4. **Parameter binding** - Automatic parameter style conversion
 
-PostgreSQL Adapters
-===================
+PostgreSQL
+==========
 
-AsyncPG (Async, High Performance)
-----------------------------------
+AsyncPG
+-------
 
 .. currentmodule:: sqlspec.adapters.asyncpg
+
+**Homepage**: https://github.com/MagicStack/asyncpg
+
+**PyPI**: https://pypi.org/project/asyncpg/
+
+**Concurrency**: Async-only
+
+**Connection Pooling**: Native pooling via ``asyncpg.Pool``
+
+**Parameter Style**: ``$1, $2, $3`` (PostgreSQL positional placeholders)
+
+**Special Features**:
+
+- Binary protocol for efficient data transfer
+- pgvector support (automatic registration when ``pgvector`` is installed)
+- Native JSON/JSONB type codecs
+- Statement caching
+- Prepared statements
+
+**Known Limitations**:
+
+- Async-only (no synchronous support)
+- Requires async/await syntax throughout application
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[asyncpg]
+
+**Configuration**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       AsyncpgConfig(
+           pool_config=AsyncpgPoolConfig(
+               dsn="postgresql://user:password@localhost:5432/mydb",
+               min_size=5,
+               max_size=20,
+               command_timeout=60.0
+           )
+       )
+   )
+
+   async with sql.provide_session(db) as session:
+       result = await session.execute("SELECT * FROM users WHERE id = $1", [1])
+       user = result.one()
+
+**API Reference**:
 
 .. autoclass:: AsyncpgConfig
    :members:
@@ -49,37 +103,82 @@ AsyncPG (Async, High Performance)
    :undoc-members:
    :show-inheritance:
 
-**Features:**
+Psycopg
+-------
 
-- Native async/await support
-- Connection pooling with asyncpg.Pool
-- Fast binary protocol
-- Best performance for async PostgreSQL
+.. currentmodule:: sqlspec.adapters.psycopg
 
-**Parameter style:** ``$1, $2, $3`` (PostgreSQL positional)
+**Homepage**: https://github.com/psycopg/psycopg
 
-**Example:**
+**PyPI**: https://pypi.org/project/psycopg/
+
+**Concurrency**: Sync and async
+
+**Connection Pooling**: Native pooling via ``psycopg_pool``
+
+**Parameter Style**: ``%s, %s, %s`` (PostgreSQL format style)
+
+**Special Features**:
+
+- Both synchronous and asynchronous support
+- Modern psycopg3 API
+- pgvector support (automatic registration when ``pgvector`` is installed)
+- Server-side cursors
+- Pipeline mode for batch operations
+
+**Known Limitations**:
+
+- Separate driver classes for sync (``PsycopgSyncDriver``) and async (``PsycopgAsyncDriver``)
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[psycopg]
+
+**Configuration (Async)**:
 
 .. code-block:: python
 
    from sqlspec import SQLSpec
-   from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
+   from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 
    sql = SQLSpec()
    db = sql.add_config(
-       AsyncpgConfig(
-           pool_config=AsyncpgPoolConfig(
-               dsn="postgresql://user:pass@localhost/db",
-               min_size=5,
-               max_size=20
-           )
+       PsycopgAsyncConfig(
+           pool_config={
+               "conninfo": "postgresql://user:password@localhost:5432/mydb",
+               "min_size": 5,
+               "max_size": 20
+           }
        )
    )
 
-Psycopg (Sync/Async, Modern)
------------------------------
+   async with sql.provide_session(db) as session:
+       result = await session.execute("SELECT * FROM users WHERE id = %s", [1])
 
-.. currentmodule:: sqlspec.adapters.psycopg
+**Configuration (Sync)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.psycopg import PsycopgSyncConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       PsycopgSyncConfig(
+           pool_config={
+               "conninfo": "postgresql://user:password@localhost:5432/mydb",
+               "min_size": 5,
+               "max_size": 20
+           }
+       )
+   )
+
+   with sql.provide_session(db) as session:
+       result = session.execute("SELECT * FROM users WHERE id = %s", [1])
+
+**API Reference**:
 
 .. autoclass:: PsycopgConfig
    :members:
@@ -96,32 +195,60 @@ Psycopg (Sync/Async, Modern)
    :undoc-members:
    :show-inheritance:
 
-**Features:**
+psqlpy
+------
 
-- Both sync and async support
-- Modern psycopg3 API
-- Connection pooling (psycopg_pool)
-- Server-side cursors
+.. currentmodule:: sqlspec.adapters.psqlpy
 
-**Parameter style:** ``%s, %s, %s`` (PostgreSQL format style)
+**Homepage**: https://github.com/psqlpy-python/psqlpy
 
-**Example:**
+**PyPI**: https://pypi.org/project/psqlpy/
+
+**Concurrency**: Async-only
+
+**Connection Pooling**: Native pooling (Rust-based implementation)
+
+**Parameter Style**: ``$1, $2, $3`` (PostgreSQL positional placeholders)
+
+**Special Features**:
+
+- Rust-based driver for memory efficiency
+- Connection pooling
+- Transaction support
+- Type conversion
+
+**Known Limitations**:
+
+- Async-only (no synchronous support)
+- Smaller ecosystem than asyncpg or psycopg
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[psqlpy]
+
+**Configuration**:
 
 .. code-block:: python
 
    from sqlspec import SQLSpec
-   from sqlspec.adapters.psycopg import PsycopgConfig
+   from sqlspec.adapters.psqlpy import PsqlpyConfig
 
-   # Async usage
-   config = PsycopgAsyncConfig(pool_config={"conninfo": "postgresql://user:pass@localhost/db"})
+   sql = SQLSpec()
+   db = sql.add_config(
+       PsqlpyConfig(
+           pool_config={
+               "dsn": "postgresql://user:password@localhost:5432/mydb",
+               "max_pool_size": 20
+           }
+       )
+   )
 
-   # Sync usage
-   config_sync = PsycopgSyncConfig(pool_config={"conninfo": "postgresql://user:pass@localhost/db"})
+   async with sql.provide_session(db) as session:
+       result = await session.execute("SELECT * FROM users WHERE id = $1", [1])
 
-psqlpy (Rust-based, Ultra High Performance)
---------------------------------------------
-
-.. currentmodule:: sqlspec.adapters.psqlpy
+**API Reference**:
 
 .. autoclass:: PsqlpyConfig
    :members:
@@ -133,22 +260,77 @@ psqlpy (Rust-based, Ultra High Performance)
    :undoc-members:
    :show-inheritance:
 
-**Features:**
+SQLite
+======
 
-- Rust-based for maximum performance
-- Zero-copy result handling
-- Connection pooling
-- Async-only
-
-**Parameter style:** ``$1, $2, $3`` (PostgreSQL positional)
-
-SQLite Adapters
-===============
-
-SQLite (Sync, Built-in)
------------------------
+sqlite
+------
 
 .. currentmodule:: sqlspec.adapters.sqlite
+
+**Homepage**: Built-in Python module
+
+**PyPI**: N/A (included with Python)
+
+**Concurrency**: Sync-only
+
+**Connection Pooling**: Custom thread-local pooling
+
+**Parameter Style**: ``?, ?, ?`` (SQLite positional placeholders)
+
+**Special Features**:
+
+- No external dependencies
+- File-based or in-memory databases
+- Thread-safe connections
+- Custom connection pooling for concurrency
+
+**Known Limitations**:
+
+- Synchronous only (no async support)
+- Limited concurrent write performance
+- Thread-local connection management
+
+**Installation**:
+
+.. code-block:: bash
+
+   # No installation required - built into Python
+   uv add sqlspec
+
+**Configuration (In-Memory)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.sqlite import SqliteConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(SqliteConfig(database=":memory:"))
+
+   with sql.provide_session(db) as session:
+       session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+       session.execute("INSERT INTO users (name) VALUES (?)", ["Alice"])
+
+**Configuration (File-Based)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.sqlite import SqliteConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       SqliteConfig(
+           pool_config={
+               "database": "/path/to/database.db",
+               "timeout": 30.0,
+               "check_same_thread": False
+           }
+       )
+   )
+
+**API Reference**:
 
 .. autoclass:: SqliteConfig
    :members:
@@ -160,31 +342,60 @@ SQLite (Sync, Built-in)
    :undoc-members:
    :show-inheritance:
 
-**Features:**
+aiosqlite
+---------
 
-- Uses Python's built-in sqlite3
-- File-based or in-memory databases
-- Simple setup for development
-- Thread-safe connections
+.. currentmodule:: sqlspec.adapters.aiosqlite
 
-**Parameter style:** ``?, ?, ?`` (SQLite positional)
+**Homepage**: https://github.com/omnilib/aiosqlite
 
-**Example:**
+**PyPI**: https://pypi.org/project/aiosqlite/
+
+**Concurrency**: Async-only
+
+**Connection Pooling**: Custom pooling
+
+**Parameter Style**: ``?, ?, ?`` (SQLite positional placeholders)
+
+**Special Features**:
+
+- Async wrapper around Python's sqlite3 module
+- Same SQLite features as synchronous version
+- Compatible with async frameworks
+
+**Known Limitations**:
+
+- Async operations run on thread pool (not true async I/O)
+- Limited concurrent write performance (SQLite limitation)
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[aiosqlite]
+
+**Configuration**:
 
 .. code-block:: python
 
-   from sqlspec.adapters.sqlite import SqliteConfig
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
-   # In-memory database
-   config = SqliteConfig(database=":memory:")
+   sql = SQLSpec()
+   db = sql.add_config(
+       AiosqliteConfig(
+           pool_config={
+               "database": "/path/to/database.db",
+               "timeout": 30.0
+           }
+       )
+   )
 
-   # File-based database
-   config = SqliteConfig(database="/path/to/db.sqlite")
+   async with sql.provide_session(db) as session:
+       await session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+       await session.execute("INSERT INTO users (name) VALUES (?)", ["Alice"])
 
-aiosqlite (Async)
------------------
-
-.. currentmodule:: sqlspec.adapters.aiosqlite
+**API Reference**:
 
 .. autoclass:: AiosqliteConfig
    :members:
@@ -196,55 +407,68 @@ aiosqlite (Async)
    :undoc-members:
    :show-inheritance:
 
-**Features:**
+MySQL
+=====
 
-- Async wrapper around sqlite3
-- Same SQLite features as sync version
-- Non-blocking operations
+asyncmy
+-------
 
-**Parameter style:** ``?, ?, ?`` (SQLite positional)
+.. currentmodule:: sqlspec.adapters.asyncmy
 
-DuckDB Adapter
-==============
+**Homepage**: https://github.com/long2ice/asyncmy
 
-.. currentmodule:: sqlspec.adapters.duckdb
+**PyPI**: https://pypi.org/project/asyncmy/
 
-.. autoclass:: DuckDBConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
+**Concurrency**: Async-only
 
-.. autoclass:: DuckDBDriver
-   :members:
-   :undoc-members:
-   :show-inheritance:
+**Connection Pooling**: Native pooling
 
-**Features:**
+**Parameter Style**: ``%s, %s, %s`` (MySQL format style)
 
-- Embedded analytical database
-- Parquet/CSV support
-- OLAP optimized
-- In-memory or persistent
+**Special Features**:
 
-**Parameter style:** ``?, ?, ?`` (positional)
+- Cython-based implementation
+- Connection pooling
+- MySQL protocol support
+- Prepared statements
 
-**Example:**
+**Known Limitations**:
+
+- Async-only (no synchronous support)
+- Requires Cython build tools during installation
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[asyncmy]
+
+**Configuration**:
 
 .. code-block:: python
 
-   from sqlspec.adapters.duckdb import DuckDBConfig
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncmy import AsyncmyConfig
 
-   # In-memory analytics
-   config = DuckDBConfig(database=":memory:")
+   sql = SQLSpec()
+   db = sql.add_config(
+       AsyncmyConfig(
+           pool_config={
+               "host": "localhost",
+               "port": 3306,
+               "user": "root",
+               "password": "password",
+               "database": "mydb",
+               "minsize": 5,
+               "maxsize": 20
+           }
+       )
+   )
 
-   # Read from Parquet
-   with sql.provide_session(config) as session:
-       session.execute("CREATE TABLE users AS SELECT * FROM 'data.parquet'")
+   async with sql.provide_session(db) as session:
+       result = await session.execute("SELECT * FROM users WHERE id = %s", [1])
 
-MySQL Adapter
-=============
-
-.. currentmodule:: sqlspec.adapters.asyncmy
+**API Reference**:
 
 .. autoclass:: AsyncmyConfig
    :members:
@@ -256,33 +480,269 @@ MySQL Adapter
    :undoc-members:
    :show-inheritance:
 
-**Features:**
+DuckDB
+======
 
-- Async MySQL client
-- Connection pooling
-- Full MySQL feature support
+duckdb
+------
 
-**Parameter style:** ``%s, %s, %s`` (MySQL format)
+.. currentmodule:: sqlspec.adapters.duckdb
 
-**Example:**
+**Homepage**: https://github.com/duckdb/duckdb
+
+**PyPI**: https://pypi.org/project/duckdb/
+
+**Concurrency**: Sync-only
+
+**Connection Pooling**: Custom pooling
+
+**Parameter Style**: ``?, ?, ?`` (positional placeholders)
+
+**Special Features**:
+
+- Embedded analytical database (OLAP)
+- Native Parquet and CSV support
+- Extension management (auto-install/load extensions)
+- Secrets management for API integrations
+- Arrow-native data transfer
+- Direct file querying without import
+- Shared memory databases for concurrency
+
+**Known Limitations**:
+
+- Synchronous only (no async support)
+- Embedded database (not client-server)
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[duckdb]
+
+**Configuration (In-Memory)**:
 
 .. code-block:: python
 
-   from sqlspec.adapters.asyncmy import AsyncmyConfig
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.duckdb import DuckDBConfig
 
-   config = AsyncmyConfig(
-       pool_config={
-           "host": "localhost",
-           "user": "root",
-           "password": "password",
-           "database": "mydb"
-       }
+   sql = SQLSpec()
+   db = sql.add_config(DuckDBConfig())  # Defaults to :memory:shared_db
+
+   with sql.provide_session(db) as session:
+       # Query Parquet file directly
+       result = session.execute("SELECT * FROM 'data.parquet' LIMIT 10")
+
+**Configuration (Persistent with Extensions)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBExtensionConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       DuckDBConfig(
+           pool_config={
+               "database": "/path/to/analytics.db",
+               "threads": 4,
+               "memory_limit": "4GB"
+           },
+           driver_features={
+               "extensions": [
+                   DuckDBExtensionConfig(name="httpfs"),
+                   DuckDBExtensionConfig(name="parquet")
+               ]
+           }
+       )
    )
 
-Oracle Adapter
-==============
+   with sql.provide_session(db) as session:
+       # Query remote Parquet file
+       result = session.execute(
+           "SELECT * FROM 'https://example.com/data.parquet' LIMIT 10"
+       )
+
+**API Reference**:
+
+.. autoclass:: DuckDBConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: DuckDBDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: DuckDBExtensionConfig
+   :members:
+   :undoc-members:
+
+.. autoclass:: DuckDBSecretConfig
+   :members:
+   :undoc-members:
+
+BigQuery
+========
+
+bigquery
+--------
+
+.. currentmodule:: sqlspec.adapters.bigquery
+
+**Homepage**: https://github.com/googleapis/python-bigquery
+
+**PyPI**: https://pypi.org/project/google-cloud-bigquery/
+
+**Concurrency**: Sync-only
+
+**Connection Pooling**: None (stateless HTTP API)
+
+**Parameter Style**: ``@param1, @param2`` (named parameters)
+
+**Special Features**:
+
+- Google Cloud BigQuery integration
+- Serverless query execution
+- Standard SQL dialect
+- Automatic result pagination
+
+**Known Limitations**:
+
+- Synchronous only (no async support)
+- Requires Google Cloud credentials
+- Query costs based on data scanned
+- No connection pooling (stateless API)
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[bigquery]
+
+**Configuration**:
+
+.. code-block:: python
+
+   from google.oauth2 import service_account
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.bigquery import BigQueryConfig
+
+   credentials = service_account.Credentials.from_service_account_file(
+       "/path/to/credentials.json"
+   )
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       BigQueryConfig(
+           pool_config={
+               "project": "my-project-id",
+               "credentials": credentials
+           }
+       )
+   )
+
+   with sql.provide_session(db) as session:
+       result = session.execute(
+           "SELECT * FROM `project.dataset.table` WHERE id = @user_id",
+           {"user_id": 1}
+       )
+
+**API Reference**:
+
+.. autoclass:: BigQueryConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: BigQueryDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Oracle
+======
+
+oracledb
+--------
 
 .. currentmodule:: sqlspec.adapters.oracledb
+
+**Homepage**: https://github.com/oracle/python-oracledb
+
+**PyPI**: https://pypi.org/project/oracledb/
+
+**Concurrency**: Sync and async
+
+**Connection Pooling**: Native pooling
+
+**Parameter Style**: ``:1, :2, :3`` (Oracle positional placeholders)
+
+**Special Features**:
+
+- Both synchronous and asynchronous support
+- Thin mode (pure Python) and thick mode (Oracle Client)
+- Oracle-specific data types (NUMBER, CLOB, BLOB, etc.)
+- Connection pooling
+- Two-phase commit support
+
+**Known Limitations**:
+
+- Separate configuration classes for sync and async
+- Thick mode requires Oracle Instant Client installation
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[oracledb]
+
+**Configuration (Async, Thin Mode)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.oracledb import OracleAsyncConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       OracleAsyncConfig(
+           pool_config={
+               "user": "system",
+               "password": "oracle",
+               "dsn": "localhost:1521/XE",
+               "min": 5,
+               "max": 20
+           }
+       )
+   )
+
+   async with sql.provide_session(db) as session:
+       result = await session.execute("SELECT * FROM users WHERE id = :1", [1])
+
+**Configuration (Sync, Thin Mode)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.oracledb import OracleSyncConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       OracleSyncConfig(
+           pool_config={
+               "user": "system",
+               "password": "oracle",
+               "dsn": "localhost:1521/XE"
+           }
+       )
+   )
+
+   with sql.provide_session(db) as session:
+       result = session.execute("SELECT * FROM users WHERE id = :1", [1])
+
+**API Reference**:
 
 .. autoclass:: OracleDBConfig
    :members:
@@ -299,182 +759,277 @@ Oracle Adapter
    :undoc-members:
    :show-inheritance:
 
-**Features:**
+Cross-Database
+==============
 
-- Both sync and async support
-- Oracle-specific types
-- Thick/thin client modes
-
-**Parameter style:** ``:1, :2, :3`` (Oracle positional)
-
-**Example:**
-
-.. code-block:: python
-
-   from sqlspec.adapters.oracledb import OracleDBConfig
-
-   config = OracleAsyncConfig(pool_config={"user": "system", "password": "oracle", "dsn": "localhost:1521/xe"})
-
-BigQuery Adapter
-================
-
-.. currentmodule:: sqlspec.adapters.bigquery
-
-.. autoclass:: BigQueryConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: BigQueryDriver
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-**Features:**
-
-- Google Cloud BigQuery integration
-- Serverless analytics
-- Petabyte-scale queries
-
-**Parameter style:** ``@param1, @param2`` (named parameters)
-
-**Example:**
-
-.. code-block:: python
-
-   from sqlspec.adapters.bigquery import BigQueryConfig
-
-   config = BigQueryConfig(
-       pool_config={
-           "project": "my-project",
-           "credentials": credentials_obj
-       }
-   )
-
-ADBC Adapter
-============
+ADBC (Arrow Database Connectivity)
+-----------------------------------
 
 .. currentmodule:: sqlspec.adapters.adbc
 
-.. autoclass:: ADBCConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
+**Homepage**: https://github.com/apache/arrow-adbc
 
-.. autoclass:: ADBCDriver
-   :members:
-   :undoc-members:
-   :show-inheritance:
+**PyPI**: Various (backend-specific):
 
-**Features:**
+- PostgreSQL: https://pypi.org/project/adbc-driver-postgresql/
+- SQLite: https://pypi.org/project/adbc-driver-sqlite/
+- DuckDB: https://pypi.org/project/adbc-driver-duckdb/
+- BigQuery: https://pypi.org/project/adbc-driver-bigquery/
+- Snowflake: https://pypi.org/project/adbc-driver-snowflake/
 
-- Arrow Database Connectivity standard
-- Zero-copy data transfer with Arrow
-- Multiple backend support (PostgreSQL, SQLite, FlightSQL)
+**Concurrency**: Sync-only
 
-**Example:**
+**Connection Pooling**: None (stateless connections)
+
+**Parameter Style**: Varies by backend
+
+- PostgreSQL: ``$1, $2, $3`` (numeric)
+- SQLite: ``?, ?, ?`` (qmark)
+- DuckDB: ``?, ?, ?`` (qmark)
+- BigQuery: ``@param1, @param2`` (named_at)
+- Snowflake: ``?, ?, ?`` (qmark)
+
+**Special Features**:
+
+- Arrow-native data transfer (zero-copy)
+- Multi-backend support with unified interface
+- Direct Arrow table output
+- Automatic driver detection from URI or driver name
+- Efficient bulk data operations
+
+**Known Limitations**:
+
+- Synchronous only (no async support)
+- No connection pooling
+- Backend-specific driver packages required
+- Parameter style varies by backend
+
+**Installation**:
+
+.. code-block:: bash
+
+   # PostgreSQL backend
+   uv add sqlspec[adbc-postgresql]
+
+   # SQLite backend
+   uv add sqlspec[adbc-sqlite]
+
+   # DuckDB backend
+   uv add sqlspec[adbc-duckdb]
+
+   # BigQuery backend
+   uv add sqlspec[adbc-bigquery]
+
+   # Snowflake backend
+   uv add sqlspec[adbc-snowflake]
+
+**Configuration (PostgreSQL)**:
 
 .. code-block:: python
 
-   from sqlspec.adapters.adbc import ADBCConfig
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.adbc import AdbcConfig
 
-   # PostgreSQL via ADBC
-   config = ADBCConfig(
-       driver="adbc_driver_postgresql",
-       pool_config={"uri": "postgresql://localhost/db"}
+   sql = SQLSpec()
+   db = sql.add_config(
+       AdbcConfig(
+           connection_config={
+               "driver_name": "postgresql",
+               "uri": "postgresql://user:password@localhost:5432/mydb"
+           }
+       )
    )
+
+   with sql.provide_session(db) as session:
+       result = session.execute("SELECT * FROM users WHERE id = $1", [1])
+       # Get Arrow table directly
+       arrow_table = result.arrow()
+
+**Configuration (SQLite)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.adbc import AdbcConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       AdbcConfig(
+           connection_config={
+               "driver_name": "sqlite",
+               "uri": "/path/to/database.db"
+           }
+       )
+   )
+
+   with sql.provide_session(db) as session:
+       result = session.execute("SELECT * FROM users WHERE id = ?", [1])
+
+**Configuration (DuckDB)**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.adbc import AdbcConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       AdbcConfig(
+           connection_config={
+               "driver_name": "duckdb",
+               "uri": "/path/to/analytics.db"
+           }
+       )
+   )
+
+   with sql.provide_session(db) as session:
+       result = session.execute("SELECT * FROM 'data.parquet' LIMIT 10")
+
+**API Reference**:
+
+.. autoclass:: AdbcConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: AdbcDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 Adapter Architecture
 ====================
 
-Common Pattern
---------------
+Common Patterns
+---------------
 
-All adapters follow a consistent pattern:
+All SQLSpec adapters follow consistent architectural patterns:
 
-1. **Configuration** (``*Config`` class)
+**Configuration Class**
 
-   - Connection parameters
-   - Pool configuration
-   - Adapter-specific options
+Each adapter provides a configuration class that inherits from either:
 
-2. **Driver** (``*Driver`` class)
+- ``AsyncDatabaseConfig`` - For async adapters
+- ``SyncDatabaseConfig`` - For sync adapters
+- ``NoPoolSyncConfig`` - For stateless adapters (ADBC, BigQuery)
 
-   - Inherits from ``BaseSyncDriver`` or ``BaseAsyncDriver``
-   - Implements query execution
-   - Handles transactions
+Configuration classes handle:
 
-3. **Type System** (``_types.py``)
+- Connection parameters
+- Pool settings (when applicable)
+- Driver-specific features
+- Statement configuration
+- Migration settings
 
-   - Database-specific type mappings
-   - Result serialization
+**Driver Class**
+
+Driver classes inherit from:
+
+- ``BaseAsyncDriver`` - For async query execution
+- ``BaseSyncDriver`` - For sync query execution
+
+Driver classes provide:
+
+- Query execution methods (``execute``, ``select_one``, ``select_all``, etc.)
+- Transaction management (``begin``, ``commit``, ``rollback``)
+- Result processing and type mapping
+- Parameter binding
+
+**Type Mappings**
+
+Each adapter includes database-specific type mappings in ``_types.py``:
+
+- Python to database type conversions
+- Database to Python type conversions
+- Custom type handlers (JSON, UUID, arrays, etc.)
 
 Parameter Binding
 -----------------
 
-Each adapter converts SQLSpec's parameter format to database-specific style:
+SQLSpec automatically converts parameter placeholders to database-specific styles:
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 30 50
+   :widths: 20 20 30 30
 
    * - Database
+     - Adapter
      - Style
      - Example
-   * - PostgreSQL (asyncpg, psqlpy)
-     - Positional ($1, $2)
+   * - PostgreSQL
+     - asyncpg, psqlpy
+     - ``$1, $2``
      - ``SELECT * FROM users WHERE id = $1``
-   * - PostgreSQL (psycopg)
-     - Format (%s)
+   * - PostgreSQL
+     - psycopg
+     - ``%s``
      - ``SELECT * FROM users WHERE id = %s``
    * - SQLite
-     - Positional (?)
+     - sqlite, aiosqlite
+     - ``?``
      - ``SELECT * FROM users WHERE id = ?``
    * - MySQL
-     - Format (%s)
+     - asyncmy
+     - ``%s``
      - ``SELECT * FROM users WHERE id = %s``
+   * - DuckDB
+     - duckdb
+     - ``?``
+     - ``SELECT * FROM users WHERE id = ?``
    * - Oracle
-     - Positional (:1, :2)
+     - oracledb
+     - ``:1, :2``
      - ``SELECT * FROM users WHERE id = :1``
    * - BigQuery
-     - Named (@param)
+     - bigquery
+     - ``@param``
      - ``SELECT * FROM users WHERE id = @user_id``
+   * - ADBC
+     - adbc (varies)
+     - Backend-specific
+     - See backend documentation
 
-Choosing an Adapter
-===================
+Connection Pooling Types
+-------------------------
 
-**For PostgreSQL:**
+**Native Pooling**
 
-- **asyncpg** - Best async performance, native pooling
-- **psycopg** - Modern API, sync/async flexibility
-- **psqlpy** - Maximum performance, Rust-based
+Adapters with native pooling use database driver's built-in pool:
 
-**For SQLite:**
+- asyncpg (``asyncpg.Pool``)
+- psycopg (``psycopg_pool``)
+- asyncmy (native pooling)
+- oracledb (``oracledb.create_pool``)
 
-- **sqlite** - Simple sync operations, development
-- **aiosqlite** - Async operations, async web apps
+**Custom Pooling**
 
-**For Analytics:**
+SQLSpec provides custom pooling for adapters without native support:
 
-- **DuckDB** - Embedded analytics, Parquet support
-- **BigQuery** - Cloud analytics, large datasets
+- sqlite (thread-local pooling)
+- aiosqlite (async pooling)
+- duckdb (connection pooling)
 
-**For MySQL:**
+**No Pooling**
 
-- **asyncmy** - Async MySQL operations
+Stateless adapters create connections per request:
 
-**For Oracle:**
+- ADBC (stateless Arrow connections)
+- BigQuery (stateless HTTP API)
 
-- **oracledb** - Official Oracle driver, sync/async
+Creating Custom Adapters
+=========================
 
-**For Cross-Database:**
+For information on creating custom database adapters, see:
 
-- **ADBC** - Standard interface, Arrow integration
+- :doc:`/contributing/creating_adapters` - Adapter development guide
+- :doc:`driver` - Driver implementation details
+- :doc:`base` - SQLSpec configuration system
 
 See Also
 ========
 
 - :doc:`/usage/configuration` - Configuration guide
-- :doc:`/examples/index` - Adapter examples
-- :doc:`driver` - Driver implementation
+- :doc:`/usage/drivers_and_querying` - Query execution
+- :doc:`/examples/index` - Usage examples
+- :doc:`driver` - Driver reference
 - :doc:`base` - SQLSpec registry
