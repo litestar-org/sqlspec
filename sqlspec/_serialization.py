@@ -2,6 +2,9 @@
 
 Provides a Protocol-based serialization system that users can extend.
 Supports msgspec, orjson, and standard library JSON with automatic fallback.
+
+Features optional numpy array serialization when numpy is installed.
+Arrays are automatically converted to lists during JSON encoding.
 """
 
 import contextlib
@@ -11,17 +14,23 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any, Final, Literal, Protocol, overload
 
+from sqlspec._typing import NUMPY_INSTALLED
 from sqlspec.typing import MSGSPEC_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED, BaseModel
 
 
-def _type_to_string(value: Any) -> str:  # pragma: no cover
+def _type_to_string(value: Any) -> Any:  # pragma: no cover
     """Convert special types to strings for JSON serialization.
+
+    Handles datetime, date, enums, Pydantic models, and numpy arrays.
 
     Args:
         value: Value to convert.
 
     Returns:
-        String representation of the value.
+        Serializable representation of the value (string, list, dict, etc.).
+
+    Raises:
+        TypeError: If value cannot be serialized.
     """
     if isinstance(value, datetime.datetime):
         return convert_datetime_to_gmt_iso(value)
@@ -31,10 +40,16 @@ def _type_to_string(value: Any) -> str:  # pragma: no cover
         return str(value.value)
     if PYDANTIC_INSTALLED and isinstance(value, BaseModel):
         return value.model_dump_json()
+    if NUMPY_INSTALLED:
+        import numpy as np
+
+        if isinstance(value, np.ndarray):
+            return value.tolist()
     try:
         return str(value)
     except Exception as exc:
-        raise TypeError from exc
+        msg = f"Cannot serialize {type(value).__name__}"
+        raise TypeError(msg) from exc
 
 
 class JSONSerializer(Protocol):
@@ -128,22 +143,37 @@ class MsgspecSerializer(BaseJSONSerializer):
 
 
 class OrjsonSerializer(BaseJSONSerializer):
-    """Orjson-based JSON serializer with native datetime/UUID support."""
+    """Orjson-based JSON serializer with native datetime/UUID support.
+
+    Automatically enables numpy serialization if numpy is installed.
+    """
 
     __slots__ = ()
 
     def encode(self, data: Any, *, as_bytes: bool = False) -> str | bytes:
-        """Encode data using orjson."""
+        """Encode data using orjson.
+
+        Args:
+            data: Data to encode.
+            as_bytes: Whether to return bytes instead of string.
+
+        Returns:
+            JSON string or bytes depending on as_bytes parameter.
+        """
         from orjson import (
             OPT_NAIVE_UTC,  # pyright: ignore[reportUnknownVariableType]
-            OPT_SERIALIZE_NUMPY,  # pyright: ignore[reportUnknownVariableType]
             OPT_SERIALIZE_UUID,  # pyright: ignore[reportUnknownVariableType]
         )
         from orjson import dumps as _orjson_dumps  # pyright: ignore[reportMissingImports]
 
-        result = _orjson_dumps(
-            data, default=_type_to_string, option=OPT_SERIALIZE_NUMPY | OPT_NAIVE_UTC | OPT_SERIALIZE_UUID
-        )
+        options = OPT_NAIVE_UTC | OPT_SERIALIZE_UUID
+
+        if NUMPY_INSTALLED:
+            from orjson import OPT_SERIALIZE_NUMPY  # pyright: ignore[reportUnknownVariableType]
+
+            options |= OPT_SERIALIZE_NUMPY
+
+        result = _orjson_dumps(data, default=_type_to_string, option=options)
         return result if as_bytes else result.decode("utf-8")
 
     def decode(self, data: str | bytes, *, decode_bytes: bool = True) -> Any:

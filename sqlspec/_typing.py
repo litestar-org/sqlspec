@@ -389,6 +389,24 @@ except ImportError:
     PYARROW_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
+@runtime_checkable
+class NumpyArrayStub(Protocol):
+    """Protocol stub for numpy.ndarray when numpy is not installed.
+
+    Provides minimal interface for type checking and serialization support.
+    """
+
+    def tolist(self) -> "list[Any]":
+        """Convert array to Python list."""
+        ...
+
+
+try:
+    from numpy import ndarray as NumpyArray  # noqa: N812
+except ImportError:
+    NumpyArray = NumpyArrayStub  # type: ignore[assignment,misc]
+
+
 try:
     from opentelemetry import trace  # pyright: ignore[reportMissingImports, reportAssignmentType]
     from opentelemetry.trace import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
@@ -660,6 +678,8 @@ __all__ = (
     "FailFastStub",
     "Gauge",
     "Histogram",
+    "NumpyArray",
+    "NumpyArrayStub",
     "Span",
     "Status",
     "StatusCode",
