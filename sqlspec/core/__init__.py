@@ -1,9 +1,9 @@
-"""SQLSpec Core Module - High-Performance SQL Processing System.
+"""SQLSpec Core Module - SQL Processing System.
 
 This module provides the core SQL processing infrastructure for SQLSpec, implementing
 a complete pipeline for SQL statement compilation, parameter processing, caching,
-and result management. All components are optimized for MyPyC compilation and
-designed for maximum performance with minimal overhead.
+and result management. All components are optimized for MyPyC compilation to
+reduce overhead.
 
 Architecture Overview:
     The core module implements a single-pass processing pipeline where SQL statements

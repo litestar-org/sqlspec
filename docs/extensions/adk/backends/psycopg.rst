@@ -703,7 +703,7 @@ Psycopg3 vs AsyncPG
      - Manual string composition
    * - Performance
      - Very fast (binary protocol)
-     - Fastest (~10% faster)
+     - Very fast (Cython-optimized)
    * - Type Safety
      - Explicit, safer
      - Implicit, convenient
@@ -762,12 +762,12 @@ When to Choose Psycopg3
 
 - Pure async application, no sync needed
 - Want simplest JSONB insertion (no wrapper required)
-- Need absolute maximum performance (~10% faster)
+- Want Cython-based performance characteristics
 - Prefer implicit type conversion
 
 **Consider Psqlpy When:**
 
-- Need cutting-edge Rust performance
+- Want Rust-based performance characteristics
 - Building high-throughput data pipelines
 - Want Rust safety guarantees
 - Can work with an evolving ecosystem

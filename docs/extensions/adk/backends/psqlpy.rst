@@ -5,24 +5,23 @@ Psqlpy Backend
 Overview
 ========
 
-Psqlpy is a **Rust-based asynchronous PostgreSQL driver** that offers exceptional performance for high-throughput database operations. Built with PyO3, it combines the safety and speed of Rust with Python's ease of use, making it ideal for performance-critical AI agent deployments.
+Psqlpy is a **Rust-based asynchronous PostgreSQL driver** for high-throughput database operations. Built with PyO3, it combines the safety and speed of Rust with Python's ease of use, making it suitable for performance-critical AI agent deployments.
 
 **Key Features:**
 
-- **Rust Performance**: Native Rust implementation for maximum speed
+- **Rust Performance**: Native Rust implementation
 - **Async-Native**: Built from the ground up for async I/O
 - **JSONB Support**: Native PostgreSQL JSONB handling without wrapper types
-- **Connection Pooling**: Built-in high-performance connection pool
+- **Connection Pooling**: Built-in connection pool
 - **Type Safety**: Strong type system inherited from Rust
 - **Zero-Copy Operations**: Efficient memory usage where possible
 
 **Ideal Use Cases:**
 
-- High-throughput AI agent applications requiring maximum performance
-- Production deployments with demanding performance requirements
+- High-throughput AI agent applications with demanding performance requirements
+- Production deployments requiring Rust-based performance characteristics
 - Rust-based technology stacks seeking consistent tooling
-- Applications needing optimal PostgreSQL performance
-- Systems with high concurrent load and low latency requirements
+- Applications with high concurrent load and low latency requirements
 
 Installation
 ============
@@ -304,15 +303,15 @@ Rust Performance Benefits
 
 Psqlpy's Rust implementation provides significant performance advantages:
 
-**Benchmark Comparison (relative to pure Python drivers):**
+**Performance Characteristics:**
 
-- **Connection Pooling**: ~2-3x faster pool acquisition
-- **Query Execution**: ~1.5-2x faster for simple queries
-- **JSON Parsing**: ~2-4x faster JSONB operations
+- **Connection Pooling**: Optimized pool acquisition
+- **Query Execution**: Rust-based execution path
+- **JSON Parsing**: Efficient JSONB operations
 - **Memory Efficiency**: Lower memory overhead per connection
-- **Concurrent Load**: Better performance under high concurrency
+- **Concurrent Load**: Strong performance under high concurrency
 
-**When Performance Matters Most:**
+**When to Consider Psqlpy:**
 
 ✅ High transaction rate (>1000 TPS)
 ✅ Large JSONB payloads (>1KB state objects)
