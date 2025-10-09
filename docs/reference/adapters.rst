@@ -686,11 +686,13 @@ oracledb
 - Oracle-specific data types (NUMBER, CLOB, BLOB, etc.)
 - Connection pooling
 - Two-phase commit support
+- **NumPy VECTOR support** (Oracle 23ai+) - automatic conversion for AI/ML embeddings
 
 **Known Limitations**:
 
 - Separate configuration classes for sync and async
 - Thick mode requires Oracle Instant Client installation
+- VECTOR data type requires Oracle Database 23ai or higher
 
 **Installation**:
 
@@ -741,6 +743,101 @@ oracledb
 
    with sql.provide_session(db) as session:
        result = session.execute("SELECT * FROM users WHERE id = :1", [1])
+
+**Configuration (with NumPy VECTOR Support - Oracle 23ai+)**:
+
+.. code-block:: python
+
+   import numpy as np
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.oracledb import OracleAsyncConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       OracleAsyncConfig(
+           pool_config={
+               "user": "system",
+               "password": "oracle",
+               "dsn": "localhost:1521/FREEPDB1"
+           },
+           driver_features={
+               "enable_numpy_vectors": True  # Enable automatic NumPy conversion
+           }
+       )
+   )
+
+   async with sql.provide_session(db) as session:
+       # Create table with VECTOR column
+       await session.execute("""
+           CREATE TABLE embeddings (
+               id NUMBER PRIMARY KEY,
+               text VARCHAR2(4000),
+               embedding VECTOR(768, FLOAT32)
+           )
+       """)
+
+       # Insert NumPy array - automatically converted to Oracle VECTOR
+       vector = np.random.rand(768).astype(np.float32)
+       await session.execute(
+           "INSERT INTO embeddings VALUES (:1, :2, :3)",
+           (1, "sample text", vector)
+       )
+
+       # Retrieve - automatically converted back to NumPy array
+       result = await session.select_one(
+           "SELECT * FROM embeddings WHERE id = :1",
+           (1,)
+       )
+       embedding = result["EMBEDDING"]
+       assert isinstance(embedding, np.ndarray)
+       assert embedding.dtype == np.float32
+
+**NumPy VECTOR Support Details**:
+
+Oracle Database 23ai introduces the VECTOR data type for AI/ML embeddings and similarity search. SQLSpec provides seamless NumPy integration for automatic bidirectional conversion.
+
+**Supported NumPy dtypes**:
+
+- ``float32`` → ``VECTOR(*, FLOAT32)`` - General embeddings (recommended)
+- ``float64`` → ``VECTOR(*, FLOAT64)`` - High-precision embeddings
+- ``int8`` → ``VECTOR(*, INT8)`` - Quantized embeddings
+- ``uint8`` → ``VECTOR(*, BINARY)`` - Binary/hash vectors
+
+**Requirements**:
+
+- Oracle Database 23ai or higher
+- NumPy installed (``pip install numpy``)
+- ``enable_numpy_vectors=True`` in ``driver_features`` (opt-in)
+
+**Manual Conversion API**:
+
+For advanced use cases, use the type converter directly:
+
+.. code-block:: python
+
+   from sqlspec.adapters.oracledb.type_converter import OracleTypeConverter
+
+   converter = OracleTypeConverter()
+
+   # NumPy → Oracle VECTOR
+   oracle_array = converter.convert_numpy_to_vector(numpy_array)
+
+   # Oracle VECTOR → NumPy
+   numpy_array = converter.convert_vector_to_numpy(oracle_array)
+
+**Vector Similarity Search Example**:
+
+.. code-block:: python
+
+   query_vector = np.random.rand(768).astype(np.float32)
+
+   results = await session.select_all("""
+       SELECT id, text,
+              VECTOR_DISTANCE(embedding, :1, COSINE) as distance
+       FROM embeddings
+       ORDER BY distance
+       FETCH FIRST 5 ROWS ONLY
+   """, (query_vector,))
 
 **API Reference**:
 
