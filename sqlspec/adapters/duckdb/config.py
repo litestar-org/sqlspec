@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -110,14 +110,24 @@ class DuckDBSecretConfig(TypedDict, total=False):
 
 
 class DuckDBDriverFeatures(TypedDict, total=False):
-    """TypedDict for DuckDB driver features configuration."""
+    """TypedDict for DuckDB driver features configuration.
+
+    Attributes:
+        extensions: List of extensions to install/load on connection creation.
+        secrets: List of secrets to create for AI/API integrations.
+        on_connection_create: Callback executed when connection is created.
+        json_serializer: Custom JSON serializer for dict/list parameter conversion.
+            Defaults to sqlspec.utils.serializers.to_json if not provided.
+        enable_uuid_conversion: Enable automatic UUID string conversion.
+            When True (default), UUID strings are automatically converted to UUID objects.
+            When False, UUID strings are treated as regular strings.
+    """
 
     extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
-    """List of extensions to install/load on connection creation."""
     secrets: NotRequired[Sequence[DuckDBSecretConfig]]
-    """List of secrets to create for AI/API integrations."""
     on_connection_create: NotRequired["Callable[[DuckDBConnection], DuckDBConnection | None]"]
-    """Callback executed when connection is created."""
+    json_serializer: NotRequired["Callable[[Any], str]"]
+    enable_uuid_conversion: NotRequired[bool]
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
@@ -131,11 +141,37 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     - Auto configuration settings
     - Arrow integration
     - Direct file querying capabilities
+    - Configurable type handlers for JSON serialization and UUID conversion
 
     DuckDB Connection Pool Configuration:
     - Default pool size is 1-4 connections (DuckDB uses single connection by default)
     - Connection recycling is set to 24 hours by default (set to 0 to disable)
     - Shared memory databases use `:memory:shared_db` for proper concurrency
+
+    Type Handler Configuration via driver_features:
+    - `json_serializer`: Custom JSON serializer for dict/list parameters.
+      Defaults to `sqlspec.utils.serializers.to_json` if not provided.
+      Example: `json_serializer=msgspec.json.encode(...).decode('utf-8')`
+
+    - `enable_uuid_conversion`: Enable automatic UUID string conversion (default: True).
+      When True, UUID strings in query results are automatically converted to UUID objects.
+      When False, UUID strings are treated as regular strings.
+
+    Example:
+        >>> import msgspec
+        >>> from sqlspec.adapters.duckdb import DuckDBConfig
+        >>>
+        >>> # Custom JSON serializer
+        >>> def custom_json(obj):
+        ...     return msgspec.json.encode(obj).decode("utf-8")
+        >>>
+        >>> config = DuckDBConfig(
+        ...     pool_config={"database": ":memory:"},
+        ...     driver_features={
+        ...         "json_serializer": custom_json,
+        ...         "enable_uuid_conversion": False,
+        ...     },
+        ... )
     """
 
     driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
@@ -159,7 +195,8 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             pool_instance: Pre-created pool instance
             migration_config: Migration configuration
             statement_config: Statement configuration override
-            driver_features: DuckDB-specific driver features
+            driver_features: DuckDB-specific driver features including json_serializer
+                and enable_uuid_conversion options
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
@@ -171,13 +208,17 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         if pool_config.get("database") in {":memory:", ""}:
             pool_config["database"] = ":memory:shared_db"
 
+        processed_features = dict(driver_features) if driver_features else {}
+        if "enable_uuid_conversion" not in processed_features:
+            processed_features["enable_uuid_conversion"] = True
+
         super().__init__(
             bind_key=bind_key,
             pool_config=dict(pool_config),
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or duckdb_statement_config,
-            driver_features=cast("dict[str, Any]", driver_features),
+            driver_features=processed_features,
             extension_config=extension_config,
         )
 
@@ -272,7 +313,11 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             A context manager that yields a DuckDBDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            driver = self.driver_type(connection=connection, statement_config=statement_config or self.statement_config)
+            driver = self.driver_type(
+                connection=connection,
+                statement_config=statement_config or self.statement_config,
+                driver_features=self.driver_features,
+            )
             yield driver
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":

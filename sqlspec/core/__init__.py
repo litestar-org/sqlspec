@@ -90,7 +90,7 @@ Example Usage:
 """
 
 from sqlspec.core import filters
-from sqlspec.core.cache import CacheConfig, CacheStats, MultiLevelCache, UnifiedCache, get_cache
+from sqlspec.core.cache import CacheConfig, CacheStats, MultiLevelCache, UnifiedCache, get_cache, get_cache_config
 from sqlspec.core.compiler import OperationType, SQLProcessor
 from sqlspec.core.filters import StatementFilter
 from sqlspec.core.hashing import (
@@ -131,6 +131,7 @@ __all__ = (
     "UnifiedCache",
     "filters",
     "get_cache",
+    "get_cache_config",
     "hash_expression",
     "hash_expression_node",
     "hash_optimized_expression",

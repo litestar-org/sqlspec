@@ -13,15 +13,18 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.asyncmy._types import AsyncmyConnection
 from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, asyncmy_statement_config
 from sqlspec.config import AsyncDatabaseConfig
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
     from asyncmy.pool import Pool  # pyright: ignore
 
     from sqlspec.core.statement import StatementConfig
 
 
-__all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyPoolParams")
+__all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", "AsyncmyPoolParams")
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +60,24 @@ class AsyncmyPoolParams(AsyncmyConnectionParams, total=False):
     pool_recycle: NotRequired[int]
 
 
+class AsyncmyDriverFeatures(TypedDict, total=False):
+    """Asyncmy driver feature flags.
+
+    MySQL/MariaDB handle JSON natively, but custom serializers can be provided
+    for specialized use cases (e.g., orjson for performance, msgspec for type safety).
+
+    json_serializer: Custom JSON serializer function.
+        Defaults to sqlspec.utils.serializers.to_json.
+        Use for performance (orjson) or custom encoding.
+    json_deserializer: Custom JSON deserializer function.
+        Defaults to sqlspec.utils.serializers.from_json.
+        Use for performance (orjson) or custom decoding.
+    """
+
+    json_serializer: NotRequired["Callable[[Any], str]"]
+    json_deserializer: NotRequired["Callable[[str], Any]"]
+
+
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):  # pyright: ignore
     """Configuration for Asyncmy database connections."""
 
@@ -70,7 +91,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         pool_instance: "AsyncmyPool | None" = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: "StatementConfig | None" = None,
-        driver_features: "dict[str, Any] | None" = None,
+        driver_features: "AsyncmyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
@@ -81,7 +102,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             pool_instance: Existing pool instance to use
             migration_config: Migration configuration
             statement_config: Statement configuration override
-            driver_features: Driver feature configuration
+            driver_features: Driver feature configuration (TypedDict or dict)
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
@@ -98,18 +119,33 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         if statement_config is None:
             statement_config = asyncmy_statement_config
 
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+
+        if "json_serializer" not in processed_driver_features:
+            processed_driver_features["json_serializer"] = to_json
+        if "json_deserializer" not in processed_driver_features:
+            processed_driver_features["json_deserializer"] = from_json
+
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features or {},
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )
 
     async def _create_pool(self) -> "AsyncmyPool":  # pyright: ignore
-        """Create the actual async connection pool."""
+        """Create the actual async connection pool.
+
+        MySQL/MariaDB handle JSON types natively without requiring connection-level
+        type handlers. JSON serialization is handled via type_coercion_map in the
+        driver's statement_config (see driver.py).
+
+        Future driver_features can be added here if needed (e.g., custom connection
+        initialization, specialized type handling).
+        """
         return await asyncmy.create_pool(**dict(self.pool_config))  # pyright: ignore
 
     async def _close_pool(self) -> None:
@@ -183,7 +219,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {"AsyncmyConnection": AsyncmyConnection, "AsyncmyPool": AsyncmyPool, "AsyncmyCursor": AsyncmyCursor}
-        )
+        namespace.update({
+            "AsyncmyConnection": AsyncmyConnection,
+            "AsyncmyPool": AsyncmyPool,
+            "AsyncmyCursor": AsyncmyCursor,
+        })
         return namespace

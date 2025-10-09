@@ -16,11 +16,8 @@ from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.adapters.bigquery.type_converter import BigQueryTypeConverter
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
-from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.driver._common import ExecutionResult
+from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig, get_cache_config
+from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     DataError,
@@ -33,11 +30,11 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from contextlib import AbstractContextManager
 
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import SQL
-    from sqlspec.driver._sync import SyncDataDictionaryBase
+    from sqlspec.core import SQL, SQLResult
+    from sqlspec.driver import SyncDataDictionaryBase
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +47,7 @@ HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 
 
-_type_converter = BigQueryTypeConverter()
+_default_type_converter = BigQueryTypeConverter()
 
 
 _BQ_TYPE_MAP: dict[type, tuple[str, str | None]] = {
@@ -64,6 +61,133 @@ _BQ_TYPE_MAP: dict[type, tuple[str, str | None]] = {
     datetime.time: ("TIME", None),
     dict: ("JSON", None),
 }
+
+
+def _create_array_parameter(name: str, value: Any, array_type: str) -> ArrayQueryParameter:
+    """Create BigQuery ARRAY parameter.
+
+    Args:
+        name: Parameter name.
+        value: Array value (converted to list, empty list if None).
+        array_type: BigQuery array element type.
+
+    Returns:
+        ArrayQueryParameter instance.
+    """
+    return ArrayQueryParameter(name, array_type, [] if value is None else list(value))
+
+
+def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[Any], str]") -> ScalarQueryParameter:
+    """Create BigQuery JSON parameter as STRING type.
+
+    Args:
+        name: Parameter name.
+        value: JSON-serializable value.
+        json_serializer: Function to serialize to JSON string.
+
+    Returns:
+        ScalarQueryParameter with STRING type.
+    """
+    return ScalarQueryParameter(name, "STRING", json_serializer(value))
+
+
+def _create_scalar_parameter(name: str, value: Any, param_type: str) -> ScalarQueryParameter:
+    """Create BigQuery scalar parameter.
+
+    Args:
+        name: Parameter name.
+        value: Scalar value.
+        param_type: BigQuery parameter type (INT64, FLOAT64, etc.).
+
+    Returns:
+        ScalarQueryParameter instance.
+    """
+    return ScalarQueryParameter(name, param_type, value)
+
+
+def _create_literal_node(value: Any, json_serializer: "Callable[[Any], str]") -> "exp.Expression":
+    """Create a SQLGlot literal expression from a Python value.
+
+    Args:
+        value: Python value to convert to SQLGlot literal.
+        json_serializer: Function to serialize dict/list to JSON string.
+
+    Returns:
+        SQLGlot expression representing the literal value.
+    """
+    if value is None:
+        return exp.Null()
+    if isinstance(value, bool):
+        return exp.Boolean(this=value)
+    if isinstance(value, (int, float)):
+        return exp.Literal.number(str(value))
+    if isinstance(value, str):
+        return exp.Literal.string(value)
+    if isinstance(value, (list, tuple)):
+        items = [_create_literal_node(item, json_serializer) for item in value]
+        return exp.Array(expressions=items)
+    if isinstance(value, dict):
+        json_str = json_serializer(value)
+        return exp.Literal.string(json_str)
+
+    return exp.Literal.string(str(value))
+
+
+def _replace_placeholder_node(
+    node: "exp.Expression",
+    parameters: Any,
+    placeholder_counter: dict[str, int],
+    json_serializer: "Callable[[Any], str]",
+) -> "exp.Expression":
+    """Replace placeholder or parameter nodes with literal values.
+
+    Handles both positional placeholders (?) and named parameters (@name, :name).
+    Converts values to SQLGlot literal expressions for safe embedding in SQL.
+
+    Args:
+        node: SQLGlot expression node to check and potentially replace.
+        parameters: Parameter values (dict, list, or tuple).
+        placeholder_counter: Mutable counter dict for positional placeholders.
+        json_serializer: Function to serialize dict/list to JSON string.
+
+    Returns:
+        Literal expression if replacement made, otherwise original node.
+    """
+    if isinstance(node, exp.Placeholder):
+        if isinstance(parameters, (list, tuple)):
+            current_index = placeholder_counter["index"]
+            placeholder_counter["index"] += 1
+            if current_index < len(parameters):
+                return _create_literal_node(parameters[current_index], json_serializer)
+        return node
+
+    if isinstance(node, exp.Parameter):
+        param_name = str(node.this) if hasattr(node.this, "__str__") else node.this
+
+        if isinstance(parameters, dict):
+            possible_names = [param_name, f"@{param_name}", f":{param_name}", f"param_{param_name}"]
+            for name in possible_names:
+                if name in parameters:
+                    actual_value = getattr(parameters[name], "value", parameters[name])
+                    return _create_literal_node(actual_value, json_serializer)
+            return node
+
+        if isinstance(parameters, (list, tuple)):
+            try:
+                if param_name.startswith("param_"):
+                    param_index = int(param_name[6:])
+                    if param_index < len(parameters):
+                        return _create_literal_node(parameters[param_index], json_serializer)
+
+                if param_name.isdigit():
+                    param_index = int(param_name)
+                    if param_index < len(parameters):
+                        return _create_literal_node(parameters[param_index], json_serializer)
+            except (ValueError, IndexError, AttributeError):
+                pass
+        return node
+
+    return node
 
 
 def _get_bq_param_type(value: Any) -> tuple[str | None, str | None]:
@@ -99,20 +223,30 @@ def _get_bq_param_type(value: Any) -> tuple[str | None, str | None]:
     return None, None
 
 
-_BQ_PARAM_CREATOR_MAP: dict[str, Any] = {
-    "ARRAY": lambda name, value, array_type: ArrayQueryParameter(
-        name, array_type, [] if value is None else list(value)
-    ),
-    "JSON": lambda name, value, _: ScalarQueryParameter(name, "STRING", to_json(value)),
-    "SCALAR": lambda name, value, param_type: ScalarQueryParameter(name, param_type, value),
-}
+def _get_bq_param_creator_map(json_serializer: "Callable[[Any], str]") -> dict[str, Any]:
+    """Get BigQuery parameter creator map with configurable JSON serializer.
+
+    Args:
+        json_serializer: Function to serialize dict/list to JSON string.
+
+    Returns:
+        Dictionary mapping parameter types to creator functions.
+    """
+    return {
+        "ARRAY": _create_array_parameter,
+        "JSON": lambda name, value, _: _create_json_parameter(name, value, json_serializer),
+        "SCALAR": _create_scalar_parameter,
+    }
 
 
-def _create_bq_parameters(parameters: Any) -> "list[ArrayQueryParameter | ScalarQueryParameter]":
+def _create_bq_parameters(
+    parameters: Any, json_serializer: "Callable[[Any], str]"
+) -> "list[ArrayQueryParameter | ScalarQueryParameter]":
     """Create BigQuery QueryParameter objects from parameters.
 
     Args:
         parameters: Dict of named parameters or list of positional parameters
+        json_serializer: Function to serialize dict/list to JSON string
 
     Returns:
         List of BigQuery QueryParameter objects
@@ -121,6 +255,7 @@ def _create_bq_parameters(parameters: Any) -> "list[ArrayQueryParameter | Scalar
         return []
 
     bq_parameters: list[ArrayQueryParameter | ScalarQueryParameter] = []
+    param_creator_map = _get_bq_param_creator_map(json_serializer)
 
     if isinstance(parameters, dict):
         for name, value in parameters.items():
@@ -129,13 +264,13 @@ def _create_bq_parameters(parameters: Any) -> "list[ArrayQueryParameter | Scalar
             param_type, array_element_type = _get_bq_param_type(actual_value)
 
             if param_type == "ARRAY" and array_element_type:
-                creator = _BQ_PARAM_CREATOR_MAP["ARRAY"]
+                creator = param_creator_map["ARRAY"]
                 bq_parameters.append(creator(param_name_for_bq, actual_value, array_element_type))
             elif param_type == "JSON":
-                creator = _BQ_PARAM_CREATOR_MAP["JSON"]
+                creator = param_creator_map["JSON"]
                 bq_parameters.append(creator(param_name_for_bq, actual_value, None))
             elif param_type:
-                creator = _BQ_PARAM_CREATOR_MAP["SCALAR"]
+                creator = param_creator_map["SCALAR"]
                 bq_parameters.append(creator(param_name_for_bq, actual_value, param_type))
             else:
                 msg = f"Unsupported BigQuery parameter type for value of param '{name}': {type(actual_value)}"
@@ -148,21 +283,33 @@ def _create_bq_parameters(parameters: Any) -> "list[ArrayQueryParameter | Scalar
     return bq_parameters
 
 
-bigquery_type_coercion_map = {
-    tuple: list,
-    bool: lambda x: x,
-    int: lambda x: x,
-    float: lambda x: x,
-    str: _type_converter.convert_if_detected,
-    bytes: lambda x: x,
-    datetime.datetime: lambda x: x,
-    datetime.date: lambda x: x,
-    datetime.time: lambda x: x,
-    Decimal: lambda x: x,
-    dict: lambda x: x,
-    list: lambda x: x,
-    type(None): lambda _: None,
-}
+def _get_bigquery_type_coercion_map(type_converter: BigQueryTypeConverter) -> dict[type, Any]:
+    """Get BigQuery type coercion map with configurable type converter.
+
+    Args:
+        type_converter: BigQuery type converter instance
+
+    Returns:
+        Type coercion map for BigQuery
+    """
+    return {
+        tuple: list,
+        bool: lambda x: x,
+        int: lambda x: x,
+        float: lambda x: x,
+        str: type_converter.convert_if_detected,
+        bytes: lambda x: x,
+        datetime.datetime: lambda x: x,
+        datetime.date: lambda x: x,
+        datetime.time: lambda x: x,
+        Decimal: lambda x: x,
+        dict: lambda x: x,
+        list: lambda x: x,
+        type(None): lambda _: None,
+    }
+
+
+bigquery_type_coercion_map = _get_bigquery_type_coercion_map(_default_type_converter)
 
 
 bigquery_statement_config = StatementConfig(
@@ -307,7 +454,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
     type coercion, error handling, and query job management.
     """
 
-    __slots__ = ("_data_dictionary", "_default_query_job_config")
+    __slots__ = ("_data_dictionary", "_default_query_job_config", "_json_serializer", "_type_converter")
     dialect = "bigquery"
 
     def __init__(
@@ -316,13 +463,39 @@ class BigQueryDriver(SyncDriverAdapterBase):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
+        features = driver_features or {}
+
+        json_serializer = features.get("json_serializer")
+        if json_serializer is None:
+            json_serializer = to_json
+
+        self._json_serializer: Callable[[Any], str] = json_serializer
+
+        enable_uuid_conversion = features.get("enable_uuid_conversion", True)
+        self._type_converter = BigQueryTypeConverter(enable_uuid_conversion=enable_uuid_conversion)
+
         if statement_config is None:
             cache_config = get_cache_config()
-            statement_config = bigquery_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
+            type_coercion_map = _get_bigquery_type_coercion_map(self._type_converter)
+
+            param_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NAMED_AT,
+                supported_parameter_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
+                default_execution_parameter_style=ParameterStyle.NAMED_AT,
+                supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
+                type_coercion_map=type_coercion_map,
+                has_native_list_expansion=True,
+                needs_static_script_compilation=False,
+                preserve_original_params_for_many=True,
+            )
+
+            statement_config = StatementConfig(
+                dialect="bigquery",
+                parameter_config=param_config,
                 enable_parsing=True,
                 enable_validation=True,
-                dialect="bigquery",
+                enable_caching=cache_config.compiled_cache_enabled,
+                enable_parameter_type_wrapping=True,
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
@@ -350,20 +523,39 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return BigQueryExceptionHandler()
 
+    def _should_copy_attribute(self, attr: str, source_config: QueryJobConfig) -> bool:
+        """Check if attribute should be copied between job configs.
+
+        Args:
+            attr: Attribute name to check.
+            source_config: Source configuration object.
+
+        Returns:
+            True if attribute should be copied, False otherwise.
+        """
+        if attr.startswith("_"):
+            return False
+
+        try:
+            value = getattr(source_config, attr)
+            return value is not None and not callable(value)
+        except (AttributeError, TypeError):
+            return False
+
     def _copy_job_config_attrs(self, source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
         """Copy non-private attributes from source config to target config.
 
         Args:
-            source_config: Configuration to copy attributes from
-            target_config: Configuration to copy attributes to
+            source_config: Configuration to copy attributes from.
+            target_config: Configuration to copy attributes to.
         """
         for attr in dir(source_config):
-            if attr.startswith("_"):
+            if not self._should_copy_attribute(attr, source_config):
                 continue
+
             try:
                 value = getattr(source_config, attr)
-                if value is not None and not callable(value):
-                    setattr(target_config, attr, value)
+                setattr(target_config, attr, value)
             except (AttributeError, TypeError):
                 continue
 
@@ -395,7 +587,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if job_config:
             self._copy_job_config_attrs(job_config, final_job_config)
 
-        bq_parameters = _create_bq_parameters(parameters)
+        bq_parameters = _create_bq_parameters(parameters, self._json_serializer)
         final_job_config.query_parameters = bq_parameters
 
         return conn.query(sql_str, job_config=final_job_config)
@@ -431,12 +623,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def _transform_ast_with_literals(self, sql: str, parameters: Any) -> str:
         """Transform SQL AST by replacing placeholders with literal values.
 
+        Used for BigQuery script execution and execute_many operations where
+        parameter binding is not supported. Safely embeds values as SQL literals.
+
         Args:
-            sql: SQL string to transform
-            parameters: Parameters to embed as literals
+            sql: SQL string to transform.
+            parameters: Parameters to embed as literals.
 
         Returns:
-            Transformed SQL string with literals embedded
+            Transformed SQL string with literals embedded.
         """
         if not parameters:
             return sql
@@ -448,69 +643,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         placeholder_counter = {"index": 0}
 
-        def replace_placeholder(node: exp.Expression) -> exp.Expression:
-            """Replace placeholder nodes with literal values."""
-            if isinstance(node, exp.Placeholder):
-                if isinstance(parameters, (list, tuple)):
-                    current_index = placeholder_counter["index"]
-                    placeholder_counter["index"] += 1
-                    if current_index < len(parameters):
-                        return self._create_literal_node(parameters[current_index])
-                return node
-            if isinstance(node, exp.Parameter):
-                param_name = str(node.this) if hasattr(node.this, "__str__") else node.this
-                if isinstance(parameters, dict):
-                    possible_names = [param_name, f"@{param_name}", f":{param_name}", f"param_{param_name}"]
-                    for name in possible_names:
-                        if name in parameters:
-                            actual_value = getattr(parameters[name], "value", parameters[name])
-                            return self._create_literal_node(actual_value)
-                    return node
-                if isinstance(parameters, (list, tuple)):
-                    try:
-                        if param_name.startswith("param_"):
-                            param_index = int(param_name[6:])
-                            if param_index < len(parameters):
-                                return self._create_literal_node(parameters[param_index])
-
-                        if param_name.isdigit():
-                            param_index = int(param_name)
-                            if param_index < len(parameters):
-                                return self._create_literal_node(parameters[param_index])
-                    except (ValueError, IndexError, AttributeError):
-                        pass
-                return node
-            return node
-
-        transformed_ast = ast.transform(replace_placeholder)
+        transformed_ast = ast.transform(
+            lambda node: _replace_placeholder_node(node, parameters, placeholder_counter, self._json_serializer)
+        )
 
         return transformed_ast.sql(dialect="bigquery")
-
-    def _create_literal_node(self, value: Any) -> "exp.Expression":
-        """Create a SQLGlot literal expression from a Python value.
-
-        Args:
-            value: Python value to convert to SQLGlot literal
-
-        Returns:
-            SQLGlot expression representing the literal value
-        """
-        if value is None:
-            return exp.Null()
-        if isinstance(value, bool):
-            return exp.Boolean(this=value)
-        if isinstance(value, (int, float)):
-            return exp.Literal.number(str(value))
-        if isinstance(value, str):
-            return exp.Literal.string(value)
-        if isinstance(value, (list, tuple)):
-            items = [self._create_literal_node(item) for item in value]
-            return exp.Array(expressions=items)
-        if isinstance(value, dict):
-            json_str = to_json(value)
-            return exp.Literal.string(json_str)
-
-        return exp.Literal.string(str(value))
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL script with statement splitting and parameter handling.

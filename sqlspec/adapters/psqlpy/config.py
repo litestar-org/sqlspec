@@ -12,6 +12,7 @@ from sqlspec.adapters.psqlpy._types import PsqlpyConnection
 from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, psqlpy_statement_config
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.core.statement import StatementConfig
+from sqlspec.typing import PGVECTOR_INSTALLED
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -73,7 +74,19 @@ class PsqlpyPoolParams(PsqlpyConnectionParams, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-__all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyPoolParams")
+class PsqlpyDriverFeatures(TypedDict, total=False):
+    """Psqlpy driver feature flags.
+
+    enable_pgvector: Enable automatic pgvector extension support for vector similarity search.
+        Requires pgvector-python package installed.
+        Defaults to True when pgvector is installed.
+        Provides automatic conversion between NumPy arrays and PostgreSQL vector types.
+    """
+
+    enable_pgvector: NotRequired[bool]
+
+
+__all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
 
 
 class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
@@ -89,31 +102,36 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         pool_instance: ConnectionPool | None = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: StatementConfig | None = None,
-        driver_features: dict[str, Any] | None = None,
+        driver_features: "PsqlpyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
         extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize Psqlpy configuration.
 
         Args:
-            pool_config: Pool configuration parameters
-            pool_instance: Existing connection pool instance to use
-            migration_config: Migration configuration
-            statement_config: SQL statement configuration
-            driver_features: Driver feature configuration
-            bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            pool_config: Pool configuration parameters.
+            pool_instance: Existing connection pool instance to use.
+            migration_config: Migration configuration.
+            statement_config: SQL statement configuration.
+            driver_features: Driver feature configuration (TypedDict or dict).
+            bind_key: Optional unique identifier for this configuration.
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
+
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        if "enable_pgvector" not in processed_driver_features:
+            processed_driver_features["enable_pgvector"] = PGVECTOR_INSTALLED
+
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or psqlpy_statement_config,
-            driver_features=driver_features or {},
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )

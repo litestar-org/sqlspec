@@ -73,6 +73,8 @@ class BigQueryDriverFeatures(TypedDict, total=False):
     on_job_start: NotRequired["Callable[[str], None]"]
     on_job_complete: NotRequired["Callable[[str, Any], None]"]
     on_connection_create: NotRequired["Callable[[Any], None]"]
+    json_serializer: NotRequired["Callable[[Any], str]"]
+    enable_uuid_conversion: NotRequired[bool]
 
 
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
@@ -114,6 +116,14 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             self.connection_config.update(extras)
 
         self.driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+
+        if "enable_uuid_conversion" not in self.driver_features:
+            self.driver_features["enable_uuid_conversion"] = True
+
+        if "json_serializer" not in self.driver_features:
+            from sqlspec.utils.serializers import to_json
+
+            self.driver_features["json_serializer"] = to_json
 
         self._connection_instance: BigQueryConnection | None = self.driver_features.get("connection_instance")
 

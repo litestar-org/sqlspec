@@ -1113,6 +1113,229 @@ Stateless adapters create connections per request:
 - ADBC (stateless Arrow connections)
 - BigQuery (stateless HTTP API)
 
+Type Handler Pattern
+====================
+
+SQLSpec supports optional type handlers for database-specific features that require external dependencies. Type handlers enable automatic type conversion at the database driver level.
+
+Overview
+--------
+
+Type handlers differ from type converters:
+
+**Type Converters** (``type_converter.py``):
+  - Transform data after retrieval or before insertion
+  - Pure Python transformations
+  - Examples: JSON detection, datetime formatting
+
+**Type Handlers** (``_<feature>_handlers.py``):
+  - Register with database driver for automatic conversion
+  - Require optional dependencies
+  - Examples: pgvector, NumPy arrays
+
+Graceful Degradation
+--------------------
+
+Type handlers gracefully degrade when optional dependencies are not installed:
+
+- Detection via ``sqlspec._typing`` constants (``NUMPY_INSTALLED``, ``PGVECTOR_INSTALLED``)
+- Auto-enable in ``driver_features`` when dependency available
+- No errors if dependency missing - simply returns unconverted values
+
+Optional Type Support Matrix
+------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 30 30
+
+   * - Adapter
+     - Feature
+     - Optional Dependency
+     - Configuration
+   * - oracledb
+     - NumPy VECTOR
+     - ``numpy``
+     - ``driver_features["enable_numpy_vectors"]``
+   * - asyncpg
+     - pgvector
+     - ``pgvector``
+     - Auto-enabled (``driver_features["enable_pgvector"]``)
+   * - psycopg
+     - pgvector
+     - ``pgvector``
+     - Auto-enabled (``driver_features["enable_pgvector"]``)
+
+Configuring Type Handlers
+---------------------------
+
+Type handlers are configured via the ``driver_features`` parameter:
+
+**Automatic Detection** (Recommended):
+
+.. code-block:: python
+
+   # NumPy vectors - auto-enabled when numpy installed
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.oracledb import OracleAsyncConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(OracleAsyncConfig(
+       pool_config={"dsn": "localhost:1521/FREEPDB1"}
+       # enable_numpy_vectors automatically set to True if numpy installed
+   ))
+
+**Explicit Configuration**:
+
+.. code-block:: python
+
+   # Explicitly disable optional feature
+   db = sql.add_config(OracleAsyncConfig(
+       pool_config={"dsn": "localhost:1521/FREEPDB1"},
+       driver_features={"enable_numpy_vectors": False}  # Force disable
+   ))
+
+**Check Feature Status**:
+
+.. code-block:: python
+
+   from sqlspec._typing import NUMPY_INSTALLED, PGVECTOR_INSTALLED
+
+   print(f"NumPy available: {NUMPY_INSTALLED}")
+   print(f"pgvector available: {PGVECTOR_INSTALLED}")
+
+NumPy VECTOR Support (Oracle)
+-------------------------------
+
+Oracle Database 23ai introduces the VECTOR data type for AI/ML embeddings. SQLSpec provides seamless NumPy integration:
+
+**Requirements**:
+- Oracle Database 23ai or higher
+- ``numpy`` package installed
+- ``driver_features["enable_numpy_vectors"]=True`` (auto-enabled)
+
+**Supported dtypes**:
+- ``float32`` → ``VECTOR(*, FLOAT32)`` - General embeddings (recommended)
+- ``float64`` → ``VECTOR(*, FLOAT64)`` - High-precision embeddings
+- ``int8`` → ``VECTOR(*, INT8)`` - Quantized embeddings
+- ``uint8`` → ``VECTOR(*, BINARY)`` - Binary/hash vectors
+
+**Example Usage**:
+
+See the Oracle adapter documentation above for complete examples.
+
+pgvector Support (PostgreSQL)
+-------------------------------
+
+PostgreSQL's pgvector extension enables vector similarity search. SQLSpec automatically registers pgvector support when available:
+
+**Requirements**:
+- PostgreSQL with pgvector extension installed
+- ``pgvector`` Python package installed
+- Automatic registration (no configuration needed)
+
+**Adapters with pgvector support**:
+- ``asyncpg`` - Async PostgreSQL driver
+- ``psycopg`` - Sync and async PostgreSQL driver
+
+**Example Usage**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(AsyncpgConfig(
+       pool_config={"dsn": "postgresql://localhost/mydb"}
+       # pgvector automatically registered if available
+   ))
+
+   async with sql.provide_session(db) as session:
+       # Enable pgvector extension
+       await session.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+       # Create table with vector column
+       await session.execute("""
+           CREATE TABLE items (
+               id SERIAL PRIMARY KEY,
+               embedding vector(384)
+           )
+       """)
+
+       # Insert vector (NumPy array or list)
+       embedding = [0.1, 0.2, 0.3] * 128  # 384 dimensions
+       await session.execute(
+           "INSERT INTO items (embedding) VALUES ($1)",
+           [embedding]
+       )
+
+       # Vector similarity search
+       results = await session.select_all("""
+           SELECT id, embedding <-> $1 as distance
+           FROM items
+           ORDER BY distance
+           LIMIT 5
+       """, [embedding])
+
+Implementing Custom Type Handlers
+-----------------------------------
+
+To add type handlers for a new optional feature:
+
+1. **Define detection constant** in ``sqlspec/_typing.py``:
+
+   .. code-block:: python
+
+      try:
+          import optional_package
+          OPTIONAL_PACKAGE_INSTALLED = True
+      except ImportError:
+          OPTIONAL_PACKAGE_INSTALLED = False
+
+2. **Create handler module** (``adapters/<adapter>/_feature_handlers.py``):
+
+   .. code-block:: python
+
+      from sqlspec._typing import OPTIONAL_PACKAGE_INSTALLED
+
+      def register_handlers(connection):
+          if not OPTIONAL_PACKAGE_INSTALLED:
+              logger.debug("Optional package not installed")
+              return
+          # Register handlers with connection
+
+3. **Update config** to auto-detect and initialize:
+
+   .. code-block:: python
+
+      from sqlspec._typing import OPTIONAL_PACKAGE_INSTALLED
+
+      class Config(AsyncDatabaseConfig):
+          def __init__(self, *, driver_features=None, **kwargs):
+              if driver_features is None:
+                  driver_features = {}
+              if "enable_feature" not in driver_features:
+                  driver_features["enable_feature"] = OPTIONAL_PACKAGE_INSTALLED
+              super().__init__(driver_features=driver_features, **kwargs)
+
+          async def _init_connection(self, connection):
+              if self.driver_features.get("enable_feature"):
+                  from ._feature_handlers import register_handlers
+                  register_handlers(connection)
+
+4. **Add tests** (unit and integration):
+
+   .. code-block:: python
+
+      import pytest
+      from sqlspec._typing import OPTIONAL_PACKAGE_INSTALLED
+
+      @pytest.mark.skipif(not OPTIONAL_PACKAGE_INSTALLED, reason="Package not installed")
+      async def test_feature_roundtrip(session):
+          # Test with optional package
+          pass
+
 Creating Custom Adapters
 =========================
 

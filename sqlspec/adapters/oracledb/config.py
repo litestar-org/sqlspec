@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 import oracledb
 from typing_extensions import NotRequired
 
-from sqlspec._typing import NUMPY_INSTALLED
 from sqlspec.adapters.oracledb._types import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
@@ -24,6 +23,7 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+from sqlspec.typing import NUMPY_INSTALLED
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
@@ -33,7 +33,13 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import StatementConfig
 
 
-__all__ = ("OracleAsyncConfig", "OracleConnectionParams", "OraclePoolParams", "OracleSyncConfig")
+__all__ = (
+    "OracleAsyncConfig",
+    "OracleConnectionParams",
+    "OracleDriverFeatures",
+    "OraclePoolParams",
+    "OracleSyncConfig",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +84,19 @@ class OraclePoolParams(OracleConnectionParams, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
+class OracleDriverFeatures(TypedDict, total=False):
+    """Oracle driver feature flags.
+
+    enable_numpy_vectors: Enable automatic NumPy array ↔ Oracle VECTOR conversion.
+        Requires NumPy and Oracle Database 23ai or higher with VECTOR data type support.
+        Defaults to True when NumPy is installed.
+        Provides automatic bidirectional conversion between NumPy ndarrays and Oracle VECTOR columns.
+        Supports float32, float64, int8, and uint8 dtypes.
+    """
+
+    enable_numpy_vectors: NotRequired[bool]
+
+
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections."""
 
@@ -94,20 +113,20 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         pool_instance: "OracleSyncConnectionPool | None" = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: "StatementConfig | None" = None,
-        driver_features: "dict[str, Any] | None" = None,
+        driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
         Args:
-            pool_config: Pool configuration parameters
-            pool_instance: Existing pool instance to use
-            migration_config: Migration configuration
-            statement_config: Default SQL statement configuration
-            driver_features: Optional driver feature configuration
-            bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            pool_config: Pool configuration parameters.
+            pool_instance: Existing pool instance to use.
+            migration_config: Migration configuration.
+            statement_config: Default SQL statement configuration.
+            driver_features: Optional driver feature configuration (TypedDict or dict).
+            bind_key: Optional unique identifier for this configuration.
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
         """
 
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -116,17 +135,16 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             processed_pool_config.update(extras)
         statement_config = statement_config or oracledb_statement_config
 
-        if driver_features is None:
-            driver_features = {}
-        if "enable_numpy_vectors" not in driver_features:
-            driver_features["enable_numpy_vectors"] = NUMPY_INSTALLED
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        if "enable_numpy_vectors" not in processed_driver_features:
+            processed_driver_features["enable_numpy_vectors"] = NUMPY_INSTALLED
 
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )
@@ -247,20 +265,20 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         pool_instance: "OracleAsyncConnectionPool | None" = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: "StatementConfig | None" = None,
-        driver_features: "dict[str, Any] | None" = None,
+        driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 
         Args:
-            pool_config: Pool configuration parameters
-            pool_instance: Existing pool instance to use
-            migration_config: Migration configuration
-            statement_config: Default SQL statement configuration
-            driver_features: Optional driver feature configuration
-            bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            pool_config: Pool configuration parameters.
+            pool_instance: Existing pool instance to use.
+            migration_config: Migration configuration.
+            statement_config: Default SQL statement configuration.
+            driver_features: Optional driver feature configuration (TypedDict or dict).
+            bind_key: Optional unique identifier for this configuration.
+            extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
         """
 
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -268,17 +286,16 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
 
-        if driver_features is None:
-            driver_features = {}
-        if "enable_numpy_vectors" not in driver_features:
-            driver_features["enable_numpy_vectors"] = NUMPY_INSTALLED
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        if "enable_numpy_vectors" not in processed_driver_features:
+            processed_driver_features["enable_numpy_vectors"] = NUMPY_INSTALLED
 
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or oracledb_statement_config,
-            driver_features=driver_features,
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )

@@ -22,15 +22,17 @@ class DuckDBTypeConverter(BaseTypeConverter):
     Includes per-instance LRU cache for improved performance.
     """
 
-    __slots__ = ("_convert_cache",)
+    __slots__ = ("_convert_cache", "_enable_uuid_conversion")
 
-    def __init__(self, cache_size: int = 5000) -> None:
+    def __init__(self, cache_size: int = 5000, enable_uuid_conversion: bool = True) -> None:
         """Initialize converter with per-instance conversion cache.
 
         Args:
             cache_size: Maximum number of string values to cache (default: 5000)
+            enable_uuid_conversion: Enable automatic UUID string conversion (default: True)
         """
         super().__init__()
+        self._enable_uuid_conversion = enable_uuid_conversion
 
         @lru_cache(maxsize=cache_size)
         def _cached_convert(value: str) -> Any:
@@ -38,6 +40,8 @@ class DuckDBTypeConverter(BaseTypeConverter):
                 return value
             detected_type = self.detect_type(value)
             if detected_type:
+                if detected_type == "uuid" and not self._enable_uuid_conversion:
+                    return value
                 try:
                     return self.convert_value(value, detected_type)
                 except Exception:
@@ -66,12 +70,12 @@ class DuckDBTypeConverter(BaseTypeConverter):
             value: Value that might be a UUID.
 
         Returns:
-            UUID object if value is UUID-like, original value otherwise.
+            UUID object if value is UUID-like and conversion enabled, original value otherwise.
         """
         if isinstance(value, UUID):
             return value
 
-        if isinstance(value, str):
+        if isinstance(value, str) and self._enable_uuid_conversion:
             detected_type = self.detect_type(value)
             if detected_type == "uuid":
                 return convert_uuid(value)
