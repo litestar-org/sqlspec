@@ -53,7 +53,7 @@ PostgreSQL is the recommended production database for AI agents due to its robus
 
    .. tab-item:: psqlpy
 
-      High-performance async PostgreSQL driver built with Rust.
+      Async PostgreSQL driver built with Rust.
 
       .. code-block:: bash
 

@@ -5,11 +5,11 @@ AsyncPG Backend
 Overview
 ========
 
-AsyncPG is a high-performance, async-native PostgreSQL driver for Python, written in Cython for exceptional speed. It is the **fastest Python PostgreSQL driver** and the recommended choice for production async AI agent deployments.
+AsyncPG is an async-native PostgreSQL driver for Python, written in Cython. It is a recommended choice for production async AI agent deployments.
 
 **Key Features:**
 
-- **High Performance**: Written in Cython, 3-5x faster than other PostgreSQL drivers
+- **Performance**: Written in Cython for improved execution speed
 - **Native Async**: Pure asyncio implementation, no thread pool overhead
 - **Connection Pooling**: Built-in sophisticated connection pool management
 - **Native JSONB**: Direct dict to/from JSONB conversion without manual serialization
@@ -21,14 +21,14 @@ AsyncPG is a high-performance, async-native PostgreSQL driver for Python, writte
 
 - Production AI agents with high-concurrency async workloads
 - Real-time conversational AI requiring fast response times
-- Multi-user agent platforms with thousands of concurrent sessions
-- Applications requiring maximum PostgreSQL performance
+- Multi-user agent platforms with high concurrency requirements
+- Applications with demanding performance requirements
 - Async web frameworks (Litestar, FastAPI, Starlette)
 
 .. tip::
 
-   **Performance Benchmark**: AsyncPG can handle 10,000+ queries per second in typical workloads,
-   making it ideal for production AI agent applications where response time is critical.
+   AsyncPG is designed for high-concurrency workloads, making it suitable for production AI agent
+   applications where response time is critical.
 
 Installation
 ============
@@ -754,7 +754,7 @@ When to Choose AsyncPG
 **Use AsyncPG When:**
 
 ✅ Building production async AI agents
-✅ Require maximum PostgreSQL performance
+✅ Need strong PostgreSQL performance characteristics
 ✅ Using async web frameworks (Litestar, FastAPI, Starlette)
 ✅ Need connection pooling for high concurrency
 ✅ Working with JSONB data extensively
@@ -764,7 +764,7 @@ When to Choose AsyncPG
 **Consider Alternatives When:**
 
 ❌ **Psycopg3**: Need sync AND async in same codebase (psycopg supports both)
-❌ **Psqlpy**: Require Rust-level performance (experimental, but faster)
+❌ **Psqlpy**: Want Rust-based performance characteristics (experimental)
 ❌ **ADBC**: Need cross-database portability with Arrow format
 ❌ **SQLite**: Development/testing without PostgreSQL server
 ❌ **DuckDB**: Analytical workloads, not transactional
@@ -825,8 +825,8 @@ Comparison: AsyncPG vs Other PostgreSQL Drivers
 .. note::
 
    **Recommendation**: Use AsyncPG for production async workloads. If you need both
-   sync and async in the same application, use Psycopg3. For cutting-edge performance
-   and willing to deal with less maturity, try Psqlpy.
+   sync and async in the same application, use Psycopg3. For Rust-based performance
+   characteristics and willing to deal with less maturity, try Psqlpy.
 
 Troubleshooting
 ===============

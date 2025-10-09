@@ -5,7 +5,7 @@ Introduction
 What is SQLSpec?
 ----------------
 
-SQLSpec is a modern, high-performance Python library for database interaction that prioritizes **raw SQL**, **type safety**, and a **unified data access layer**. It is designed for developers who want to work directly with SQL while benefiting from modern Python features like type hinting and asynchronous programming, without the overhead of a traditional Object-Relational Mapper (ORM).
+SQLSpec is a modern Python library for database interaction that prioritizes **raw SQL**, **type safety**, and a **unified data access layer**. It is designed for developers who want to work directly with SQL while benefiting from modern Python features like type hinting and asynchronous programming, without the overhead of a traditional Object-Relational Mapper (ORM).
 
 At its core, SQLSpec provides a consistent and extensible interface for a wide array of database systems, including PostgreSQL, SQLite, DuckDB, MySQL, Oracle, BigQuery, and many others.
 
@@ -18,7 +18,7 @@ SQLSpec, by contrast, is **not an ORM** and is designed for developers who prefe
 
 1.  **Level of Abstraction**: SQLSpec provides a minimal, lightweight abstraction layer. It keeps you close to the database, focusing on query validation, type-safe result mapping, and a unified I/O layer.
 2.  **Core Use Case**: SQLSpec is a "query mapper" and data integration tool. It is ideal for data-centric applications, APIs, and data engineering workflows where you write optimized SQL and need to move data efficiently.
-3.  **Performance & Data Engineering Focus**: SQLSpec's architecture is designed for high-performance data workflows. The ability to efficiently handle data formats like Apache Arrow is a core feature.
+3.  **Performance & Data Engineering Focus**: SQLSpec's architecture is designed for efficient data workflows. The ability to handle data formats like Apache Arrow is a core feature.
 
 Core Features
 -------------

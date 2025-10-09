@@ -213,7 +213,7 @@ BigQuery is optimized for different workloads than traditional OLTP databases:
 - **Analytics Queries**: Excellent for aggregating and analyzing large volumes of session/event data
 - **Scalability**: Handles millions of sessions and billions of events effortlessly
 - **Serverless**: No connection pooling or infrastructure management
-- **Concurrent Reads**: Massive read parallelism
+- **Concurrent Reads**: High degree of read parallelism
 
 **Considerations:**
 

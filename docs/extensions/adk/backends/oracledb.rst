@@ -5,24 +5,24 @@ Oracle Database Backend
 Overview
 ========
 
-Oracle Database is an enterprise-grade relational database system designed for mission-critical applications with high performance, reliability, and advanced features. The SQLSpec ADK integration provides intelligent version-specific JSON storage that automatically adapts to your Oracle version.
+Oracle Database is a relational database system commonly used for business-critical applications requiring high reliability and advanced features. The SQLSpec ADK integration provides intelligent version-specific JSON storage that automatically adapts to your Oracle version.
 
 **Key Features:**
 
-- **Enterprise-Grade**: ACID compliance, advanced security, and high availability
+- **Database Features**: ACID compliance, advanced security features, and high availability options
 - **Version-Adaptive JSON Storage**: Automatic detection and optimization for Oracle 21c, 12c, and legacy versions
 - **Timezone-Aware**: TIMESTAMP WITH TIME ZONE for accurate global timestamps
-- **Connection Pooling**: Built-in pool management for optimal performance
+- **Connection Pooling**: Built-in pool management
 - **Thin & Thick Modes**: Choose between pure Python or Oracle Client deployment
 - **Advanced Data Types**: BLOB, CLOB, and native JSON support
 
 **Ideal Use Cases:**
 
-- Enterprise AI agent deployments requiring high reliability
+- AI agent deployments requiring high reliability
 - Organizations with existing Oracle infrastructure
 - Applications requiring advanced security and compliance features
 - Multi-region deployments with timezone awareness
-- Mission-critical systems requiring 24/7 availability
+- Business-critical systems requiring high availability
 
 Installation
 ============

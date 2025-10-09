@@ -100,7 +100,7 @@ class BaseJSONSerializer(ABC):
 
 
 class MsgspecSerializer(BaseJSONSerializer):
-    """Msgspec-based JSON serializer for optimal performance."""
+    """Msgspec-based JSON serializer."""
 
     __slots__ = ("_decoder", "_encoder")
 
@@ -244,7 +244,7 @@ def encode_json(data: Any, *, as_bytes: Literal[True]) -> bytes: ...  # pragma: 
 
 
 def encode_json(data: Any, *, as_bytes: bool = False) -> str | bytes:
-    """Encode to JSON, optionally returning bytes for optimal performance.
+    """Encode to JSON, optionally returning bytes.
 
     Args:
         data: The data to encode.

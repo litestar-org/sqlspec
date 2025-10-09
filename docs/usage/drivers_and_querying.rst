@@ -65,7 +65,7 @@ PostgreSQL Drivers
 asyncpg (Recommended for Async)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-High-performance async PostgreSQL driver with native connection pooling.
+Async PostgreSQL driver with native connection pooling.
 
 .. code-block:: python
 
@@ -705,7 +705,7 @@ Choose the right driver for your use case:
      - Use Case
    * - PostgreSQL (Async)
      - asyncpg
-     - High-performance async applications
+     - Async applications with connection pooling
    * - PostgreSQL (Sync)
      - psycopg
      - Traditional sync applications
