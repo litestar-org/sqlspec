@@ -4,12 +4,14 @@ Provides specialized type handling for Oracle databases, including
 efficient LOB (Large Object) processing and JSON storage detection.
 """
 
+import array
 import re
 from datetime import datetime
 from functools import lru_cache
 from typing import Any, Final
 
 from sqlspec.core.type_conversion import BaseTypeConverter
+from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.sync_tools import ensure_async_
 
 ORACLE_JSON_STORAGE_REGEX: Final[re.Pattern[str]] = re.compile(
@@ -149,6 +151,55 @@ class OracleTypeConverter(BaseTypeConverter):
 
         if isinstance(value, str):
             return self.convert_if_detected(value)
+
+        return value
+
+    def convert_vector_to_numpy(self, value: Any) -> Any:
+        """Convert Oracle VECTOR to NumPy array.
+
+        Provides manual conversion API for users who need explicit control
+        over vector transformations or have disabled automatic handlers.
+
+        Args:
+            value: Oracle VECTOR value (array.array) or other value.
+
+        Returns:
+            NumPy ndarray if value is array.array and NumPy is installed,
+            otherwise original value.
+        """
+        if not NUMPY_INSTALLED:
+            return value
+
+        if isinstance(value, array.array):
+            from sqlspec.adapters.oracledb._numpy_handlers import numpy_converter_out
+
+            return numpy_converter_out(value)
+
+        return value
+
+    def convert_numpy_to_vector(self, value: Any) -> Any:
+        """Convert NumPy array to Oracle VECTOR format.
+
+        Provides manual conversion API for users who need explicit control
+        over vector transformations or have disabled automatic handlers.
+
+        Args:
+            value: NumPy ndarray or other value.
+
+        Returns:
+            array.array compatible with Oracle VECTOR if value is ndarray,
+            otherwise original value.
+
+        """
+        if not NUMPY_INSTALLED:
+            return value
+
+        import numpy as np
+
+        if isinstance(value, np.ndarray):
+            from sqlspec.adapters.oracledb._numpy_handlers import numpy_converter_in
+
+            return numpy_converter_in(value)
 
         return value
 
