@@ -17,6 +17,7 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL
+from sqlspec.utils.serializers import from_json, to_json
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -182,6 +183,58 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     assert row["int_col"] == 42
     assert abs(row["float_col"] - math.pi) < 0.01
     assert row["bool_col"] == 1
+    assert isinstance(row["json_col"], dict)
+    assert row["json_col"]["key"] == "value"
+
+
+async def test_asyncmy_driver_features_custom_serializers(mysql_service: MySQLService) -> None:
+    """Ensure custom serializer and deserializer driver features are applied."""
+
+    serializer_calls: list[object] = []
+
+    def tracking_serializer(value: object) -> str:
+        serializer_calls.append(value)
+        return to_json(value)
+
+    def tracking_deserializer(value: str | bytes) -> object:
+        decoded = from_json(value)
+        if isinstance(decoded, dict):
+            decoded["extra_marker"] = True
+        return decoded
+
+    config = AsyncmyConfig(
+        pool_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": True,
+        },
+        driver_features={"json_serializer": tracking_serializer, "json_deserializer": tracking_deserializer},
+    )
+
+    async with config.provide_session() as session:
+        await session.execute_script(
+            """
+            CREATE TABLE IF NOT EXISTS driver_feature_test (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                payload JSON
+            );
+            TRUNCATE TABLE driver_feature_test;
+            """
+        )
+
+        payload = {"foo": "bar"}
+        await session.execute("INSERT INTO driver_feature_test (payload) VALUES (?)", (payload,))
+
+        assert serializer_calls
+        assert serializer_calls[0] == payload
+
+        select_result = await session.execute("SELECT payload FROM driver_feature_test ORDER BY id DESC LIMIT 1")
+        stored_row = select_result.get_data()[0]
+        assert stored_row["payload"]["foo"] == "bar"
+        assert stored_row["payload"]["extra_marker"] is True
 
 
 async def test_asyncmy_transaction_management(asyncmy_driver: AsyncmyDriver) -> None:

@@ -25,13 +25,13 @@ Always start by understanding the full scope:
 
 ```python
 # Read PRD from workspace
-Read(".agents/{requirement}/prd.md")
+Read("requirements/{requirement}/prd.md")
 
 # Check tasks list
-Read(".agents/{requirement}/tasks.md")
+Read("requirements/{requirement}/tasks.md")
 
 # Review research findings
-Read(".agents/{requirement}/research/plan.md")
+Read("requirements/{requirement}/research/plan.md")
 ```
 
 ### Step 2: Research Implementation Details
@@ -75,6 +75,7 @@ mcp__context7__get-library-docs(
 **MANDATORY CODE QUALITY RULES** (from CLAUDE.md):
 
 ✅ **DO:**
+
 - Stringified type hints: `def foo(config: "SQLConfig"):`
 - Type guards: `if supports_where(obj):`
 - Clean names: `process_query()`, `execute_batch()`
@@ -85,6 +86,7 @@ mcp__context7__get-library-docs(
 - Function-based pytest tests: `def test_something():`
 
 ❌ **DO NOT:**
+
 - `from __future__ import annotations`
 - Defensive patterns: `hasattr()`, `getattr()`
 - Workaround names: `_optimized`, `_with_cache`, `_fallback`
@@ -207,7 +209,7 @@ make fix
 
 ### Step 6: Update Workspace
 
-Track progress in `.agents/{requirement}/`:
+Track progress in `requirements/{requirement}/`:
 
 ```markdown
 # In tasks.md, mark completed items:
@@ -282,6 +284,7 @@ Read("docs/guides/performance/sqlglot-best-practices.md")
 ```
 
 **Key patterns:**
+
 - Parse once, transform once
 - Use dialect-specific optimizations
 - Cache compiled statements
@@ -296,6 +299,7 @@ Read("docs/guides/performance/mypyc-optimizations.md")
 ```
 
 **Key patterns:**
+
 - Keep hot paths in compilable modules
 - Avoid dynamic features in performance-critical code
 - Use type annotations for better compilation
@@ -340,6 +344,7 @@ mcp__zen__debug(
 When implementation complete:
 
 1. **Mark tasks complete:**
+
    ```markdown
    - [x] 2. Core implementation
    - [x] 3. Adapter-specific code
@@ -347,6 +352,7 @@ When implementation complete:
    ```
 
 2. **Update recovery.md:**
+
    ```markdown
    ## Current Status
    Status: Ready for testing
@@ -362,6 +368,7 @@ When implementation complete:
    ```
 
 3. **Notify user:**
+
    ```
    Implementation complete!
 
@@ -390,7 +397,7 @@ When implementation complete:
 # User: "Implement connection pooling for asyncpg"
 
 # 1. Read plan
-Read(".agents/asyncpg-pooling/prd.md")
+Read("requirements/asyncpg-pooling/prd.md")
 
 # 2. Research
 Read("docs/guides/adapters/postgres.md")
@@ -410,7 +417,7 @@ Edit(
 Bash(command="uv run pytest tests/integration/test_adapters/test_asyncpg/ -v")
 
 # 5. Update workspace
-Edit(file_path=".agents/asyncpg-pooling/tasks.md", ...)
+Edit(file_path="requirements/asyncpg-pooling/tasks.md", ...)
 ```
 
 ## Success Criteria

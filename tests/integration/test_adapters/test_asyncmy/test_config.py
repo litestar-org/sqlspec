@@ -188,17 +188,23 @@ def test_asyncmy_config_with_driver_features() -> None:
 
 
 def test_asyncmy_config_with_empty_driver_features() -> None:
-    """Test AsyncmyConfig with empty driver_features."""
+    """Test AsyncmyConfig with empty driver_features still provides defaults."""
     config = AsyncmyConfig(pool_config={"host": "localhost", "port": 3306}, driver_features={})
 
-    assert config.driver_features == {}
+    assert "json_serializer" in config.driver_features
+    assert "json_deserializer" in config.driver_features
+    assert callable(config.driver_features["json_serializer"])
+    assert callable(config.driver_features["json_deserializer"])
 
 
 def test_asyncmy_config_without_driver_features() -> None:
-    """Test AsyncmyConfig without driver_features defaults to empty dict."""
+    """Test AsyncmyConfig without driver_features provides sensible defaults."""
     config = AsyncmyConfig(pool_config={"host": "localhost", "port": 3306})
 
-    assert config.driver_features == {}
+    assert "json_serializer" in config.driver_features
+    assert "json_deserializer" in config.driver_features
+    assert callable(config.driver_features["json_serializer"])
+    assert callable(config.driver_features["json_deserializer"])
 
 
 def test_asyncmy_config_driver_features_as_plain_dict() -> None:

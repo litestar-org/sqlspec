@@ -468,6 +468,13 @@ asyncmy
    async with sql.provide_session(db) as session:
        result = await session.execute("SELECT * FROM users WHERE id = %s", [1])
 
+**Driver Features**:
+
+- ``json_serializer`` – Override JSON parameter serialization for ``dict``/``list``/``tuple`` inputs. Defaults to
+  :func:`sqlspec.utils.serializers.to_json` and is invoked for every JSON parameter passed to AsyncMy.
+- ``json_deserializer`` – Customize JSON result decoding. Defaults to
+  :func:`sqlspec.utils.serializers.from_json` and automatically converts JSON columns into Python objects during fetches.
+
 **API Reference**:
 
 .. autoclass:: AsyncmyConfig

@@ -140,6 +140,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     statement_config: "StatementConfig"
     pool_instance: "PoolT | None"
     migration_config: "dict[str, Any] | MigrationConfig"
+    driver_features: "dict[str, Any]"
 
     def __hash__(self) -> int:
         return id(self)

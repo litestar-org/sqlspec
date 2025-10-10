@@ -65,7 +65,25 @@ class AsyncpgPoolConfig(AsyncpgConnectionConfig, total=False):
 
 
 class AsyncpgDriverFeatures(TypedDict, total=False):
-    """TypedDict for AsyncPG driver features configuration."""
+    """AsyncPG driver feature flags.
+
+    json_serializer: Custom JSON serializer function for PostgreSQL JSON/JSONB types.
+        Defaults to sqlspec.utils.serializers.to_json.
+        Use for performance optimization (e.g., orjson) or custom encoding behavior.
+        Applied when enable_json_codecs is True.
+    json_deserializer: Custom JSON deserializer function for PostgreSQL JSON/JSONB types.
+        Defaults to sqlspec.utils.serializers.from_json.
+        Use for performance optimization (e.g., orjson) or custom decoding behavior.
+        Applied when enable_json_codecs is True.
+    enable_json_codecs: Enable automatic JSON/JSONB codec registration on connections.
+        Defaults to True for seamless Python dict/list to PostgreSQL JSON/JSONB conversion.
+        Set to False to disable automatic codec registration (manual handling required).
+    enable_pgvector: Enable pgvector extension support for vector similarity search.
+        Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
+        Defaults to True when pgvector-python is installed.
+        Provides automatic conversion between Python objects and PostgreSQL vector types.
+        Enables vector similarity operations and index support.
+    """
 
     json_serializer: NotRequired[Callable[[Any], str]]
     json_deserializer: NotRequired[Callable[[str], Any]]
@@ -218,7 +236,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         async with self.provide_connection(*args, **kwargs) as connection:
             final_statement_config = statement_config or self.statement_config or asyncpg_statement_config
-            yield self.driver_type(connection=connection, statement_config=final_statement_config)
+            yield self.driver_type(
+                connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
+            )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":
         """Provide async pool instance.

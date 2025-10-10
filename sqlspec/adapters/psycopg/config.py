@@ -66,7 +66,15 @@ class PsycopgPoolParams(PsycopgConnectionParams, total=False):
 
 
 class PsycopgDriverFeatures(TypedDict, total=False):
-    """Psycopg driver feature flags."""
+    """Psycopg driver feature flags.
+
+    enable_pgvector: Enable automatic pgvector extension support for vector similarity search.
+        Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
+        Defaults to True when pgvector-python is installed.
+        Provides automatic conversion between Python objects and PostgreSQL vector types.
+        Enables vector similarity operations and index support.
+        Set to False to disable pgvector support even when package is available.
+    """
 
     enable_pgvector: NotRequired[bool]
 
@@ -244,7 +252,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         with self.provide_connection(*args, **kwargs) as conn:
             final_statement_config = statement_config or self.statement_config
-            yield self.driver_type(connection=conn, statement_config=final_statement_config)
+            yield self.driver_type(
+                connection=conn, statement_config=final_statement_config, driver_features=self.driver_features
+            )
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -422,7 +432,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """
         async with self.provide_connection(*args, **kwargs) as conn:
             final_statement_config = statement_config or psycopg_statement_config
-            yield self.driver_type(connection=conn, statement_config=final_statement_config)
+            yield self.driver_type(
+                connection=conn, statement_config=final_statement_config, driver_features=self.driver_features
+            )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.

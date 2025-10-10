@@ -39,9 +39,7 @@ def test_uuid_conversion_can_be_disabled() -> None:
     When disabled, UUID strings are passed as-is to DuckDB without conversion.
     DuckDB still returns UUID objects from UUID columns (native behavior).
     """
-    config = DuckDBConfig(
-        pool_config={"database": ":memory:"}, driver_features={"enable_uuid_conversion": False}
-    )
+    config = DuckDBConfig(pool_config={"database": ":memory:"}, driver_features={"enable_uuid_conversion": False})
     try:
         with config.provide_session() as session:
             session.execute("CREATE TABLE test (id UUID, value TEXT)")

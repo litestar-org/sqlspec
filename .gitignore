@@ -60,3 +60,4 @@ requirements/archive/*
 !requirements/archive/.gitkeep
 requirements/*
 !requirements/example-feature
+!requirements/README.md

@@ -37,8 +37,8 @@ Understand what needs documenting:
 
 ```python
 # Read workspace
-Read(".agents/{requirement}/prd.md")
-Read(".agents/{requirement}/tasks.md")
+Read("requirements/{requirement}/prd.md")
+Read("requirements/{requirement}/tasks.md")
 
 # Read implementation
 Read("sqlspec/adapters/asyncpg/driver.py")
@@ -88,11 +88,13 @@ async with config.provide_session() as session:
 ```
 
 The pool automatically handles:
+
 - Connection retry with exponential backoff
 - Health checks for idle connections
 - Graceful connection cleanup
 """
 )
+
 ```
 
 **For new features:**
@@ -127,8 +129,10 @@ async with config.provide_session() as session:
         {"embedding": embedding}
     )
 ```
+
 """
 )
+
 ```
 
 ### Step 4: Update API Reference (if needed)
@@ -179,6 +183,7 @@ make docs
 ```
 
 **Fix any warnings:**
+
 - Broken links
 - Missing references
 - Invalid RST syntax
@@ -211,6 +216,7 @@ make lint
 ```
 
 **If linting fails:**
+
 1. Run auto-fix: `make fix`
 2. Manually fix remaining issues
 3. Re-run `make lint` until passing
@@ -269,6 +275,7 @@ uv run pytest -n 2 --dist=loadgroup
 ```
 
 **If tests fail:**
+
 1. Identify failing tests
 2. Fix issues
 3. Re-run tests until passing
@@ -279,7 +286,7 @@ uv run pytest -n 2 --dist=loadgroup
 **Check acceptance criteria:**
 
 ```python
-Read(".agents/{requirement}/prd.md")
+Read("requirements/{requirement}/prd.md")
 
 # Manually verify each criterion:
 # - [ ] Feature works as described
@@ -310,6 +317,7 @@ Read(".agents/{requirement}/prd.md")
 ❌ PRD criteria not met
 
 **If quality gate FAILS:**
+
 ```python
 print("❌ QUALITY GATE FAILED")
 print("\nIssues found:")
@@ -324,6 +332,7 @@ return
 ```
 
 **If quality gate PASSES:**
+
 ```python
 print("✅ QUALITY GATE PASSED")
 print("\n Proceeding to Phase 3: Cleanup")
@@ -343,10 +352,10 @@ Cleanup workspace, archive completed work, remove temporary files.
 
 ```bash
 # Find and remove tmp directories
-find .agents/*/tmp -type d -exec rm -rf {} + 2>/dev/null || true
+find requirements/*/tmp -type d -exec rm -rf {} + 2>/dev/null || true
 
 # Verify removed
-find .agents/*/tmp 2>/dev/null
+find requirements/*/tmp 2>/dev/null
 # Should return nothing
 ```
 
@@ -354,13 +363,13 @@ find .agents/*/tmp 2>/dev/null
 
 ```bash
 # Remove verification artifacts
-rm -rf .agents/verification/ 2>/dev/null || true
+rm -rf requirements/verification/ 2>/dev/null || true
 
-# Remove any __pycache__ in .agents/
-find .agents -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+# Remove any __pycache__ in requirements/
+find requirements -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 # Remove any .DS_Store or other cruft
-find .agents -name ".DS_Store" -delete 2>/dev/null || true
+find requirements -name ".DS_Store" -delete 2>/dev/null || true
 ```
 
 ### Step 2: Update Final Status
@@ -369,7 +378,7 @@ find .agents -name ".DS_Store" -delete 2>/dev/null || true
 
 ```python
 Edit(
-    file_path=".agents/{requirement}/tasks.md",
+    file_path="requirements/{requirement}/tasks.md",
     old_string="- [ ] 5. Documentation",
     new_string="- [x] 5. Documentation"
 )
@@ -379,7 +388,7 @@ Edit(
 
 ```python
 Edit(
-    file_path=".agents/{requirement}/recovery.md",
+    file_path="requirements/{requirement}/recovery.md",
     old_string="Status: Documentation",
     new_string="""Status: ✅ COMPLETE
 
@@ -397,22 +406,22 @@ Documentation: Complete
 
 ```bash
 # Create archive directory if needed
-mkdir -p .agents/archive
+mkdir -p requirements/archive
 
 # Move completed requirement to archive
-mv .agents/{requirement-slug} .agents/archive/{requirement-slug}
+mv requirements/{requirement-slug} requirements/archive/{requirement-slug}
 
 # Verify archived
-ls -la .agents/archive/{requirement-slug}
+ls -la requirements/archive/{requirement-slug}
 ```
 
-### Step 4: Clean .agents/ Root
+### Step 4: Clean requirements/ Root
 
 **Keep only last 3 active requirements:**
 
 ```python
 # List all non-archived requirements
-active_reqs = Glob(".agents/*/prd.md")
+active_reqs = Glob("requirements/*/prd.md")
 
 # If more than 3 active requirements
 if len(active_reqs) > 3:
@@ -420,7 +429,7 @@ if len(active_reqs) > 3:
     # Move oldest to archive
     for old_req in active_reqs[:-3]:
         req_dir = old_req.parent
-        Bash(f"mv {req_dir} .agents/archive/")
+        Bash(f"mv {req_dir} requirements/archive/")
 ```
 
 ### Step 5: Cleanup Reports
@@ -439,8 +448,8 @@ mv .claude/reports/{requirement-name}-*.md .claude/reports/archive/$(date +%Y-%m
 **Verify workspace is clean:**
 
 ```bash
-# Check .agents/ structure
-ls -la .agents/
+# Check requirements/ structure
+ls -la requirements/
 
 # Should show:
 # - archive/           (archived requirements)
@@ -450,7 +459,7 @@ ls -la .agents/
 # - README.md
 
 # No tmp/ directories should exist
-find .agents -name tmp -type d
+find requirements -name tmp -type d
 # Should return nothing
 ```
 
@@ -478,9 +487,9 @@ After all 3 phases complete, provide summary:
 
 ## ✅ Cleanup (Phase 3)
 - Temporary files: ✅ Removed
-- Workspace: ✅ Archived to .agents/archive/{requirement}
+- Workspace: ✅ Archived to requirements/archive/{requirement}
 - Reports: ✅ Archived to .claude/reports/archive/
-- .agents/ root: ✅ Clean (2 active requirements)
+- requirements/ root: ✅ Clean (2 active requirements)
 
 ## Files Modified
 - [sqlspec/adapters/asyncpg/driver.py](sqlspec/adapters/asyncpg/driver.py#L42-L67)
@@ -502,6 +511,7 @@ Run `make lint && make test` one final time before committing.
 **These patterns MUST be caught and blocked:**
 
 ❌ **Defensive coding:**
+
 ```python
 # NEVER
 if hasattr(obj, 'where'):
@@ -514,6 +524,7 @@ if supports_where(obj):
 ```
 
 ❌ **Workaround naming:**
+
 ```python
 # NEVER
 def process_query_optimized():
@@ -537,6 +548,7 @@ def execute():
 ```
 
 ❌ **Class-based tests:**
+
 ```python
 # NEVER
 class TestAsyncpgConnection:

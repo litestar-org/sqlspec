@@ -11,19 +11,16 @@ from sqlspec.adapters.sqlite import SqliteConfig
 
 
 @pytest.mark.sqlite
-def test_driver_features_disabled_by_default() -> None:
-    """Test that driver features are disabled by default."""
+def test_driver_features_enabled_by_default() -> None:
+    """Test that driver features are enabled by default for stdlib types."""
     config = SqliteConfig(pool_config={"database": ":memory:"})
-    assert config.driver_features.get("enable_custom_adapters") is False
+    assert config.driver_features.get("enable_custom_adapters") is True
 
 
 @pytest.mark.sqlite
 def test_enable_custom_adapters_feature() -> None:
     """Test enabling custom type adapters feature."""
-    config = SqliteConfig(
-        pool_config={"database": ":memory:"},
-        driver_features={"enable_custom_adapters": True},
-    )
+    config = SqliteConfig(pool_config={"database": ":memory:"}, driver_features={"enable_custom_adapters": True})
 
     assert config.driver_features["enable_custom_adapters"] is True
 
@@ -83,10 +80,7 @@ def test_custom_json_serializer() -> None:
         session.execute("CREATE TABLE test_custom (id INTEGER, data JSON)")
 
         test_data = {"compact": True, "separator": "no_space"}
-        session.execute(
-            "INSERT INTO test_custom (id, data) VALUES (?, ?)",
-            (1, json.dumps(test_data)),
-        )
+        session.execute("INSERT INTO test_custom (id, data) VALUES (?, ?)", (1, json.dumps(test_data)))
 
         result = session.select_one("SELECT data FROM test_custom WHERE id = 1")
 

@@ -194,7 +194,11 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             An AiosqliteDriver instance.
         """
         async with self.provide_connection(*_args, **_kwargs) as connection:
-            yield self.driver_type(connection=connection, statement_config=statement_config or self.statement_config)
+            yield self.driver_type(
+                connection=connection,
+                statement_config=statement_config or self.statement_config,
+                driver_features=self.driver_features,
+            )
 
     async def _create_pool(self) -> AiosqliteConnectionPool:
         """Create the connection pool instance.
@@ -271,14 +275,16 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({
-            "AiosqliteConnection": AiosqliteConnection,
-            "AiosqliteConnectionPool": AiosqliteConnectionPool,
-            "AiosqliteConnectTimeoutError": AiosqliteConnectTimeoutError,
-            "AiosqliteCursor": AiosqliteCursor,
-            "AiosqlitePoolClosedError": AiosqlitePoolClosedError,
-            "AiosqlitePoolConnection": AiosqlitePoolConnection,
-        })
+        namespace.update(
+            {
+                "AiosqliteConnection": AiosqliteConnection,
+                "AiosqliteConnectionPool": AiosqliteConnectionPool,
+                "AiosqliteConnectTimeoutError": AiosqliteConnectTimeoutError,
+                "AiosqliteCursor": AiosqliteCursor,
+                "AiosqlitePoolClosedError": AiosqlitePoolClosedError,
+                "AiosqlitePoolConnection": AiosqlitePoolConnection,
+            }
+        )
         return namespace
 
     async def _close_pool(self) -> None:

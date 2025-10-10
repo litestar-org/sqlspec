@@ -858,22 +858,21 @@ Current state of all adapters (as of type-cleanup branch):
 | Adapter    | TypedDict | Auto-Detect | enable_ Prefix | Defaults | Grade      | Notes                                    |
 |------------|-----------|-------------|----------------|----------|------------|------------------------------------------|
 | Oracle     | ✅        | ✅          | ✅             | ✅       | Gold       | Perfect implementation, reference model  |
-| AsyncPG    | ✅        | ✅          | ✅             | ✅       | Excellent  | Multiple features, all patterns followed |
-| Psycopg    | ✅        | ✅          | ✅             | ✅       | Excellent  | Matches AsyncPG quality                  |
+| AsyncPG    | ✅        | ✅          | ✅             | ✅       | Excellent  | Comprehensive TypedDict docs added       |
+| Psycopg    | ✅        | ✅          | ✅             | ✅       | Excellent  | Comprehensive TypedDict docs added       |
 | Psqlpy     | ✅        | ✅          | ✅             | ✅       | Excellent  | Simple but correct                       |
-| DuckDB     | ✅        | N/A         | ✅             | ✅       | Good       | Stdlib features, appropriate defaults    |
+| DuckDB     | ✅        | N/A         | ✅             | ✅       | Excellent  | Stdlib features, comprehensive docs      |
 | BigQuery   | ✅        | N/A         | ✅             | ✅       | Good       | Simple config, well documented           |
-| ADBC       | ✅        | N/A         | ✅             | ✅       | Good       | Minimal features by design               |
-| SQLite     | ✅        | N/A         | ✅             | ✅       | Fixed      | Now provides sensible defaults           |
-| AioSQLite  | ✅        | N/A         | ✅             | ✅       | Fixed      | Now provides sensible defaults           |
-| Asyncmy    | ✅        | N/A         | N/A            | ✅       | Fixed      | Now provides defaults (no bool flags)    |
+| ADBC       | ✅        | N/A         | ✅             | ✅       | Excellent  | Comprehensive TypedDict documentation    |
+| SQLite     | ✅        | N/A         | ✅             | ✅       | Excellent  | Provides sensible defaults               |
+| AioSQLite  | ✅        | N/A         | ✅             | ✅       | Excellent  | Matches SQLite patterns                  |
+| Asyncmy    | ✅        | N/A         | N/A            | ✅       | Excellent  | Provides defaults (no bool flags)        |
 
 **Grading criteria**:
 
 - **Gold**: Perfect adherence to all patterns, serves as reference
 - **Excellent**: Follows all patterns, well documented
 - **Good**: Follows patterns appropriately for adapter's needs
-- **Fixed**: Previously had issues, now corrected
 
 ### Testing Requirements
 

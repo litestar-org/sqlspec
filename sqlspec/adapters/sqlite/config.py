@@ -185,7 +185,11 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             SqliteDriver: A driver instance with thread-local connection
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(connection=connection, statement_config=statement_config or self.statement_config)
+            yield self.driver_type(
+                connection=connection,
+                statement_config=statement_config or self.statement_config,
+                driver_features=self.driver_features,
+            )
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for SQLite types.

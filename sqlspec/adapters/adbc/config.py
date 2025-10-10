@@ -352,7 +352,9 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                     or self.statement_config
                     or get_adbc_statement_config(str(self._get_dialect() or "sqlite"))
                 )
-                yield self.driver_type(connection=connection, statement_config=final_statement_config)
+                yield self.driver_type(
+                    connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
+                )
 
         return session_manager()
 

@@ -275,7 +275,15 @@ def session_provider_maker(
     """
 
     async def provide_session(*args: Any, **kwargs: Any) -> "AsyncGenerator[DriverT, None]":
-        yield cast("DriverT", config.driver_type(connection=args[0] if args else kwargs.get(connection_dependency_key)))  # pyright: ignore
+        connection_obj = args[0] if args else kwargs.get(connection_dependency_key)
+        yield cast(
+            "DriverT",
+            config.driver_type(
+                connection=connection_obj,
+                statement_config=config.statement_config,
+                driver_features=config.driver_features,
+            ),
+        )  # pyright: ignore
 
     conn_type_annotation = config.connection_type
 

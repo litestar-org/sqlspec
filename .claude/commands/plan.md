@@ -5,7 +5,7 @@ Invoke the Planner agent to:
 1. **Research** - Consult docs/guides/, Context7, and WebSearch
 2. **Plan** - Use zen.planner for structured planning
 3. **Consensus** - Get multi-model agreement on complex decisions
-4. **Workspace** - Create .agents/{requirement-slug}/ with:
+4. **Workspace** - Create requirements/{requirement-slug}/ with:
    - prd.md (Product Requirements Document)
    - tasks.md (Implementation checklist)
    - research/plan.md (Research findings)
@@ -13,6 +13,7 @@ Invoke the Planner agent to:
    - tmp/ (temporary files directory)
 
 The planner should reference:
+
 - docs/guides/adapters/ for database-specific patterns
 - docs/guides/performance/ for optimization strategies
 - docs/guides/testing/ for test planning

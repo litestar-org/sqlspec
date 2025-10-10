@@ -198,8 +198,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             An AsyncmyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            final_statement_config = statement_config or asyncmy_statement_config
-            yield self.driver_type(connection=connection, statement_config=final_statement_config)
+            final_statement_config = statement_config or self.statement_config or asyncmy_statement_config
+            yield self.driver_type(
+                connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
+            )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":  # pyright: ignore
         """Provide async pool instance.
@@ -219,9 +221,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update({
-            "AsyncmyConnection": AsyncmyConnection,
-            "AsyncmyPool": AsyncmyPool,
-            "AsyncmyCursor": AsyncmyCursor,
-        })
+        namespace.update(
+            {"AsyncmyConnection": AsyncmyConnection, "AsyncmyPool": AsyncmyPool, "AsyncmyCursor": AsyncmyCursor}
+        )
         return namespace
