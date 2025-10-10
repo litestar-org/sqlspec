@@ -306,7 +306,7 @@ SQLSpec includes a built-in migration system for managing schema changes. After 
 sqlspec db init migrations
 
 # Generate new migration file
-sqlspec db make-migrations "Add user table"
+sqlspec db create-migration "Add user table"
 
 # Apply all pending migrations
 sqlspec db upgrade
@@ -319,7 +319,7 @@ For Litestar applications, replace `sqlspec` with your application command:
 
 ```bash
 # Using Litestar CLI integration
-litestar db make-migrations "Add user table"
+litestar db create-migration "Add user table"
 litestar db upgrade
 litestar db show-current-revision
 ```

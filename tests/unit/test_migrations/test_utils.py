@@ -26,11 +26,7 @@ def test_get_git_config_success() -> None:
 
     assert result == "John Doe"
     mock_run.assert_called_once_with(
-        ["git", "config", "user.name"],
-        capture_output=True,
-        text=True,
-        timeout=2,
-        check=False,
+        ["git", "config", "user.name"], capture_output=True, text=True, timeout=2, check=False
     )
 
 
@@ -112,10 +108,9 @@ def test_get_author_with_git_config() -> None:
         patch("sqlspec.migrations.utils._get_git_config") as mock_git_config,
         patch("sqlspec.migrations.utils._get_system_username") as mock_system,
     ):
-        mock_git_config.side_effect = lambda key: {
-            "user.name": "Jane Developer",
-            "user.email": "jane@example.com",
-        }.get(key)
+        mock_git_config.side_effect = lambda key: {"user.name": "Jane Developer", "user.email": "jane@example.com"}.get(
+            key
+        )
 
         result = get_author()
 
@@ -129,10 +124,7 @@ def test_get_author_with_only_git_name() -> None:
         patch("sqlspec.migrations.utils._get_git_config") as mock_git_config,
         patch("sqlspec.migrations.utils._get_system_username", return_value="systemuser") as mock_system,
     ):
-        mock_git_config.side_effect = lambda key: {
-            "user.name": "Jane Developer",
-            "user.email": None,
-        }.get(key)
+        mock_git_config.side_effect = lambda key: {"user.name": "Jane Developer", "user.email": None}.get(key)
 
         result = get_author()
 
@@ -146,10 +138,7 @@ def test_get_author_with_only_git_email() -> None:
         patch("sqlspec.migrations.utils._get_git_config") as mock_git_config,
         patch("sqlspec.migrations.utils._get_system_username", return_value="systemuser") as mock_system,
     ):
-        mock_git_config.side_effect = lambda key: {
-            "user.name": None,
-            "user.email": "jane@example.com",
-        }.get(key)
+        mock_git_config.side_effect = lambda key: {"user.name": None, "user.email": "jane@example.com"}.get(key)
 
         result = get_author()
 

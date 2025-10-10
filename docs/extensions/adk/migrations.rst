@@ -87,7 +87,7 @@ Setting Up Migrations
 
 .. code-block:: bash
 
-   sqlspec --config myapp.config make-migrations -m "Create ADK tables"
+   sqlspec --config myapp.config create-migration -m "Create ADK tables"
 
 This creates a migration file in ``migrations/versions/``.
 

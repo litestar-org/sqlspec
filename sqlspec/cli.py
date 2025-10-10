@@ -502,7 +502,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         run_(_init_sqlspec)()
 
-    @database_group.command(name="make-migrations", help="Create a new migration revision.")
+    @database_group.command(
+        name="create-migration", aliases=["make-migration"], help="Create a new migration revision."
+    )
     @bind_key_option
     @click.option("-m", "--message", default=None, help="Revision message")
     @no_prompt_option
