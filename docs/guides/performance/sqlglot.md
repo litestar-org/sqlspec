@@ -65,6 +65,22 @@ postgres_str = sqlite_ast.sql(dialect="postgres")
 postgres_ast = sqlglot.parse_one(postgres_str, read="postgres")  # Wasteful!
 ```
 
+### Avoid Unnecessary Copies (MANDATORY)
+
+```python
+# ✅ GOOD: Mutate in-place with copy=False
+predicate = sqlglot.parse_one("user_id = :id")
+query = sqlglot.select("*").from_("users").where(predicate, copy=False)
+
+# ❌ BAD: copy=True triggers deep clone of the expression tree
+query = sqlglot.select("*").from_("users").where(predicate, copy=True)
+```
+
+**Why copy=False**:
+- Deep copies walk the entire expression tree and allocate new nodes; this is 5-20x slower on medium queries.
+- SQLSpec builders expect mutable expressions; reusing nodes with `copy=False` keeps the AST cached and avoids invalidating references.
+- Only opt into `copy=True` when crossing thread boundaries or handing the tree to untrusted mutators.
+
 ## Quick Reference
 
 ### Parsing
@@ -829,7 +845,10 @@ for sql in queries:
 
 ## Resources
 
-- **SQLglot Documentation**: https://sqlglot.com/
-- **SQLglot GitHub**: https://github.com/tobymao/sqlglot
-- **Supported Dialects**: https://sqlglot.com/sqlglot.html#dialects
-- **Expression Types**: https://sqlglot.com/sqlglot/expressions.html
+- **Primary Docs Hub**: https://sqlglot.com/sqlglot/index.html
+- **Dialects Reference**: https://sqlglot.com/sqlglot/dialects/
+- **Expression Catalog**: https://sqlglot.com/sqlglot/expressions/
+- **Optimizer Passes**: https://sqlglot.com/sqlglot/optimizer/index.html
+- **Planner Guide**: https://sqlglot.com/sqlglot/planner.html
+- **Token Reference**: https://sqlglot.com/sqlglot/tokens.html
+- **GitHub Repository**: https://github.com/tobymao/sqlglot

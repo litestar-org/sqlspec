@@ -1035,3 +1035,12 @@ When adding new code to SQLSpec:
 6. **Benchmark critical paths** - Verify optimization benefits
 
 Remember: MyPyC's power comes from static typing and predictable patterns. When in doubt, choose the more explicit, statically-typed approach.
+
+## Resources
+
+- **Central Docs Hub**: https://mypyc.readthedocs.io/en/latest/
+- **Getting Started Guide**: https://mypyc.readthedocs.io/en/latest/getting_started.html
+- **Build & Packaging Reference**: https://mypyc.readthedocs.io/en/latest/build.html
+- **Native Classes & Data Structures**: https://mypyc.readthedocs.io/en/latest/native_classes.html
+- **myproject `mypycify` API Reference**: https://mypyc.readthedocs.io/en/latest/mypycify.html
+- **Mypy Project Repository**: https://github.com/python/mypy
