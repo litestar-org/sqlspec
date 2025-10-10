@@ -16,7 +16,7 @@ from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import schema_dump
 
 if TYPE_CHECKING:
-    from sqlspec.typing import ModelDictList, SupportedSchemaModel
+    from sqlspec.typing import SupportedSchemaModel
 
 __all__ = ("open_fixture", "open_fixture_async", "write_fixture", "write_fixture_async")
 
@@ -171,7 +171,7 @@ def _serialize_data(data: Any) -> str:
 def write_fixture(
     fixtures_path: str,
     table_name: str,
-    data: "ModelDictList | list[dict[str, Any]] | SupportedSchemaModel",
+    data: "list[SupportedSchemaModel] | list[dict[str, Any]] | SupportedSchemaModel",
     storage_backend: str = "local",
     compress: bool = False,
     **storage_kwargs: Any,
@@ -219,7 +219,7 @@ def write_fixture(
 async def write_fixture_async(
     fixtures_path: str,
     table_name: str,
-    data: "ModelDictList | list[dict[str, Any]] | SupportedSchemaModel",
+    data: "list[SupportedSchemaModel] | list[dict[str, Any]] | SupportedSchemaModel",
     storage_backend: str = "local",
     compress: bool = False,
     **storage_kwargs: Any,

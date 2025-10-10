@@ -27,7 +27,7 @@ def test_select_one_no_rows(sqlite_driver: SqliteDriver) -> None:
 
 def test_select_one_multiple_rows(sqlite_driver: SqliteDriver) -> None:
     """Test select_one raises when multiple rows found."""
-    with pytest.raises(ValueError, match="Expected exactly one row"):
+    with pytest.raises(ValueError, match="Multiple results found"):
         sqlite_driver.select_one("SELECT * FROM users WHERE age > 25")
 
 
@@ -47,7 +47,7 @@ def test_select_one_or_none_no_rows(sqlite_driver: SqliteDriver) -> None:
 
 def test_select_one_or_none_multiple_rows(sqlite_driver: SqliteDriver) -> None:
     """Test select_one_or_none raises when multiple rows found."""
-    with pytest.raises(ValueError, match="Expected at most one row"):
+    with pytest.raises(ValueError, match="Multiple results found"):
         sqlite_driver.select_one_or_none("SELECT * FROM users WHERE age < 35")
 
 

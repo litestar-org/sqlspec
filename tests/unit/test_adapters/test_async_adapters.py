@@ -238,7 +238,7 @@ async def test_async_driver_execute_script_method(mock_async_driver: MockAsyncDr
 
 async def test_async_driver_select_one(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_one method - expects error when multiple rows returned."""
-    with pytest.raises(ValueError, match="Expected exactly one row, found 2"):
+    with pytest.raises(ValueError, match="Multiple results found"):
         await mock_async_driver.select_one("SELECT * FROM users WHERE id = ?", 1)
 
 
@@ -247,7 +247,7 @@ async def test_async_driver_select_one_no_results(mock_async_driver: MockAsyncDr
 
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.get_data.return_value = []
+        mock_result.one.side_effect = ValueError("No result found, exactly one row expected")
         mock_execute.return_value = mock_result
 
         with pytest.raises(NotFoundError, match="No rows found"):
@@ -259,16 +259,16 @@ async def test_async_driver_select_one_multiple_results(mock_async_driver: MockA
 
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.get_data.return_value = [{"id": 1}, {"id": 2}, {"id": 3}]
+        mock_result.one.side_effect = ValueError("Multiple results found (3), exactly one row expected")
         mock_execute.return_value = mock_result
 
-        with pytest.raises(ValueError, match="Expected exactly one row, found 3"):
+        with pytest.raises(ValueError, match="Multiple results found"):
             await mock_async_driver.select_one("SELECT * FROM users")
 
 
 async def test_async_driver_select_one_or_none(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_one_or_none method - expects error when multiple rows returned."""
-    with pytest.raises(ValueError, match="Expected at most one row, found 2"):
+    with pytest.raises(ValueError, match="Multiple results found"):
         await mock_async_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 1)
 
 
@@ -276,7 +276,7 @@ async def test_async_driver_select_one_or_none_no_results(mock_async_driver: Moc
     """Test async select_one_or_none method with no results."""
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.get_data.return_value = []
+        mock_result.one_or_none.return_value = None
         mock_execute.return_value = mock_result
 
         result = await mock_async_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 999)
@@ -287,10 +287,10 @@ async def test_async_driver_select_one_or_none_multiple_results(mock_async_drive
     """Test async select_one_or_none method with multiple results."""
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.get_data.return_value = [{"id": 1}, {"id": 2}]
+        mock_result.one_or_none.side_effect = ValueError("Multiple results found (2), at most one row expected")
         mock_execute.return_value = mock_result
 
-        with pytest.raises(ValueError, match="Expected at most one row, found 2"):
+        with pytest.raises(ValueError, match="Multiple results found"):
             await mock_async_driver.select_one_or_none("SELECT * FROM users")
 
 
@@ -309,7 +309,7 @@ async def test_async_driver_select_value(mock_async_driver: MockAsyncDriver) -> 
 
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.one.return_value = {"count": 42}
+        mock_result.scalar.return_value = 42
         mock_execute.return_value = mock_result
 
         result = await mock_async_driver.select_value("SELECT COUNT(*) as count FROM users")
@@ -320,7 +320,7 @@ async def test_async_driver_select_value_no_results(mock_async_driver: MockAsync
     """Test async select_value method with no results."""
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.one.side_effect = ValueError("No rows")
+        mock_result.scalar.side_effect = ValueError("No result found, exactly one row expected")
         mock_execute.return_value = mock_result
 
         with pytest.raises(NotFoundError, match="No rows found"):
@@ -329,7 +329,7 @@ async def test_async_driver_select_value_no_results(mock_async_driver: MockAsync
 
 async def test_async_driver_select_value_or_none(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_value_or_none method - expects error when multiple rows returned."""
-    with pytest.raises(ValueError, match="Expected at most one row, found 2"):
+    with pytest.raises(ValueError, match="Multiple results found"):
         await mock_async_driver.select_value_or_none("SELECT * FROM users WHERE id = ?", 1)
 
 
@@ -337,7 +337,7 @@ async def test_async_driver_select_value_or_none_no_results(mock_async_driver: M
     """Test async select_value_or_none method with no results."""
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.get_data.return_value = []
+        mock_result.scalar_or_none.return_value = None
         mock_execute.return_value = mock_result
 
         result = await mock_async_driver.select_value_or_none("SELECT COUNT(*) FROM users WHERE id = 999")

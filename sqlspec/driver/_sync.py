@@ -1,14 +1,18 @@
 """Synchronous driver protocol implementation."""
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Final, NoReturn, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
 from sqlspec.core import SQL
-from sqlspec.driver._common import CommonDriverAttributesMixin, DataDictionaryMixin, ExecutionResult, VersionInfo
-from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
-from sqlspec.exceptions import NotFoundError
+from sqlspec.driver._common import (
+    CommonDriverAttributesMixin,
+    DataDictionaryMixin,
+    ExecutionResult,
+    VersionInfo,
+    handle_single_row_error,
+)
+from sqlspec.driver.mixins import SQLTranslatorMixin
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -29,7 +33,7 @@ EMPTY_FILTERS: Final["list[StatementFilter]"] = []
 SyncDriverT = TypeVar("SyncDriverT", bound="SyncDriverAdapterBase")
 
 
-class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin):
+class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
     """Base class for synchronous database drivers."""
 
     __slots__ = ()
@@ -249,23 +253,19 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[Any] | None" = None,
+        schema_type: "type[SchemaT] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "SchemaT | dict[str, Any]":
         """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        data = result.get_data()
-        data_len: int = len(data)
-        if data_len == 0:
-            self._raise_no_rows_found()
-        if data_len > 1:
-            self._raise_expected_one_row(data_len)
-        first_row = data[0]
-        return self.to_schema(first_row, schema_type=schema_type) if schema_type else first_row
+        try:
+            return result.one(schema_type=schema_type)
+        except ValueError as error:
+            handle_single_row_error(error)
 
     @overload
     def select_one_or_none(
@@ -294,24 +294,17 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[Any] | None" = None,
+        schema_type: "type[SchemaT] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "SchemaT | dict[str, Any] | None":
         """Execute a select statement and return at most one row.
 
         Returns None if no rows are found.
         Raises an exception if more than one row is returned.
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        data = result.get_data()
-        data_len: int = len(data)
-        if data_len == 0:
-            return None
-        if data_len > 1:
-            self._raise_expected_at_most_one_row(data_len)
-        first_row = data[0]
-        return self.to_schema(first_row, schema_type=schema_type) if schema_type else first_row
+        return result.one_or_none(schema_type=schema_type)
 
     @overload
     def select(
@@ -340,13 +333,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[Any] | None" = None,
+        schema_type: "type[SchemaT] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "list[SchemaT] | list[dict[str, Any]]":
         """Execute a select statement and return all rows."""
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        return self.to_schema(result.get_data(), schema_type=schema_type)
+        return result.get_data(schema_type=schema_type)
 
     def select_value(
         self,
@@ -363,21 +356,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         try:
-            row = result.one()
-        except ValueError as e:
-            self._raise_no_rows_found_from_exception(e)
-        if not row:
-            self._raise_no_rows_found()
-        if is_dict_row(row):
-            if not row:
-                self._raise_row_no_columns()
-            return next(iter(row.values()))
-        if is_indexable_row(row):
-            if not row:
-                self._raise_row_no_columns()
-            return row[0]
-        self._raise_unexpected_row_type(type(row))
-        return None
+            return result.scalar()
+        except ValueError as error:
+            handle_single_row_error(error)
 
     def select_value_or_none(
         self,
@@ -394,22 +375,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         Raises an exception if more than one row is returned.
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        data = result.get_data()
-        data_len: int = len(data)
-        if data_len == 0:
-            return None
-        if data_len > 1:
-            msg = f"Expected at most one row, found {data_len}"
-            raise ValueError(msg)
-        row = data[0]
-        if isinstance(row, dict):
-            if not row:
-                return None
-            return next(iter(row.values()))
-        if isinstance(row, (tuple, list)):
-            return row[0]
-        msg = f"Cannot extract value from row type {type(row).__name__}"
-        raise TypeError(msg)
+        return result.scalar_or_none()
 
     @overload
     def select_with_total(
@@ -438,10 +404,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement: "Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[Any] | None" = None,
+        schema_type: "type[SchemaT] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "tuple[list[SchemaT] | list[dict[str, Any]], int]":
         """Execute a select statement and return both the data and total count.
 
         This method is designed for pagination scenarios where you need both
@@ -465,35 +431,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         count_result = self.dispatch_statement_execution(self._create_count_query(sql_statement), self.connection)
         select_result = self.execute(sql_statement)
 
-        return (self.to_schema(select_result.get_data(), schema_type=schema_type), count_result.scalar())
-
-    def _raise_no_rows_found(self) -> NoReturn:
-        msg = "No rows found"
-        raise NotFoundError(msg)
-
-    def _raise_no_rows_found_from_exception(self, e: ValueError) -> NoReturn:
-        msg = "No rows found"
-        raise NotFoundError(msg) from e
-
-    def _raise_expected_one_row(self, data_len: int) -> NoReturn:
-        msg = f"Expected exactly one row, found {data_len}"
-        raise ValueError(msg)
-
-    def _raise_expected_at_most_one_row(self, data_len: int) -> NoReturn:
-        msg = f"Expected at most one row, found {data_len}"
-        raise ValueError(msg)
-
-    def _raise_row_no_columns(self) -> NoReturn:
-        msg = "Row has no columns"
-        raise ValueError(msg)
-
-    def _raise_unexpected_row_type(self, row_type: type) -> NoReturn:
-        msg = f"Unexpected row type: {row_type}"
-        raise ValueError(msg)
-
-    def _raise_cannot_extract_value_from_row_type(self, type_name: str) -> NoReturn:
-        msg = f"Cannot extract value from row type {type_name}"
-        raise TypeError(msg)
+        return (select_result.get_data(schema_type=schema_type), count_result.scalar())
 
 
 class SyncDataDictionaryBase(DataDictionaryMixin):
