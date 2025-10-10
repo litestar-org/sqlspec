@@ -16,9 +16,9 @@ results/
 site/
 target/
 .idea/
-.vscode/ 
+.vscode/
 .cursor/
-.zed/ 
+.zed/
 .coverage*
 # files
 **/*.so
@@ -33,10 +33,10 @@ target/
 coverage.*
 setup.py
 tmp/
-*.log 
-.tmp 
+*.log
+.tmp
 TODO*
-.env 
+.env
 tools/*.json
 benchmarks/
 .benchmark
@@ -46,7 +46,7 @@ benchmarks/
 *.db-shm
 *.duckdb
 .crush
-CRUSH.md 
+CRUSH.md
 docs-build
 .envs/
 .claude/*

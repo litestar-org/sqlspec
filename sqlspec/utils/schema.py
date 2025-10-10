@@ -6,8 +6,10 @@ from collections.abc import Callable, Sequence
 from enum import Enum
 from functools import lru_cache, partial
 from pathlib import Path, PurePath
-from typing import Any, Final, overload
+from typing import Any, Final, TypeGuard, overload
 from uuid import UUID
+
+from typing_extensions import TypeVar
 
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import (
@@ -34,19 +36,21 @@ from sqlspec.utils.type_guards import (
 
 __all__ = (
     "_DEFAULT_TYPE_DECODERS",
+    "DataT",
     "_convert_numpy_to_list",
     "_default_msgspec_deserializer",
     "_is_list_type_target",
     "to_schema",
 )
 
+DataT = TypeVar("DataT", default=dict[str, Any])
 
 logger = logging.getLogger(__name__)
 
 _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.time}
 
 
-def _is_list_type_target(target_type: Any) -> bool:
+def _is_list_type_target(target_type: Any) -> TypeGuard[list[object]]:
     """Check if target type is a list type (e.g., list[float])."""
     try:
         return hasattr(target_type, "__origin__") and target_type.__origin__ is list
@@ -244,20 +248,16 @@ _SCHEMA_CONVERTERS: "dict[str, Callable[[Any, Any], Any]]" = {
 
 
 @overload
-def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+def to_schema(data: "list[DataT]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
 @overload
-def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
+def to_schema(data: "list[DataT]", *, schema_type: None = None) -> "list[DataT]": ...
 @overload
-def to_schema(data: "dict[str, Any]", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
+def to_schema(data: "DataT", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
 @overload
-def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
-@overload
-def to_schema(data: Any, *, schema_type: "type[SchemaT]") -> Any: ...
-@overload
-def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
+def to_schema(data: "DataT", *, schema_type: None = None) -> "DataT": ...
 
 
-def to_schema(data: Any, *, schema_type: "type[Any] | None" = None) -> Any:
+def to_schema(data: Any, *, schema_type: Any = None) -> Any:
     """Convert data to a specified schema type.
 
     Supports transformation to various schema types including:
@@ -280,7 +280,7 @@ def to_schema(data: Any, *, schema_type: "type[Any] | None" = None) -> Any:
     if schema_type is None:
         return data
 
-    schema_type_key = _detect_schema_type(schema_type)  # type: ignore[arg-type]
+    schema_type_key = _detect_schema_type(schema_type)
     if schema_type_key is None:
         msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, Attrs class, or TypedDict"
         raise SQLSpecError(msg)
