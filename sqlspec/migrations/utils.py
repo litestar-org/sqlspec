@@ -3,7 +3,9 @@
 This module provides helper functions for migration operations.
 """
 
+import logging
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,6 +14,8 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase
 
 __all__ = ("create_migration_file", "drop_all", "get_author")
+
+logger = logging.getLogger(__name__)
 
 
 def create_migration_file(migrations_dir: Path, version: str, message: str, file_type: str = "sql") -> Path:
@@ -108,8 +112,52 @@ DROP TABLE placeholder;
 def get_author() -> str:
     """Get current user for migration metadata.
 
+    Attempts to retrieve git user configuration (name and email).
+    Falls back to system username if git is not configured or unavailable.
+
     Returns:
-        Username from environment or 'unknown'.
+        Author string in format 'Name <email>' if git configured,
+        otherwise system username from environment.
+    """
+    git_name = _get_git_config("user.name")
+    git_email = _get_git_config("user.email")
+
+    if git_name and git_email:
+        return f"{git_name} <{git_email}>"
+
+    return _get_system_username()
+
+
+def _get_git_config(config_key: str) -> str | None:
+    """Retrieve git configuration value.
+
+    Args:
+        config_key: Git config key (e.g., 'user.name', 'user.email').
+
+    Returns:
+        Configuration value if found, None otherwise.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "config", config_key],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+        logger.debug("Failed to get git config %s: %s", config_key, e)
+
+    return None
+
+
+def _get_system_username() -> str:
+    """Get system username from environment.
+
+    Returns:
+        Username from USER environment variable, or 'unknown' if not set.
     """
     return os.environ.get("USER", "unknown")
 
