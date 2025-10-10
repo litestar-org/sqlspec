@@ -7,9 +7,9 @@ from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+import sqlspec.exceptions
 from sqlspec.core.compiler import OperationType, SQLProcessor
 from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
-from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
@@ -455,7 +455,7 @@ class SQL:
                     validation_errors=[],
                     is_many=self._is_many,
                 )
-            except SQLSpecError:
+            except sqlspec.exceptions.SQLSpecError:
                 raise
             except Exception as e:
                 logger.warning("Processing failed, using fallback: %s", e)

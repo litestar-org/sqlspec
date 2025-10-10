@@ -15,8 +15,8 @@ from mypy_extensions import mypyc_attr
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
+import sqlspec.exceptions
 from sqlspec.core.parameters import ParameterProcessor
-from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -273,8 +273,7 @@ class SQLProcessor:
                 parameter_casts=parameter_casts,
             )
 
-        except SQLSpecError:
-            # Re-raise SQLSpecError (validation errors, parameter mismatches) - these should fail hard
+        except sqlspec.exceptions.SQLSpecError:
             raise
         except Exception as e:
             logger.warning("Compilation failed, using fallback: %s", e)
