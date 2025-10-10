@@ -112,7 +112,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     pending.append((version, file_path))
 
             if not pending:
-                console.print("[green]Already at latest version[/]")
+                if not all_migrations:
+                    console.print(
+                        "[yellow]No migrations found. Create your first migration with 'sqlspec make-migrations'.[/]"
+                    )
+                else:
+                    console.print("[green]Already at latest version[/]")
                 return
 
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
@@ -290,7 +295,12 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 if (current is None or version > current) and (revision == "head" or version <= revision):
                     pending.append((version, file_path))
             if not pending:
-                console.print("[green]Already at latest version[/]")
+                if not all_migrations:
+                    console.print(
+                        "[yellow]No migrations found. Create your first migration with 'sqlspec make-migrations'.[/]"
+                    )
+                else:
+                    console.print("[green]Already at latest version[/]")
                 return
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
             for version, file_path in pending:

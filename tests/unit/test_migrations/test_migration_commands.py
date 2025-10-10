@@ -293,3 +293,93 @@ def test_migration_commands_config_type_detection(sync_config: SqliteConfig, asy
     assert async_commands is not None
     assert hasattr(sync_commands, "runner")
     assert hasattr(async_commands, "runner")
+
+
+def test_sync_upgrade_empty_migration_folder(sync_config: SqliteConfig) -> None:
+    """Test that sync upgrade shows helpful message when migration folder is empty."""
+    from unittest.mock import MagicMock
+
+    commands = SyncMigrationCommands(sync_config)
+
+    mock_driver = MagicMock()
+    with (
+        patch.object(sync_config, "provide_session") as mock_session,
+        patch("sqlspec.migrations.commands.console") as mock_console,
+        patch.object(commands.runner, "get_migration_files", return_value=[]),
+    ):
+        mock_session.return_value.__enter__.return_value = mock_driver
+
+        commands.upgrade()
+
+        mock_console.print.assert_called_once()
+        call_args = str(mock_console.print.call_args)
+        assert "No migrations found" in call_args
+        assert "sqlspec make-migrations" in call_args
+
+
+async def test_async_upgrade_empty_migration_folder(async_config: AiosqliteConfig) -> None:
+    """Test that async upgrade shows helpful message when migration folder is empty."""
+    commands = AsyncMigrationCommands(async_config)
+
+    mock_driver = AsyncMock()
+    with (
+        patch.object(async_config, "provide_session") as mock_session,
+        patch("sqlspec.migrations.commands.console") as mock_console,
+        patch.object(commands.runner, "get_migration_files", return_value=[]),
+    ):
+        mock_session.return_value.__aenter__.return_value = mock_driver
+
+        await commands.upgrade()
+
+        mock_console.print.assert_called_once()
+        call_args = str(mock_console.print.call_args)
+        assert "No migrations found" in call_args
+        assert "sqlspec make-migrations" in call_args
+
+
+def test_sync_upgrade_already_at_latest_version(sync_config: SqliteConfig) -> None:
+    """Test that sync upgrade shows 'already at latest' when all migrations are applied."""
+    from unittest.mock import MagicMock
+
+    commands = SyncMigrationCommands(sync_config)
+
+    mock_driver = MagicMock()
+    mock_migration_file = Path("/fake/migrations/0001_initial.sql")
+
+    with (
+        patch.object(sync_config, "provide_session") as mock_session,
+        patch("sqlspec.migrations.commands.console") as mock_console,
+        patch.object(commands.runner, "get_migration_files", return_value=[("0001", mock_migration_file)]),
+        patch.object(commands.tracker, "get_current_version", return_value="0001"),
+    ):
+        mock_session.return_value.__enter__.return_value = mock_driver
+
+        commands.upgrade()
+
+        mock_console.print.assert_called_once()
+        call_args = str(mock_console.print.call_args)
+        assert "Already at latest version" in call_args
+        assert "No migrations found" not in call_args
+
+
+async def test_async_upgrade_already_at_latest_version(async_config: AiosqliteConfig) -> None:
+    """Test that async upgrade shows 'already at latest' when all migrations are applied."""
+    commands = AsyncMigrationCommands(async_config)
+
+    mock_driver = AsyncMock()
+    mock_migration_file = Path("/fake/migrations/0001_initial.sql")
+
+    with (
+        patch.object(async_config, "provide_session") as mock_session,
+        patch("sqlspec.migrations.commands.console") as mock_console,
+        patch.object(commands.runner, "get_migration_files", return_value=[("0001", mock_migration_file)]),
+        patch.object(commands.tracker, "get_current_version", return_value="0001"),
+    ):
+        mock_session.return_value.__aenter__.return_value = mock_driver
+
+        await commands.upgrade()
+
+        mock_console.print.assert_called_once()
+        call_args = str(mock_console.print.call_args)
+        assert "Already at latest version" in call_args
+        assert "No migrations found" not in call_args
