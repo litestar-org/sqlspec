@@ -6,8 +6,8 @@ Focuses on loading aiosql-style SQL files inside SQLSpec, when to use the native
 
 - Optional dependency: install with `pip install "sqlspec[aiosql]"` or `uv pip install "sqlspec[aiosql]"` to enable the adapter.
 - Two paths:
-  - **SQLFileLoader** for SQLSpec-native projects (no aiosql operators).
-  - **Aiosql adapters** for existing aiosql repositories that rely on operators like `^`, `$`, `!`, `*!`, and `#`.
+    - **SQLFileLoader** for SQLSpec-native projects (no aiosql operators).
+    - **Aiosql adapters** for existing aiosql repositories that rely on operators like `^`, `$`, `!`, `*!`, and `#`.
 - Adapters wrap SQLSpec drivers, so you keep connection pooling, parameter style conversion, and schema typing.
 - Comments between `-- name:` and the SQL body become documentation strings for generated methods—use them for quick API recall.
 
@@ -45,17 +45,16 @@ async def main() -> None:
         adapter = AiosqlAsyncAdapter(driver)
         queries = aiosql.from_path("queries/users.sql", adapter)
 
-        async with spec.provide_connection(config) as conn:
-            users = await queries.get_all_users(conn)
-            count = await queries.get_user_count(conn)
-            await queries.create_user(conn, username="alice", email="alice@example.com")
+        users = await queries.get_all_users(driver.connection)
+        count = await queries.get_user_count(driver.connection)
+        await queries.create_user(driver.connection, username="alice", email="alice@example.com")
 
-            # Map results with SQLSpec typing
-            await queries.get_user_by_id(
-                conn,
-                user_id=1,
-                _sqlspec_schema_type="sqlspec.schemas.User",
-            )
+        # Map results with SQLSpec typing
+        await queries.get_user_by_id(
+            driver.connection,
+            user_id=1,
+            _sqlspec_schema_type="sqlspec.schemas.User",
+        )
 
 
 asyncio.run(main())
@@ -107,7 +106,7 @@ with spec.provide_driver(config) as driver:
 
 ## Resources
 
-- aiosql documentation: https://nackjicholson.github.io/aiosql/
-- Getting started with aiosql named queries: https://nackjicholson.github.io/aiosql/getting-started/
+- aiosql documentation: <https://nackjicholson.github.io/aiosql/>
+- Getting started with aiosql named queries: <https://nackjicholson.github.io/aiosql/getting-started/>
 - SQLSpec aiosql extension docs: `docs/extensions/aiosql/`
 - SQLSpec SQL file loader reference: `docs/extensions/aiosql/usage`
