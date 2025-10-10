@@ -228,7 +228,6 @@ class SyncMigrationRunner(BaseMigrationRunner):
         if file_path.suffix == ".sql":
             version = metadata["version"]
             up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
-            self.loader.clear_cache()
             self.loader.load_sql(file_path)
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
@@ -394,7 +393,6 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         if file_path.suffix == ".sql":
             version = metadata["version"]
             up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
-            self.loader.clear_cache()
             await async_(self.loader.load_sql)(file_path)
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
