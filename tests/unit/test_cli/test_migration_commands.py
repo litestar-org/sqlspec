@@ -283,8 +283,8 @@ def get_config():
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
-def test_make_migrations_command(mock_create_commands: "Mock", cleanup_test_modules: None) -> None:
-    """Test make-migrations command."""
+def test_create_migration_command(mock_create_commands: "Mock", cleanup_test_modules: None) -> None:
+    """Test create-migration command."""
     runner = CliRunner()
 
     mock_commands = Mock()
@@ -308,7 +308,43 @@ def get_config():
 
             result = runner.invoke(
                 add_migration_commands(),
-                ["--config", "test_config.get_config", "make-migrations", "-m", "test migration", "--no-prompt"],
+                ["--config", "test_config.get_config", "create-migration", "-m", "test migration", "--no-prompt"],
+            )
+
+        finally:
+            os.chdir(original_dir)
+
+        assert result.exit_code == 0
+        mock_commands.revision.assert_called_once_with(message="test migration")
+
+
+@patch("sqlspec.migrations.commands.create_migration_commands")
+def test_make_migration_alias(mock_create_commands: "Mock", cleanup_test_modules: None) -> None:
+    """Test make-migration alias for backward compatibility."""
+    runner = CliRunner()
+
+    mock_commands = Mock()
+    mock_commands.revision = Mock(return_value=None)
+    mock_create_commands.return_value = mock_commands
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_dir = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            config_module = """
+from sqlspec.adapters.sqlite.config import SqliteConfig
+
+def get_config():
+    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config.bind_key = "revision_test"
+    config.migration_config = {"enabled": True}
+    return config
+"""
+            Path("test_config.py").write_text(config_module)
+
+            result = runner.invoke(
+                add_migration_commands(),
+                ["--config", "test_config.get_config", "make-migration", "-m", "test migration", "--no-prompt"],
             )
 
         finally:

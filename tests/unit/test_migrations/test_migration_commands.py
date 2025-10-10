@@ -314,7 +314,7 @@ def test_sync_upgrade_empty_migration_folder(sync_config: SqliteConfig) -> None:
         mock_console.print.assert_called_once()
         call_args = str(mock_console.print.call_args)
         assert "No migrations found" in call_args
-        assert "sqlspec make-migrations" in call_args
+        assert "sqlspec create-migration" in call_args
 
 
 async def test_async_upgrade_empty_migration_folder(async_config: AiosqliteConfig) -> None:
@@ -334,7 +334,7 @@ async def test_async_upgrade_empty_migration_folder(async_config: AiosqliteConfi
         mock_console.print.assert_called_once()
         call_args = str(mock_console.print.call_args)
         assert "No migrations found" in call_args
-        assert "sqlspec make-migrations" in call_args
+        assert "sqlspec create-migration" in call_args
 
 
 def test_sync_upgrade_already_at_latest_version(sync_config: SqliteConfig) -> None:

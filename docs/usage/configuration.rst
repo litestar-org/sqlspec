@@ -451,7 +451,7 @@ Basic Migration Config
 .. code-block:: bash
 
    # Create migration
-   sqlspec --config myapp.config make-migrations -m "Add users table"
+   sqlspec --config myapp.config create-migration -m "Add users table"
 
    # Apply migrations
    sqlspec --config myapp.config upgrade

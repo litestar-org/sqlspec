@@ -114,7 +114,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             if not pending:
                 if not all_migrations:
                     console.print(
-                        "[yellow]No migrations found. Create your first migration with 'sqlspec make-migrations'.[/]"
+                        "[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]"
                     )
                 else:
                     console.print("[green]Already at latest version[/]")
@@ -297,7 +297,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             if not pending:
                 if not all_migrations:
                     console.print(
-                        "[yellow]No migrations found. Create your first migration with 'sqlspec make-migrations'.[/]"
+                        "[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]"
                     )
                 else:
                     console.print("[green]Already at latest version[/]")
