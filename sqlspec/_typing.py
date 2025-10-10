@@ -568,7 +568,7 @@ except ImportError:
     aiosql = _AiosqlShim()  # type: ignore[assignment]
 
     # Placeholder types for aiosql protocols
-    AiosqlParamType = Any
+    AiosqlParamType = Any  # type: ignore[misc]
 
     class AiosqlSQLOperationType(Enum):  # type: ignore[no-redef]
         """Enumeration of aiosql operation types."""
