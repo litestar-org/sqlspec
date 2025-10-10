@@ -4,7 +4,13 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
 from sqlspec.core import SQL
-from sqlspec.driver._common import CommonDriverAttributesMixin, DataDictionaryMixin, ExecutionResult, VersionInfo
+from sqlspec.driver._common import (
+    CommonDriverAttributesMixin,
+    DataDictionaryMixin,
+    ExecutionResult,
+    VersionInfo,
+    handle_single_row_error,
+)
 from sqlspec.driver.mixins import SQLTranslatorMixin
 from sqlspec.utils.logging import get_logger
 
@@ -256,7 +262,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
         Raises an exception if no rows or more than one row is returned.
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        return result.one(schema_type=schema_type)
+        try:
+            return result.one(schema_type=schema_type)
+        except ValueError as error:
+            handle_single_row_error(error)
 
     @overload
     def select_one_or_none(
@@ -346,7 +355,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
         Raises an exception if no rows or more than one row/column is returned.
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        return result.scalar()
+        try:
+            return result.scalar()
+        except ValueError as error:
+            handle_single_row_error(error)
 
     def select_value_or_none(
         self,

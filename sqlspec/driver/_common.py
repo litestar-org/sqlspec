@@ -2,7 +2,7 @@
 
 import re
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, NoReturn, Optional, TypeVar, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -11,7 +11,7 @@ from sqlspec.builder import QueryBuilder
 from sqlspec.core import SQL, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
 from sqlspec.core.cache import CachedStatement, get_cache, get_cache_config
 from sqlspec.core.splitter import split_sql_script
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -31,6 +31,7 @@ __all__ = (
     "ExecutionResult",
     "ScriptExecutionResult",
     "VersionInfo",
+    "handle_single_row_error",
     "make_cache_key_hashable",
 )
 
@@ -93,6 +94,16 @@ def make_cache_key_hashable(obj: Any) -> Any:
         else:
             return ("ndarray", dtype_str, shape)
     return obj
+
+
+def handle_single_row_error(error: ValueError) -> "NoReturn":
+    """Normalize single-row selection errors to SQLSpec exceptions."""
+
+    message = str(error)
+    if message.startswith("No result found"):
+        msg = "No rows found"
+        raise NotFoundError(msg) from error
+    raise error
 
 
 class VersionInfo:
