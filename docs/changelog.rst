@@ -10,6 +10,33 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+Shell Completion Support
+-------------------------
+
+Added comprehensive shell completion support for the SQLSpec CLI:
+
+- **Bash, Zsh, and Fish support** - Tab completion for commands and options
+- **Easy setup** - One-time eval command in your shell rc file
+- **Comprehensive documentation** - Setup instructions in :doc:`usage/cli`
+
+.. code-block:: bash
+
+   # Bash - add to ~/.bashrc
+   eval "$(_SQLSPEC_COMPLETE=bash_source sqlspec)"
+
+   # Zsh - add to ~/.zshrc
+   eval "$(_SQLSPEC_COMPLETE=zsh_source sqlspec)"
+
+   # Fish - add to ~/.config/fish/completions/sqlspec.fish
+   eval (env _SQLSPEC_COMPLETE=fish_source sqlspec)
+
+After setup, tab completion works for all commands and options:
+
+.. code-block:: bash
+
+   sqlspec <TAB>              # Shows: create-migration, downgrade, init, ...
+   sqlspec create-migration --<TAB>  # Shows: --bind-key, --help, --message, ...
+
 Extension Migration Configuration
 ----------------------------------
 
