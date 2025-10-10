@@ -7,15 +7,17 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
 from sqlspec.adapters.sqlite._types import SqliteConnection
 from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, sqlite_statement_config
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.config import SyncDatabaseConfig
+from sqlspec.utils.serializers import from_json, to_json
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
     from sqlspec.core.statement import StatementConfig
 
@@ -33,7 +35,26 @@ class SqliteConnectionParams(TypedDict, total=False):
     uri: NotRequired[bool]
 
 
-__all__ = ("SqliteConfig", "SqliteConnectionParams")
+class SqliteDriverFeatures(TypedDict, total=False):
+    """SQLite driver feature configuration.
+
+    Controls optional type handling and serialization features for SQLite connections.
+
+    enable_custom_adapters: Enable custom type adapters for JSON/UUID/datetime conversion.
+        Defaults to True for enhanced Python type support.
+        Set to False only if you need pure SQLite behavior without type conversions.
+    json_serializer: Custom JSON serializer function.
+        Defaults to sqlspec.utils.serializers.to_json.
+    json_deserializer: Custom JSON deserializer function.
+        Defaults to sqlspec.utils.serializers.from_json.
+    """
+
+    enable_custom_adapters: NotRequired[bool]
+    json_serializer: "NotRequired[Callable[[Any], str]]"
+    json_deserializer: "NotRequired[Callable[[str], Any]]"
+
+
+__all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")
 
 
 class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):
@@ -49,7 +70,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         pool_instance: "SqliteConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
-        driver_features: "dict[str, Any] | None" = None,
+        driver_features: "SqliteDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
@@ -79,13 +100,24 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
                 )
                 pool_config["uri"] = True
 
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+
+        if "enable_custom_adapters" not in processed_driver_features:
+            processed_driver_features["enable_custom_adapters"] = True
+
+        if "json_serializer" not in processed_driver_features:
+            processed_driver_features["json_serializer"] = to_json
+
+        if "json_deserializer" not in processed_driver_features:
+            processed_driver_features["json_deserializer"] = from_json
+
         super().__init__(
             bind_key=bind_key,
             pool_instance=pool_instance,
             pool_config=cast("dict[str, Any]", pool_config),
             migration_config=migration_config,
             statement_config=statement_config or sqlite_statement_config,
-            driver_features=driver_features or {},
+            driver_features=processed_driver_features,
             extension_config=extension_config,
         )
 
@@ -99,7 +131,24 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """Create connection pool from configuration."""
         config_dict = self._get_connection_config_dict()
 
-        return SqliteConnectionPool(connection_parameters=config_dict, **self.pool_config)
+        pool = SqliteConnectionPool(connection_parameters=config_dict, **self.pool_config)
+
+        if self.driver_features.get("enable_custom_adapters", False):
+            self._register_type_adapters()
+
+        return pool
+
+    def _register_type_adapters(self) -> None:
+        """Register custom type adapters and converters for SQLite.
+
+        Called once during pool creation if enable_custom_adapters is True.
+        Registers JSON serialization handlers if configured.
+        """
+        if self.driver_features.get("enable_custom_adapters", False):
+            register_type_handlers(
+                json_serializer=self.driver_features.get("json_serializer"),
+                json_deserializer=self.driver_features.get("json_deserializer"),
+            )
 
     def _close_pool(self) -> None:
         """Close the connection pool."""
@@ -136,7 +185,11 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             SqliteDriver: A driver instance with thread-local connection
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(connection=connection, statement_config=statement_config or self.statement_config)
+            yield self.driver_type(
+                connection=connection,
+                statement_config=statement_config or self.statement_config,
+                driver_features=self.driver_features,
+            )
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for SQLite types.

@@ -25,8 +25,8 @@ Understand what needs testing:
 
 ```python
 # Read workspace
-Read(".agents/{requirement}/prd.md")
-Read(".agents/{requirement}/tasks.md")
+Read("requirements/{requirement}/prd.md")
+Read("requirements/{requirement}/tasks.md")
 
 # Read implementation
 Read("sqlspec/adapters/asyncpg/driver.py")
@@ -44,6 +44,7 @@ Read("docs/guides/testing/testing.md")
 ```
 
 **Key testing principles from guide:**
+
 - Use `pytest-databases` for containerized database instances
 - Mark tests with database-specific markers (`@pytest.mark.postgres`, etc.)
 - Use function-based tests (NO class-based tests)
@@ -87,6 +88,7 @@ def test_statement_parameter_replacement():
 **Testing standards (from CLAUDE.md):**
 
 ✅ **DO:**
+
 - Function-based tests: `def test_something():`
 - Descriptive test names: `test_asyncpg_connection_pool_releases_on_error()`
 - One assertion focus per test
@@ -95,6 +97,7 @@ def test_statement_parameter_replacement():
 - Test edge cases: empty inputs, None values, exceptions
 
 ❌ **DO NOT:**
+
 - Class-based tests: `class TestSomething:` (PROHIBITED)
 - Vague test names: `test_1()`, `test_works()`
 - Multiple unrelated assertions in one test
@@ -209,6 +212,7 @@ def test_duckdb_analytics_query(duckdb_connection):
 **Always test:**
 
 1. **Empty inputs:**
+
    ```python
    def test_execute_empty_sql():
        """Test execution with empty SQL string."""
@@ -217,6 +221,7 @@ def test_duckdb_analytics_query(duckdb_connection):
    ```
 
 2. **None values:**
+
    ```python
    def test_execute_with_none_params():
        """Test execution with None parameters."""
@@ -225,6 +230,7 @@ def test_duckdb_analytics_query(duckdb_connection):
    ```
 
 3. **Error conditions:**
+
    ```python
    @pytest.mark.asyncio
    async def test_connection_failure_handling():
@@ -236,6 +242,7 @@ def test_duckdb_analytics_query(duckdb_connection):
    ```
 
 4. **Concurrent operations:**
+
    ```python
    @pytest.mark.asyncio
    async def test_concurrent_queries(postgres_url):
@@ -283,7 +290,7 @@ uv run pytest -n 2 --dist=loadgroup
 **Mark testing complete:**
 
 ```markdown
-# In .agents/{requirement}/tasks.md:
+# In requirements/{requirement}/tasks.md:
 - [x] 3. Adapter-specific code
 - [x] 4. Testing  ← JUST COMPLETED
 - [ ] 5. Documentation  ← HAND OFF TO DOCS & VISION
@@ -343,6 +350,7 @@ open htmlcov/index.html
 ```
 
 **Target coverage:**
+
 - Core modules: 90%+ coverage
 - Adapters: 80%+ coverage (integration tests)
 - Utilities: 95%+ coverage
@@ -352,6 +360,7 @@ open htmlcov/index.html
 **From testing guide:**
 
 1. **Use fixtures for setup/teardown:**
+
    ```python
    @pytest.fixture
    async def asyncpg_session(postgres_url):
@@ -362,6 +371,7 @@ open htmlcov/index.html
    ```
 
 2. **Parametrize for multiple cases:**
+
    ```python
    @pytest.mark.parametrize("sql,expected", [
        ("SELECT 1", 1),
@@ -375,6 +385,7 @@ open htmlcov/index.html
    ```
 
 3. **Mark slow tests:**
+
    ```python
    @pytest.mark.slow
    @pytest.mark.integration
@@ -384,6 +395,7 @@ open htmlcov/index.html
    ```
 
 4. **Use pytest-asyncio for async tests:**
+
    ```python
    @pytest.mark.asyncio
    async def test_async_operation():
@@ -397,18 +409,21 @@ open htmlcov/index.html
 When testing complete:
 
 1. **Verify all tests pass:**
+
    ```bash
    uv run pytest -n 2 --dist=loadgroup
    # Should see: ===== X passed in Y.YYs =====
    ```
 
 2. **Update workspace:**
+
    ```markdown
    - [x] 4. Testing
    - [ ] 5. Documentation ← HAND OFF TO DOCS & VISION
    ```
 
 3. **Notify user:**
+
    ```
    Testing complete! ✅
 

@@ -28,13 +28,13 @@ Comprehensive guide for the SQLSpec agent system, covering agent responsibilitie
 1. Research guides, Context7, WebSearch
 2. Create structured plan with zen.planner
 3. Get consensus on complex decisions (zen.consensus)
-4. Create workspace in `.agents/{requirement}/`
+4. Create workspace in `requirements/{requirement}/`
 5. Write PRD, tasks, research, recovery docs
 
 **Output:**
 
 ```
-.agents/{requirement-slug}/
+requirements/{requirement-slug}/
 ├── prd.md          # Product Requirements Document
 ├── tasks.md        # Implementation checklist
 ├── research/       # Research findings
@@ -116,7 +116,7 @@ Comprehensive guide for the SQLSpec agent system, covering agent responsibilitie
 
 3. **Cleanup (MANDATORY):**
    - Remove all tmp/ directories
-   - Archive requirement to .agents/archive/
+   - Archive requirement to requirements/archive/
    - Keep only last 3 active requirements
    - Archive planning reports
 
@@ -150,7 +150,7 @@ Include relevant files for context:
 - sqlspec/protocols.py
 - sqlspec/adapters/asyncpg/driver.py
 
-Write consensus findings to .agents/{requirement}/research/consensus.md
+Write consensus findings to requirements/{requirement}/research/consensus.md
 """
 )
 ```
@@ -175,7 +175,7 @@ Use zen.debug to:
 4. Verify pool configuration
 5. Test fix
 
-Write findings to .agents/{requirement}/tmp/debug-{issue}.md
+Write findings to requirements/{requirement}/tmp/debug-{issue}.md
 """
 )
 ```
@@ -337,7 +337,7 @@ WebSearch(query="PostgreSQL 16 connection pooling best practices 2025")
 ### Structure
 
 ```
-.agents/
+requirements/
 ├── {requirement-1}/      # Active requirement
 │   ├── prd.md
 │   ├── tasks.md
@@ -361,13 +361,13 @@ WebSearch(query="PostgreSQL 16 connection pooling best practices 2025")
 1. Remove all tmp/ directories:
 
    ```bash
-   find .agents/*/tmp -type d -exec rm -rf {} +
+   find requirements/*/tmp -type d -exec rm -rf {} +
    ```
 
 2. Archive completed requirement:
 
    ```bash
-   mv .agents/{requirement} .agents/archive/{requirement}
+   mv requirements/{requirement} requirements/archive/{requirement}
    ```
 
 3. Keep only last 3 active requirements:
@@ -384,19 +384,19 @@ To resume work across sessions/context resets:
 
 ```python
 # 1. List active requirements
-Glob(".agents/*/prd.md")
+Glob("requirements/*/prd.md")
 
 # 2. Read recovery.md to understand status
-Read(".agents/{requirement}/recovery.md")
+Read("requirements/{requirement}/recovery.md")
 
 # 3. Check task progress
-Read(".agents/{requirement}/tasks.md")
+Read("requirements/{requirement}/tasks.md")
 
 # 4. Review PRD for full context
-Read(".agents/{requirement}/prd.md")
+Read("requirements/{requirement}/prd.md")
 
 # 5. Review planning details
-Read(".agents/{requirement}/research/plan.md")
+Read("requirements/{requirement}/research/plan.md")
 ```
 
 ## Code Quality Standards
@@ -481,7 +481,7 @@ docs/guides/quick-reference/
 
 ```python
 # 1. Find active work
-active_requirements = Glob(".agents/*/prd.md")
+active_requirements = Glob("requirements/*/prd.md")
 
 # 2. For each active requirement, check status
 for req_prd in active_requirements:
@@ -504,10 +504,10 @@ If requirement archived:
 
 ```python
 # Find in archive
-Glob(".agents/archive/*/prd.md")
+Glob("requirements/archive/*/prd.md")
 
 # Can still read archived requirements
-Read(".agents/archive/{requirement}/recovery.md")
+Read("requirements/archive/{requirement}/recovery.md")
 ```
 
 ## Command Workflow
@@ -518,7 +518,7 @@ Read(".agents/archive/{requirement}/recovery.md")
 # 1. Plan
 /plan implement vector search for Oracle and PostgreSQL
 
-# Creates: .agents/vector-search/
+# Creates: requirements/vector-search/
 
 # 2. Implement
 /implement
@@ -537,7 +537,7 @@ Read(".agents/archive/{requirement}/recovery.md")
 # Phase 2: Quality gate (must pass)
 # Phase 3: Cleanup (mandatory)
 
-# Result: .agents/vector-search/ → .agents/archive/vector-search/
+# Result: requirements/vector-search/ → requirements/archive/vector-search/
 ```
 
 ### Bug Fix Workflow
@@ -616,13 +616,13 @@ Read(".agents/archive/{requirement}/recovery.md")
 ### Workspace Getting Cluttered
 
 ```markdown
-**Problem:** .agents/ has too many folders
+**Problem:** requirements/ has too many folders
 
 **Solution:**
 1. Run `/review` on oldest requirements
 2. Let Docs & Vision archive them
 3. Manually archive if needed:
-   mv .agents/{old-requirement} .agents/archive/
+   mv requirements/{old-requirement} requirements/archive/
 4. Keep only 3 active requirements
 ```
 
@@ -632,7 +632,7 @@ Read(".agents/archive/{requirement}/recovery.md")
 **Problem:** Can't remember what I was working on
 
 **Solution:**
-1. Read .agents/*/recovery.md for all active requirements
+1. Read requirements/*/recovery.md for all active requirements
 2. Each recovery.md has:
    - Current status
    - Last updated date

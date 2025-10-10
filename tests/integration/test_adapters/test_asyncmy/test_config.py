@@ -3,7 +3,13 @@
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyConnectionParams, AsyncmyDriver, AsyncmyPoolParams
+from sqlspec.adapters.asyncmy import (
+    AsyncmyConfig,
+    AsyncmyConnectionParams,
+    AsyncmyDriver,
+    AsyncmyDriverFeatures,
+    AsyncmyPoolParams,
+)
 from sqlspec.core.statement import StatementConfig
 
 pytestmark = pytest.mark.xdist_group("mysql")
@@ -137,3 +143,78 @@ def test_asyncmy_config_supports_connection_pooling() -> None:
     config = AsyncmyConfig(pool_config=pool_config)
     assert config.supports_connection_pooling is True
     assert AsyncmyConfig.supports_connection_pooling is True
+
+
+def test_asyncmy_driver_features_typed_dict_structure() -> None:
+    """Test AsyncmyDriverFeatures TypedDict structure."""
+    features: AsyncmyDriverFeatures = {"json_serializer": lambda x: str(x), "json_deserializer": lambda x: x}
+
+    assert "json_serializer" in features
+    assert "json_deserializer" in features
+    assert callable(features["json_serializer"])
+    assert callable(features["json_deserializer"])
+
+
+def test_asyncmy_driver_features_partial_dict() -> None:
+    """Test AsyncmyDriverFeatures with partial configuration."""
+    features: AsyncmyDriverFeatures = {"json_serializer": lambda x: str(x)}
+
+    assert "json_serializer" in features
+    assert "json_deserializer" not in features
+
+
+def test_asyncmy_driver_features_empty_dict() -> None:
+    """Test AsyncmyDriverFeatures with empty configuration."""
+    features: AsyncmyDriverFeatures = {}
+
+    assert len(features) == 0
+
+
+def test_asyncmy_config_with_driver_features() -> None:
+    """Test AsyncmyConfig initialization with driver_features."""
+
+    def custom_serializer(data: object) -> str:
+        return str(data)
+
+    def custom_deserializer(data: str) -> object:
+        return data
+
+    features: AsyncmyDriverFeatures = {"json_serializer": custom_serializer, "json_deserializer": custom_deserializer}
+
+    config = AsyncmyConfig(pool_config={"host": "localhost", "port": 3306}, driver_features=features)
+
+    assert config.driver_features["json_serializer"] is custom_serializer
+    assert config.driver_features["json_deserializer"] is custom_deserializer
+
+
+def test_asyncmy_config_with_empty_driver_features() -> None:
+    """Test AsyncmyConfig with empty driver_features still provides defaults."""
+    config = AsyncmyConfig(pool_config={"host": "localhost", "port": 3306}, driver_features={})
+
+    assert "json_serializer" in config.driver_features
+    assert "json_deserializer" in config.driver_features
+    assert callable(config.driver_features["json_serializer"])
+    assert callable(config.driver_features["json_deserializer"])
+
+
+def test_asyncmy_config_without_driver_features() -> None:
+    """Test AsyncmyConfig without driver_features provides sensible defaults."""
+    config = AsyncmyConfig(pool_config={"host": "localhost", "port": 3306})
+
+    assert "json_serializer" in config.driver_features
+    assert "json_deserializer" in config.driver_features
+    assert callable(config.driver_features["json_serializer"])
+    assert callable(config.driver_features["json_deserializer"])
+
+
+def test_asyncmy_config_driver_features_as_plain_dict() -> None:
+    """Test AsyncmyConfig with driver_features as plain dict."""
+
+    def custom_serializer(data: object) -> str:
+        return str(data)
+
+    config = AsyncmyConfig(
+        pool_config={"host": "localhost", "port": 3306}, driver_features={"json_serializer": custom_serializer}
+    )
+
+    assert config.driver_features["json_serializer"] is custom_serializer

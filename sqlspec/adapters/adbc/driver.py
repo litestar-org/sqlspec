@@ -579,6 +579,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         For PostgreSQL, applies cast-aware parameter processing using metadata from the compiled statement.
         This allows proper handling of JSONB casts and other type conversions.
+        Respects driver_features['enable_cast_detection'] configuration.
 
         Args:
             parameters: Parameters in any format
@@ -589,7 +590,9 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Parameters with cast-aware type coercion applied
         """
-        if prepared_statement and self.dialect in {"postgres", "postgresql"} and not is_many:
+        enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
+
+        if enable_cast_detection and prepared_statement and self.dialect in {"postgres", "postgresql"} and not is_many:
             parameter_casts = self._get_parameter_casts(prepared_statement)
             postgres_compatible = self._handle_postgres_empty_parameters(parameters)
             return self._prepare_parameters_with_casts(postgres_compatible, parameter_casts, statement_config)
@@ -617,6 +620,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Prepare parameters with cast-aware type coercion.
 
         Uses type coercion map for non-dict types and dialect-aware dict handling.
+        Respects driver_features configuration for JSON serialization backend.
 
         Args:
             parameters: Parameter values (list, tuple, or scalar)
@@ -626,7 +630,9 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Parameters with cast-aware type coercion applied
         """
-        from sqlspec._serialization import encode_json
+        from sqlspec.utils.serializers import to_json
+
+        json_encoder = self.driver_features.get("json_serializer", to_json)
 
         if isinstance(parameters, (list, tuple)):
             result: list[Any] = []
@@ -634,7 +640,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 cast_type = parameter_casts.get(idx, "").upper()
                 if cast_type in {"JSON", "JSONB", "TYPE.JSON", "TYPE.JSONB"}:
                     if isinstance(param, dict):
-                        result.append(encode_json(param))
+                        result.append(json_encoder(param))
                     else:
                         result.append(param)
                 elif isinstance(param, dict):

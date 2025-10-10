@@ -55,7 +55,37 @@ class AdbcConnectionParams(TypedDict, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-__all__ = ("AdbcConfig", "AdbcConnectionParams")
+class AdbcDriverFeatures(TypedDict, total=False):
+    """ADBC driver feature configuration.
+
+    Controls optional type handling and serialization behavior for the ADBC adapter.
+    These features configure how data is converted between Python and Arrow types.
+
+    Attributes:
+        json_serializer: JSON serialization function to use.
+            Callable that takes Any and returns str (JSON string).
+            Default: sqlspec.utils.serializers.to_json
+        enable_cast_detection: Enable cast-aware parameter processing.
+            When True, detects SQL casts (e.g., ::JSONB) and applies appropriate
+            serialization. Currently used for PostgreSQL JSONB handling.
+            Default: True
+        strict_type_coercion: Enforce strict type coercion rules.
+            When True, raises errors for unsupported type conversions.
+            When False, attempts best-effort conversion.
+            Default: False
+        arrow_extension_types: Enable PyArrow extension type support.
+            When True, preserves Arrow extension type metadata when reading data.
+            When False, falls back to storage types.
+            Default: True
+    """
+
+    json_serializer: "NotRequired[Callable[[Any], str]]"
+    enable_cast_detection: NotRequired[bool]
+    strict_type_coercion: NotRequired[bool]
+    arrow_extension_types: NotRequired[bool]
+
+
+__all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
 
 
 class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
@@ -77,7 +107,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         connection_config: AdbcConnectionParams | dict[str, Any] | None = None,
         migration_config: dict[str, Any] | None = None,
         statement_config: StatementConfig | None = None,
-        driver_features: dict[str, Any] | None = None,
+        driver_features: "AdbcDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
         extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
@@ -87,7 +117,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             connection_config: Connection configuration parameters
             migration_config: Migration configuration
             statement_config: Default SQL statement configuration
-            driver_features: Driver feature configuration
+            driver_features: Driver feature configuration (AdbcDriverFeatures)
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
         """
@@ -104,11 +134,24 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             detected_dialect = str(self._get_dialect() or "sqlite")
             statement_config = get_adbc_statement_config(detected_dialect)
 
+        from sqlspec.utils.serializers import to_json
+
+        if driver_features is None:
+            driver_features = {}
+        if "json_serializer" not in driver_features:
+            driver_features["json_serializer"] = to_json
+        if "enable_cast_detection" not in driver_features:
+            driver_features["enable_cast_detection"] = True
+        if "strict_type_coercion" not in driver_features:
+            driver_features["strict_type_coercion"] = False
+        if "arrow_extension_types" not in driver_features:
+            driver_features["arrow_extension_types"] = True
+
         super().__init__(
             connection_config=self.connection_config,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features or {},
+            driver_features=dict(driver_features),
             bind_key=bind_key,
             extension_config=extension_config,
         )
@@ -309,7 +352,9 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                     or self.statement_config
                     or get_adbc_statement_config(str(self._get_dialect() or "sqlite"))
                 )
-                yield self.driver_type(connection=connection, statement_config=final_statement_config)
+                yield self.driver_type(
+                    connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
+                )
 
         return session_manager()
 

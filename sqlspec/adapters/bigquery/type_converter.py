@@ -42,15 +42,17 @@ class BigQueryTypeConverter(BaseTypeConverter):
     Includes per-instance LRU cache for improved performance.
     """
 
-    __slots__ = ("_convert_cache",)
+    __slots__ = ("_convert_cache", "_enable_uuid_conversion")
 
-    def __init__(self, cache_size: int = 5000) -> None:
+    def __init__(self, cache_size: int = 5000, *, enable_uuid_conversion: bool = True) -> None:
         """Initialize converter with per-instance conversion cache.
 
         Args:
             cache_size: Maximum number of string values to cache (default: 5000)
+            enable_uuid_conversion: Whether to enable automatic UUID conversion (default: True)
         """
         super().__init__()
+        self._enable_uuid_conversion = enable_uuid_conversion
 
         @lru_cache(maxsize=cache_size)
         def _cached_convert(value: str) -> Any:
@@ -92,14 +94,15 @@ class BigQueryTypeConverter(BaseTypeConverter):
         if ScalarQueryParameter is None:
             return None
 
-        if isinstance(value, UUID):
-            return ScalarQueryParameter(name, "STRING", str(value))
+        if self._enable_uuid_conversion:
+            if isinstance(value, UUID):
+                return ScalarQueryParameter(name, "STRING", str(value))
 
-        if isinstance(value, str):
-            detected_type = self.detect_type(value)
-            if detected_type == "uuid":
-                uuid_obj = convert_uuid(value)
-                return ScalarQueryParameter(name, "STRING", str(uuid_obj))
+            if isinstance(value, str):
+                detected_type = self.detect_type(value)
+                if detected_type == "uuid":
+                    uuid_obj = convert_uuid(value)
+                    return ScalarQueryParameter(name, "STRING", str(uuid_obj))
 
         param_type = BQ_TYPE_MAP.get(type(value).__name__, "STRING")
         return ScalarQueryParameter(name, param_type, value)

@@ -18,6 +18,7 @@ from sqlspec.adapters.psycopg.driver import (
     psycopg_statement_config,
 )
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+from sqlspec.typing import PGVECTOR_INSTALLED
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
@@ -64,10 +65,25 @@ class PsycopgPoolParams(PsycopgConnectionParams, total=False):
     kwargs: NotRequired[dict[str, Any]]
 
 
+class PsycopgDriverFeatures(TypedDict, total=False):
+    """Psycopg driver feature flags.
+
+    enable_pgvector: Enable automatic pgvector extension support for vector similarity search.
+        Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
+        Defaults to True when pgvector-python is installed.
+        Provides automatic conversion between Python objects and PostgreSQL vector types.
+        Enables vector similarity operations and index support.
+        Set to False to disable pgvector support even when package is available.
+    """
+
+    enable_pgvector: NotRequired[bool]
+
+
 __all__ = (
     "PsycopgAsyncConfig",
     "PsycopgAsyncCursor",
     "PsycopgConnectionParams",
+    "PsycopgDriverFeatures",
     "PsycopgPoolParams",
     "PsycopgSyncConfig",
     "PsycopgSyncCursor",
@@ -107,12 +123,17 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
 
+        if driver_features is None:
+            driver_features = {}
+        if "enable_pgvector" not in driver_features:
+            driver_features["enable_pgvector"] = PGVECTOR_INSTALLED
+
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or psycopg_statement_config,
-            driver_features=driver_features or {},
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )
@@ -143,15 +164,10 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 if autocommit_setting is not None:
                     conn.autocommit = autocommit_setting
 
-                try:
-                    import pgvector.psycopg
+                if self.driver_features.get("enable_pgvector", False):
+                    from sqlspec.adapters.psycopg._type_handlers import register_pgvector_sync
 
-                    pgvector.psycopg.register_vector(conn)
-                    logger.debug("pgvector registered successfully for psycopg sync connection")
-                except ImportError:
-                    pass
-                except Exception as e:
-                    logger.debug("Failed to register pgvector for psycopg sync: %s", e)
+                    register_pgvector_sync(conn)
 
             pool_parameters["configure"] = all_config.pop("configure", configure_connection)
 
@@ -236,7 +252,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         with self.provide_connection(*args, **kwargs) as conn:
             final_statement_config = statement_config or self.statement_config
-            yield self.driver_type(connection=conn, statement_config=final_statement_config)
+            yield self.driver_type(
+                connection=conn, statement_config=final_statement_config, driver_features=self.driver_features
+            )
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -295,12 +313,17 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
 
+        if driver_features is None:
+            driver_features = {}
+        if "enable_pgvector" not in driver_features:
+            driver_features["enable_pgvector"] = PGVECTOR_INSTALLED
+
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or psycopg_statement_config,
-            driver_features=driver_features or {},
+            driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )
@@ -329,15 +352,10 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             if autocommit_setting is not None:
                 await conn.set_autocommit(autocommit_setting)
 
-            try:
-                from pgvector.psycopg import register_vector_async
+            if self.driver_features.get("enable_pgvector", False):
+                from sqlspec.adapters.psycopg._type_handlers import register_pgvector_async
 
-                await register_vector_async(conn)
-                logger.debug("pgvector registered successfully for psycopg async connection")
-            except ImportError:
-                pass
-            except Exception as e:
-                logger.debug("Failed to register pgvector for psycopg async: %s", e)
+                await register_pgvector_async(conn)
 
         pool_parameters["configure"] = all_config.pop("configure", configure_connection)
 
@@ -414,7 +432,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """
         async with self.provide_connection(*args, **kwargs) as conn:
             final_statement_config = statement_config or psycopg_statement_config
-            yield self.driver_type(connection=conn, statement_config=final_statement_config)
+            yield self.driver_type(
+                connection=conn, statement_config=final_statement_config, driver_features=self.driver_features
+            )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.

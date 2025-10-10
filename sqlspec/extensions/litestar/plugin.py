@@ -370,7 +370,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if connection is None:
             self._raise_missing_connection(plugin_state.connection_key)
 
-        session = plugin_state.config.driver_type(connection=connection)
+        session = plugin_state.config.driver_type(
+            connection=connection,
+            statement_config=plugin_state.config.statement_config,
+            driver_features=plugin_state.config.driver_features,
+        )
         set_sqlspec_scope_state(scope, session_scope_key, session)
 
         return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)

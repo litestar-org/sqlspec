@@ -11,6 +11,7 @@ AsyncMy Parameter Conversion Requirements:
 This implements MySQL's 2-phase parameter processing.
 """
 
+import math
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -619,7 +620,7 @@ async def test_asyncmy_none_complex_scenarios(asyncmy_parameter_session: Asyncmy
     params = {
         "name": "complex_test",
         "score": None,
-        "factor": 3.14,
+        "factor": math.pi,
         "active": None,
         "tags": '["tag1", "tag2"]',
         "created_at": None,
@@ -646,9 +647,9 @@ async def test_asyncmy_none_complex_scenarios(asyncmy_parameter_session: Asyncmy
     row = verify_result.data[0]
     assert row["name"] == "complex_test"
     assert row["score"] is None
-    assert abs(float(row["factor"]) - 3.14) < 0.01  # Decimal comparison
+    assert abs(float(row["factor"]) - math.pi) < 0.01  # Decimal comparison
     assert row["active"] is None
-    assert row["tags"] == '["tag1", "tag2"]'
+    assert row["tags"] == '["tag1", "tag2"]' or row["tags"] == ["tag1", "tag2"]  # JSON field
     assert row["created_at"] is None
     assert row["metadata"] is None
 

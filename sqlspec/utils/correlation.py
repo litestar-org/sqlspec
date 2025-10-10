@@ -4,15 +4,14 @@ This module provides utilities for tracking correlation IDs across
 database operations, enabling distributed tracing and debugging.
 """
 
-from __future__ import annotations
-
 import uuid
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, MutableMapping
+    from collections.abc import MutableMapping
     from logging import LoggerAdapter
 
 __all__ = ("CorrelationContext", "correlation_context", "get_correlation_adapter")
@@ -115,7 +114,7 @@ def correlation_context(correlation_id: str | None = None) -> Generator[str, Non
         yield cid
 
 
-def get_correlation_adapter(logger: Any) -> LoggerAdapter:
+def get_correlation_adapter(logger: Any) -> "LoggerAdapter":
     """Get a logger adapter that automatically includes correlation ID.
 
     Args:
@@ -129,7 +128,7 @@ def get_correlation_adapter(logger: Any) -> LoggerAdapter:
     class CorrelationAdapter(LoggerAdapter):
         """Logger adapter that adds correlation ID to all logs."""
 
-        def process(self, msg: str, kwargs: MutableMapping[str, Any]) -> tuple[str, dict[str, Any]]:
+        def process(self, msg: str, kwargs: "MutableMapping[str, Any]") -> tuple[str, dict[str, Any]]:
             """Add correlation ID to the log record.
 
             Args:

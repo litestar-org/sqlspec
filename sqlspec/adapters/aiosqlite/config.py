@@ -15,13 +15,14 @@ from sqlspec.adapters.aiosqlite.pool import (
     AiosqlitePoolConnection,
 )
 from sqlspec.config import AsyncDatabaseConfig
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable
 
     from sqlspec.core.statement import StatementConfig
 
-__all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqlitePoolParams")
+__all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteDriverFeatures", "AiosqlitePoolParams")
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,25 @@ class AiosqlitePoolParams(AiosqliteConnectionParams, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
+class AiosqliteDriverFeatures(TypedDict, total=False):
+    """Aiosqlite driver feature configuration.
+
+    Controls optional type handling and serialization features for SQLite connections.
+
+    enable_custom_adapters: Enable custom type adapters for JSON/UUID/datetime conversion.
+        Defaults to True for enhanced Python type support.
+        Set to False only if you need pure SQLite behavior without type conversions.
+    json_serializer: Custom JSON serializer function.
+        Defaults to sqlspec.utils.serializers.to_json.
+    json_deserializer: Custom JSON deserializer function.
+        Defaults to sqlspec.utils.serializers.from_json.
+    """
+
+    enable_custom_adapters: NotRequired[bool]
+    json_serializer: "NotRequired[Callable[[Any], str]]"
+    json_deserializer: "NotRequired[Callable[[str], Any]]"
+
+
 class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnectionPool, AiosqliteDriver]):
     """Database configuration for AioSQLite engine."""
 
@@ -61,7 +81,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         pool_instance: "AiosqliteConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
-        driver_features: "dict[str, Any] | None" = None,
+        driver_features: "AiosqliteDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
@@ -91,12 +111,23 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
                 )
                 config_dict["uri"] = True
 
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+
+        if "enable_custom_adapters" not in processed_driver_features:
+            processed_driver_features["enable_custom_adapters"] = True
+
+        if "json_serializer" not in processed_driver_features:
+            processed_driver_features["json_serializer"] = to_json
+
+        if "json_deserializer" not in processed_driver_features:
+            processed_driver_features["json_deserializer"] = from_json
+
         super().__init__(
             pool_config=config_dict,
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or aiosqlite_statement_config,
-            driver_features=driver_features or {},
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )
@@ -163,7 +194,11 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             An AiosqliteDriver instance.
         """
         async with self.provide_connection(*_args, **_kwargs) as connection:
-            yield self.driver_type(connection=connection, statement_config=statement_config or self.statement_config)
+            yield self.driver_type(
+                connection=connection,
+                statement_config=statement_config or self.statement_config,
+                driver_features=self.driver_features,
+            )
 
     async def _create_pool(self) -> AiosqliteConnectionPool:
         """Create the connection pool instance.
@@ -177,13 +212,35 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         idle_timeout = config.pop("idle_timeout", 24 * 60 * 60)
         operation_timeout = config.pop("operation_timeout", 10.0)
 
-        return AiosqliteConnectionPool(
+        pool = AiosqliteConnectionPool(
             connection_parameters=self._get_connection_config_dict(),
             pool_size=pool_size,
             connect_timeout=connect_timeout,
             idle_timeout=idle_timeout,
             operation_timeout=operation_timeout,
         )
+
+        if self.driver_features.get("enable_custom_adapters", False):
+            self._register_type_adapters()
+
+        return pool
+
+    def _register_type_adapters(self) -> None:
+        """Register custom type adapters and converters for SQLite.
+
+        Called once during pool creation if enable_custom_adapters is True.
+        Registers JSON serialization handlers if configured.
+
+        Note: aiosqlite uses the same sqlite3 module type registration as the
+        sync adapter, so this shares the implementation.
+        """
+        if self.driver_features.get("enable_custom_adapters", False):
+            from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
+
+            register_type_handlers(
+                json_serializer=self.driver_features.get("json_serializer"),
+                json_deserializer=self.driver_features.get("json_deserializer"),
+            )
 
     async def close_pool(self) -> None:
         """Close the connection pool."""

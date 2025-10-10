@@ -5,10 +5,10 @@ type coercion, error handling, and transaction management.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
-import asyncmy
 import asyncmy.errors  # pyright: ignore
+from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 
 from sqlspec.core.cache import get_cache_config
@@ -30,6 +30,7 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.asyncmy._types import AsyncmyConnection
@@ -37,11 +38,14 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import SQL
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
+__all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "asyncmy_statement_config")
 
 logger = logging.getLogger(__name__)
 
-__all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "asyncmy_statement_config")
-
+json_type_value = (
+    ASYNC_MY_FIELD_TYPE.JSON if ASYNC_MY_FIELD_TYPE is not None and hasattr(ASYNC_MY_FIELD_TYPE, "JSON") else None
+)
+ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 MYSQL_ER_DUP_ENTRY = 1062
 MYSQL_ER_NO_DEFAULT_FOR_FIELD = 1364
 MYSQL_ER_CHECK_CONSTRAINT_VIOLATED = 3819
@@ -147,9 +151,9 @@ class AsyncmyExceptionHandler:
             self._raise_transaction_error(e, sqlstate, error_code)
         elif sqlstate and sqlstate.startswith("22"):
             self._raise_data_error(e, sqlstate, error_code)
-        elif error_code in (2002, 2003, 2005, 2006, 2013):
+        elif error_code in {2002, 2003, 2005, 2006, 2013}:
             self._raise_connection_error(e, sqlstate, error_code)
-        elif error_code in (1205, 1213):
+        elif error_code in {1205, 1213}:
             self._raise_transaction_error(e, sqlstate, error_code)
         elif error_code in range(1064, 1100):
             self._raise_parsing_error(e, sqlstate, error_code)
@@ -229,17 +233,91 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
-        if statement_config is None:
+        final_statement_config = statement_config
+        if final_statement_config is None:
             cache_config = get_cache_config()
-            statement_config = asyncmy_statement_config.replace(
+            final_statement_config = asyncmy_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,
                 enable_validation=True,
                 dialect="mysql",
             )
 
-        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        final_statement_config = self._apply_json_serializer_feature(final_statement_config, driver_features)
+
+        super().__init__(
+            connection=connection, statement_config=final_statement_config, driver_features=driver_features
+        )
         self._data_dictionary: AsyncDataDictionaryBase | None = None
+
+    @staticmethod
+    def _clone_parameter_config(
+        parameter_config: ParameterStyleConfig, type_coercion_map: "dict[type[Any], Callable[[Any], Any]]"
+    ) -> ParameterStyleConfig:
+        """Create a copy of the parameter configuration with updated coercion map.
+
+        Args:
+            parameter_config: Existing parameter configuration to copy.
+            type_coercion_map: Updated coercion mapping for parameter serialization.
+
+        Returns:
+            ParameterStyleConfig with the updated type coercion map applied.
+        """
+
+        supported_execution_styles = (
+            set(parameter_config.supported_execution_parameter_styles)
+            if parameter_config.supported_execution_parameter_styles is not None
+            else None
+        )
+
+        return ParameterStyleConfig(
+            default_parameter_style=parameter_config.default_parameter_style,
+            supported_parameter_styles=set(parameter_config.supported_parameter_styles),
+            supported_execution_parameter_styles=supported_execution_styles,
+            default_execution_parameter_style=parameter_config.default_execution_parameter_style,
+            type_coercion_map=type_coercion_map,
+            has_native_list_expansion=parameter_config.has_native_list_expansion,
+            needs_static_script_compilation=parameter_config.needs_static_script_compilation,
+            allow_mixed_parameter_styles=parameter_config.allow_mixed_parameter_styles,
+            preserve_parameter_format=parameter_config.preserve_parameter_format,
+            preserve_original_params_for_many=parameter_config.preserve_original_params_for_many,
+            output_transformer=parameter_config.output_transformer,
+            ast_transformer=parameter_config.ast_transformer,
+        )
+
+    @staticmethod
+    def _apply_json_serializer_feature(
+        statement_config: "StatementConfig", driver_features: "dict[str, Any] | None"
+    ) -> "StatementConfig":
+        """Apply driver-level JSON serializer customization to the statement config.
+
+        Args:
+            statement_config: Base statement configuration for the driver.
+            driver_features: Driver feature mapping provided via configuration.
+
+        Returns:
+            StatementConfig with serializer adjustments applied when configured.
+        """
+
+        if not driver_features:
+            return statement_config
+
+        serializer = driver_features.get("json_serializer")
+        if serializer is None:
+            return statement_config
+
+        parameter_config = statement_config.parameter_config
+        type_coercion_map = dict(parameter_config.type_coercion_map)
+
+        def serialize_tuple(value: Any) -> Any:
+            return serializer(list(value))
+
+        type_coercion_map[dict] = serializer
+        type_coercion_map[list] = serializer
+        type_coercion_map[tuple] = serialize_tuple
+
+        updated_parameter_config = AsyncmyDriver._clone_parameter_config(parameter_config, type_coercion_map)
+        return statement_config.replace(parameter_config=updated_parameter_config)
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         """Create cursor context manager for the connection.
@@ -272,6 +350,75 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         _ = (cursor, statement)
         return None
+
+    def _detect_json_columns(self, cursor: Any) -> "list[int]":
+        """Identify JSON column indexes from cursor metadata.
+
+        Args:
+            cursor: Database cursor with description metadata available.
+
+        Returns:
+            List of index positions where JSON values are present.
+        """
+
+        description = getattr(cursor, "description", None)
+        if not description or not ASYNCMY_JSON_TYPE_CODES:
+            return []
+
+        json_indexes: list[int] = []
+        for index, column in enumerate(description):
+            type_code = getattr(column, "type_code", None)
+            if type_code is None and isinstance(column, (tuple, list)) and len(column) > 1:
+                type_code = column[1]
+            if type_code in ASYNCMY_JSON_TYPE_CODES:
+                json_indexes.append(index)
+        return json_indexes
+
+    def _deserialize_json_columns(
+        self, cursor: Any, column_names: "list[str]", rows: "list[dict[str, Any]]"
+    ) -> "list[dict[str, Any]]":
+        """Apply configured JSON deserializer to result rows.
+
+        Args:
+            cursor: Database cursor used for the current result set.
+            column_names: Ordered column names from the cursor description.
+            rows: Result rows represented as dictionaries.
+
+        Returns:
+            Rows with JSON columns decoded when a deserializer is configured.
+        """
+
+        if not rows or not column_names:
+            return rows
+
+        deserializer = self.driver_features.get("json_deserializer")
+        if deserializer is None:
+            return rows
+
+        json_indexes = self._detect_json_columns(cursor)
+        if not json_indexes:
+            return rows
+
+        target_columns = [column_names[index] for index in json_indexes if index < len(column_names)]
+        if not target_columns:
+            return rows
+
+        for row in rows:
+            for column in target_columns:
+                if column not in row:
+                    continue
+                raw_value = row[column]
+                if raw_value is None:
+                    continue
+                if isinstance(raw_value, bytearray):
+                    raw_value = bytes(raw_value)
+                if not isinstance(raw_value, (str, bytes)):
+                    continue
+                try:
+                    row[column] = deserializer(raw_value)
+                except Exception:
+                    logger.debug("Failed to deserialize JSON column %s", column, exc_info=True)
+        return rows
 
     async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -349,12 +496,16 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             column_names = [desc[0] for desc in cursor.description or []]
 
             if fetched_data and not isinstance(fetched_data[0], dict):
-                data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
+                rows = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
+            elif fetched_data:
+                rows = [dict(row) for row in fetched_data]
             else:
-                data = fetched_data
+                rows = []
+
+            rows = self._deserialize_json_columns(cursor, column_names, rows)
 
             return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+                cursor, selected_data=rows, column_names=column_names, data_row_count=len(rows), is_select_result=True
             )
 
         affected_rows = cursor.rowcount if cursor.rowcount is not None else -1

@@ -14,7 +14,7 @@ Strategic planning agent for SQLSpec development. Creates research-grounded, mul
 1. **Research-Grounded Planning** - Consult guides, docs, and best practices before planning
 2. **Multi-Session Planning** - Use zen planner for structured, resumable plans
 3. **Consensus Verification** - Get multi-model agreement on complex decisions
-4. **Session Continuity** - Produce detailed artifacts in `.agents/` workspace
+4. **Session Continuity** - Produce detailed artifacts in `requirements/` workspace
 
 ## Planning Workflow
 
@@ -34,6 +34,7 @@ Strategic planning agent for SQLSpec development. Creates research-grounded, mul
 **Priority order for research:**
 
 1. **Static Guides** (fastest, most reliable):
+
    ```python
    # Adapter-specific patterns
    Read("docs/guides/adapters/{adapter}.md")
@@ -50,6 +51,7 @@ Strategic planning agent for SQLSpec development. Creates research-grounded, mul
    ```
 
 2. **Context7** (for library documentation):
+
    ```python
    # Get library ID
    mcp__context7__resolve-library-id(libraryName="asyncpg")
@@ -62,6 +64,7 @@ Strategic planning agent for SQLSpec development. Creates research-grounded, mul
    ```
 
 3. **WebSearch** (for recent best practices):
+
    ```python
    WebSearch(query="PostgreSQL 16 performance best practices 2025")
    ```
@@ -80,6 +83,7 @@ mcp__zen__planner(
 ```
 
 **Plan structure:**
+
 - Break work into small, testable chunks
 - Account for all affected adapters
 - Plan for testing (unit + integration)
@@ -107,15 +111,16 @@ mcp__zen__consensus(
 
 ### Step 5: Create Workspace Artifacts
 
-Create requirement folder in `.agents/`:
+Create requirement folder in `requirements/`:
 
 ```bash
-mkdir -p .agents/{requirement-slug}/{research,tmp}
+mkdir -p requirements/{requirement-slug}/{research,tmp}
 ```
 
 **Required files:**
 
 1. **`prd.md`** - Product Requirements Document:
+
    ```markdown
    # Feature: {Name}
 
@@ -134,6 +139,7 @@ mkdir -p .agents/{requirement-slug}/{research,tmp}
    ```
 
 2. **`tasks.md`** - Implementation checklist:
+
    ```markdown
    # Tasks
 
@@ -152,6 +158,7 @@ mkdir -p .agents/{requirement-slug}/{research,tmp}
    - Architecture diagrams (if needed)
 
 4. **`recovery.md`** - Session resume instructions:
+
    ```markdown
    # Resume: {Feature}
 
@@ -180,6 +187,7 @@ When planning adapter work, always consider:
 - **Error Handling**: Adapter-specific exceptions
 
 **Reference adapter guides:**
+
 ```python
 Read(f"docs/guides/adapters/{adapter}.md")
 ```
@@ -189,12 +197,14 @@ Read(f"docs/guides/adapters/{adapter}.md")
 Based on CLAUDE.md standards:
 
 ❌ **NO defensive programming**:
+
 ```python
 if hasattr(obj, 'method'):  # NEVER
     obj.method()
 ```
 
 ✅ **Use type guards**:
+
 ```python
 from sqlspec.utils.type_guards import supports_where
 if supports_where(obj):  # ALWAYS
@@ -202,11 +212,13 @@ if supports_where(obj):  # ALWAYS
 ```
 
 ❌ **NO workaround naming**:
+
 - `process_query_optimized()`
 - `get_statement_with_cache()`
 - `_fallback_method()`
 
 ✅ **Clean, descriptive names**:
+
 - `process_query()`
 - `get_statement()`
 - `execute_batch()`
@@ -216,19 +228,22 @@ if supports_where(obj):  # ALWAYS
 After planning complete:
 
 1. **Verify workspace created**:
+
    ```bash
-   ls -la .agents/{requirement-slug}/
+   ls -la requirements/{requirement-slug}/
    # Should show: prd.md, tasks.md, research/, tmp/, recovery.md
    ```
 
 2. **Notify user**:
+
    ```
-   Planning complete! Workspace created at `.agents/{requirement-slug}/`.
+   Planning complete! Workspace created at `requirements/{requirement-slug}/`.
 
    Next: Invoke Expert agent to begin implementation.
    ```
 
 3. **Update tasks.md**:
+
    ```markdown
    - [x] 1. Research & Planning
    - [ ] 2. Core implementation  ← START HERE
@@ -275,6 +290,6 @@ mcp__zen__planner(
 ✅ **Research complete** - All relevant guides consulted
 ✅ **Plan structured** - Zen planner workflow used
 ✅ **Decisions verified** - Consensus on complex choices
-✅ **Workspace created** - `.agents/{requirement}/` fully populated
+✅ **Workspace created** - `requirements/{requirement}/` fully populated
 ✅ **Resumable** - recovery.md enables session continuity
 ✅ **Standards followed** - CLAUDE.md patterns enforced
