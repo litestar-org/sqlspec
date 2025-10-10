@@ -1,0 +1,94 @@
+# SQLSpec Development Guides
+
+Comprehensive guides for developing with and contributing to SQLSpec.
+
+## Adapters
+
+Database adapter-specific guides covering patterns, best practices, and implementation details:
+
+- [**ADBC**](adapters/adbc.md) - Arrow Database Connectivity
+- [**AioSQLite**](adapters/aiosqlite.md) - Async SQLite
+- [**AsyncMy**](adapters/asyncmy.md) - Async MySQL/MariaDB
+- [**BigQuery**](adapters/bigquery.md) - Google Cloud BigQuery
+- [**DuckDB**](adapters/duckdb.md) - OLAP analytical database
+- [**MySQL**](adapters/mysql.md) - MySQL patterns
+- [**Oracle**](adapters/oracle.md) - Oracle Database (comprehensive guide)
+- [**PostgreSQL**](adapters/postgres.md) - PostgreSQL patterns (asyncpg, psycopg)
+- [**Psqlpy**](adapters/psqlpy.md) - Rust-based async PostgreSQL
+- [**SQLite**](adapters/sqlite.md) - Embedded SQLite
+
+## Performance
+
+Optimization guides for SQLSpec:
+
+- [**SQLglot Guide**](performance/sqlglot.md) - SQL parsing, transformation, and optimization with SQLglot
+- [**MyPyC Guide**](performance/mypyc.md) - Compilation strategies for high-performance Python code
+
+## Testing
+
+Testing strategies and patterns:
+
+- [**Testing Guide**](testing/testing.md) - Pytest strategies, integration testing, database fixtures
+
+## Architecture
+
+Core architecture and design patterns:
+
+- [**Architecture Guide**](architecture/architecture.md) - SQLSpec architecture overview
+- [**Data Flow Guide**](architecture/data-flow.md) - How data flows through SQLSpec
+
+## Quick Reference
+
+- [**Quick Reference**](quick-reference/quick-reference.md) - Common patterns and code snippets
+
+## Writing Documentation
+
+Style guide and best practices for writing SQLSpec documentation:
+
+- [**Documentation Style Guide**](writing/documentation-style-guide.md) - Voice, tone, terminology, and writing standards
+
+## Usage
+
+These guides are referenced by AI agents in and are the **canonical source of truth** for SQLSpec development patterns. When working with AI coding assistants:
+
+1. **Agents read these guides first** before making implementation decisions
+2. **Guides are verified and updated** to reflect current best practices
+3. **Cross-AI compatible** - works with Claude, Gemini, Codex, and other AI assistants
+
+## Contributing
+
+When adding new patterns or updating guides:
+
+1. Update the relevant guide in this directory
+2. Run verification to ensure accuracy
+3. Update this README if adding new guide categories
+4. Commit guides with descriptive messages
+
+## Guide Organization
+
+```
+docs/guides/
+├── README.md                    # This file
+├── adapters/                    # Database adapter guides
+│   ├── adbc.md
+│   ├── oracle.md
+│   ├── postgres.md
+│   └── ...
+├── performance/                 # Performance optimization
+│   ├── sqlglot.md
+│   └── mypyc.md
+├── testing/                     # Testing strategies
+│   └── testing.md
+├── architecture/                # Architecture guides
+│   ├── architecture.md
+│   └── data-flow.md
+├── quick-reference/             # Quick reference
+│   └── quick-reference.md
+└── writing/                     # Documentation writing
+    └── documentation-style-guide.md
+```
+
+## See Also
+
+- [CLAUDE.md](../../CLAUDE.md) - Code quality standards and collaboration guidelines
+- [.claude/agents/](../../.claude/agents/) - AI agent definitions that reference these guides
