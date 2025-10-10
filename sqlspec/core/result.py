@@ -275,7 +275,7 @@ class SQLResult(StatementResult):
     @overload
     def get_data(self, *, schema_type: None = None) -> "list[dict[str, Any]]": ...
 
-    def get_data(self, *, schema_type: "type[Any] | None" = None) -> Any:
+    def get_data(self, *, schema_type: "type[SchemaT] | None" = None) -> "list[SchemaT] | list[dict[str, Any]]":
         """Get the data from the result.
 
         For regular operations, returns the list of rows.
@@ -302,9 +302,9 @@ class SQLResult(StatementResult):
                     "total_rows_affected": self.get_total_rows_affected(),
                 }
             ]
-        data = self.data or []
+        data = cast("list[dict[str, Any]]", self.data or [])
         if schema_type:
-            return to_schema(data, schema_type=schema_type)
+            return cast("list[SchemaT]", to_schema(data, schema_type=schema_type))
         return data
 
     def add_statement_result(self, result: "SQLResult") -> None:
@@ -356,7 +356,7 @@ class SQLResult(StatementResult):
     @overload
     def get_first(self, *, schema_type: None = None) -> "dict[str, Any] | None": ...
 
-    def get_first(self, *, schema_type: "type[Any] | None" = None) -> Any:
+    def get_first(self, *, schema_type: "type[SchemaT] | None" = None) -> "SchemaT | dict[str, Any] | None":
         """Get the first row from the result, if any.
 
         Args:
@@ -368,7 +368,7 @@ class SQLResult(StatementResult):
         """
         if not self.data:
             return None
-        row = self.data[0]
+        row = cast("dict[str, Any]", self.data[0])
         if schema_type:
             return to_schema(row, schema_type=schema_type)
         return row
@@ -457,7 +457,7 @@ class SQLResult(StatementResult):
     @overload
     def all(self, *, schema_type: None = None) -> list[dict[str, Any]]: ...
 
-    def all(self, *, schema_type: "type[Any] | None" = None) -> Any:
+    def all(self, *, schema_type: "type[SchemaT] | None" = None) -> "list[SchemaT] | list[dict[str, Any]]":
         """Return all rows as a list.
 
         Args:
@@ -467,9 +467,9 @@ class SQLResult(StatementResult):
         Returns:
             List of all rows (optionally transformed to schema_type)
         """
-        data = self.data or []
+        data = cast("list[dict[str, Any]]", self.data or [])
         if schema_type:
-            return to_schema(data, schema_type=schema_type)
+            return cast("list[SchemaT]", to_schema(data, schema_type=schema_type))
         return data
 
     @overload
@@ -478,7 +478,7 @@ class SQLResult(StatementResult):
     @overload
     def one(self, *, schema_type: None = None) -> "dict[str, Any]": ...
 
-    def one(self, *, schema_type: "type[Any] | None" = None) -> Any:
+    def one(self, *, schema_type: "type[SchemaT] | None" = None) -> "SchemaT | dict[str, Any]":
         """Return exactly one row.
 
         Args:
@@ -514,7 +514,7 @@ class SQLResult(StatementResult):
     @overload
     def one_or_none(self, *, schema_type: None = None) -> "dict[str, Any] | None": ...
 
-    def one_or_none(self, *, schema_type: "type[Any] | None" = None) -> Any:
+    def one_or_none(self, *, schema_type: "type[SchemaT] | None" = None) -> "SchemaT | dict[str, Any] | None":
         """Return at most one row.
 
         Args:

@@ -34,17 +34,7 @@ from sqlspec.core import (
 from sqlspec.core import filters as filters
 from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
 from sqlspec.loader import SQLFile, SQLFileLoader
-from sqlspec.typing import (
-    ConnectionT,
-    DictRow,
-    ModelDTOT,
-    ModelT,
-    PoolT,
-    RowT,
-    SchemaT,
-    StatementParameters,
-    SupportedSchemaModel,
-)
+from sqlspec.typing import ConnectionT, PoolT, SchemaT, StatementParameters, SupportedSchemaModel
 from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
 
 suppress_erroneous_sqlglot_log_messages()
@@ -61,21 +51,17 @@ __all__ = (
     "ConnectionT",
     "CreateTable",
     "Delete",
-    "DictRow",
     "DropTable",
     "ExecutionResult",
     "FunctionColumn",
     "Insert",
     "Merge",
-    "ModelDTOT",
-    "ModelT",
     "ParameterConverter",
     "ParameterProcessor",
     "ParameterStyle",
     "ParameterStyleConfig",
     "PoolT",
     "QueryBuilder",
-    "RowT",
     "SQLFactory",
     "SQLFile",
     "SQLFileLoader",

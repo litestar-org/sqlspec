@@ -126,7 +126,11 @@ async def test_numpy_float64_insert_and_select(oracle_numpy_async_config: Oracle
 
 
 async def test_numpy_uint8_binary_vector(oracle_numpy_async_config: OracleAsyncConfig) -> None:
-    """Test NumPy uint8 array for BINARY vector type."""
+    """Test NumPy uint8 array for BINARY vector type.
+
+    Note: VECTOR(256, BINARY) stores 256 bits = 32 bytes.
+    So we need 32 uint8 values to represent 256 bits.
+    """
     import numpy as np
 
     async with oracle_numpy_async_config.provide_session() as session:
@@ -142,7 +146,7 @@ async def test_numpy_uint8_binary_vector(oracle_numpy_async_config: OracleAsyncC
         await session.execute("""
             CREATE TABLE test_binary (
                 id NUMBER PRIMARY KEY,
-                vector_data VECTOR(32, BINARY)
+                vector_data VECTOR(256, BINARY)
             )
         """)
 
@@ -262,39 +266,44 @@ async def test_vector_null_handling(oracle_numpy_async_config: OracleAsyncConfig
         assert result["VECTOR_DATA"] is None
 
 
-async def test_numpy_disabled_by_default(oracle_async_session: OracleAsyncDriver) -> None:
-    """Test that NumPy conversion is disabled by default."""
+async def test_numpy_disabled_by_default(oracle_async_config: OracleAsyncConfig) -> None:
+    """Test that NumPy conversion can be explicitly disabled."""
     import array
 
     import numpy as np
 
-    await oracle_async_session.execute_script("""
-        BEGIN
-            EXECUTE IMMEDIATE 'DROP TABLE test_no_numpy';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -942 THEN RAISE; END IF;
-        END;
-    """)
+    config_no_numpy = OracleAsyncConfig(
+        pool_config=oracle_async_config.pool_config, driver_features={"enable_numpy_vectors": False}
+    )
 
-    await oracle_async_session.execute("""
-        CREATE TABLE test_no_numpy (
-            id NUMBER PRIMARY KEY,
-            vector_data VECTOR(8, FLOAT32)
-        )
-    """)
+    async with config_no_numpy.provide_session() as session:
+        await session.execute_script("""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP TABLE test_no_numpy';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -942 THEN RAISE; END IF;
+            END;
+        """)
 
-    manual_array = array.array("f", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        await session.execute("""
+            CREATE TABLE test_no_numpy (
+                id NUMBER PRIMARY KEY,
+                vector_data VECTOR(8, FLOAT32)
+            )
+        """)
 
-    await oracle_async_session.execute("INSERT INTO test_no_numpy VALUES (:1, :2)", (1, manual_array))
+        manual_array = array.array("f", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
 
-    result = await oracle_async_session.select_one("SELECT * FROM test_no_numpy WHERE id = :1", (1,))
+        await session.execute("INSERT INTO test_no_numpy VALUES (:1, :2)", (1, manual_array))
 
-    assert result is not None
-    retrieved = result["VECTOR_DATA"]
+        result = await session.select_one("SELECT * FROM test_no_numpy WHERE id = :1", (1,))
 
-    assert isinstance(retrieved, array.array)
-    assert not isinstance(retrieved, np.ndarray)
+        assert result is not None
+        retrieved = result["VECTOR_DATA"]
+
+        assert isinstance(retrieved, array.array)
+        assert not isinstance(retrieved, np.ndarray)
 
 
 def test_sync_numpy_vector_operations(oracle_numpy_sync_config: OracleSyncConfig) -> None:

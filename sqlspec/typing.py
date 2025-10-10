@@ -1,7 +1,7 @@
 # pyright: ignore[reportAttributeAccessIssue]
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from functools import lru_cache
-from typing import TYPE_CHECKING, Annotated, Any, Protocol, TypeAlias, _TypedDict  # pyright: ignore
+from typing import Annotated, Any, Protocol, TypeAlias, _TypedDict  # pyright: ignore
 
 from typing_extensions import TypeVar
 
@@ -23,7 +23,6 @@ from sqlspec._typing import (
     UNSET,
     AiosqlAsyncProtocol,
     AiosqlParamType,
-    AiosqlProtocol,
     AiosqlSQLOperationType,
     AiosqlSyncProtocol,
     ArrowRecordBatch,
@@ -62,9 +61,6 @@ from sqlspec._typing import (
     trace,
 )
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
 
 class DictLike(Protocol):
     """A protocol for objects that behave like a dictionary for reading."""
@@ -88,29 +84,13 @@ PoolT = TypeVar("PoolT")
 
 :class:`~sqlspec.typing.PoolT`
 """
-PoolT_co = TypeVar("PoolT_co", covariant=True)
-"""Type variable for covariant pool types.
-
-:class:`~sqlspec.typing.PoolT_co`
-"""
-ModelT = TypeVar("ModelT", bound="DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub")
-"""Type variable for model types.
-
-:class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
-"""
-RowT = TypeVar("RowT", bound="dict[str, Any]")
-SchemaT = TypeVar("SchemaT")
+SchemaT = TypeVar("SchemaT", default=dict[str, Any])
 """Type variable for schema types (models, TypedDict, dataclasses, etc.).
 
 Unbounded TypeVar for use with schema_type parameter in driver methods.
 Supports all schema types including TypedDict which cannot be bounded to a class hierarchy.
 """
 
-
-DictRow: TypeAlias = "dict[str, Any]"
-"""Type variable for DictRow types."""
-TupleRow: TypeAlias = "tuple[Any, ...]"
-"""Type variable for TupleRow types."""
 
 SupportedSchemaModel: TypeAlias = (
     DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub | _TypedDict
@@ -128,45 +108,6 @@ Represents:
 - :type:`tuple[Any, ...]`
 - :type:`None`
 """
-ModelDTOT = TypeVar("ModelDTOT", bound="SupportedSchemaModel")
-"""Type variable for model DTOs.
-
-:class:`msgspec.Struct`|:class:`pydantic.BaseModel`
-
-.. deprecated:: 0.27.0
-    Use :class:`SchemaT` instead. This TypeVar will be removed in a future version.
-"""
-PydanticOrMsgspecT = SupportedSchemaModel
-"""Type alias for pydantic or msgspec models.
-
-:class:`msgspec.Struct` or :class:`pydantic.BaseModel`
-"""
-ModelDict: TypeAlias = (
-    "dict[str, Any] | DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub | Any"
-)
-"""Type alias for model dictionaries.
-
-Represents:
-- :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` |  :class:`pydantic.BaseModel`
-"""
-ModelDictList: TypeAlias = (
-    "Sequence[dict[str, Any] | DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub]"
-)
-"""Type alias for model dictionary lists.
-
-A list or sequence of any of the following:
-- :type:`Sequence`[:type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
-
-"""
-BulkModelDict: TypeAlias = (
-    "Sequence[dict[str, Any] | DictLike | StructStub | BaseModelStub | DataclassProtocol | AttrsInstanceStub ] | Any"
-)
-"""Type alias for bulk model dictionaries.
-
-Represents:
-- :type:`Sequence`[:type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
-- :class:`DTOData`[:type:`list[ModelT]`]
-"""
 
 
 @lru_cache(typed=True)
@@ -182,18 +123,6 @@ def get_type_adapter(f: "type[T]") -> Any:
     if PYDANTIC_USE_FAILFAST:
         return TypeAdapter(Annotated[f, FailFast()])
     return TypeAdapter(f)
-
-
-def MixinOf(base: type[T]) -> type[T]:  # noqa: N802
-    """Useful function to make mixins with baseclass type hint
-
-    ```
-    class StorageMixin(MixinOf(DriverProtocol)): ...
-    ```
-    """
-    if TYPE_CHECKING:
-        return base
-    return type("<MixinOf>", (base,), {})
 
 
 __all__ = (
@@ -215,39 +144,25 @@ __all__ = (
     "UNSET",
     "AiosqlAsyncProtocol",
     "AiosqlParamType",
-    "AiosqlProtocol",
     "AiosqlSQLOperationType",
     "AiosqlSyncProtocol",
     "ArrowRecordBatch",
     "ArrowTable",
     "AttrsInstance",
     "BaseModel",
-    "BulkModelDict",
     "ConnectionT",
     "Counter",
     "DTOData",
     "DataclassProtocol",
     "DictLike",
-    "DictRow",
     "Empty",
     "EmptyEnum",
     "EmptyType",
     "FailFast",
     "Gauge",
     "Histogram",
-    "Mapping",
-    "MixinOf",
-    "ModelDTOT",
-    "ModelDict",
-    "ModelDict",
-    "ModelDictList",
-    "ModelDictList",
-    "ModelT",
     "NumpyArray",
     "PoolT",
-    "PoolT_co",
-    "PydanticOrMsgspecT",
-    "RowT",
     "SchemaT",
     "Span",
     "StatementParameters",
@@ -256,7 +171,6 @@ __all__ = (
     "Struct",
     "SupportedSchemaModel",
     "Tracer",
-    "TupleRow",
     "TypeAdapter",
     "UnsetType",
     "aiosql",

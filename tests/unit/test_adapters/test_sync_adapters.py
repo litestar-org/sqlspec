@@ -242,7 +242,7 @@ def test_sync_driver_execute_script_method(mock_sync_driver: MockSyncDriver) -> 
 
 def test_sync_driver_select_one(mock_sync_driver: MockSyncDriver) -> None:
     """Test select_one method - expects error when multiple rows returned."""
-    with pytest.raises(ValueError, match="Expected exactly one row, found 2"):
+    with pytest.raises(ValueError, match="Multiple results found"):
         mock_sync_driver.select_one("SELECT * FROM users WHERE id = ?", 1)
 
 
@@ -251,7 +251,7 @@ def test_sync_driver_select_one_no_results(mock_sync_driver: MockSyncDriver) -> 
 
     with patch.object(mock_sync_driver, "execute") as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.get_data.return_value = []
+        mock_result.one.side_effect = ValueError("No result found, exactly one row expected")
         mock_execute.return_value = mock_result
 
         with pytest.raises(NotFoundError, match="No rows found"):
@@ -263,16 +263,16 @@ def test_sync_driver_select_one_multiple_results(mock_sync_driver: MockSyncDrive
 
     with patch.object(mock_sync_driver, "execute") as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.get_data.return_value = [{"id": 1}, {"id": 2}, {"id": 3}]
+        mock_result.one.side_effect = ValueError("Multiple results found (3), exactly one row expected")
         mock_execute.return_value = mock_result
 
-        with pytest.raises(ValueError, match="Expected exactly one row, found 3"):
+        with pytest.raises(ValueError, match="Multiple results found"):
             mock_sync_driver.select_one("SELECT * FROM users")
 
 
 def test_sync_driver_select_one_or_none(mock_sync_driver: MockSyncDriver) -> None:
     """Test select_one_or_none method - expects error when multiple rows returned."""
-    with pytest.raises(ValueError, match="Expected at most one row, found 2"):
+    with pytest.raises(ValueError, match="Multiple results found"):
         mock_sync_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 1)
 
 
@@ -280,7 +280,7 @@ def test_sync_driver_select_one_or_none_no_results(mock_sync_driver: MockSyncDri
     """Test select_one_or_none method with no results."""
     with patch.object(mock_sync_driver, "execute") as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.get_data.return_value = []
+        mock_result.one_or_none.return_value = None
         mock_execute.return_value = mock_result
 
         result = mock_sync_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 999)
@@ -291,10 +291,10 @@ def test_sync_driver_select_one_or_none_multiple_results(mock_sync_driver: MockS
     """Test select_one_or_none method with multiple results."""
     with patch.object(mock_sync_driver, "execute") as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.get_data.return_value = [{"id": 1}, {"id": 2}]
+        mock_result.one_or_none.side_effect = ValueError("Multiple results found (2), at most one row expected")
         mock_execute.return_value = mock_result
 
-        with pytest.raises(ValueError, match="Expected at most one row, found 2"):
+        with pytest.raises(ValueError, match="Multiple results found"):
             mock_sync_driver.select_one_or_none("SELECT * FROM users")
 
 
@@ -313,7 +313,7 @@ def test_sync_driver_select_value(mock_sync_driver: MockSyncDriver) -> None:
 
     with patch.object(mock_sync_driver, "execute") as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.one.return_value = {"count": 42}
+        mock_result.scalar.return_value = 42
         mock_execute.return_value = mock_result
 
         result = mock_sync_driver.select_value("SELECT COUNT(*) as count FROM users")
@@ -324,7 +324,7 @@ def test_sync_driver_select_value_no_results(mock_sync_driver: MockSyncDriver) -
     """Test select_value method with no results."""
     with patch.object(mock_sync_driver, "execute") as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.one.side_effect = ValueError("No rows")
+        mock_result.scalar.side_effect = ValueError("No result found, exactly one row expected")
         mock_execute.return_value = mock_result
 
         with pytest.raises(NotFoundError, match="No rows found"):
@@ -333,7 +333,7 @@ def test_sync_driver_select_value_no_results(mock_sync_driver: MockSyncDriver) -
 
 def test_sync_driver_select_value_or_none(mock_sync_driver: MockSyncDriver) -> None:
     """Test select_value_or_none method - expects error when multiple rows returned."""
-    with pytest.raises(ValueError, match="Expected at most one row, found 2"):
+    with pytest.raises(ValueError, match="Multiple results found"):
         mock_sync_driver.select_value_or_none("SELECT * FROM users WHERE id = ?", 1)
 
 
@@ -341,7 +341,7 @@ def test_sync_driver_select_value_or_none_no_results(mock_sync_driver: MockSyncD
     """Test select_value_or_none method with no results."""
     with patch.object(mock_sync_driver, "execute") as mock_execute:
         mock_result = Mock(spec=SQLResult)
-        mock_result.get_data.return_value = []
+        mock_result.scalar_or_none.return_value = None
         mock_execute.return_value = mock_result
 
         result = mock_sync_driver.select_value_or_none("SELECT COUNT(*) FROM users WHERE id = 999")

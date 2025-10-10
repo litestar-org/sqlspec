@@ -2,7 +2,7 @@
 
 import re
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, NoReturn, Optional, TypeVar, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -11,7 +11,7 @@ from sqlspec.builder import QueryBuilder
 from sqlspec.core import SQL, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
 from sqlspec.core.cache import CachedStatement, get_cache, get_cache_config
 from sqlspec.core.splitter import split_sql_script
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -31,6 +31,8 @@ __all__ = (
     "ExecutionResult",
     "ScriptExecutionResult",
     "VersionInfo",
+    "handle_single_row_error",
+    "make_cache_key_hashable",
 )
 
 
@@ -39,6 +41,69 @@ logger = get_logger("driver")
 DriverT = TypeVar("DriverT")
 VERSION_GROUPS_MIN_FOR_MINOR = 1
 VERSION_GROUPS_MIN_FOR_PATCH = 2
+
+
+def make_cache_key_hashable(obj: Any) -> Any:
+    """Recursively convert unhashable types to hashable ones for cache keys.
+
+    For array-like objects (NumPy arrays, Python arrays, etc.), we use structural
+    info (dtype + shape or typecode + length) rather than content for cache keys.
+    This ensures high cache hit rates for parameterized queries with different
+    vector values while avoiding expensive content hashing.
+
+    Args:
+        obj: Object to make hashable.
+
+    Returns:
+        A hashable representation of the object. Collections become tuples,
+        arrays become structural tuples like ("ndarray", dtype, shape).
+
+    Examples:
+        >>> make_cache_key_hashable([1, 2, 3])
+        (1, 2, 3)
+        >>> make_cache_key_hashable({"a": 1, "b": 2})
+        (('a', 1), ('b', 2))
+    """
+    if isinstance(obj, (list, tuple)):
+        return tuple(make_cache_key_hashable(item) for item in obj)
+    if isinstance(obj, dict):
+        return tuple(sorted((k, make_cache_key_hashable(v)) for k, v in obj.items()))
+    if isinstance(obj, set):
+        return frozenset(make_cache_key_hashable(item) for item in obj)
+
+    typecode = getattr(obj, "typecode", None)
+    if typecode is not None:
+        try:
+            length = len(obj)
+        except (AttributeError, TypeError):
+            return ("array", typecode)
+        else:
+            return ("array", typecode, length)
+
+    if hasattr(obj, "__array__"):
+        try:
+            dtype_str = getattr(obj.dtype, "str", str(type(obj)))
+            shape = tuple(int(s) for s in obj.shape)
+        except (AttributeError, TypeError):
+            try:
+                length = len(obj)
+            except (AttributeError, TypeError):
+                return ("array_like", type(obj).__name__)
+            else:
+                return ("array_like", type(obj).__name__, length)
+        else:
+            return ("ndarray", dtype_str, shape)
+    return obj
+
+
+def handle_single_row_error(error: ValueError) -> "NoReturn":
+    """Normalize single-row selection errors to SQLSpec exceptions."""
+
+    message = str(error)
+    if message.startswith("No result found"):
+        msg = "No rows found"
+        raise NotFoundError(msg) from error
+    raise error
 
 
 class VersionInfo:
@@ -625,26 +690,14 @@ class CommonDriverAttributesMixin:
             except TypeError:
                 pass
 
-        params_key: Any
-
-        def make_hashable(obj: Any) -> Any:
-            """Recursively convert unhashable types to hashable ones."""
-            if isinstance(obj, (list, tuple)):
-                return tuple(make_hashable(item) for item in obj)
-            if isinstance(obj, dict):
-                return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
-            if isinstance(obj, set):
-                return frozenset(make_hashable(item) for item in obj)
-            return obj
-
         try:
             if isinstance(params, dict):
-                params_key = make_hashable(params)
+                params_key = make_cache_key_hashable(params)
             elif isinstance(params, (list, tuple)) and params:
                 if isinstance(params[0], dict):
-                    params_key = tuple(make_hashable(d) for d in params)
+                    params_key = tuple(make_cache_key_hashable(d) for d in params)
                 else:
-                    params_key = make_hashable(params)
+                    params_key = make_cache_key_hashable(params)
             elif isinstance(params, (list, tuple)):
                 params_key = ()
             else:

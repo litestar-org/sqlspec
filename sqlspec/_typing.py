@@ -540,9 +540,6 @@ try:
     from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
         AsyncDriverAdapterProtocol as AiosqlAsyncProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
-    from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
-        DriverAdapterProtocol as AiosqlProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
-    )
     from aiosql.types import ParamType as AiosqlParamType  # pyright: ignore[reportMissingImports, reportAssignmentType]
     from aiosql.types import (
         SQLOperationType as AiosqlSQLOperationType,  # pyright: ignore[reportMissingImports, reportAssignmentType]
@@ -571,7 +568,7 @@ except ImportError:
     aiosql = _AiosqlShim()  # type: ignore[assignment]
 
     # Placeholder types for aiosql protocols
-    AiosqlParamType = dict[str, Any] | list[Any] | tuple[Any, ...] | None  # type: ignore[misc]
+    AiosqlParamType = Any  # type: ignore[misc]
 
     class AiosqlSQLOperationType(Enum):  # type: ignore[no-redef]
         """Enumeration of aiosql operation types."""
@@ -583,12 +580,6 @@ except ImportError:
         SELECT = 4
         SELECT_ONE = 5
         SELECT_VALUE = 6
-
-    @runtime_checkable
-    class AiosqlProtocol(Protocol):  # type: ignore[no-redef]
-        """Placeholder for aiosql DriverAdapterProtocol"""
-
-        def process_sql(self, query_name: str, op_type: Any, sql: str) -> str: ...
 
     @runtime_checkable
     class AiosqlSyncProtocol(Protocol):  # type: ignore[no-redef]
@@ -656,7 +647,6 @@ __all__ = (
     "UNSET_STUB",
     "AiosqlAsyncProtocol",
     "AiosqlParamType",
-    "AiosqlProtocol",
     "AiosqlSQLOperationType",
     "AiosqlSyncProtocol",
     "ArrowRecordBatch",

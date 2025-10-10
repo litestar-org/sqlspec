@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 import oracledb
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers
 from sqlspec.adapters.oracledb._types import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
@@ -158,11 +159,12 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 
         return oracledb.create_pool(**config)
 
-    def _init_connection(self, connection: "OracleSyncConnection") -> None:
+    def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
         """Initialize connection with optional NumPy vector support.
 
         Args:
             connection: Oracle connection to initialize.
+            tag: Connection tag for session state (unused).
         """
         if self.driver_features.get("enable_numpy_vectors", False):
             from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers
@@ -309,15 +311,14 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
         return oracledb.create_pool_async(**config)
 
-    async def _init_connection(self, connection: "OracleAsyncConnection") -> None:
+    async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
         """Initialize async connection with optional NumPy vector support.
 
         Args:
             connection: Oracle async connection to initialize.
+            tag: Connection tag for session state (unused).
         """
         if self.driver_features.get("enable_numpy_vectors", False):
-            from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers
-
             register_numpy_handlers(connection)
 
     async def _close_pool(self) -> None:
