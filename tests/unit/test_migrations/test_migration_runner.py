@@ -538,3 +538,41 @@ DROP TABLE test_table_{i};
         for i, (version, _) in enumerate(files):
             expected_version = f"{i + 1:04d}"
             assert version == expected_version
+
+
+def test_sql_loader_caches_files() -> None:
+    """Test that SQL migration files leverage CoreSQLFileLoader caching.
+
+    Verifies fix for bug #118 - duplicate SQL loading during migrations.
+    The SQLFileLoader should NOT call clear_cache() before operations,
+    allowing CoreSQLFileLoader's internal caching to work properly.
+    """
+    import asyncio
+
+    from sqlspec.migrations.loaders import SQLFileLoader
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        migrations_path = Path(temp_dir)
+
+        migration_file = migrations_path / "0001_test_migration.sql"
+        migration_content = """
+-- name: migrate-0001-up
+CREATE TABLE test (id INTEGER PRIMARY KEY);
+
+-- name: migrate-0001-down
+DROP TABLE test;
+"""
+        migration_file.write_text(migration_content)
+
+        sql_loader = SQLFileLoader()
+
+        async def test_operations() -> None:
+            await sql_loader.get_up_sql(migration_file)
+            path_str = str(migration_file)
+            assert path_str in sql_loader.sql_loader._files
+            assert sql_loader.sql_loader.has_query("migrate-0001-up")
+            assert sql_loader.sql_loader.has_query("migrate-0001-down")
+            await sql_loader.get_down_sql(migration_file)
+            assert path_str in sql_loader.sql_loader._files
+
+        asyncio.run(test_operations())

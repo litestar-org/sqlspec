@@ -93,7 +93,6 @@ class SQLFileLoader(BaseMigrationLoader):
         Raises:
             MigrationLoadError: If migration file is invalid or missing up query.
         """
-        self.sql_loader.clear_cache()
         self.sql_loader.load_sql(path)
 
         version = self._extract_version(path.name)
@@ -115,7 +114,6 @@ class SQLFileLoader(BaseMigrationLoader):
         Returns:
             List containing single SQL statement for downgrade, or empty list.
         """
-        self.sql_loader.clear_cache()
         self.sql_loader.load_sql(path)
 
         version = self._extract_version(path.name)
@@ -141,7 +139,6 @@ class SQLFileLoader(BaseMigrationLoader):
             msg = f"Invalid migration filename: {path.name}"
             raise MigrationLoadError(msg)
 
-        self.sql_loader.clear_cache()
         self.sql_loader.load_sql(path)
         up_query = f"migrate-{version}-up"
         if not self.sql_loader.has_query(up_query):
