@@ -540,6 +540,7 @@ try:
     from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
         AsyncDriverAdapterProtocol as AiosqlAsyncProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
+    from aiosql.types import ParamType as AiosqlParamType  # pyright: ignore[reportMissingImports, reportAssignmentType]
     from aiosql.types import (
         SQLOperationType as AiosqlSQLOperationType,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
@@ -567,7 +568,7 @@ except ImportError:
     aiosql = _AiosqlShim()  # type: ignore[assignment]
 
     # Placeholder types for aiosql protocols
-    AiosqlParamType = dict[str, Any] | list[Any] | tuple[Any, ...] | None
+    AiosqlParamType = Any
 
     class AiosqlSQLOperationType(Enum):  # type: ignore[no-redef]
         """Enumeration of aiosql operation types."""
