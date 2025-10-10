@@ -12,6 +12,7 @@ This section provides comprehensive guides on using SQLSpec for database operati
    drivers_and_querying
    query_builder
    sql_files
+   cli
    framework_integrations
 
 Overview
@@ -33,6 +34,9 @@ SQLSpec provides a unified interface for database operations across multiple bac
 
 **SQL Files**
    Manage SQL statements from files using the aiosql-style loader.
+
+**Command Line Interface**
+   Use the SQLSpec CLI for migrations, with shell completion support for bash, zsh, and fish.
 
 **Framework Integrations**
    Integrate SQLSpec with Litestar, FastAPI, and other Python web frameworks.
