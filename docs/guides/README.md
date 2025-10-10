@@ -37,9 +37,16 @@ Core architecture and design patterns:
 - [**Architecture Guide**](architecture/architecture.md) - SQLSpec architecture overview
 - [**Data Flow Guide**](architecture/data-flow.md) - How data flows through SQLSpec
 
+## Extensions
+
+- [**aiosql Extension**](extensions/aiosql.md) - Bridge existing aiosql SQL files into SQLSpec
+
 ## Quick Reference
 
 - [**Quick Reference**](quick-reference/quick-reference.md) - Common patterns and code snippets
+- [**SQLglot LLM Playbook**](quick-reference/sqlglot-llm-playbook.md) - Fast-start guide for agents leveraging SQLglot in SQLSpec
+- [**Litestar LLM Playbook**](quick-reference/litestar-llm-playbook.md) - Guidelines for wiring SQLSpec into Litestar apps quickly
+- [**MyPyC LLM Playbook**](quick-reference/mypyc-llm-playbook.md) - Compilation workflow tips for high-performance modules
 
 ## Writing Documentation
 
@@ -82,8 +89,13 @@ docs/guides/
 ├── architecture/                # Architecture guides
 │   ├── architecture.md
 │   └── data-flow.md
+├── extensions/                  # Extension integration guides
+│   └── aiosql.md
 ├── quick-reference/             # Quick reference
-│   └── quick-reference.md
+│   ├── quick-reference.md
+│   ├── sqlglot-llm-playbook.md
+│   ├── litestar-llm-playbook.md
+│   └── mypyc-llm-playbook.md
 └── writing/                     # Documentation writing
     └── documentation-style-guide.md
 ```
