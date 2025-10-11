@@ -54,11 +54,14 @@ Basic Setup
 
    # 2. Add database configuration
    db = spec.add_config(
-       AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/mydb"})
+       AsyncpgConfig(
+           pool_config={"dsn": "postgresql://localhost/mydb"},
+           extension_config={"litestar": {"session_table": "litestar_sessions"}},
+       )
    )
 
    # 3. Create session store (uses the config instance)
-   store = AsyncpgStore(db, table_name="sessions")
+   store = AsyncpgStore(db)
 
    # 4. Configure Litestar application
    app = Litestar(

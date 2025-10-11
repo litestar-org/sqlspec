@@ -287,7 +287,7 @@ Use SQLSpec as a session backend for Litestar:
    )
 
    # Create session store using adapter-specific class
-   store = AsyncpgStore(db, table_name="litestar_sessions")
+   store = AsyncpgStore(db)
 
    # Configure Litestar with plugin and session middleware
    app = Litestar(

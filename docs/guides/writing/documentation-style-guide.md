@@ -88,6 +88,7 @@ This applies to ALL documentation: docstrings, guides, API docs, commit messages
 **Examples:**
 
 ❌ **Bad - Change-focused:**
+
 ```python
 def execute(query: str) -> list[dict[str, Any]]:
     """Execute a query.
@@ -98,6 +99,7 @@ def execute(query: str) -> list[dict[str, Any]]:
 ```
 
 ✅ **Good - Current state:**
+
 ```python
 def execute(query: str) -> list[dict[str, Any]]:
     """Execute a query with parameter binding.
@@ -858,6 +860,7 @@ Use this checklist when writing or reviewing documentation:
 ---
 
 **Before (docstring):**
+
 ```python
 def execute(query: str) -> list[dict]:
     """Execute query.
@@ -868,6 +871,7 @@ def execute(query: str) -> list[dict]:
 ```
 
 **After (docstring):**
+
 ```python
 def execute(query: str) -> list[dict]:
     """Execute SQL query with parameter binding.
@@ -908,8 +912,8 @@ def execute(query: str) -> list[dict]:
 - create (not generate/make)
 - owner ID column (not user FK, for feature)
 - **migrations** = SQLSpec's DB schema versioning feature
-  - Use "upgrade/switch to" for feature changes
-  - Use "migrations" only for database DDL versioning
+    - Use "upgrade/switch to" for feature changes
+    - Use "migrations" only for database DDL versioning
 
 ### Code Examples
 
