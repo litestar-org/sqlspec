@@ -67,8 +67,8 @@ Setting Up Migrations
 .. note::
 
    **Version Prefixing**: ADK migrations are automatically prefixed with ``ext_adk_``
-   to prevent version conflicts. For example, ``0001_create_adk_tables.py`` becomes
-   ``ext_adk_0001`` in the database tracking table (``ddl_migrations``).
+   to prevent version conflicts. For example, ``20251011120000_create_adk_tables.py`` becomes
+   ``ext_adk_20251011120000`` in the database tracking table (``ddl_migrations``).
 
 .. note::
 
@@ -97,9 +97,8 @@ This creates a migration file in ``migrations/versions/``.
 
    """Create ADK tables
 
-   Revision ID: 0001_create_adk_tables
-   Revises: None
-   Create Date: 2025-10-06 14:00:00.000000
+   Revision ID: 20251011120000_create_adk_tables
+   Create Date: 2025-10-11 12:00:00.000000
    """
 
    from sqlspec.migrations import Migration
@@ -148,7 +147,7 @@ SQLSpec includes a built-in migration for ADK tables:
 
    from sqlspec.extensions.adk.migrations import create_adk_tables_migration
 
-Location: ``sqlspec/extensions/adk/migrations/0001_create_adk_tables.py``
+Location: ``sqlspec/extensions/adk/migrations/``
 
 You can copy this template for custom migrations:
 
@@ -312,8 +311,8 @@ When using owner ID columns, ensure migrations run in this order:
    sqlspec --config myapp.config upgrade
 
    # Migrations applied:
-   # 1. 0001_create_users
-   # 2. ext_adk_0001_create_adk_tables  (with owner ID column)
+   # 1. 20251011100000_create_users
+   # 2. ext_adk_20251011120000_create_adk_tables  (with owner ID column)
 
 Database-Specific Examples
 ---------------------------
