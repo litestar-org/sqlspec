@@ -38,8 +38,7 @@ class MigrationGap:
 
 
 def detect_out_of_order_migrations(
-    pending_versions: "list[str]",
-    applied_versions: "list[str]",
+    pending_versions: "list[str]", applied_versions: "list[str]"
 ) -> "list[MigrationGap]":
     """Detect migrations created before already-applied migrations.
 
@@ -63,7 +62,7 @@ def detect_out_of_order_migrations(
     if not applied_versions or not pending_versions:
         return []
 
-    gaps: "list[MigrationGap]" = []
+    gaps: list[MigrationGap] = []
 
     parsed_applied = [parse_version(v) for v in applied_versions]
     parsed_pending = [parse_version(v) for v in pending_versions]
@@ -74,10 +73,7 @@ def detect_out_of_order_migrations(
         if pending < latest_applied:
             applied_after = [a for a in parsed_applied if a > pending]
             if applied_after:
-                gaps.append(MigrationGap(
-                    missing_version=pending,
-                    applied_after=applied_after,
-                ))
+                gaps.append(MigrationGap(missing_version=pending, applied_after=applied_after))
 
     return gaps
 
@@ -110,23 +106,22 @@ def format_out_of_order_warning(gaps: "list[MigrationGap]") -> str:
 
     for gap in gaps:
         lines.append(f"- {gap.missing_version.raw} created before:")
-        for applied in gap.applied_after:
-            lines.append(f"  - {applied.raw}")
+        lines.extend(f"  - {applied.raw}" for applied in gap.applied_after)
         lines.append("")
 
-    lines.append("These migrations will be applied but may cause issues if they")
-    lines.append("depend on schema changes from later migrations.")
-    lines.append("")
-    lines.append("To prevent this in the future, rebase your branch before merging")
-    lines.append("or use strict_ordering mode in migration_config.")
+    lines.extend((
+        "These migrations will be applied but may cause issues if they",
+        "depend on schema changes from later migrations.",
+        "",
+        "To prevent this in the future, rebase your branch before merging",
+        "or use strict_ordering mode in migration_config.",
+    ))
 
     return "\n".join(lines)
 
 
 def validate_migration_order(
-    pending_versions: "list[str]",
-    applied_versions: "list[str]",
-    strict_ordering: bool = False,
+    pending_versions: "list[str]", applied_versions: "list[str]", strict_ordering: bool = False
 ) -> None:
     """Validate migration order and raise error if out-of-order in strict mode.
 
@@ -144,7 +139,11 @@ def validate_migration_order(
             strict_ordering is True.
 
     Example:
-        >>> validate_migration_order(["20251011130000"], ["20251012140000"], strict_ordering=True)
+        >>> validate_migration_order(
+        ...     ["20251011130000"],
+        ...     ["20251012140000"],
+        ...     strict_ordering=True,
+        ... )
         OutOfOrderMigrationError: Out-of-order migrations detected...
     """
     gaps = detect_out_of_order_migrations(pending_versions, applied_versions)
@@ -155,10 +154,7 @@ def validate_migration_order(
     warning_message = format_out_of_order_warning(gaps)
 
     if strict_ordering:
-        msg = (
-            f"{warning_message}\n\n"
-            "Strict ordering is enabled. Use --allow-missing to override."
-        )
+        msg = f"{warning_message}\n\nStrict ordering is enabled. Use --allow-missing to override."
         raise OutOfOrderMigrationError(msg)
 
     logger.warning("Out-of-order migrations detected")
