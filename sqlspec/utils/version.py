@@ -219,21 +219,13 @@ def parse_version(version_str: str) -> MigrationVersion:
 
     if is_sequential_version(version_str):
         return MigrationVersion(
-            raw=version_str,
-            type=VersionType.SEQUENTIAL,
-            sequence=int(version_str),
-            timestamp=None,
-            extension=None,
+            raw=version_str, type=VersionType.SEQUENTIAL, sequence=int(version_str), timestamp=None, extension=None
         )
 
     if is_timestamp_version(version_str):
         dt = datetime.strptime(version_str, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
         return MigrationVersion(
-            raw=version_str,
-            type=VersionType.TIMESTAMP,
-            sequence=None,
-            timestamp=dt,
-            extension=None,
+            raw=version_str, type=VersionType.TIMESTAMP, sequence=None, timestamp=dt, extension=None
         )
 
     msg = f"Invalid migration version format: {version_str}. Expected sequential (0001) or timestamp (YYYYMMDDHHmmss)."

@@ -97,10 +97,7 @@ def test_format_out_of_order_warning_empty():
 
 def test_format_out_of_order_warning_single():
     """Test formatting with single gap."""
-    gap = MigrationGap(
-        missing_version=parse_version("20251011130000"),
-        applied_after=[parse_version("20251012120000")],
-    )
+    gap = MigrationGap(missing_version=parse_version("20251011130000"), applied_after=[parse_version("20251012120000")])
 
     warning = format_out_of_order_warning([gap])
 
@@ -117,10 +114,7 @@ def test_format_out_of_order_warning_multiple():
             missing_version=parse_version("20251011130000"),
             applied_after=[parse_version("20251012120000"), parse_version("20251013120000")],
         ),
-        MigrationGap(
-            missing_version=parse_version("20251011140000"),
-            applied_after=[parse_version("20251012120000")],
-        ),
+        MigrationGap(missing_version=parse_version("20251011140000"), applied_after=[parse_version("20251012120000")]),
     ]
 
     warning = format_out_of_order_warning(gaps)
@@ -165,10 +159,7 @@ def test_validate_migration_order_strict_raises():
 
 def test_migration_gap_frozen():
     """Test MigrationGap is frozen (immutable)."""
-    gap = MigrationGap(
-        missing_version=parse_version("20251011130000"),
-        applied_after=[parse_version("20251012120000")],
-    )
+    gap = MigrationGap(missing_version=parse_version("20251011130000"), applied_after=[parse_version("20251012120000")])
 
     with pytest.raises(Exception):
         gap.missing_version = parse_version("20251011140000")
@@ -176,17 +167,8 @@ def test_migration_gap_frozen():
 
 def test_detect_out_of_order_complex_scenario():
     """Test detection with complex real-world scenario."""
-    pending = [
-        "20251011100000",
-        "20251011150000",
-        "20251012100000",
-        "20251015120000",
-    ]
-    applied = [
-        "20251011120000",
-        "20251011140000",
-        "20251013120000",
-    ]
+    pending = ["20251011100000", "20251011150000", "20251012100000", "20251015120000"]
+    applied = ["20251011120000", "20251011140000", "20251013120000"]
 
     gaps = detect_out_of_order_migrations(pending, applied)
 
