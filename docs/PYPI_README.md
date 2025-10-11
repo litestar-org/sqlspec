@@ -303,26 +303,50 @@ SQLSpec includes a built-in migration system for managing schema changes. After 
 
 ```bash
 # Initialize migration directory
-sqlspec db init migrations
+sqlspec --config myapp.config init
 
 # Generate new migration file
-sqlspec db create-migration "Add user table"
+sqlspec --config myapp.config create-migration -m "Add user table"
 
 # Apply all pending migrations
-sqlspec db upgrade
+sqlspec --config myapp.config upgrade
 
 # Show current migration status
-sqlspec db show-current-revision
+sqlspec --config myapp.config show-current-revision
 ```
 
 For Litestar applications, replace `sqlspec` with your application command:
 
 ```bash
 # Using Litestar CLI integration
-litestar db create-migration "Add user table"
-litestar db upgrade
-litestar db show-current-revision
+litestar database create-migration -m "Add user table"
+litestar database upgrade
+litestar database show-current-revision
 ```
+
+### Shell Completion
+
+SQLSpec CLI supports tab completion for bash, zsh, and fish shells. Enable it with:
+
+```bash
+# Bash - add to ~/.bashrc
+eval "$(_SQLSPEC_COMPLETE=bash_source sqlspec)"
+
+# Zsh - add to ~/.zshrc
+eval "$(_SQLSPEC_COMPLETE=zsh_source sqlspec)"
+
+# Fish - add to ~/.config/fish/completions/sqlspec.fish
+eval (env _SQLSPEC_COMPLETE=fish_source sqlspec)
+```
+
+After setup, you can tab-complete commands and options:
+
+```bash
+sqlspec <TAB>         # Shows: create-migration, downgrade, init, ...
+sqlspec upgrade --<TAB>  # Shows: --bind-key, --help, --no-prompt, ...
+```
+
+See the [CLI documentation](https://sqlspec.litestar.dev/usage/cli.html) for complete setup instructions.
 
 ### Basic Litestar Integration
 
