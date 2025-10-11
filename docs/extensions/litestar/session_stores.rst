@@ -297,7 +297,7 @@ Oracle Database In-Memory Column Store can dramatically improve session lookup p
    **Licensing Required**: Oracle Database In-Memory is a **separately licensed option** for Oracle Database Enterprise Edition:
 
    - Oracle Database 12.1.0.2 or higher required
-   - Oracle Database In-Memory option license ($23,000 per processor)
+   - Oracle Database In-Memory option license
    - Sufficient ``INMEMORY_SIZE`` configured in the database instance
 
    Using ``in_memory=True`` without proper licensing will result in **ORA-00439** or **ORA-62142** errors.
@@ -384,9 +384,6 @@ In-Memory Column Store significantly improves session operations:
 ❌ **Small applications** (< 1,000 concurrent users)
    - Overhead not justified
    - Standard indexes sufficient
-
-❌ **Budget constraints**
-   - In-Memory license costs $23K+ per processor
 
 Database Requirements
 ~~~~~~~~~~~~~~~~~~~~~
