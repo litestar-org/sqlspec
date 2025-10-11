@@ -40,6 +40,12 @@ Core architecture and design patterns:
 ## Extensions
 
 - [**aiosql Extension**](extensions/aiosql.md) - Bridge existing aiosql SQL files into SQLSpec
+- [**Litestar Extension**](extensions/litestar.md) - Plugin usage, dependency injection, sessions, CLI commands
+- [**Google ADK Extension**](extensions/google-adk.md) - Persist Google ADK sessions/events with SQLSpec stores
+- [**Starlette Integration**](extensions/starlette.md) - Lifespan management and middleware patterns
+- [**FastAPI Integration**](extensions/fastapi.md) - Dependency injection and transaction handling
+- [**Flask Integration**](extensions/flask.md) - Request-scoped sessions for synchronous drivers
+- [**Sanic Integration**](extensions/sanic.md) - Listeners, middleware, and Sanic-Ext dependencies
 
 ## Quick Reference
 

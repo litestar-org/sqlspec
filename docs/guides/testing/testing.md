@@ -1,75 +1,195 @@
 # Testing Guide for SQLSpec
 
-This guide outlines the testing procedures for the `sqlspec` project, leveraging `pytest-databases` for integration testing against real database instances.
+This document describes how we execute and structure tests across SQLSpec. It reflects our current strategy of using **pytest + pytest-databases** (with Docker services) and **pytest-xdist** for parallel execution. Follow these instructions whenever you add, update, or run tests locally or in CI.
 
-## Running Tests
+---
 
-The project uses `make` for convenience.
+## 1. Test Command Reference
 
-- **Run all tests:**
+We invoke pytest directly through `uv` so we share the same virtual environment management in local dev and CI. The most common commands are:
 
-    ```bash
-    make test
-    ```
+- **Full suite (unit + integration + lint gates configured elsewhere):**
 
-- **Run tests with coverage:**
+  ```bash
+  uv run pytest
+  ```
 
-    ```bash
-    make coverage
-    ```
+- **Single file:**
 
-- **Run a specific test file:**
+  ```bash
+  uv run pytest tests/integration/test_asyncpg_driver.py
+  ```
 
-    ```bash
-    uv run pytest tests/path/to/test.py
-    ```
+- **Single test (node id):**
 
-- **Run a single test function:**
+  ```bash
+  uv run pytest tests/unit/adapters/test_asyncpg_config.py::test_validation
+  ```
 
-    ```bash
-    uv run pytest tests/path/to/test.py::test_name
-    ```
+- **Parallel run (recommended by default):**
 
-## Linting and Type Checking
+  ```bash
+  uv run pytest -n auto
+  ```
 
-Before committing, ensure all quality checks pass.
+  We rely on `pytest-xdist` (`-n auto`) to scale across CPU cores. Keep thread-safety in mind; most of our fixtures are session-scoped, so they are safe to share across workers. If you add fixtures that cannot be shared, mark them `scope="function"` or use `xdist_worker_id` to isolate resources.
 
-- **Run all linting and type checking:**
+---
 
-    ```bash
-    make lint
-    ```
+## 2. pytest-databases Overview
 
-- **Auto-fix linting issues:**
+We depend on [`pytest-databases`](https://github.com/litestar-org/pytest-databases) to launch containerized databases on demand. **Never call `make infra-up` or `make infra-down` in tests**—pytest-databases handles lifecycle automatically.
 
-    ```bash
-    make fix
-    ```
+### 2.1 Enable Plugins
 
-- **Run MyPy:**
+To make services available, list the plugins at module import time (usually in `tests/conftest.py`):
 
-    ```bash
-    make mypy
-    ```
+```python
+pytest_plugins = [
+    "pytest_databases.docker.postgres",
+    "pytest_databases.docker.mysql",
+    "pytest_databases.docker.oracle",
+    # add others as needed (redis, elasticsearch, etc.)
+]
+```
 
-## Integration Testing with Databases
+Each plugin contributes fixtures ending with `_service` (preferred) and `_connection` (currently available but being evaluated). **Use the service fixtures** so we’re ready if direct connection fixtures are deprecated.
 
-`sqlspec` uses `pytest-databases` to manage Docker containers for integration tests. To run tests that require a database, you first need to start the infrastructure.
+### 2.2 Service Fixtures
 
-- **Start database containers:**
+- `postgres_service`, `mysql_service`, `oracle_service`, etc. provide access to host, port, credentials, and utility helpers.
+- All drivers that target the same database flavour share the same underlying container. For example, `asyncpg`, `psycopg`, and `psqlpy` all point at the PostgreSQL service spun up by `postgres_service`.
+- Fixtures are usually **session-scoped** so databases start once per pytest session, which keeps setup fast and reduces container churn.
 
-    ```bash
-    make infra-up
-    ```
+Example usage:
 
-- **Stop database containers:**
+```python
+from pytest_databases.docker.postgres import PostgresService
 
-    ```bash
-    make infra-down
-    ```
+def test_round_trip(postgres_service: PostgresService) -> None:
+    url = postgres_service.connection_url()
+    # Use url in SQLSpec config, run migrations once, run assertions…
+```
 
-### Oracle Database
+Avoid calling `postgres_service.connection` or `postgres_connection` directly unless there is no alternative; we prefer to construct SQLSpec configs and drivers using the service metadata and reuse our own fixture helpers (see below).
 
-- The Oracle tests use the official Oracle database container images.
-- The driver supports both **thin** and **thick** client modes. When implementing changes, ensure both modes are supported if possible.
-- For **Autonomous Database** connectivity, additional configuration for wallets and connection strings will be required. Refer to the official `oracledb` documentation for details on connecting to OCI, Google Cloud, etc.
+---
+
+## 3. SQLSpec Testing Fixtures
+
+We provide shared fixtures in `tests/fixtures/` to keep tests DRY and ensure consistent setup across drivers. When adding tests:
+
+- Reuse existing config/driver fixtures (e.g., `asyncpg_driver`, `psycopg_sync_driver`) instead of creating new ones.
+- Keep fixtures at `session` or `module` scope whenever possible. This allows us to deploy DDL once per service instead of per test.
+- Store DDL scripts under `tests/fixtures/postgres/`, `tests/fixtures/mysql/`, etc. Use helper utilities from `tests/fixtures/sql_utils.py` to apply them.
+- If you need pre-populated data, prefer fixture-level setup functions that insert data during `setup` once.
+
+### Example Pattern
+
+```python
+import pytest
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from tests.fixtures.sql_utils import apply_ddl
+
+@pytest.fixture(scope="session")
+def asyncpg_config(postgres_service):
+    return AsyncpgConfig(
+        pool_config={"dsn": postgres_service.connection_url()},
+        extension_config={"litestar": {"session_table": "litestar_sessions"}},
+    )
+
+@pytest.fixture(scope="session")
+def asyncpg_driver(asyncpg_config):
+    spec = SQLSpec()
+    config = spec.add_config(asyncpg_config)
+    apply_ddl(config, "tests/fixtures/postgres/basic_schema.sql")
+    with spec.provide_driver(config) as driver:
+        yield driver
+```
+
+The combination ensures:
+
+1. The container is started via `postgres_service`.
+2. Configuration is stored once per session.
+3. DDL executes once per session (fast) rather than per test.
+
+---
+
+## 4. Database Isolation & Data Management
+
+- Because we share containers across tests, **start each test in a known state**. Prefer truncating tables or using transaction rollbacks within the test when data isolation is required.
+- For write-heavy suites, consider wrapping tests in `BEGIN … ROLLBACK` using driver transaction fixtures. If the driver does not support nested transactions, reset tables via fixture-level finalizers.
+- Use fixture-scoped DB objects (schemas, tables) with unique names to avoid cross-test collisions.
+
+---
+
+## 5. Organising Tests
+
+Directory structure:
+
+```
+tests/
+├── unit/          # no external services
+├── integration/   # requires services (postgres, mysql, etc.)
+├── fixtures/      # shared fixtures, ddl scripts, utilities
+└── conftest.py    # pytest plugins, global fixtures
+```
+
+Guidelines:
+
+- Unit tests should never depend on pytest-databases.
+- Integration tests must declare their service dependencies via fixtures and should be marked with meaningful pytest markers (`@pytest.mark.postgres`, `@pytest.mark.oracle`) to enable targeted runs (e.g., `uv run pytest -m postgres`).
+- When you add a new adapter or driver, create or reuse fixture modules under `tests/fixtures/<adapter>/`.
+
+---
+
+## 6. Parallel Execution with pytest-xdist
+
+We run with `-n auto` by default. Keep in mind:
+
+- Each worker receives its own copy of fixtures respecting scope. Session-scoped fixtures run once—`pytest-databases` is compatible with xdist because services are globally shared via Docker.
+- If you need worker-specific isolation, inspect `request.node` or `xdist_worker_id` in your fixture and adjust resource names accordingly (e.g., create per-worker schemas).
+- Ensure DDL scripts are idempotent (`CREATE TABLE IF NOT EXISTS…`) when using session-scoped fixtures.
+
+---
+
+## 7. Markers & CI Filtering
+
+We register markers in `pyproject.toml` (e.g., `postgres`, `mysql`, `oracle`, `integration`). When writing tests:
+
+```python
+import pytest
+
+@pytest.mark.integration
+@pytest.mark.postgres
+async def test_asyncpg_insert(asyncpg_driver):
+    ...
+```
+
+This lets us run `uv run pytest -m postgres` locally and use the marker selectors in CI pipelines.
+
+---
+
+## 8. Linting & Static Checks
+
+Tests follow the same linting and type checking rules as production code. Use:
+
+- `uv run ruff check tests/`
+- `uv run mypy tests/`
+
+Keep fixtures typed—the more explicit the types, the easier it is to detect broken signatures when pytest-databases updates.
+
+---
+
+## 9. Common Pitfalls & Best Practices
+
+- Don’t start/stop Docker containers manually. Rely on pytest-databases services.
+- Prefer service fixtures over connection fixtures to stay future-proof.
+- Reuse global fixtures from `tests/fixtures/` rather than duplicating DDL/application setup in individual test modules.
+- Ensure teardown logic runs: use `yield` fixtures and finalizers to close drivers, truncate tables, or drop schemas if necessary.
+- Document new fixtures and add them to the markdown guides so other contributors know they exist.
+
+---
+
+By following these guidelines, the SQLSpec suite remains fast, reliable, and consistent across local development and CI environments. When in doubt, check existing integration tests for patterns you can extend.*** End Patch

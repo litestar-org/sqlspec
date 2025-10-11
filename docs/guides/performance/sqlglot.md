@@ -21,6 +21,7 @@ parsed_again = sqlglot.parse_one(sql_str)  # Parse 2 - WASTEFUL!
 ```
 
 **Why this matters**:
+
 - SQL parsing is expensive (10-100µs per query)
 - String conversions lose AST benefits
 - Multiple passes compound memory allocation overhead
@@ -46,6 +47,7 @@ def build_query_slow(table: str) -> str:
 ```
 
 **Performance comparison**:
+
 - Parse once, reuse: ~1µs per query
 - Re-parse every time: ~50µs per query (50x slower!)
 
@@ -77,6 +79,7 @@ query = sqlglot.select("*").from_("users").where(predicate, copy=True)
 ```
 
 **Why copy=False**:
+
 - Deep copies walk the entire expression tree and allocate new nodes; this is 5-20x slower on medium queries.
 - SQLSpec builders expect mutable expressions; reusing nodes with `copy=False` keeps the AST cached and avoids invalidating references.
 - Only opt into `copy=True` when crossing thread boundaries or handing the tree to untrusted mutators.
@@ -263,6 +266,7 @@ final_sql = context.expression.sql(dialect=target_dialect)
 ```
 
 **Key benefits**:
+
 - Parse once (in SQLTransformContext creation)
 - Chain transformations on AST
 - Convert to SQL once at the end
@@ -810,6 +814,7 @@ def test_transpilation(source, target, input_sql, expected):
 ### Common Issues
 
 **Issue**: Parse error on valid SQL
+
 ```python
 # Problem: Dialect mismatch
 ast = parse_one("SELECT TOP 10 * FROM users")  # Error - TOP is TSQL
@@ -819,6 +824,7 @@ ast = parse_one("SELECT TOP 10 * FROM users", read="tsql")
 ```
 
 **Issue**: Missing columns after transformation
+
 ```python
 # Problem: Mutating shared expression
 base_query = select("id", "name").from_("users")
@@ -831,6 +837,7 @@ query2 = base_query.copy().where("deleted = FALSE")  # Independent
 ```
 
 **Issue**: Slow transpilation
+
 ```python
 # Problem: Re-parsing instead of transpiling
 for sql in queries:
@@ -845,10 +852,10 @@ for sql in queries:
 
 ## Resources
 
-- **Primary Docs Hub**: https://sqlglot.com/sqlglot/index.html
-- **Dialects Reference**: https://sqlglot.com/sqlglot/dialects/
-- **Expression Catalog**: https://sqlglot.com/sqlglot/expressions/
-- **Optimizer Passes**: https://sqlglot.com/sqlglot/optimizer/index.html
-- **Planner Guide**: https://sqlglot.com/sqlglot/planner.html
-- **Token Reference**: https://sqlglot.com/sqlglot/tokens.html
-- **GitHub Repository**: https://github.com/tobymao/sqlglot
+- **Primary Docs Hub**: <https://sqlglot.com/sqlglot/index.html>
+- **Dialects Reference**: <https://sqlglot.com/sqlglot/dialects/>
+- **Expression Catalog**: <https://sqlglot.com/sqlglot/expressions/>
+- **Optimizer Passes**: <https://sqlglot.com/sqlglot/optimizer/index.html>
+- **Planner Guide**: <https://sqlglot.com/sqlglot/planner.html>
+- **Token Reference**: <https://sqlglot.com/sqlglot/tokens.html>
+- **GitHub Repository**: <https://github.com/tobymao/sqlglot>
