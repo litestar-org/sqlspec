@@ -68,6 +68,8 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             EXECUTE IMMEDIATE '
             CREATE TABLE {self.version_table} (
                 version_num VARCHAR2(32) PRIMARY KEY,
+                version_type VARCHAR2(16),
+                execution_sequence INTEGER,
                 description VARCHAR2(2000),
                 applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 execution_time_ms INTEGER,
@@ -134,7 +136,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         version_type = parsed_version.type.value
 
         next_seq_result = driver.execute(self._get_next_execution_sequence_sql())
-        execution_sequence = next_seq_result.data[0]["next_seq"] if next_seq_result.data else 1
+        execution_sequence = next_seq_result.data[0]["NEXT_SEQ"] if next_seq_result.data else 1
 
         record_sql = self._get_record_migration_sql(
             version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
@@ -172,6 +174,8 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             EXECUTE IMMEDIATE '
             CREATE TABLE {self.version_table} (
                 version_num VARCHAR2(32) PRIMARY KEY,
+                version_type VARCHAR2(16),
+                execution_sequence INTEGER,
                 description VARCHAR2(2000),
                 applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 execution_time_ms INTEGER,
@@ -238,7 +242,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         version_type = parsed_version.type.value
 
         next_seq_result = await driver.execute(self._get_next_execution_sequence_sql())
-        execution_sequence = next_seq_result.data[0]["next_seq"] if next_seq_result.data else 1
+        execution_sequence = next_seq_result.data[0]["NEXT_SEQ"] if next_seq_result.data else 1
 
         record_sql = self._get_record_migration_sql(
             version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
