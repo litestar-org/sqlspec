@@ -556,7 +556,7 @@ Use `driver_features` when the feature:
 Every adapter MUST define a TypedDict for its `driver_features`:
 
 ```python
-class AdapterDriverFeatures(TypedDict, total=False):
+class AdapterDriverFeatures(TypedDict):
     """Adapter driver feature flags.
 
     feature_name: Description of what this feature does.
@@ -600,7 +600,7 @@ For optional dependencies, auto-enable features when the dependency is available
 ```python
 from sqlspec.typing import NUMPY_INSTALLED, PGVECTOR_INSTALLED
 
-class AdapterDriverFeatures(TypedDict, total=False):
+class AdapterDriverFeatures(TypedDict):
     """Adapter driver feature flags."""
 
     enable_feature: NotRequired[bool]
@@ -658,7 +658,7 @@ class AdapterConfig(AsyncDatabaseConfig):
 ```python
 from sqlspec.typing import NUMPY_INSTALLED
 
-class OracleDriverFeatures(TypedDict, total=False):
+class OracleDriverFeatures(TypedDict):
     """Oracle driver feature flags.
 
     enable_numpy_vectors: Enable automatic NumPy array ↔ Oracle VECTOR conversion.
@@ -706,7 +706,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig):
 ```python
 from sqlspec.typing import PGVECTOR_INSTALLED
 
-class AsyncpgDriverFeatures(TypedDict, total=False):
+class AsyncpgDriverFeatures(TypedDict):
     """AsyncPG driver feature flags."""
 
     json_serializer: NotRequired[Callable[[Any], str]]
@@ -745,7 +745,7 @@ class AsyncpgConfig(AsyncDatabaseConfig):
 #### Appropriate Hardcoded Defaults: DuckDB UUID Conversion
 
 ```python
-class DuckDBDriverFeatures(TypedDict, total=False):
+class DuckDBDriverFeatures(TypedDict):
     """DuckDB driver feature flags.
 
     enable_uuid_conversion: Enable automatic UUID string conversion.
@@ -798,7 +798,7 @@ class AdapterConfig(AsyncDatabaseConfig):
 
 ```python
 # BAD - Before Asyncmy fix
-class AsyncmyDriverFeatures(TypedDict, total=False):
+class AsyncmyDriverFeatures(TypedDict):
     json_serializer: NotRequired[Callable[[Any], str]]
     json_deserializer: NotRequired[Callable[[str], Any]]
 
@@ -835,7 +835,7 @@ class AsyncmyConfig(AsyncDatabaseConfig):
 
 ```python
 # BAD - Inconsistent prefixes
-class BadDriverFeatures(TypedDict, total=False):
+class BadDriverFeatures(TypedDict):
     numpy_vectors: NotRequired[bool]  # Missing enable_ prefix
     use_pgvector: NotRequired[bool]   # Wrong prefix (use_)
     json_on: NotRequired[bool]        # Wrong prefix (_on)
@@ -845,7 +845,7 @@ class BadDriverFeatures(TypedDict, total=False):
 
 ```python
 # GOOD - Consistent enable_ prefix
-class GoodDriverFeatures(TypedDict, total=False):
+class GoodDriverFeatures(TypedDict):
     enable_numpy_vectors: NotRequired[bool]
     enable_pgvector: NotRequired[bool]
     enable_json_codecs: NotRequired[bool]
@@ -925,7 +925,7 @@ When adding a new `driver_features` option:
 **Example TypedDict documentation**:
 
 ```python
-class AdapterDriverFeatures(TypedDict, total=False):
+class AdapterDriverFeatures(TypedDict):
     """Adapter driver feature flags.
 
     enable_feature_name: Short one-line description.

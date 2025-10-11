@@ -29,7 +29,7 @@ __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", 
 logger = logging.getLogger(__name__)
 
 
-class AsyncmyConnectionParams(TypedDict, total=False):
+class AsyncmyConnectionParams(TypedDict):
     """Asyncmy connection parameters."""
 
     host: NotRequired[str]
@@ -51,7 +51,7 @@ class AsyncmyConnectionParams(TypedDict, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-class AsyncmyPoolParams(AsyncmyConnectionParams, total=False):
+class AsyncmyPoolParams(AsyncmyConnectionParams):
     """Asyncmy pool parameters."""
 
     minsize: NotRequired[int]
@@ -60,7 +60,7 @@ class AsyncmyPoolParams(AsyncmyConnectionParams, total=False):
     pool_recycle: NotRequired[int]
 
 
-class AsyncmyDriverFeatures(TypedDict, total=False):
+class AsyncmyDriverFeatures(TypedDict):
     """Asyncmy driver feature flags.
 
     MySQL/MariaDB handle JSON natively, but custom serializers can be provided

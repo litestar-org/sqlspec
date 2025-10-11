@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class SqliteConnectionParams(TypedDict, total=False):
+class SqliteConnectionParams(TypedDict):
     """SQLite connection parameters."""
 
     database: NotRequired[str]

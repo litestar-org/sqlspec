@@ -5,7 +5,7 @@ from typing_extensions import NotRequired, TypedDict
 __all__ = ("ADKConfig",)
 
 
-class ADKConfig(TypedDict, total=False):
+class ADKConfig(TypedDict):
     """Configuration options for ADK session store extension.
 
     All fields are optional with sensible defaults. Use in extension_config["adk"]:

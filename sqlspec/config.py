@@ -49,7 +49,7 @@ DriverT = TypeVar("DriverT", bound="SyncDriverAdapterBase | AsyncDriverAdapterBa
 logger = get_logger("config")
 
 
-class LifecycleConfig(TypedDict, total=False):
+class LifecycleConfig(TypedDict):
     """Lifecycle hooks for database adapters.
 
     Each hook accepts a list of callables to support multiple handlers.
@@ -66,7 +66,7 @@ class LifecycleConfig(TypedDict, total=False):
     on_error: NotRequired[list[Callable[[Exception, str, dict], None]]]
 
 
-class MigrationConfig(TypedDict, total=False):
+class MigrationConfig(TypedDict):
     """Configuration options for database migrations.
 
     All fields are optional with default values.
@@ -85,7 +85,7 @@ class MigrationConfig(TypedDict, total=False):
     """Whether this configuration should be included in CLI operations. Defaults to True."""
 
 
-class LitestarConfig(TypedDict, total=False):
+class LitestarConfig(TypedDict):
     """Configuration options for Litestar SQLSpec plugin.
 
     All fields are optional with sensible defaults.

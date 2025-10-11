@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("sqlspec.adapters.adbc")
 
 
-class AdbcConnectionParams(TypedDict, total=False):
+class AdbcConnectionParams(TypedDict):
     """ADBC connection parameters."""
 
     uri: NotRequired[str]
@@ -55,7 +55,7 @@ class AdbcConnectionParams(TypedDict, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-class AdbcDriverFeatures(TypedDict, total=False):
+class AdbcDriverFeatures(TypedDict):
     """ADBC driver feature configuration.
 
     Controls optional type handling and serialization behavior for the ADBC adapter.

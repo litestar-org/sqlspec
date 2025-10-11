@@ -26,7 +26,7 @@ __all__ = (
 )
 
 
-class DuckDBConnectionParams(TypedDict, total=False):
+class DuckDBConnectionParams(TypedDict):
     """DuckDB connection parameters."""
 
     database: NotRequired[str]
@@ -65,7 +65,7 @@ class DuckDBConnectionParams(TypedDict, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-class DuckDBPoolParams(DuckDBConnectionParams, total=False):
+class DuckDBPoolParams(DuckDBConnectionParams):
     """Complete pool configuration for DuckDB adapter.
 
     Combines standardized pool parameters with DuckDB-specific connection parameters.
@@ -77,7 +77,7 @@ class DuckDBPoolParams(DuckDBConnectionParams, total=False):
     pool_recycle_seconds: NotRequired[int]
 
 
-class DuckDBExtensionConfig(TypedDict, total=False):
+class DuckDBExtensionConfig(TypedDict):
     """DuckDB extension configuration for auto-management."""
 
     name: str
@@ -93,7 +93,7 @@ class DuckDBExtensionConfig(TypedDict, total=False):
     """Force reinstallation of the extension."""
 
 
-class DuckDBSecretConfig(TypedDict, total=False):
+class DuckDBSecretConfig(TypedDict):
     """DuckDB secret configuration for AI/API integrations."""
 
     secret_type: str
@@ -109,7 +109,7 @@ class DuckDBSecretConfig(TypedDict, total=False):
     """Scope of the secret (LOCAL or PERSISTENT)."""
 
 
-class DuckDBDriverFeatures(TypedDict, total=False):
+class DuckDBDriverFeatures(TypedDict):
     """TypedDict for DuckDB driver features configuration.
 
     Attributes:
