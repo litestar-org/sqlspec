@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class BigQueryConnectionParams(TypedDict, total=False):
+class BigQueryConnectionParams(TypedDict):
     """Standard BigQuery connection parameters.
 
     Includes both official BigQuery client parameters and BigQuery-specific configuration options.
@@ -63,7 +63,7 @@ class BigQueryConnectionParams(TypedDict, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-class BigQueryDriverFeatures(TypedDict, total=False):
+class BigQueryDriverFeatures(TypedDict):
     """BigQuery driver-specific features configuration.
 
     Only non-standard BigQuery client parameters that are SQLSpec-specific extensions.

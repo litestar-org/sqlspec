@@ -5,7 +5,7 @@ from typing_extensions import NotRequired, TypedDict
 __all__ = ("LitestarConfig",)
 
 
-class LitestarConfig(TypedDict, total=False):
+class LitestarConfig(TypedDict):
     """Configuration options for Litestar session store extension.
 
     All fields are optional with sensible defaults. Use in extension_config["litestar"]:

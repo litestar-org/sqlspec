@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import StatementConfig
 
 
-class SqliteConnectionParams(TypedDict, total=False):
+class SqliteConnectionParams(TypedDict):
     """SQLite connection parameters."""
 
     database: NotRequired[str]
@@ -35,7 +35,7 @@ class SqliteConnectionParams(TypedDict, total=False):
     uri: NotRequired[bool]
 
 
-class SqliteDriverFeatures(TypedDict, total=False):
+class SqliteDriverFeatures(TypedDict):
     """SQLite driver feature configuration.
 
     Controls optional type handling and serialization features for SQLite connections.

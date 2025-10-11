@@ -29,7 +29,7 @@ __all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgDriverFeatures", 
 logger = logging.getLogger("sqlspec")
 
 
-class AsyncpgConnectionConfig(TypedDict, total=False):
+class AsyncpgConnectionConfig(TypedDict):
     """TypedDict for AsyncPG connection parameters."""
 
     dsn: NotRequired[str]
@@ -49,7 +49,7 @@ class AsyncpgConnectionConfig(TypedDict, total=False):
     server_settings: NotRequired[dict[str, str]]
 
 
-class AsyncpgPoolConfig(AsyncpgConnectionConfig, total=False):
+class AsyncpgPoolConfig(AsyncpgConnectionConfig):
     """TypedDict for AsyncPG pool parameters, inheriting connection parameters."""
 
     min_size: NotRequired[int]
@@ -64,7 +64,7 @@ class AsyncpgPoolConfig(AsyncpgConnectionConfig, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-class AsyncpgDriverFeatures(TypedDict, total=False):
+class AsyncpgDriverFeatures(TypedDict):
     """AsyncPG driver feature flags.
 
     json_serializer: Custom JSON serializer function for PostgreSQL JSON/JSONB types.

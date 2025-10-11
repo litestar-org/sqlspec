@@ -27,7 +27,7 @@ __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteDriverFeatu
 logger = logging.getLogger(__name__)
 
 
-class AiosqliteConnectionParams(TypedDict, total=False):
+class AiosqliteConnectionParams(TypedDict):
     """TypedDict for aiosqlite connection parameters."""
 
     database: NotRequired[str]
@@ -39,7 +39,7 @@ class AiosqliteConnectionParams(TypedDict, total=False):
     uri: NotRequired[bool]
 
 
-class AiosqlitePoolParams(AiosqliteConnectionParams, total=False):
+class AiosqlitePoolParams(AiosqliteConnectionParams):
     """TypedDict for aiosqlite pool parameters, inheriting connection parameters."""
 
     pool_size: NotRequired[int]
@@ -49,7 +49,7 @@ class AiosqlitePoolParams(AiosqliteConnectionParams, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-class AiosqliteDriverFeatures(TypedDict, total=False):
+class AiosqliteDriverFeatures(TypedDict):
     """Aiosqlite driver feature configuration.
 
     Controls optional type handling and serialization features for SQLite connections.

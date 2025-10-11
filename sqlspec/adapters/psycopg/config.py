@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("sqlspec.adapters.psycopg")
 
 
-class PsycopgConnectionParams(TypedDict, total=False):
+class PsycopgConnectionParams(TypedDict):
     """Psycopg connection parameters."""
 
     conninfo: NotRequired[str]
@@ -49,7 +49,7 @@ class PsycopgConnectionParams(TypedDict, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-class PsycopgPoolParams(PsycopgConnectionParams, total=False):
+class PsycopgPoolParams(PsycopgConnectionParams):
     """Psycopg pool parameters."""
 
     min_size: NotRequired[int]
@@ -65,7 +65,7 @@ class PsycopgPoolParams(PsycopgConnectionParams, total=False):
     kwargs: NotRequired[dict[str, Any]]
 
 
-class PsycopgDriverFeatures(TypedDict, total=False):
+class PsycopgDriverFeatures(TypedDict):
     """Psycopg driver feature flags.
 
     enable_pgvector: Enable automatic pgvector extension support for vector similarity search.

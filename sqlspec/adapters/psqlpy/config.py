@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("sqlspec.adapters.psqlpy")
 
 
-class PsqlpyConnectionParams(TypedDict, total=False):
+class PsqlpyConnectionParams(TypedDict):
     """Psqlpy connection parameters."""
 
     dsn: NotRequired[str]
@@ -63,7 +63,7 @@ class PsqlpyConnectionParams(TypedDict, total=False):
     load_balance_hosts: NotRequired[str]
 
 
-class PsqlpyPoolParams(PsqlpyConnectionParams, total=False):
+class PsqlpyPoolParams(PsqlpyConnectionParams):
     """Psqlpy pool parameters."""
 
     hosts: NotRequired[list[str]]
@@ -74,7 +74,7 @@ class PsqlpyPoolParams(PsqlpyConnectionParams, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-class PsqlpyDriverFeatures(TypedDict, total=False):
+class PsqlpyDriverFeatures(TypedDict):
     """Psqlpy driver feature flags.
 
     enable_pgvector: Enable automatic pgvector extension support for vector similarity search.

@@ -45,7 +45,7 @@ __all__ = (
 logger = logging.getLogger(__name__)
 
 
-class OracleConnectionParams(TypedDict, total=False):
+class OracleConnectionParams(TypedDict):
     """OracleDB connection parameters."""
 
     dsn: NotRequired[str]
@@ -66,7 +66,7 @@ class OracleConnectionParams(TypedDict, total=False):
     edition: NotRequired[str]
 
 
-class OraclePoolParams(OracleConnectionParams, total=False):
+class OraclePoolParams(OracleConnectionParams):
     """OracleDB pool parameters."""
 
     min: NotRequired[int]
@@ -85,7 +85,7 @@ class OraclePoolParams(OracleConnectionParams, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-class OracleDriverFeatures(TypedDict, total=False):
+class OracleDriverFeatures(TypedDict):
     """Oracle driver feature flags.
 
     enable_numpy_vectors: Enable automatic NumPy array ↔ Oracle VECTOR conversion.
