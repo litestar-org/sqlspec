@@ -40,6 +40,8 @@ class OracleMigrationTrackerMixin:
         return (
             sql.create_table(self.version_table)
             .column("version_num", "VARCHAR2(32)", primary_key=True)
+            .column("version_type", "VARCHAR2(16)")
+            .column("execution_sequence", "INTEGER")
             .column("description", "VARCHAR2(2000)")
             .column("applied_at", "TIMESTAMP", default="CURRENT_TIMESTAMP")
             .column("execution_time_ms", "INTEGER")
