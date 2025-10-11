@@ -1,5 +1,7 @@
 """Tests for migration validation and out-of-order detection."""
 
+from typing import Any
+
 import pytest
 
 from sqlspec.exceptions import OutOfOrderMigrationError
@@ -12,40 +14,40 @@ from sqlspec.migrations.validation import (
 from sqlspec.utils.version import parse_version
 
 
-def test_detect_out_of_order_no_applied():
+def test_detect_out_of_order_no_applied() -> None:
     """Test detection with no applied migrations."""
-    pending = ["20251011120000", "20251012120000"]
-    applied = []
+    pending: list[str] = ["20251011120000", "20251012120000"]
+    applied: list[str] = []
 
     gaps = detect_out_of_order_migrations(pending, applied)
 
     assert gaps == []
 
 
-def test_detect_out_of_order_no_pending():
+def test_detect_out_of_order_no_pending() -> None:
     """Test detection with no pending migrations."""
-    pending = []
-    applied = ["20251011120000", "20251012120000"]
+    pending: list[str] = []
+    applied: list[str] = ["20251011120000", "20251012120000"]
 
     gaps = detect_out_of_order_migrations(pending, applied)
 
     assert gaps == []
 
 
-def test_detect_out_of_order_no_gaps():
+def test_detect_out_of_order_no_gaps() -> None:
     """Test detection with no out-of-order migrations."""
-    pending = ["20251013120000", "20251014120000"]
-    applied = ["20251011120000", "20251012120000"]
+    pending: list[str] = ["20251013120000", "20251014120000"]
+    applied: list[str] = ["20251011120000", "20251012120000"]
 
     gaps = detect_out_of_order_migrations(pending, applied)
 
     assert gaps == []
 
 
-def test_detect_out_of_order_single_gap():
+def test_detect_out_of_order_single_gap() -> None:
     """Test detection with single out-of-order migration."""
-    pending = ["20251011130000", "20251013120000"]
-    applied = ["20251011120000", "20251012120000"]
+    pending: list[str] = ["20251011130000", "20251013120000"]
+    applied: list[str] = ["20251011120000", "20251012120000"]
 
     gaps = detect_out_of_order_migrations(pending, applied)
 
@@ -54,10 +56,10 @@ def test_detect_out_of_order_single_gap():
     assert gaps[0].applied_after == [parse_version("20251012120000")]
 
 
-def test_detect_out_of_order_multiple_gaps():
+def test_detect_out_of_order_multiple_gaps() -> None:
     """Test detection with multiple out-of-order migrations."""
-    pending = ["20251011130000", "20251011140000", "20251013120000"]
-    applied = ["20251011120000", "20251012120000"]
+    pending: list[str] = ["20251011130000", "20251011140000", "20251013120000"]
+    applied: list[str] = ["20251011120000", "20251012120000"]
 
     gaps = detect_out_of_order_migrations(pending, applied)
 
@@ -66,10 +68,10 @@ def test_detect_out_of_order_multiple_gaps():
     assert gaps[1].missing_version == parse_version("20251011140000")
 
 
-def test_detect_out_of_order_with_sequential():
+def test_detect_out_of_order_with_sequential() -> None:
     """Test detection works with mixed sequential and timestamp versions."""
-    pending = ["20251011120000"]
-    applied = ["0001", "0002", "20251012120000"]
+    pending: list[str] = ["20251011120000"]
+    applied: list[str] = ["0001", "0002", "20251012120000"]
 
     gaps = detect_out_of_order_migrations(pending, applied)
 
@@ -77,10 +79,10 @@ def test_detect_out_of_order_with_sequential():
     assert gaps[0].missing_version == parse_version("20251011120000")
 
 
-def test_detect_out_of_order_extension_versions():
+def test_detect_out_of_order_extension_versions() -> None:
     """Test detection with extension migrations."""
-    pending = ["ext_litestar_20251011130000"]
-    applied = ["ext_litestar_20251012120000"]
+    pending: list[str] = ["ext_litestar_20251011130000"]
+    applied: list[str] = ["ext_litestar_20251012120000"]
 
     gaps = detect_out_of_order_migrations(pending, applied)
 
@@ -88,14 +90,14 @@ def test_detect_out_of_order_extension_versions():
     assert gaps[0].missing_version.extension == "litestar"
 
 
-def test_format_out_of_order_warning_empty():
+def test_format_out_of_order_warning_empty() -> None:
     """Test formatting with no gaps."""
     warning = format_out_of_order_warning([])
 
     assert warning == ""
 
 
-def test_format_out_of_order_warning_single():
+def test_format_out_of_order_warning_single() -> None:
     """Test formatting with single gap."""
     gap = MigrationGap(missing_version=parse_version("20251011130000"), applied_after=[parse_version("20251012120000")])
 
@@ -107,7 +109,7 @@ def test_format_out_of_order_warning_single():
     assert "created before" in warning
 
 
-def test_format_out_of_order_warning_multiple():
+def test_format_out_of_order_warning_multiple() -> None:
     """Test formatting with multiple gaps."""
     gaps = [
         MigrationGap(
@@ -125,29 +127,29 @@ def test_format_out_of_order_warning_multiple():
     assert "20251013120000" in warning
 
 
-def test_validate_migration_order_no_gaps():
+def test_validate_migration_order_no_gaps() -> None:
     """Test validation with no out-of-order migrations."""
-    pending = ["20251013120000"]
-    applied = ["20251011120000", "20251012120000"]
+    pending: list[str] = ["20251013120000"]
+    applied: list[str] = ["20251011120000", "20251012120000"]
 
     validate_migration_order(pending, applied, strict_ordering=False)
     validate_migration_order(pending, applied, strict_ordering=True)
 
 
-def test_validate_migration_order_warns_by_default(caplog):
+def test_validate_migration_order_warns_by_default(caplog: "Any") -> None:
     """Test validation warns but allows out-of-order migrations by default."""
-    pending = ["20251011130000"]
-    applied = ["20251012120000"]
+    pending: list[str] = ["20251011130000"]
+    applied: list[str] = ["20251012120000"]
 
     validate_migration_order(pending, applied, strict_ordering=False)
 
     assert "Out-of-order migrations detected" in caplog.text
 
 
-def test_validate_migration_order_strict_raises():
+def test_validate_migration_order_strict_raises() -> None:
     """Test validation raises error in strict mode."""
-    pending = ["20251011130000"]
-    applied = ["20251012120000"]
+    pending: list[str] = ["20251011130000"]
+    applied: list[str] = ["20251012120000"]
 
     with pytest.raises(OutOfOrderMigrationError) as exc_info:
         validate_migration_order(pending, applied, strict_ordering=True)
@@ -157,18 +159,18 @@ def test_validate_migration_order_strict_raises():
     assert "Strict ordering is enabled" in str(exc_info.value)
 
 
-def test_migration_gap_frozen():
+def test_migration_gap_frozen() -> None:
     """Test MigrationGap is frozen (immutable)."""
     gap = MigrationGap(missing_version=parse_version("20251011130000"), applied_after=[parse_version("20251012120000")])
 
     with pytest.raises(Exception):
-        gap.missing_version = parse_version("20251011140000")
+        gap.missing_version = parse_version("20251011140000")  # type: ignore[misc]
 
 
-def test_detect_out_of_order_complex_scenario():
+def test_detect_out_of_order_complex_scenario() -> None:
     """Test detection with complex real-world scenario."""
-    pending = ["20251011100000", "20251011150000", "20251012100000", "20251015120000"]
-    applied = ["20251011120000", "20251011140000", "20251013120000"]
+    pending: list[str] = ["20251011100000", "20251011150000", "20251012100000", "20251015120000"]
+    applied: list[str] = ["20251011120000", "20251011140000", "20251013120000"]
 
     gaps = detect_out_of_order_migrations(pending, applied)
 

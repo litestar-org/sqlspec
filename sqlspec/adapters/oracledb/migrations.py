@@ -127,10 +127,18 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
         """
+        from sqlspec.utils.version import parse_version
 
         applied_by = getpass.getuser()
+        parsed_version = parse_version(version)
+        version_type = parsed_version.type.value
 
-        record_sql = self._get_record_migration_sql(version, description, execution_time_ms, checksum, applied_by)
+        next_seq_result = driver.execute(self._get_next_execution_sequence_sql())
+        execution_sequence = next_seq_result.data[0]["next_seq"] if next_seq_result.data else 1
+
+        record_sql = self._get_record_migration_sql(
+            version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
+        )
         driver.execute(record_sql)
         driver.commit()
 
@@ -223,10 +231,18 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
         """
+        from sqlspec.utils.version import parse_version
 
         applied_by = getpass.getuser()
+        parsed_version = parse_version(version)
+        version_type = parsed_version.type.value
 
-        record_sql = self._get_record_migration_sql(version, description, execution_time_ms, checksum, applied_by)
+        next_seq_result = await driver.execute(self._get_next_execution_sequence_sql())
+        execution_sequence = next_seq_result.data[0]["next_seq"] if next_seq_result.data else 1
+
+        record_sql = self._get_record_migration_sql(
+            version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
+        )
         await driver.execute(record_sql)
         await driver.commit()
 
