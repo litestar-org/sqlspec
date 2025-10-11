@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -58,6 +59,9 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
     ) -> None:
         """Record a successfully applied migration.
 
+        Parses version to determine type (sequential or timestamp) and
+        auto-increments execution_sequence for application order tracking.
+
         Args:
             driver: The database driver to use.
             version: Version number of the migration.
@@ -65,9 +69,21 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
         """
+        parsed_version = parse_version(version)
+        version_type = parsed_version.type.value
+
+        result = driver.execute(self._get_next_execution_sequence_sql())
+        next_sequence = result.data[0]["next_seq"] if result.data else 1
+
         driver.execute(
             self._get_record_migration_sql(
-                version, description, execution_time_ms, checksum, os.environ.get("USER", "unknown")
+                version,
+                version_type,
+                next_sequence,
+                description,
+                execution_time_ms,
+                checksum,
+                os.environ.get("USER", "unknown"),
             )
         )
         self._safe_commit(driver)
@@ -143,6 +159,9 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
     ) -> None:
         """Record a successfully applied migration.
 
+        Parses version to determine type (sequential or timestamp) and
+        auto-increments execution_sequence for application order tracking.
+
         Args:
             driver: The database driver to use.
             version: Version number of the migration.
@@ -150,9 +169,21 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
         """
+        parsed_version = parse_version(version)
+        version_type = parsed_version.type.value
+
+        result = await driver.execute(self._get_next_execution_sequence_sql())
+        next_sequence = result.data[0]["next_seq"] if result.data else 1
+
         await driver.execute(
             self._get_record_migration_sql(
-                version, description, execution_time_ms, checksum, os.environ.get("USER", "unknown")
+                version,
+                version_type,
+                next_sequence,
+                description,
+                execution_time_ms,
+                checksum,
+                os.environ.get("USER", "unknown"),
             )
         )
         await self._safe_commit_async(driver)

@@ -167,7 +167,7 @@ def test_applied_migrations_sql_generation() -> None:
     assert "*" in stmt.sql
     assert "test_migrations" in stmt.sql.lower()
     assert "ORDER BY" in stmt.sql.upper()
-    assert "version_num" in stmt.sql.lower()
+    assert "execution_sequence" in stmt.sql.lower()
 
 
 def test_record_migration_sql_generation() -> None:
@@ -175,7 +175,13 @@ def test_record_migration_sql_generation() -> None:
     tracker = MockMigrationTracker("test_migrations")
 
     record_sql = tracker._get_record_migration_sql(
-        version="0001", description="test migration", execution_time_ms=250, checksum="abc123", applied_by="test_user"
+        version="0001",
+        version_type="sequential",
+        execution_sequence=1,
+        description="test migration",
+        execution_time_ms=250,
+        checksum="abc123",
+        applied_by="test_user",
     )
 
     assert hasattr(record_sql, "to_statement")

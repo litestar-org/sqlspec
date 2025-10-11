@@ -11,11 +11,14 @@ __all__ = (
     "ForeignKeyViolationError",
     "ImproperConfigurationError",
     "IntegrityError",
+    "InvalidVersionFormatError",
+    "MigrationError",
     "MissingDependencyError",
     "MultipleResultsFoundError",
     "NotFoundError",
     "NotNullViolationError",
     "OperationalError",
+    "OutOfOrderMigrationError",
     "RepositoryError",
     "SQLBuilderError",
     "SQLConversionError",
@@ -205,6 +208,26 @@ class SQLFileParseError(SQLSpecError):
         self.name = name
         self.path = path
         self.original_error = original_error
+
+
+class MigrationError(SQLSpecError):
+    """Base exception for migration-related errors."""
+
+
+class InvalidVersionFormatError(MigrationError):
+    """Raised when a migration version format is invalid.
+
+    Invalid formats include versions that don't match sequential (0001)
+    or timestamp (YYYYMMDDHHmmss) patterns, or timestamps with invalid dates.
+    """
+
+
+class OutOfOrderMigrationError(MigrationError):
+    """Raised when an out-of-order migration is detected in strict mode.
+
+    Out-of-order migrations occur when a pending migration has a timestamp
+    earlier than already-applied migrations, typically from late-merging branches.
+    """
 
 
 @contextmanager

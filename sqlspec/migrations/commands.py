@@ -13,7 +13,9 @@ from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import create_migration_file
+from sqlspec.migrations.validation import validate_migration_order
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.version import generate_timestamp_version
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncConfigT, SyncConfigT
@@ -95,11 +97,17 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             return cast("str | None", current)
 
-    def upgrade(self, revision: str = "head") -> None:
+    def upgrade(self, revision: str = "head", allow_missing: bool = False) -> None:
         """Upgrade to a target revision.
+
+        Validates migration order and warns if out-of-order migrations are detected.
+        Out-of-order migrations can occur when branches merge in different orders
+        across environments.
 
         Args:
             revision: Target revision or "head" for latest.
+            allow_missing: If True, allow out-of-order migrations even in strict mode.
+                Defaults to False.
         """
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
@@ -119,6 +127,15 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 else:
                     console.print("[green]Already at latest version[/]")
                 return
+
+            applied_migrations = self.tracker.get_applied_migrations(driver)
+            applied_versions = [m["version_num"] for m in applied_migrations]
+            pending_versions = [v for v, _ in pending]
+
+            migration_config = getattr(self.config, "migration_config", {}) or {}
+            strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
+
+            validate_migration_order(pending_versions, applied_versions, strict_ordering)
 
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
 
@@ -199,16 +216,17 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             console.print(f"[green]Database stamped at revision {revision}[/]")
 
     def revision(self, message: str, file_type: str = "sql") -> None:
-        """Create a new migration file.
+        """Create a new migration file with timestamp-based versioning.
+
+        Generates a unique timestamp version (YYYYMMDDHHmmss format) to avoid
+        conflicts when multiple developers create migrations concurrently.
 
         Args:
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
         """
-        existing = self.runner.get_migration_files()
-        next_num = int(existing[-1][0]) + 1 if existing else 1
-        next_version = str(next_num).zfill(4)
-        file_path = create_migration_file(self.migrations_path, next_version, message, file_type)
+        version = generate_timestamp_version()
+        file_path = create_migration_file(self.migrations_path, version, message, file_type)
         console.print(f"[green]Created migration:[/] {file_path}")
 
 
@@ -279,11 +297,17 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             return cast("str | None", current)
 
-    async def upgrade(self, revision: str = "head") -> None:
+    async def upgrade(self, revision: str = "head", allow_missing: bool = False) -> None:
         """Upgrade to a target revision.
+
+        Validates migration order and warns if out-of-order migrations are detected.
+        Out-of-order migrations can occur when branches merge in different orders
+        across environments.
 
         Args:
             revision: Target revision or "head" for latest.
+            allow_missing: If True, allow out-of-order migrations even in strict mode.
+                Defaults to False.
         """
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
@@ -302,6 +326,16 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 else:
                     console.print("[green]Already at latest version[/]")
                 return
+
+            applied_migrations = await self.tracker.get_applied_migrations(driver)
+            applied_versions = [m["version_num"] for m in applied_migrations]
+            pending_versions = [v for v, _ in pending]
+
+            migration_config = getattr(self.config, "migration_config", {}) or {}
+            strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
+
+            validate_migration_order(pending_versions, applied_versions, strict_ordering)
+
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
             for version, file_path in pending:
                 migration = await self.runner.load_migration(file_path, version)
@@ -381,16 +415,17 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             console.print(f"[green]Database stamped at revision {revision}[/]")
 
     async def revision(self, message: str, file_type: str = "sql") -> None:
-        """Create a new migration file.
+        """Create a new migration file with timestamp-based versioning.
+
+        Generates a unique timestamp version (YYYYMMDDHHmmss format) to avoid
+        conflicts when multiple developers create migrations concurrently.
 
         Args:
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
         """
-        existing = await self.runner.get_migration_files()
-        next_num = int(existing[-1][0]) + 1 if existing else 1
-        next_version = str(next_num).zfill(4)
-        file_path = create_migration_file(self.migrations_path, next_version, message, file_type)
+        version = generate_timestamp_version()
+        file_path = create_migration_file(self.migrations_path, version, message, file_type)
         console.print(f"[green]Created migration:[/] {file_path}")
 
 

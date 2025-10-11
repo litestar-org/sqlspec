@@ -4,7 +4,6 @@ This module provides abstract base classes for migration components.
 """
 
 import hashlib
-import operator
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Generic, TypeVar, cast
@@ -16,6 +15,7 @@ from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.sync_tools import await_
+from sqlspec.utils.version import parse_version
 
 __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker")
 
@@ -42,6 +42,16 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
     def _get_create_table_sql(self) -> CreateTable:
         """Get SQL builder for creating the tracking table.
 
+        Schema includes both legacy and new versioning columns:
+        - version_num: Migration version (sequential or timestamp format)
+        - version_type: Format indicator ('sequential' or 'timestamp')
+        - execution_sequence: Auto-incrementing application order
+        - description: Human-readable migration description
+        - applied_at: Timestamp when migration was applied
+        - execution_time_ms: Migration execution duration
+        - checksum: MD5 hash for content verification
+        - applied_by: User who applied the migration
+
         Returns:
             SQL builder object for table creation.
         """
@@ -49,6 +59,8 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             sql.create_table(self.version_table)
             .if_not_exists()
             .column("version_num", "VARCHAR(32)", primary_key=True)
+            .column("version_type", "VARCHAR(16)")
+            .column("execution_sequence", "INTEGER")
             .column("description", "TEXT")
             .column("applied_at", "TIMESTAMP", default="CURRENT_TIMESTAMP", not_null=True)
             .column("execution_time_ms", "INTEGER")
@@ -59,26 +71,49 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
     def _get_current_version_sql(self) -> Select:
         """Get SQL builder for retrieving current version.
 
+        Uses execution_sequence to get the last applied migration,
+        which may differ from version_num order due to out-of-order migrations.
+
         Returns:
             SQL builder object for version query.
         """
-        return sql.select("version_num").from_(self.version_table).order_by("version_num DESC").limit(1)
+        return sql.select("version_num").from_(self.version_table).order_by("execution_sequence DESC").limit(1)
 
     def _get_applied_migrations_sql(self) -> Select:
         """Get SQL builder for retrieving all applied migrations.
 
+        Orders by execution_sequence to show migrations in application order,
+        which preserves the actual execution history for out-of-order migrations.
+
         Returns:
             SQL builder object for migrations query.
         """
-        return sql.select("*").from_(self.version_table).order_by("version_num")
+        return sql.select("*").from_(self.version_table).order_by("execution_sequence")
+
+    def _get_next_execution_sequence_sql(self) -> Select:
+        """Get SQL builder for retrieving next execution sequence.
+
+        Returns:
+            SQL builder object for sequence query.
+        """
+        return sql.select("COALESCE(MAX(execution_sequence), 0) + 1 AS next_seq").from_(self.version_table)
 
     def _get_record_migration_sql(
-        self, version: str, description: str, execution_time_ms: int, checksum: str, applied_by: str
+        self,
+        version: str,
+        version_type: str,
+        execution_sequence: int,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        applied_by: str,
     ) -> Insert:
         """Get SQL builder for recording a migration.
 
         Args:
             version: Version number of the migration.
+            version_type: Version format type ('sequential' or 'timestamp').
+            execution_sequence: Auto-incrementing application order.
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
@@ -89,8 +124,16 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         return (
             sql.insert(self.version_table)
-            .columns("version_num", "description", "execution_time_ms", "checksum", "applied_by")
-            .values(version, description, execution_time_ms, checksum, applied_by)
+            .columns(
+                "version_num",
+                "version_type",
+                "execution_sequence",
+                "description",
+                "execution_time_ms",
+                "checksum",
+                "applied_by",
+            )
+            .values(version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by)
         )
 
     def _get_remove_migration_sql(self, version: str) -> Delete:
@@ -192,6 +235,9 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
     def _get_migration_files_sync(self) -> "list[tuple[str, Path]]":
         """Get all migration files sorted by version.
 
+        Uses version-aware sorting that handles both sequential and timestamp
+        formats correctly, with extension migrations sorted by extension name.
+
         Returns:
             List of tuples containing (version, file_path).
         """
@@ -221,7 +267,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
                             prefixed_version = f"ext_{ext_name}_{version}"
                             migrations.append((prefixed_version, file_path))
 
-        return sorted(migrations, key=operator.itemgetter(0))
+        return sorted(migrations, key=lambda m: parse_version(m[0]))
 
     def _load_migration_metadata(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
         """Load migration metadata from file.
@@ -424,13 +470,13 @@ This directory contains database migration files.
 Migration files use SQLFileLoader's named query syntax with versioned names:
 
 ```sql
--- name: migrate-0001-up
+-- name: migrate-20251011120000-up
 CREATE TABLE example (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL
 );
 
--- name: migrate-0001-down
+-- name: migrate-20251011120000-down
 DROP TABLE example;
 ```
 
@@ -440,16 +486,39 @@ DROP TABLE example;
 
 Format: `{version}_{description}.sql`
 
-- Version: Zero-padded 4-digit number (0001, 0002, etc.)
+- Version: Timestamp in YYYYMMDDHHmmss format (UTC)
 - Description: Brief description using underscores
-- Example: `0001_create_users_table.sql`
+- Example: `20251011120000_create_users_table.sql`
 
 ### Query Names
 
 - Upgrade: `migrate-{version}-up`
 - Downgrade: `migrate-{version}-down`
 
-This naming ensures proper sorting and avoids conflicts when loading multiple files.
+## Version Format
+
+Migrations use **timestamp-based versioning** (YYYYMMDDHHmmss):
+
+- **Format**: 14-digit UTC timestamp
+- **Example**: `20251011120000` (October 11, 2025 at 12:00:00 UTC)
+- **Benefits**: Eliminates merge conflicts when multiple developers create migrations concurrently
+
+### Creating Migrations
+
+Use the CLI to generate timestamped migrations:
+
+```bash
+sqlspec create-migration "add user table"
+# Creates: 20251011120000_add_user_table.sql
+```
+
+The timestamp is automatically generated in UTC timezone.
+
+## Migration Execution
+
+Migrations are applied in chronological order based on their timestamps.
+The database tracks both version and execution order separately to handle
+out-of-order migrations gracefully (e.g., from late-merging branches).
 """
 
     def init_directory(self, directory: str, package: bool = True) -> None:
