@@ -11,11 +11,12 @@ from rich.table import Table
 from sqlspec.builder import sql
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.migrations.validation import validate_migration_order
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.version import generate_timestamp_version
+from sqlspec.utils.version import generate_conversion_map, generate_timestamp_version
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncConfigT, SyncConfigT
@@ -229,6 +230,90 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         file_path = create_migration_file(self.migrations_path, version, message, file_type)
         console.print(f"[green]Created migration:[/] {file_path}")
 
+    def fix(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
+        """Convert timestamp migrations to sequential format.
+
+        Implements hybrid versioning workflow where development uses timestamps
+        and production uses sequential numbers. Creates backup before changes
+        and provides rollback on errors.
+
+        Args:
+            dry_run: Preview changes without applying.
+            update_database: Update migration records in database.
+            yes: Skip confirmation prompt.
+
+        Examples:
+            >>> commands.fix(dry_run=True)  # Preview only
+            >>> commands.fix(yes=True)  # Auto-approve
+            >>> commands.fix(update_database=False)  # Files only
+        """
+        all_migrations = self.runner.get_migration_files()
+
+        conversion_map = generate_conversion_map(all_migrations)
+
+        if not conversion_map:
+            console.print("[yellow]No timestamp migrations found - nothing to convert[/]")
+            return
+
+        fixer = MigrationFixer(self.migrations_path)
+        renames = fixer.plan_renames(conversion_map)
+
+        table = Table(title="Migration Conversions")
+        table.add_column("Current Version", style="cyan")
+        table.add_column("New Version", style="green")
+        table.add_column("File")
+
+        for rename in renames:
+            table.add_row(rename.old_version, rename.new_version, rename.old_path.name)
+
+        console.print(table)
+        console.print(f"\n[yellow]{len(renames)} migrations will be converted[/]")
+
+        if dry_run:
+            console.print("[yellow][Preview Mode - No changes made][/]")
+            return
+
+        if not yes:
+            response = input("\nProceed with conversion? [y/N]: ")
+            if response.lower() != "y":
+                console.print("[yellow]Conversion cancelled[/]")
+                return
+
+        try:
+            backup_path = fixer.create_backup()
+            console.print(f"[green]✓ Created backup in {backup_path.name}[/]")
+
+            fixer.apply_renames(renames)
+            for rename in renames:
+                console.print(f"[green]✓ Renamed {rename.old_path.name} → {rename.new_path.name}[/]")
+
+            if update_database:
+                with self.config.provide_session() as driver:
+                    self.tracker.ensure_tracking_table(driver)
+                    applied_migrations = self.tracker.get_applied_migrations(driver)
+                    applied_versions = {m["version_num"] for m in applied_migrations}
+
+                    updated_count = 0
+                    for old_version, new_version in conversion_map.items():
+                        if old_version in applied_versions:
+                            self.tracker.update_version_record(driver, old_version, new_version)
+                            updated_count += 1
+
+                    if updated_count > 0:
+                        console.print(f"[green]✓ Updated {updated_count} database records[/]")
+                    else:
+                        console.print("[yellow]No database records to update[/]")
+
+            fixer.cleanup()
+            console.print("[green]✓ Conversion complete![/]")
+
+        except Exception as e:
+            logger.exception("Fix command failed")
+            console.print(f"[red]✗ Error: {e}[/]")
+            fixer.rollback()
+            console.print("[yellow]Restored files from backup[/]")
+            raise
+
 
 class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
     """Asynchronous migration commands."""
@@ -427,6 +512,90 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         version = generate_timestamp_version()
         file_path = create_migration_file(self.migrations_path, version, message, file_type)
         console.print(f"[green]Created migration:[/] {file_path}")
+
+    async def fix(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
+        """Convert timestamp migrations to sequential format.
+
+        Implements hybrid versioning workflow where development uses timestamps
+        and production uses sequential numbers. Creates backup before changes
+        and provides rollback on errors.
+
+        Args:
+            dry_run: Preview changes without applying.
+            update_database: Update migration records in database.
+            yes: Skip confirmation prompt.
+
+        Examples:
+            >>> await commands.fix(dry_run=True)  # Preview only
+            >>> await commands.fix(yes=True)  # Auto-approve
+            >>> await commands.fix(update_database=False)  # Files only
+        """
+        all_migrations = await self.runner.get_migration_files()
+
+        conversion_map = generate_conversion_map(all_migrations)
+
+        if not conversion_map:
+            console.print("[yellow]No timestamp migrations found - nothing to convert[/]")
+            return
+
+        fixer = MigrationFixer(self.migrations_path)
+        renames = fixer.plan_renames(conversion_map)
+
+        table = Table(title="Migration Conversions")
+        table.add_column("Current Version", style="cyan")
+        table.add_column("New Version", style="green")
+        table.add_column("File")
+
+        for rename in renames:
+            table.add_row(rename.old_version, rename.new_version, rename.old_path.name)
+
+        console.print(table)
+        console.print(f"\n[yellow]{len(renames)} migrations will be converted[/]")
+
+        if dry_run:
+            console.print("[yellow][Preview Mode - No changes made][/]")
+            return
+
+        if not yes:
+            response = input("\nProceed with conversion? [y/N]: ")
+            if response.lower() != "y":
+                console.print("[yellow]Conversion cancelled[/]")
+                return
+
+        try:
+            backup_path = fixer.create_backup()
+            console.print(f"[green]✓ Created backup in {backup_path.name}[/]")
+
+            fixer.apply_renames(renames)
+            for rename in renames:
+                console.print(f"[green]✓ Renamed {rename.old_path.name} → {rename.new_path.name}[/]")
+
+            if update_database:
+                async with self.config.provide_session() as driver:
+                    await self.tracker.ensure_tracking_table(driver)
+                    applied_migrations = await self.tracker.get_applied_migrations(driver)
+                    applied_versions = {m["version_num"] for m in applied_migrations}
+
+                    updated_count = 0
+                    for old_version, new_version in conversion_map.items():
+                        if old_version in applied_versions:
+                            await self.tracker.update_version_record(driver, old_version, new_version)
+                            updated_count += 1
+
+                    if updated_count > 0:
+                        console.print(f"[green]✓ Updated {updated_count} database records[/]")
+                    else:
+                        console.print("[yellow]No database records to update[/]")
+
+            fixer.cleanup()
+            console.print("[green]✓ Conversion complete![/]")
+
+        except Exception as e:
+            logger.exception("Fix command failed")
+            console.print(f"[red]✗ Error: {e}[/]")
+            fixer.rollback()
+            console.print("[yellow]Restored files from backup[/]")
+            raise
 
 
 def create_migration_commands(

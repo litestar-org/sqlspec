@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Generic, TypeVar, cast
 
-from sqlspec.builder import Delete, Insert, Select, sql
+from sqlspec.builder import Delete, Insert, Select, Update, sql
 from sqlspec.builder._ddl import CreateTable
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.loaders import get_migration_loader
@@ -146,6 +146,28 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             SQL builder object for delete.
         """
         return sql.delete().from_(self.version_table).where(sql.version_num == version)
+
+    def _get_update_version_sql(self, old_version: str, new_version: str, new_version_type: str) -> Update:
+        """Get SQL builder for updating version record.
+
+        Updates version_num and version_type while preserving execution_sequence,
+        applied_at, and other metadata. Used during fix command to convert
+        timestamp versions to sequential format.
+
+        Args:
+            old_version: Current version string.
+            new_version: New version string.
+            new_version_type: New version type ('sequential' or 'timestamp').
+
+        Returns:
+            SQL builder object for update.
+        """
+        return (
+            sql.update(self.version_table)
+            .set("version_num", new_version)
+            .set("version_type", new_version_type)
+            .where(sql.version_num == old_version)
+        )
 
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> Any:

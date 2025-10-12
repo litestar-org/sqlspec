@@ -533,6 +533,28 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         run_(_create_revision)()
 
+    @database_group.command(name="fix", help="Convert timestamp migrations to sequential format.")
+    @bind_key_option
+    @dry_run_option
+    @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+    @click.option("--no-database", is_flag=True, help="Skip database record updates")
+    def fix_migrations(  # pyright: ignore[reportUnusedFunction]
+        bind_key: str | None, dry_run: bool, yes: bool, no_database: bool
+    ) -> None:
+        """Convert timestamp migrations to sequential format."""
+        from sqlspec.migrations.commands import create_migration_commands
+        from sqlspec.utils.sync_tools import run_
+
+        ctx = click.get_current_context()
+
+        async def _fix_migrations() -> None:
+            console.rule("[yellow]Migration Fix Command[/]", align="left")
+            sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
+            migration_commands = create_migration_commands(config=sqlspec_config)
+            await maybe_await(migration_commands.fix(dry_run=dry_run, update_database=not no_database, yes=yes))
+
+        run_(_fix_migrations)()
+
     @database_group.command(name="show-config", help="Show all configurations with migrations enabled.")
     @bind_key_option
     def show_config(bind_key: str | None = None) -> None:  # pyright: ignore[reportUnusedFunction]

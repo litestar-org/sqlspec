@@ -9,11 +9,15 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 __all__ = (
     "MigrationVersion",
     "VersionType",
+    "convert_to_sequential_version",
+    "generate_conversion_map",
     "generate_timestamp_version",
+    "get_next_sequential_number",
     "is_sequential_version",
     "is_timestamp_version",
     "parse_version",
@@ -248,3 +252,169 @@ def generate_timestamp_version() -> str:
         True
     """
     return datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
+
+
+def get_next_sequential_number(migrations: "list[MigrationVersion]", extension: "str | None" = None) -> int:
+    """Find highest sequential number and return next available.
+
+    Scans migrations for sequential versions and returns the next number in sequence.
+    When extension is specified, only that extension's migrations are considered.
+    When extension is None, only core (non-extension) migrations are considered.
+
+    Args:
+        migrations: List of parsed migration versions.
+        extension: Optional extension name to filter by (e.g., "litestar", "adk").
+                  None means core migrations only.
+
+    Returns:
+        Next available sequential number (1 if no sequential migrations exist).
+
+    Examples:
+        >>> v1 = parse_version("0001")
+        >>> v2 = parse_version("0002")
+        >>> get_next_sequential_number([v1, v2])
+        3
+
+        >>> get_next_sequential_number([])
+        1
+
+        >>> ext = parse_version("ext_litestar_0001")
+        >>> core = parse_version("0001")
+        >>> get_next_sequential_number([ext, core])
+        2
+
+        >>> ext1 = parse_version("ext_litestar_0001")
+        >>> get_next_sequential_number([ext1], extension="litestar")
+        2
+    """
+    sequential = [
+        m.sequence for m in migrations if m.type == VersionType.SEQUENTIAL and m.extension == extension and m.sequence
+    ]
+
+    if not sequential:
+        return 1
+
+    return max(sequential) + 1
+
+
+def convert_to_sequential_version(timestamp_version: MigrationVersion, sequence_number: int) -> str:
+    """Convert timestamp MigrationVersion to sequential string format.
+
+    Preserves extension prefixes during conversion. Format uses zero-padded
+    4-digit numbers (0001, 0002, etc.).
+
+    Args:
+        timestamp_version: Parsed timestamp version to convert.
+        sequence_number: Sequential number to assign.
+
+    Returns:
+        Sequential version string with extension prefix if applicable.
+
+    Raises:
+        ValueError: If input is not a timestamp version.
+
+    Examples:
+        >>> v = parse_version("20251011120000")
+        >>> convert_to_sequential_version(v, 3)
+        '0003'
+
+        >>> v = parse_version("ext_litestar_20251011120000")
+        >>> convert_to_sequential_version(v, 1)
+        'ext_litestar_0001'
+
+        >>> v = parse_version("0001")
+        >>> convert_to_sequential_version(v, 2)
+        Traceback (most recent call last):
+            ...
+        ValueError: Can only convert timestamp versions to sequential
+    """
+    if timestamp_version.type != VersionType.TIMESTAMP:
+        msg = "Can only convert timestamp versions to sequential"
+        raise ValueError(msg)
+
+    seq_str = str(sequence_number).zfill(4)
+
+    if timestamp_version.extension:
+        return f"ext_{timestamp_version.extension}_{seq_str}"
+
+    return seq_str
+
+
+def generate_conversion_map(migrations: "list[tuple[str, Any]]") -> "dict[str, str]":
+    """Generate mapping from timestamp versions to sequential versions.
+
+    Separates timestamp migrations from sequential, sorts timestamps chronologically,
+    and assigns sequential numbers starting after the highest existing sequential
+    number. Extension migrations maintain separate numbering within their namespace.
+
+    Args:
+        migrations: List of tuples (version_string, migration_path).
+
+    Returns:
+        Dictionary mapping old timestamp versions to new sequential versions.
+
+    Examples:
+        >>> migrations = [
+        ...     ("0001", Path("0001_init.sql")),
+        ...     ("0002", Path("0002_users.sql")),
+        ...     ("20251011120000", Path("20251011120000_products.sql")),
+        ...     ("20251012130000", Path("20251012130000_orders.sql")),
+        ... ]
+        >>> result = generate_conversion_map(migrations)
+        >>> result
+        {'20251011120000': '0003', '20251012130000': '0004'}
+
+        >>> migrations = [
+        ...     ("20251011120000", Path("20251011120000_first.sql")),
+        ...     ("20251010090000", Path("20251010090000_earlier.sql")),
+        ... ]
+        >>> result = generate_conversion_map(migrations)
+        >>> result
+        {'20251010090000': '0001', '20251011120000': '0002'}
+
+        >>> migrations = []
+        >>> generate_conversion_map(migrations)
+        {}
+    """
+    if not migrations:
+        return {}
+
+    def _try_parse_version(version_str: str) -> "MigrationVersion | None":
+        """Parse version string, returning None for invalid versions."""
+        try:
+            return parse_version(version_str)
+        except ValueError:
+            logger.warning("Skipping invalid migration version: %s", version_str)
+            return None
+
+    parsed_versions = [v for version_str, _path in migrations if (v := _try_parse_version(version_str)) is not None]
+
+    timestamp_migrations = sorted([v for v in parsed_versions if v.type == VersionType.TIMESTAMP])
+
+    if not timestamp_migrations:
+        return {}
+
+    core_timestamps = [m for m in timestamp_migrations if m.extension is None]
+    ext_timestamps_by_name: dict[str, list[MigrationVersion]] = {}
+    for m in timestamp_migrations:
+        if m.extension:
+            ext_timestamps_by_name.setdefault(m.extension, []).append(m)
+
+    conversion_map: dict[str, str] = {}
+
+    if core_timestamps:
+        next_seq = get_next_sequential_number(parsed_versions)
+        for timestamp_version in core_timestamps:
+            sequential_version = convert_to_sequential_version(timestamp_version, next_seq)
+            conversion_map[timestamp_version.raw] = sequential_version
+            next_seq += 1
+
+    for ext_name, ext_migrations in ext_timestamps_by_name.items():
+        ext_parsed = [v for v in parsed_versions if v.extension == ext_name]
+        next_seq = get_next_sequential_number(ext_parsed, extension=ext_name)
+        for timestamp_version in ext_migrations:
+            sequential_version = convert_to_sequential_version(timestamp_version, next_seq)
+            conversion_map[timestamp_version.raw] = sequential_version
+            next_seq += 1
+
+    return conversion_map

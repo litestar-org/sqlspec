@@ -137,7 +137,7 @@ You should see available commands:
 
 .. code-block:: text
 
-   create-migration  downgrade  init  show-config  show-current-revision  stamp  upgrade
+   create-migration  downgrade  fix  init  show-config  show-current-revision  stamp  upgrade
 
 Try option completion:
 
@@ -511,6 +511,113 @@ Rollback migrations to a specific revision.
 
    Downgrade operations can result in data loss. Always backup your database
    before running downgrade commands in production.
+
+fix
+^^^
+
+Convert timestamp migrations to sequential format for hybrid versioning workflow.
+
+.. code-block:: bash
+
+   sqlspec --config myapp.config fix [OPTIONS]
+
+**Purpose:**
+
+The ``fix`` command implements a hybrid versioning workflow that combines the benefits
+of both timestamp and sequential migration numbering:
+
+- **Development**: Use timestamps to avoid merge conflicts
+- **Production**: Use sequential numbers for deterministic ordering
+
+This command converts timestamp-format migrations (YYYYMMDDHHmmss) to sequential
+format (0001, 0002, etc.) while preserving migration history in the database.
+
+**Options:**
+
+``--bind-key KEY``
+   Target specific config.
+
+``--dry-run``
+   Preview changes without applying them.
+
+``--yes``
+   Skip confirmation prompt (useful for CI/CD).
+
+``--no-database``
+   Only rename files, skip database record updates.
+
+**Examples:**
+
+.. code-block:: bash
+
+   # Preview what would change
+   sqlspec --config myapp.config fix --dry-run
+
+   # Apply changes with confirmation
+   sqlspec --config myapp.config fix
+
+   # CI/CD mode (auto-approve)
+   sqlspec --config myapp.config fix --yes
+
+   # Only fix files, don't update database
+   sqlspec --config myapp.config fix --no-database
+
+**Before Fix:**
+
+.. code-block:: text
+
+   migrations/
+   ├── 0001_initial.sql
+   ├── 0002_add_users.sql
+   ├── 20251011120000_add_products.sql    # Timestamp format
+   ├── 20251012130000_add_orders.sql      # Timestamp format
+
+**After Fix:**
+
+.. code-block:: text
+
+   migrations/
+   ├── 0001_initial.sql
+   ├── 0002_add_users.sql
+   ├── 0003_add_products.sql              # Converted to sequential
+   ├── 0004_add_orders.sql                # Converted to sequential
+
+**What Gets Updated:**
+
+1. **File Names**: ``20251011120000_add_products.sql`` → ``0003_add_products.sql``
+2. **SQL Query Names**: ``-- name: migrate-20251011120000-up`` → ``-- name: migrate-0003-up``
+3. **Database Records**: Version tracking table updated to reflect new version numbers
+
+**Backup & Safety:**
+
+The command automatically creates a timestamped backup before making changes:
+
+.. code-block:: text
+
+   migrations/
+   ├── .backup_20251012_143022/    # Automatic backup
+   │   ├── 20251011120000_add_products.sql
+   │   └── 20251012130000_add_orders.sql
+   ├── 0003_add_products.sql
+   └── 0004_add_orders.sql
+
+If conversion fails, files are automatically restored from backup.
+Remove backup with ``rm -rf migrations/.backup_*`` after verifying success.
+
+**Use Cases:**
+
+- **Pre-merge CI check**: Convert timestamps before merging to main branch
+- **Production deployment**: Ensure deterministic migration ordering
+- **Repository cleanup**: Standardize on sequential format after development
+
+.. seealso::
+
+   :ref:`hybrid-versioning-guide` for complete workflow documentation and best practices.
+
+.. warning::
+
+   Always commit migration files before running ``fix`` command. While automatic
+   backups are created, version control provides the safest recovery option.
 
 stamp
 ^^^^^

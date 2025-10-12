@@ -98,6 +98,32 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         driver.execute(self._get_remove_migration_sql(version))
         self._safe_commit(driver)
 
+    def update_version_record(self, driver: "SyncDriverAdapterBase", old_version: str, new_version: str) -> None:
+        """Update migration version record from timestamp to sequential.
+
+        Updates version_num and version_type while preserving execution_sequence,
+        applied_at, and other tracking metadata. Used during fix command.
+
+        Args:
+            driver: The database driver to use.
+            old_version: Current timestamp version string.
+            new_version: New sequential version string.
+
+        Raises:
+            ValueError: If old_version not found in database.
+        """
+        parsed_new_version = parse_version(new_version)
+        new_version_type = parsed_new_version.type.value
+
+        result = driver.execute(self._get_update_version_sql(old_version, new_version, new_version_type))
+
+        if result.rows_affected == 0:
+            msg = f"Migration version {old_version} not found in database"
+            raise ValueError(msg)
+
+        self._safe_commit(driver)
+        logger.debug("Updated version record: %s -> %s", old_version, new_version)
+
     def _safe_commit(self, driver: "SyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
 
@@ -197,6 +223,32 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         """
         await driver.execute(self._get_remove_migration_sql(version))
         await self._safe_commit_async(driver)
+
+    async def update_version_record(self, driver: "AsyncDriverAdapterBase", old_version: str, new_version: str) -> None:
+        """Update migration version record from timestamp to sequential.
+
+        Updates version_num and version_type while preserving execution_sequence,
+        applied_at, and other tracking metadata. Used during fix command.
+
+        Args:
+            driver: The database driver to use.
+            old_version: Current timestamp version string.
+            new_version: New sequential version string.
+
+        Raises:
+            ValueError: If old_version not found in database.
+        """
+        parsed_new_version = parse_version(new_version)
+        new_version_type = parsed_new_version.type.value
+
+        result = await driver.execute(self._get_update_version_sql(old_version, new_version, new_version_type))
+
+        if result.rows_affected == 0:
+            msg = f"Migration version {old_version} not found in database"
+            raise ValueError(msg)
+
+        await self._safe_commit_async(driver)
+        logger.debug("Updated version record: %s -> %s", old_version, new_version)
 
     async def _safe_commit_async(self, driver: "AsyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.

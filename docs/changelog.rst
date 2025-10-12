@@ -10,6 +10,58 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+Hybrid Versioning with Fix Command
+-----------------------------------
+
+Added comprehensive hybrid versioning support for database migrations:
+
+- **Fix Command** - Convert timestamp migrations to sequential format
+- **Hybrid Workflow** - Use timestamps in development, sequential in production
+- **Automatic Conversion** - CI integration for seamless workflow
+- **Safety Features** - Automatic backup, rollback on errors, dry-run preview
+
+Key Features:
+
+- **Zero merge conflicts**: Developers use timestamps (``20251011120000``) during development
+- **Deterministic ordering**: Production uses sequential format (``0001``, ``0002``, etc.)
+- **Database synchronization**: Automatically updates version tracking table
+- **File operations**: Renames files and updates SQL query names
+- **CI-ready**: ``--yes`` flag for automated workflows
+
+.. code-block:: bash
+
+   # Preview changes
+   sqlspec --config myapp.config fix --dry-run
+
+   # Apply conversion
+   sqlspec --config myapp.config fix
+
+   # CI/CD mode
+   sqlspec --config myapp.config fix --yes --no-database
+
+Example conversion:
+
+.. code-block:: text
+
+   Before:                              After:
+   migrations/                          migrations/
+   ├── 0001_initial.sql                ├── 0001_initial.sql
+   ├── 0002_add_users.sql              ├── 0002_add_users.sql
+   ├── 20251011120000_products.sql →   ├── 0003_add_products.sql
+   └── 20251012130000_orders.sql   →   └── 0004_add_orders.sql
+
+**Documentation:**
+
+- Complete CLI reference: :doc:`usage/cli`
+- Workflow guide: :ref:`hybrid-versioning-guide`
+- CI integration examples for GitHub Actions and GitLab CI
+
+**Use Cases:**
+
+- Teams with parallel development avoiding migration number conflicts
+- Projects requiring deterministic migration ordering in production
+- CI/CD pipelines that standardize migrations before deployment
+
 Shell Completion Support
 -------------------------
 
