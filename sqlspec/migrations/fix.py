@@ -11,14 +11,10 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Final
 
 __all__ = ("MigrationFixer", "MigrationRename")
 
 logger = logging.getLogger(__name__)
-
-UP_QUERY_PATTERN: Final[re.Pattern[str]] = re.compile(r"(-- name:\s+migrate-)([^-]+)(-up)")
-DOWN_QUERY_PATTERN: Final[re.Pattern[str]] = re.compile(r"(-- name:\s+migrate-)([^-]+)(-down)")
 
 
 @dataclass
@@ -160,6 +156,9 @@ class MigrationFixer:
             -- name: migrate-{old_version}-up  →  -- name: migrate-{new_version}-up
             -- name: migrate-{old_version}-down  →  -- name: migrate-{new_version}-down
 
+        Creates version-specific regex patterns to avoid unintended replacements
+        of other migrate-* patterns in the file.
+
         Args:
             file_path: Path to file to update.
             old_version: Old version string.
@@ -170,8 +169,11 @@ class MigrationFixer:
         """
         content = file_path.read_text()
 
-        content = UP_QUERY_PATTERN.sub(rf"\g<1>{new_version}\g<3>", content)
-        content = DOWN_QUERY_PATTERN.sub(rf"\g<1>{new_version}\g<3>", content)
+        up_pattern = re.compile(rf"(-- name:\s+migrate-){re.escape(old_version)}(-up)")
+        down_pattern = re.compile(rf"(-- name:\s+migrate-){re.escape(old_version)}(-down)")
+
+        content = up_pattern.sub(rf"\g<1>{new_version}\g<2>", content)
+        content = down_pattern.sub(rf"\g<1>{new_version}\g<2>", content)
 
         file_path.write_text(content)
         logger.debug("Updated content in %s", file_path.name)

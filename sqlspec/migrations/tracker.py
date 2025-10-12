@@ -104,13 +104,16 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Updates version_num and version_type while preserving execution_sequence,
         applied_at, and other tracking metadata. Used during fix command.
 
+        Idempotent: If the version is already updated, logs and continues without error.
+        This allows fix command to be safely re-run after pulling changes.
+
         Args:
             driver: The database driver to use.
             old_version: Current timestamp version string.
             new_version: New sequential version string.
 
         Raises:
-            ValueError: If old_version not found in database.
+            ValueError: If neither old_version nor new_version found in database.
         """
         parsed_new_version = parse_version(new_version)
         new_version_type = parsed_new_version.type.value
@@ -118,6 +121,13 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         result = driver.execute(self._get_update_version_sql(old_version, new_version, new_version_type))
 
         if result.rows_affected == 0:
+            check_result = driver.execute(self._get_applied_migrations_sql())
+            applied_versions = {row["version_num"] for row in check_result.data} if check_result.data else set()
+
+            if new_version in applied_versions:
+                logger.debug("Version already updated: %s -> %s", old_version, new_version)
+                return
+
             msg = f"Migration version {old_version} not found in database"
             raise ValueError(msg)
 
@@ -230,13 +240,16 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Updates version_num and version_type while preserving execution_sequence,
         applied_at, and other tracking metadata. Used during fix command.
 
+        Idempotent: If the version is already updated, logs and continues without error.
+        This allows fix command to be safely re-run after pulling changes.
+
         Args:
             driver: The database driver to use.
             old_version: Current timestamp version string.
             new_version: New sequential version string.
 
         Raises:
-            ValueError: If old_version not found in database.
+            ValueError: If neither old_version nor new_version found in database.
         """
         parsed_new_version = parse_version(new_version)
         new_version_type = parsed_new_version.type.value
@@ -244,6 +257,13 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         result = await driver.execute(self._get_update_version_sql(old_version, new_version, new_version_type))
 
         if result.rows_affected == 0:
+            check_result = await driver.execute(self._get_applied_migrations_sql())
+            applied_versions = {row["version_num"] for row in check_result.data} if check_result.data else set()
+
+            if new_version in applied_versions:
+                logger.debug("Version already updated: %s -> %s", old_version, new_version)
+                return
+
             msg = f"Migration version {old_version} not found in database"
             raise ValueError(msg)
 

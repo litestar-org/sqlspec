@@ -74,6 +74,10 @@ class BaseMigrationRunner(ABC):
     def _calculate_checksum(self, content: str) -> str:
         """Calculate MD5 checksum of migration content.
 
+        Canonicalizes content by excluding query name headers that change during
+        fix command (migrate-{version}-up/down). This ensures checksums remain
+        stable when converting timestamp versions to sequential format.
+
         Args:
             content: The migration file content.
 
@@ -81,8 +85,11 @@ class BaseMigrationRunner(ABC):
             MD5 checksum hex string.
         """
         import hashlib
+        import re
 
-        return hashlib.md5(content.encode()).hexdigest()  # noqa: S324
+        canonical_content = re.sub(r"^--\s*name:\s*migrate-[^-]+-(?:up|down)\s*$", "", content, flags=re.MULTILINE)
+
+        return hashlib.md5(canonical_content.encode()).hexdigest()  # noqa: S324
 
     @abstractmethod
     def load_migration(self, file_path: Path) -> Union["dict[str, Any]", "Coroutine[Any, Any, dict[str, Any]]"]:
