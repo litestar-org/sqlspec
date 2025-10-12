@@ -286,6 +286,11 @@ filterwarnings = [
   "ignore::DeprecationWarning:google",
   "ignore::DeprecationWarning:websockets.connection",
   "ignore::DeprecationWarning:websockets.legacy",
+  "ignore::PendingDeprecationWarning:rich_click.*",
+  "ignore:`use_markdown=` will be deprecated:PendingDeprecationWarning",
+  "ignore:`use_rich_markup=` will be deprecated:PendingDeprecationWarning",
+  "ignore:`show_metavars_column=` will be deprecated:PendingDeprecationWarning",
+  "ignore:`append_metavars_help=` will be deprecated:PendingDeprecationWarning",
 ]
 markers = [
   "integration: marks tests that require an external database",
@@ -296,6 +301,7 @@ markers = [
   "mysql: marks tests specific to MySQL",
   "oracle: marks tests specific to Oracle",
   "spanner: marks tests specific to Google Cloud Spanner",
+  "snowflake: marks tests specific to Snowflake",
   "mssql: marks tests specific to Microsoft SQL Server",
   # Driver markers
   "adbc: marks tests using ADBC drivers",

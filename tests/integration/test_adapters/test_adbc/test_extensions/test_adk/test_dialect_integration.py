@@ -90,7 +90,7 @@ def test_sqlite_dialect_event_operations(sqlite_store: Any) -> None:
     assert events[0]["content"] == content
 
 
-@pytest.mark.postgresql
+@pytest.mark.postgres
 @pytest.mark.skipif(True, reason="Requires adbc-driver-postgresql and PostgreSQL server")
 def test_postgresql_dialect_creates_jsonb_columns() -> None:
     """Test PostgreSQL dialect creates JSONB columns.
