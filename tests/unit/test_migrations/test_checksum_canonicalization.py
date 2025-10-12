@@ -1,5 +1,7 @@
 """Unit tests for canonicalized checksum computation."""
 
+# pyright: reportPrivateUsage=false
+
 from pathlib import Path
 
 import pytest

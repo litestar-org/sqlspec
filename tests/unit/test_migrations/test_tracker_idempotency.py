@@ -1,5 +1,6 @@
 """Unit tests for idempotent update_version_record behavior."""
 
+from typing import Any
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -126,7 +127,7 @@ async def test_async_update_version_record_success() -> None:
     mock_result = Mock()
     mock_result.rows_affected = 1
 
-    async def mock_execute(sql):
+    async def mock_execute(sql: Any) -> Mock:
         return mock_result
 
     driver.execute = AsyncMock(side_effect=mock_execute)
@@ -158,7 +159,7 @@ async def test_async_update_version_record_idempotent_when_already_updated() -> 
 
     call_count = [0]
 
-    async def mock_execute(sql):
+    async def mock_execute(sql: Any) -> Mock:
         call_count[0] += 1
         if call_count[0] == 1:
             return update_result
@@ -187,7 +188,7 @@ async def test_async_update_version_record_raises_when_neither_version_exists() 
 
     call_count = [0]
 
-    async def mock_execute(sql):
+    async def mock_execute(sql: Any) -> Mock:
         call_count[0] += 1
         if call_count[0] == 1:
             return update_result
@@ -215,7 +216,7 @@ async def test_async_update_version_record_empty_database() -> None:
 
     call_count = [0]
 
-    async def mock_execute(sql):
+    async def mock_execute(sql: Any) -> Mock:
         call_count[0] += 1
         if call_count[0] == 1:
             return update_result
@@ -240,7 +241,7 @@ async def test_async_update_version_record_commits_after_success() -> None:
     mock_result = Mock()
     mock_result.rows_affected = 1
 
-    async def mock_execute(sql):
+    async def mock_execute(sql: Any) -> Mock:
         return mock_result
 
     driver.execute = AsyncMock(side_effect=mock_execute)
@@ -269,7 +270,7 @@ async def test_async_update_version_record_no_commit_on_idempotent_path() -> Non
 
     call_count = [0]
 
-    async def mock_execute(sql):
+    async def mock_execute(sql: Any) -> Mock:
         call_count[0] += 1
         if call_count[0] == 1:
             return update_result
