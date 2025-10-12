@@ -350,6 +350,14 @@ class HasParameterBuilderProtocol(Protocol):
         """Add a parameter to the builder."""
         ...
 
+    def get_expression(self) -> "exp.Expression | None":
+        """Return the underlying SQLGlot expression."""
+        ...
+
+    def set_expression(self, expression: "exp.Expression") -> None:
+        """Replace the underlying SQLGlot expression."""
+        ...
+
 
 @runtime_checkable
 class HasExpressionProtocol(Protocol):
@@ -399,6 +407,30 @@ class SQLBuilderProtocol(Protocol):
 
     def build(self) -> "exp.Expression | Any":
         """Build and return the final expression."""
+        ...
+
+    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
+        """Merge parameters from SQL objects into the builder."""
+        ...
+
+    def _build_final_expression(self, *, copy: bool = False) -> "exp.Expression":
+        """Return the expression with attached CTEs."""
+        ...
+
+    def _spawn_like_self(self) -> "Self":
+        """Create a new builder with matching configuration."""
+        ...
+
+    def get_expression(self) -> "exp.Expression | None":
+        """Return the underlying SQLGlot expression."""
+        ...
+
+    def set_expression(self, expression: "exp.Expression") -> None:
+        """Replace the underlying SQLGlot expression."""
+        ...
+
+    def generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate a unique parameter name exposed via public API."""
         ...
 
 

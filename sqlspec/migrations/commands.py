@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 from rich.console import Console
 from rich.table import Table
 
-from sqlspec._sql import sql
+from sqlspec.builder import sql
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner

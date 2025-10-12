@@ -9,8 +9,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Generic, TypeVar, cast
 
-from sqlspec._sql import sql
-from sqlspec.builder import Delete, Insert, Select
+from sqlspec.builder import Delete, Insert, Select, sql
 from sqlspec.builder._ddl import CreateTable
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.loaders import get_migration_loader

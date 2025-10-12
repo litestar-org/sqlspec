@@ -262,7 +262,7 @@ def extract_expression(value: Any) -> exp.Expression:
     """
     from sqlspec.builder._column import Column
     from sqlspec.builder._expression_wrappers import ExpressionWrapper
-    from sqlspec.builder.mixins._select_operations import Case
+    from sqlspec.builder._select import Case
 
     if isinstance(value, str):
         return exp.column(value)

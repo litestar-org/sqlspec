@@ -10,8 +10,9 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
+from sqlspec.builder._dml import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
-from sqlspec.builder.mixins import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin, ReturningClauseMixin
+from sqlspec.builder._select import ReturningClauseMixin
 from sqlspec.core.result import SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_sql
@@ -23,9 +24,6 @@ if TYPE_CHECKING:
 __all__ = ("Insert",)
 
 ERR_MSG_TABLE_NOT_SET: Final[str] = "The target table must be set using .into() before adding values."
-ERR_MSG_VALUES_COLUMNS_MISMATCH: Final[str] = (
-    "Number of values ({values_len}) does not match the number of specified columns ({columns_len})."
-)
 ERR_MSG_INTERNAL_EXPRESSION_TYPE: Final[str] = "Internal error: expression is not an Insert instance as expected."
 ERR_MSG_EXPRESSION_NOT_INITIALIZED: Final[str] = "Internal error: base expression not initialized."
 
@@ -93,81 +91,6 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
     def get_insert_expression(self) -> exp.Insert:
         """Get the insert expression (public API)."""
         return self._get_insert_expression()
-
-    def values(self, *values: Any, **kwargs: Any) -> "Self":
-        """Adds a row of values to the INSERT statement.
-
-        This method can be called multiple times to insert multiple rows,
-        resulting in a multi-row INSERT statement like `VALUES (...), (...)`.
-
-        Supports:
-        - values(val1, val2, val3)
-        - values(col1=val1, col2=val2)
-        - values(mapping)
-
-        Args:
-            *values: The values for the row to be inserted. The number of values
-                     must match the number of columns set by `columns()`, if `columns()` was called
-                     and specified any non-empty list of columns.
-            **kwargs: Column-value pairs for named values.
-
-        Returns:
-            The current builder instance for method chaining.
-
-        Raises:
-            SQLBuilderError: If `into()` has not been called to set the table,
-                             or if `columns()` was called with a non-empty list of columns
-                             and the number of values does not match the number of specified columns.
-        """
-        if not self._table:
-            raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
-
-        if kwargs:
-            if values:
-                msg = "Cannot mix positional values with keyword values."
-                raise SQLBuilderError(msg)
-            return self.values_from_dict(kwargs)
-
-        if len(values) == 1:
-            values_0 = values[0]
-            if isinstance(values_0, dict):
-                return self.values_from_dict(values_0)
-
-        insert_expr = self.get_insert_expression()
-
-        if self._columns and len(values) != len(self._columns):
-            msg = ERR_MSG_VALUES_COLUMNS_MISMATCH.format(values_len=len(values), columns_len=len(self._columns))
-            raise SQLBuilderError(msg)
-
-        value_placeholders: list[exp.Expression] = []
-        for i, value in enumerate(values):
-            if isinstance(value, exp.Expression):
-                value_placeholders.append(value)
-            elif has_expression_and_sql(value):
-                value_expr = extract_sql_object_expression(value, builder=self)
-                value_placeholders.append(value_expr)
-            else:
-                if self._columns and i < len(self._columns):
-                    column_str = str(self._columns[i])
-                    column_name = column_str.rsplit(".", maxsplit=1)[-1] if "." in column_str else column_str
-                    param_name = self.generate_unique_parameter_name(column_name)
-                else:
-                    param_name = self.generate_unique_parameter_name(f"value_{i + 1}")
-                _, param_name = self.add_parameter(value, name=param_name)
-                value_placeholders.append(exp.Placeholder(this=param_name))
-
-        tuple_expr = exp.Tuple(expressions=value_placeholders)
-        if self._values_added_count == 0:
-            insert_expr.set("expression", exp.Values(expressions=[tuple_expr]))
-        else:
-            current_values = insert_expr.args.get("expression")
-            if isinstance(current_values, exp.Values):
-                current_values.expressions.append(tuple_expr)
-            else:
-                insert_expr.set("expression", exp.Values(expressions=[tuple_expr]))
-
-        self._values_added_count += 1
-        return self
 
     def values_from_dict(self, data: "Mapping[str, Any]") -> "Self":
         """Adds a row of values from a dictionary.

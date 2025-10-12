@@ -2,7 +2,6 @@
 
 from sqlspec import adapters, base, builder, core, driver, exceptions, extensions, loader, migrations, typing, utils
 from sqlspec.__metadata__ import __version__
-from sqlspec._sql import SQLFactory, sql
 from sqlspec.base import SQLSpec
 from sqlspec.builder import (
     Column,
@@ -15,7 +14,9 @@ from sqlspec.builder import (
     Merge,
     QueryBuilder,
     Select,
+    SQLFactory,
     Update,
+    sql,
 )
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.core import (

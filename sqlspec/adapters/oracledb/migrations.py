@@ -7,8 +7,7 @@ to handle Oracle's unique SQL syntax requirements.
 import getpass
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec._sql import sql
-from sqlspec.builder import CreateTable
+from sqlspec.builder import CreateTable, sql
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.utils.logging import get_logger
 
