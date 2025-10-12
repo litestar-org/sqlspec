@@ -21,6 +21,120 @@ if TYPE_CHECKING:
 __all__ = ("JoinBuilder", "JoinClauseMixin")
 
 
+def _handle_sql_object_condition(on: Any, builder: "SQLBuilderProtocol") -> exp.Expression:
+    if hasattr(on, "expression") and on.expression is not None:
+        if hasattr(on, "parameters"):
+            for param_name, param_value in on.parameters.items():
+                builder.add_parameter(param_value, name=param_name)
+        return cast("exp.Expression", on.expression)
+    if hasattr(on, "parameters"):
+        for param_name, param_value in on.parameters.items():
+            builder.add_parameter(param_value, name=param_name)
+    parsed_expr = exp.maybe_parse(on.sql)
+    return parsed_expr if parsed_expr is not None else exp.condition(str(on.sql))
+
+
+def _parse_join_condition(
+    builder: "SQLBuilderProtocol", on: Union[str, exp.Expression, "SQL"] | None
+) -> exp.Expression | None:
+    if on is None:
+        return None
+    if isinstance(on, str):
+        return exp.condition(on)
+    if hasattr(on, "expression") and hasattr(on, "sql"):
+        return _handle_sql_object_condition(on, builder)
+    if isinstance(on, exp.Expression):
+        return on
+    return exp.condition(str(on))
+
+
+def _handle_query_builder_table(table: Any, alias: str | None, builder: "SQLBuilderProtocol") -> exp.Expression:
+    subquery_expression: exp.Expression
+    parameters: dict[str, Any] | None = None
+    table_parameters = getattr(table, "parameters", None)
+    if isinstance(table_parameters, dict):
+        parameters = table_parameters
+
+    if hasattr(table, "_build_final_expression") and callable(table._build_final_expression):
+        subquery_expression = cast("exp.Expression", table._build_final_expression(copy=True))
+    else:
+        subquery_result = table.build()
+        sql_text = subquery_result.sql if hasattr(subquery_result, "sql") else str(subquery_result)
+        subquery_expression = exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.convert(sql_text)
+        if parameters is None and hasattr(subquery_result, "parameters"):
+            result_parameters = subquery_result.parameters
+            if isinstance(result_parameters, dict):
+                parameters = result_parameters
+
+    if parameters:
+        for param_name, param_value in parameters.items():
+            builder.add_parameter(param_value, name=param_name)
+
+    subquery_exp = exp.paren(subquery_expression)
+    return exp.alias_(subquery_exp, alias) if alias else subquery_exp
+
+
+def _parse_join_table(
+    builder: "SQLBuilderProtocol", table: str | exp.Expression | Any, alias: str | None
+) -> exp.Expression:
+    if isinstance(table, str):
+        return parse_table_expression(table, alias)
+    if has_query_builder_parameters(table):
+        return _handle_query_builder_table(table, alias, builder)
+    if isinstance(table, exp.Expression):
+        return table
+    return cast("exp.Expression", table)
+
+
+def _create_join_expression(table_expr: exp.Expression, on_expr: exp.Expression | None, join_type: str) -> exp.Join:
+    join_type_upper = join_type.upper()
+    if join_type_upper == "INNER":
+        return exp.Join(this=table_expr, on=on_expr)
+    if join_type_upper == "LEFT":
+        return exp.Join(this=table_expr, on=on_expr, side="LEFT")
+    if join_type_upper == "RIGHT":
+        return exp.Join(this=table_expr, on=on_expr, side="RIGHT")
+    if join_type_upper == "FULL":
+        return exp.Join(this=table_expr, on=on_expr, side="FULL", kind="OUTER")
+    if join_type_upper == "CROSS":
+        return exp.Join(this=table_expr, kind="CROSS")
+    msg = f"Unsupported join type: {join_type}"
+    raise SQLBuilderError(msg)
+
+
+def _apply_lateral_modifier(join_expr: exp.Join) -> None:
+    current_kind = join_expr.args.get("kind")
+    current_side = join_expr.args.get("side")
+
+    if current_kind == "CROSS":
+        join_expr.set("kind", "CROSS LATERAL")
+    elif current_kind == "OUTER" and current_side == "FULL":
+        join_expr.set("side", "FULL")
+        join_expr.set("kind", "OUTER LATERAL")
+    elif current_side:
+        join_expr.set("kind", f"{current_side} LATERAL")
+        join_expr.set("side", None)
+    else:
+        join_expr.set("kind", "LATERAL")
+
+
+def build_join_clause(
+    builder: "SQLBuilderProtocol",
+    table: str | exp.Expression | Any,
+    on: Union[str, exp.Expression, "SQL"] | None,
+    alias: str | None,
+    join_type: str,
+    *,
+    lateral: bool = False,
+) -> exp.Join:
+    table_expr = _parse_join_table(builder, table, alias)
+    on_expr = _parse_join_condition(builder, on)
+    join_expr = _create_join_expression(table_expr, on_expr, join_type)
+    if lateral:
+        _apply_lateral_modifier(join_expr)
+    return join_expr
+
+
 @trait
 class JoinClauseMixin:
     """Mixin providing JOIN clause methods for SELECT builders."""
@@ -39,118 +153,19 @@ class JoinClauseMixin:
         lateral: bool = False,
     ) -> Self:
         builder = cast("SQLBuilderProtocol", self)
-        self._validate_join_context(builder)
-
-        # Handle Join expressions directly (from JoinBuilder.on() calls)
-        if isinstance(table, exp.Join):
-            if builder._expression is not None and isinstance(builder._expression, exp.Select):
-                builder._expression = builder._expression.join(table, copy=False)
-            return cast("Self", builder)
-
-        table_expr = self._parse_table_expression(table, alias, builder)
-        on_expr = self._parse_on_condition(on, builder)
-        join_expr = self._create_join_expression(table_expr, on_expr, join_type)
-
-        if lateral:
-            self._apply_lateral_modifier(join_expr)
-
-        if builder._expression is not None and isinstance(builder._expression, exp.Select):
-            builder._expression = builder._expression.join(join_expr, copy=False)
-        return cast("Self", builder)
-
-    def _validate_join_context(self, builder: "SQLBuilderProtocol") -> None:
-        """Validate that the join can be applied to the current expression."""
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):
             msg = "JOIN clause is only supported for SELECT statements."
             raise SQLBuilderError(msg)
 
-    def _parse_table_expression(
-        self, table: str | exp.Expression | Any, alias: str | None, builder: "SQLBuilderProtocol"
-    ) -> exp.Expression:
-        """Parse table parameter into a SQLGlot expression."""
-        if isinstance(table, str):
-            return parse_table_expression(table, alias)
-        if has_query_builder_parameters(table):
-            return self._handle_query_builder_table(table, alias, builder)
-        if isinstance(table, exp.Expression):
-            return table
-        return cast("exp.Expression", table)
+        if isinstance(table, exp.Join):
+            builder._expression = builder._expression.join(table, copy=False)
+            return cast("Self", builder)
 
-    def _handle_query_builder_table(
-        self, table: Any, alias: str | None, builder: "SQLBuilderProtocol"
-    ) -> exp.Expression:
-        """Handle table parameters that are query builders."""
-        if hasattr(table, "_expression") and table._expression is not None:
-            subquery_exp = exp.paren(table._expression)
-            return exp.alias_(subquery_exp, alias) if alias else subquery_exp
-        subquery = table.build()
-        sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
-        subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=builder.dialect))
-        return exp.alias_(subquery_exp, alias) if alias else subquery_exp
-
-    def _parse_on_condition(
-        self, on: Union[str, exp.Expression, "SQL"] | None, builder: "SQLBuilderProtocol"
-    ) -> exp.Expression | None:
-        """Parse ON condition into a SQLGlot expression."""
-        if on is None:
-            return None
-
-        if isinstance(on, str):
-            return exp.condition(on)
-        if hasattr(on, "expression") and hasattr(on, "sql"):
-            return self._handle_sql_object_condition(on, builder)
-        if isinstance(on, exp.Expression):
-            return on
-        return exp.condition(str(on))
-
-    def _handle_sql_object_condition(self, on: Any, builder: "SQLBuilderProtocol") -> exp.Expression:
-        """Handle SQL object conditions with parameter binding."""
-        if hasattr(on, "expression") and on.expression is not None:
-            if hasattr(on, "parameters"):
-                for param_name, param_value in on.parameters.items():
-                    builder.add_parameter(param_value, name=param_name)
-            return cast("exp.Expression", on.expression)
-        if hasattr(on, "parameters"):
-            for param_name, param_value in on.parameters.items():
-                builder.add_parameter(param_value, name=param_name)
-        parsed_expr = exp.maybe_parse(on.sql)
-        return parsed_expr if parsed_expr is not None else exp.condition(str(on.sql))
-
-    def _create_join_expression(
-        self, table_expr: exp.Expression, on_expr: exp.Expression | None, join_type: str
-    ) -> exp.Join:
-        """Create the appropriate JOIN expression based on join type."""
-        join_type_upper = join_type.upper()
-        if join_type_upper == "INNER":
-            return exp.Join(this=table_expr, on=on_expr)
-        if join_type_upper == "LEFT":
-            return exp.Join(this=table_expr, on=on_expr, side="LEFT")
-        if join_type_upper == "RIGHT":
-            return exp.Join(this=table_expr, on=on_expr, side="RIGHT")
-        if join_type_upper == "FULL":
-            return exp.Join(this=table_expr, on=on_expr, side="FULL", kind="OUTER")
-        if join_type_upper == "CROSS":
-            return exp.Join(this=table_expr, kind="CROSS")
-        msg = f"Unsupported join type: {join_type}"
-        raise SQLBuilderError(msg)
-
-    def _apply_lateral_modifier(self, join_expr: exp.Join) -> None:
-        """Apply LATERAL modifier to the join expression."""
-        current_kind = join_expr.args.get("kind")
-        current_side = join_expr.args.get("side")
-
-        if current_kind == "CROSS":
-            join_expr.set("kind", "CROSS LATERAL")
-        elif current_kind == "OUTER" and current_side == "FULL":
-            join_expr.set("side", "FULL")  # Keep side
-            join_expr.set("kind", "OUTER LATERAL")
-        elif current_side:
-            join_expr.set("kind", f"{current_side} LATERAL")
-            join_expr.set("side", None)  # Clear side to avoid duplication
-        else:
-            join_expr.set("kind", "LATERAL")
+        join_expr = build_join_clause(builder, table, on, alias, join_type, lateral=lateral)
+        builder._expression = builder._expression.join(join_expr, copy=False)
+        return cast("Self", builder)
 
     def inner_join(
         self, table: str | exp.Expression | Any, on: Union[str, exp.Expression, "SQL"], alias: str | None = None
@@ -179,20 +194,7 @@ class JoinClauseMixin:
         if not isinstance(builder._expression, exp.Select):
             msg = "Cannot add cross join to a non-SELECT expression."
             raise SQLBuilderError(msg)
-        table_expr: exp.Expression
-        if isinstance(table, str):
-            table_expr = parse_table_expression(table, alias)
-        elif has_query_builder_parameters(table):
-            if hasattr(table, "_expression") and table._expression is not None:
-                subquery_exp = exp.paren(table._expression)
-                table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
-            else:
-                subquery = table.build()
-                sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
-                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=builder.dialect))
-                table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
-        else:
-            table_expr = table
+        table_expr = _parse_join_table(builder, table, alias)
         join_expr = exp.Join(this=table_expr, kind="CROSS")
         builder._expression = builder._expression.join(join_expr, copy=False)
         return cast("Self", builder)

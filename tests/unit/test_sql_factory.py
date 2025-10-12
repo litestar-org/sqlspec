@@ -6,7 +6,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec import sql
-from sqlspec._sql import SQLFactory
+from sqlspec.builder import SQLFactory
 from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLBuilderError
 
@@ -637,7 +637,7 @@ def test_case_expression_type_compatibility() -> None:
 
 def test_case_property_returns_case_builder() -> None:
     """Test that sql.case_ returns a Case builder instance."""
-    from sqlspec._sql import Case
+    from sqlspec.builder import Case
 
     case_builder = sql.case_
     assert isinstance(case_builder, Case)
@@ -649,7 +649,7 @@ def test_case_property_returns_case_builder() -> None:
 
 def test_window_function_shortcuts() -> None:
     """Test window function shortcuts like sql.row_number_."""
-    from sqlspec._sql import WindowFunctionBuilder
+    from sqlspec.builder import WindowFunctionBuilder
 
     assert isinstance(sql.row_number_, WindowFunctionBuilder)
     assert isinstance(sql.rank_, WindowFunctionBuilder)
@@ -720,7 +720,7 @@ def test_normal_column_access_preserved() -> None:
     assert isinstance(sql.department, Column)
     assert isinstance(sql.some_normal_column, Column)
 
-    from sqlspec._sql import WindowFunctionBuilder
+    from sqlspec.builder import WindowFunctionBuilder
 
     assert isinstance(sql.row_number_, WindowFunctionBuilder)
     assert isinstance(sql.rank_, WindowFunctionBuilder)
@@ -728,7 +728,7 @@ def test_normal_column_access_preserved() -> None:
 
 def test_subquery_builders() -> None:
     """Test subquery builder shortcuts."""
-    from sqlspec._sql import SubqueryBuilder
+    from sqlspec.builder import SubqueryBuilder
 
     assert isinstance(sql.exists_, SubqueryBuilder)
     assert isinstance(sql.in_, SubqueryBuilder)
@@ -781,7 +781,7 @@ def test_all_subquery() -> None:
 
 def test_join_builders() -> None:
     """Test join builder shortcuts."""
-    from sqlspec._sql import JoinBuilder
+    from sqlspec.builder import JoinBuilder
 
     assert isinstance(sql.left_join_, JoinBuilder)
     assert isinstance(sql.inner_join_, JoinBuilder)

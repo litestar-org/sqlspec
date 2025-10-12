@@ -24,21 +24,64 @@ from sqlspec.builder._ddl import (
     Truncate,
 )
 from sqlspec.builder._delete import Delete
+from sqlspec.builder._dml import (
+    DeleteFromClauseMixin,
+    InsertFromSelectMixin,
+    InsertIntoClauseMixin,
+    InsertValuesMixin,
+    UpdateFromClauseMixin,
+    UpdateSetClauseMixin,
+    UpdateTableClauseMixin,
+)
+from sqlspec.builder._expression_wrappers import (
+    AggregateExpression,
+    ConversionExpression,
+    FunctionExpression,
+    MathExpression,
+    StringExpression,
+)
+from sqlspec.builder._factory import SQLFactory, sql
 from sqlspec.builder._insert import Insert
+from sqlspec.builder._join import JoinBuilder
 from sqlspec.builder._merge import Merge
-from sqlspec.builder._select import Select
+from sqlspec.builder._parsing_utils import (
+    extract_expression,
+    parse_column_expression,
+    parse_condition_expression,
+    parse_order_expression,
+    parse_table_expression,
+    to_expression,
+)
+from sqlspec.builder._select import (
+    Case,
+    CaseBuilder,
+    CommonTableExpressionMixin,
+    HavingClauseMixin,
+    LimitOffsetClauseMixin,
+    OrderByClauseMixin,
+    PivotClauseMixin,
+    ReturningClauseMixin,
+    Select,
+    SelectClauseMixin,
+    SetOperationMixin,
+    SubqueryBuilder,
+    UnpivotClauseMixin,
+    WhereClauseMixin,
+    WindowFunctionBuilder,
+)
 from sqlspec.builder._update import Update
-from sqlspec.builder.mixins import WhereClauseMixin
-from sqlspec.builder.mixins._join_operations import JoinBuilder
-from sqlspec.builder.mixins._select_operations import Case, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.exceptions import SQLBuilderError
 
 __all__ = (
+    "AggregateExpression",
     "AlterTable",
     "Case",
+    "CaseBuilder",
     "Column",
     "ColumnExpression",
     "CommentOn",
+    "CommonTableExpressionMixin",
+    "ConversionExpression",
     "CreateIndex",
     "CreateMaterializedView",
     "CreateSchema",
@@ -47,22 +90,48 @@ __all__ = (
     "CreateView",
     "DDLBuilder",
     "Delete",
+    "DeleteFromClauseMixin",
     "DropIndex",
     "DropSchema",
     "DropTable",
     "DropView",
     "FunctionColumn",
+    "FunctionExpression",
+    "HavingClauseMixin",
     "Insert",
+    "InsertFromSelectMixin",
+    "InsertIntoClauseMixin",
+    "InsertValuesMixin",
     "JoinBuilder",
+    "LimitOffsetClauseMixin",
+    "MathExpression",
     "Merge",
+    "OrderByClauseMixin",
+    "PivotClauseMixin",
     "QueryBuilder",
     "RenameTable",
+    "ReturningClauseMixin",
     "SQLBuilderError",
+    "SQLFactory",
     "SafeQuery",
     "Select",
+    "SelectClauseMixin",
+    "SetOperationMixin",
+    "StringExpression",
     "SubqueryBuilder",
     "Truncate",
+    "UnpivotClauseMixin",
     "Update",
+    "UpdateFromClauseMixin",
+    "UpdateSetClauseMixin",
+    "UpdateTableClauseMixin",
     "WhereClauseMixin",
     "WindowFunctionBuilder",
+    "extract_expression",
+    "parse_column_expression",
+    "parse_condition_expression",
+    "parse_order_expression",
+    "parse_table_expression",
+    "sql",
+    "to_expression",
 )

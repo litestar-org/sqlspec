@@ -11,9 +11,9 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
-from sqlspec.builder import (
+from sqlspec.builder._column import Column
+from sqlspec.builder._ddl import (
     AlterTable,
-    Column,
     CommentOn,
     CreateIndex,
     CreateMaterializedView,
@@ -21,18 +21,14 @@ from sqlspec.builder import (
     CreateTable,
     CreateTableAsSelect,
     CreateView,
-    Delete,
     DropIndex,
     DropSchema,
     DropTable,
     DropView,
-    Insert,
-    Merge,
     RenameTable,
-    Select,
     Truncate,
-    Update,
 )
+from sqlspec.builder._delete import Delete
 from sqlspec.builder._expression_wrappers import (
     AggregateExpression,
     ConversionExpression,
@@ -40,9 +36,12 @@ from sqlspec.builder._expression_wrappers import (
     MathExpression,
     StringExpression,
 )
+from sqlspec.builder._insert import Insert
+from sqlspec.builder._join import JoinBuilder
+from sqlspec.builder._merge import Merge
 from sqlspec.builder._parsing_utils import extract_expression, to_expression
-from sqlspec.builder.mixins._join_operations import JoinBuilder
-from sqlspec.builder.mixins._select_operations import Case, SubqueryBuilder, WindowFunctionBuilder
+from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
+from sqlspec.builder._update import Update
 from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLBuilderError
 

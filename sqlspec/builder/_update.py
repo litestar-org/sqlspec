@@ -4,24 +4,21 @@ Provides a fluent interface for building SQL UPDATE queries with
 parameter binding and validation.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
-from sqlspec.builder.mixins import (
-    ReturningClauseMixin,
-    UpdateFromClauseMixin,
-    UpdateSetClauseMixin,
-    UpdateTableClauseMixin,
-    WhereClauseMixin,
-)
+from sqlspec.builder._dml import UpdateFromClauseMixin, UpdateSetClauseMixin, UpdateTableClauseMixin
+from sqlspec.builder._join import build_join_clause
+from sqlspec.builder._select import ReturningClauseMixin, WhereClauseMixin
 from sqlspec.core.result import SQLResult
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
     from sqlspec.builder._select import Select
+    from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = ("Update",)
 
@@ -123,35 +120,7 @@ class Update(
             msg = "Cannot add JOIN clause to non-UPDATE expression."
             raise SQLBuilderError(msg)
 
-        table_expr: exp.Expression
-        if isinstance(table, str):
-            table_expr = exp.table_(table, alias=alias)
-        elif isinstance(table, QueryBuilder):
-            subquery = table.build()
-            subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=self.dialect))
-            table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
-
-            subquery_parameters = table.parameters
-            if subquery_parameters:
-                for p_name, p_value in subquery_parameters.items():
-                    self.add_parameter(p_value, name=p_name)
-        else:
-            table_expr = table
-
-        on_expr: exp.Expression = exp.condition(on) if isinstance(on, str) else on
-
-        join_type_upper = join_type.upper()
-        if join_type_upper == "INNER":
-            join_expr = exp.Join(this=table_expr, on=on_expr)
-        elif join_type_upper == "LEFT":
-            join_expr = exp.Join(this=table_expr, on=on_expr, side="LEFT")
-        elif join_type_upper == "RIGHT":
-            join_expr = exp.Join(this=table_expr, on=on_expr, side="RIGHT")
-        elif join_type_upper == "FULL":
-            join_expr = exp.Join(this=table_expr, on=on_expr, side="FULL", kind="OUTER")
-        else:
-            msg = f"Unsupported join type: {join_type}"
-            raise SQLBuilderError(msg)
+        join_expr = build_join_clause(cast("SQLBuilderProtocol", self), table, on, alias, join_type)
 
         if not self._expression.args.get("joins"):
             self._expression.set("joins", [])

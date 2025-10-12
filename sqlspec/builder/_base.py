@@ -189,6 +189,80 @@ class QueryBuilder(ABC):
         msg = f"Failed to parse CTE query: {cause!s}"
         raise SQLBuilderError(msg) from cause
 
+    def _build_final_expression(self, *, copy: bool = False) -> exp.Expression:
+        """Construct the current expression with attached CTEs.
+
+        Args:
+            copy: Whether to copy the underlying expression tree before
+                applying transformations.
+
+        Returns:
+            Expression representing the current builder state with CTEs applied.
+        """
+        if self._expression is None:
+            self._raise_sql_builder_error("QueryBuilder expression not initialized.")
+
+        base_expression = self._expression.copy() if copy else self._expression
+
+        if not self._with_ctes:
+            return base_expression
+
+        final_expression: exp.Expression = base_expression
+        if has_with_method(final_expression):
+            for alias, cte_node in self._with_ctes.items():
+                final_expression = cast("Any", final_expression).with_(cte_node.args["this"], as_=alias, copy=False)
+            return cast("exp.Expression", final_expression)
+
+        if isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
+            return exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
+
+        return final_expression
+
+    def _spawn_like_self(self: Self) -> Self:
+        """Create a new builder instance with matching configuration."""
+        return type(self)(
+            dialect=self.dialect,
+            schema=self.schema,
+            enable_optimization=self.enable_optimization,
+            optimize_joins=self.optimize_joins,
+            optimize_predicates=self.optimize_predicates,
+            simplify_expressions=self.simplify_expressions,
+        )
+
+    def _resolve_cte_query(self, alias: str, query: "QueryBuilder | exp.Select | str") -> exp.Select:
+        """Resolve a CTE query into a Select expression with merged parameters."""
+        if isinstance(query, QueryBuilder):
+            query_expr = query.get_expression()
+            if query_expr is None:
+                self._raise_cte_query_error(alias, "query builder has no expression")
+            if not isinstance(query_expr, exp.Select):
+                self._raise_cte_query_error(alias, f"expression must be a Select, got {type(query_expr).__name__}")
+            cte_select_expression = query_expr.copy()
+            param_mapping = self._merge_cte_parameters(alias, query.parameters)
+            updated_expression = self._update_placeholders_in_expression(cte_select_expression, param_mapping)
+            if not isinstance(updated_expression, exp.Select):  # pragma: no cover - defensive
+                msg = "CTE placeholder update produced non-select expression"
+                raise SQLBuilderError(msg)
+            return updated_expression
+
+        if isinstance(query, str):
+            try:
+                parsed_expression = sqlglot.parse_one(query, read=self.dialect_name)
+            except SQLGlotParseError as e:  # pragma: no cover - defensive
+                self._raise_cte_parse_error(e)
+            if not isinstance(parsed_expression, exp.Select):
+                self._raise_cte_query_error(
+                    alias, f"query string must parse to SELECT, got {type(parsed_expression).__name__}"
+                )
+            return parsed_expression
+
+        if isinstance(query, exp.Select):
+            return query
+
+        self._raise_cte_query_error(alias, f"invalid query type: {type(query).__name__}")
+        msg = "Unreachable"
+        raise AssertionError(msg)
+
     def _add_parameter(self, value: Any, context: str | None = None) -> str:
         """Adds a parameter to the query and returns its placeholder name.
 
@@ -368,35 +442,7 @@ class QueryBuilder(ABC):
         if alias in self._with_ctes:
             self._raise_sql_builder_error(f"CTE with alias '{alias}' already exists.")
 
-        cte_select_expression: exp.Select
-
-        if isinstance(query, QueryBuilder):
-            query_expr = query.get_expression()
-            if query_expr is None:
-                self._raise_cte_query_error(alias, "query builder has no expression")
-            if not isinstance(query_expr, exp.Select):
-                self._raise_cte_query_error(alias, f"expression must be a Select, got {type(query_expr).__name__}")
-            cte_select_expression = query_expr
-            param_mapping = self._merge_cte_parameters(alias, query.parameters)
-            cte_select_expression = cast(
-                "exp.Select", self._update_placeholders_in_expression(cte_select_expression, param_mapping)
-            )
-
-        elif isinstance(query, str):
-            try:
-                parsed_expression = sqlglot.parse_one(query, read=self.dialect_name)
-                if not isinstance(parsed_expression, exp.Select):
-                    self._raise_cte_query_error(
-                        alias, f"query string must parse to SELECT, got {type(parsed_expression).__name__}"
-                    )
-                cte_select_expression = parsed_expression
-            except SQLGlotParseError as e:
-                self._raise_cte_parse_error(e)
-        elif isinstance(query, exp.Select):
-            cte_select_expression = query
-        else:
-            self._raise_cte_query_error(alias, f"invalid query type: {type(query).__name__}")
-
+        cte_select_expression = self._resolve_cte_query(alias, query)
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
 
@@ -406,18 +452,7 @@ class QueryBuilder(ABC):
         Returns:
             SafeQuery: A dataclass containing the SQL string and parameters.
         """
-        if self._expression is None:
-            self._raise_sql_builder_error("QueryBuilder expression not initialized.")
-
-        if self._with_ctes:
-            final_expression = self._expression
-            if has_with_method(final_expression):
-                for alias, cte_node in self._with_ctes.items():
-                    final_expression = cast("Any", final_expression).with_(cte_node.args["this"], as_=alias, copy=False)
-            elif isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
-                final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
-        else:
-            final_expression = self._expression
+        final_expression = self._build_final_expression()
 
         if self.enable_optimization and isinstance(final_expression, exp.Expression):
             final_expression = self._optimize_expression(final_expression)
