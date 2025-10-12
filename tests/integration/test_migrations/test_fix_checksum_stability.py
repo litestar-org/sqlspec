@@ -61,13 +61,7 @@ DROP TABLE users;
     migration = runner.load_migration(migration_files[0][1], version=migration_files[0][0])
 
     runner.execute_upgrade(sqlite_session, migration)
-    tracker.record_migration(
-        sqlite_session,
-        migration["version"],
-        migration["description"],
-        100,
-        migration["checksum"],
-    )
+    tracker.record_migration(sqlite_session, migration["version"], migration["description"], 100, migration["checksum"])
 
     applied = tracker.get_applied_migrations(sqlite_session)
     original_checksum = applied[0]["checksum"]
@@ -134,11 +128,7 @@ DROP TABLE orders;
         migration = runner.load_migration(file_path, version=version)
         runner.execute_upgrade(sqlite_session, migration)
         tracker.record_migration(
-            sqlite_session,
-            migration["version"],
-            migration["description"],
-            100,
-            migration["checksum"],
+            sqlite_session, migration["version"], migration["description"], 100, migration["checksum"]
         )
         original_checksums[version] = migration["checksum"]
 
