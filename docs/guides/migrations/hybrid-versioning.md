@@ -476,6 +476,27 @@ SET version_num = '0003'
 WHERE version_num = '20251011120000';
 ```
 
+### After Pulling Fixed Migrations
+
+**Problem**: Teammate ran `fix` and merged to main. You pull changes and your local database still has timestamp version.
+
+**Example**:
+- Your database: `version_num = '20251011120000'`
+- Migration file (after pull): `0003_add_users.sql`
+- Running `migrate` tries to apply `0003` again (fails or causes duplicates)
+
+**Solution**: Run `fix` locally to update your database:
+
+```bash
+git pull origin main              # Get renamed migration files
+sqlspec --config myapp.config fix # Updates your database: 20251011120000 → 0003
+sqlspec --config myapp.config migrate # Now sees 0003 already applied
+```
+
+**Why this happens**: The `fix` command is idempotent - it safely detects that `0003` already exists in your database and just logs it without errors. This keeps your local database synchronized with the renamed files.
+
+**Best Practice**: Always run `fix` after pulling changes that include renamed migrations.
+
 ### CI Fails to Push
 
 **Problem**: CI can't push converted migrations
