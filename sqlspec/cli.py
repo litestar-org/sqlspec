@@ -124,6 +124,12 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         default="auto",
         help="Force execution mode (auto-detects by default)",
     )
+    no_auto_sync_option = click.option(
+        "--no-auto-sync",
+        is_flag=True,
+        default=False,
+        help="Disable automatic version reconciliation when migrations have been renamed",
+    )
 
     def get_config_by_bind_key(
         ctx: "click.Context", bind_key: str | None
@@ -378,6 +384,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @exclude_option
     @dry_run_option
     @execution_mode_option
+    @no_auto_sync_option
     @click.argument("revision", type=str, default="head")
     def upgrade_database(  # pyright: ignore[reportUnusedFunction]
         bind_key: str | None,
@@ -387,6 +394,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         exclude: "tuple[str, ...]",
         dry_run: bool,
         execution_mode: str,
+        no_auto_sync: bool,
     ) -> None:
         """Upgrade the database to the latest revision."""
         from rich.prompt import Confirm
@@ -424,7 +432,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
                             create_migration_commands(config=config)
                         )
-                        await maybe_await(migration_commands.upgrade(revision=revision))
+                        await maybe_await(migration_commands.upgrade(revision=revision, auto_sync=not no_auto_sync))
                         console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
                     except Exception as e:
                         console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
@@ -441,7 +449,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 if input_confirmed:
                     sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
                     migration_commands = create_migration_commands(config=sqlspec_config)
-                    await maybe_await(migration_commands.upgrade(revision=revision))
+                    await maybe_await(migration_commands.upgrade(revision=revision, auto_sync=not no_auto_sync))
 
         run_(_upgrade_database)()
 

@@ -98,7 +98,48 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             return cast("str | None", current)
 
-    def upgrade(self, revision: str = "head", allow_missing: bool = False) -> None:
+    def _synchronize_version_records(self, driver: Any) -> int:
+        """Synchronize database version records with migration files.
+
+        Auto-updates DB tracking when migrations have been renamed by fix command.
+        This allows developers to just run upgrade after pulling changes without
+        manually running fix.
+
+        Validates checksums match before updating to prevent incorrect matches.
+
+        Args:
+            driver: Database driver instance.
+
+        Returns:
+            Number of version records updated.
+        """
+        all_migrations = self.runner.get_migration_files()
+        applied_migrations = self.tracker.get_applied_migrations(driver)
+        applied_map = {m["version_num"]: m for m in applied_migrations}
+
+        conversion_map = generate_conversion_map(all_migrations)
+
+        updated_count = 0
+        for old_version, new_version in conversion_map.items():
+            if old_version in applied_map and new_version not in applied_map:
+                applied_checksum = applied_map[old_version]["checksum"]
+
+                file_path = next((path for v, path in all_migrations if v == new_version), None)
+                if file_path:
+                    migration = self.runner.load_migration(file_path, new_version)
+                    if migration["checksum"] == applied_checksum:
+                        self.tracker.update_version_record(driver, old_version, new_version)
+                        logger.info("Reconciled version: %s → %s", old_version, new_version)
+                        updated_count += 1
+                    else:
+                        logger.warning("Checksum mismatch for %s → %s, skipping auto-sync", old_version, new_version)
+
+        if updated_count > 0:
+            console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
+
+        return updated_count
+
+    def upgrade(self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True) -> None:
         """Upgrade to a target revision.
 
         Validates migration order and warns if out-of-order migrations are detected.
@@ -109,9 +150,17 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             revision: Target revision or "head" for latest.
             allow_missing: If True, allow out-of-order migrations even in strict mode.
                 Defaults to False.
+            auto_sync: If True, automatically reconcile renamed migrations in database.
+                Defaults to True. Can be disabled via --no-auto-sync flag.
         """
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
+
+            if auto_sync:
+                migration_config = getattr(self.config, "migration_config", {}) or {}
+                config_auto_sync = migration_config.get("auto_sync", True)
+                if config_auto_sync:
+                    self._synchronize_version_records(driver)
 
             current = self.tracker.get_current_version(driver)
             all_migrations = self.runner.get_migration_files()
@@ -382,7 +431,48 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             return cast("str | None", current)
 
-    async def upgrade(self, revision: str = "head", allow_missing: bool = False) -> None:
+    async def _synchronize_version_records(self, driver: Any) -> int:
+        """Synchronize database version records with migration files.
+
+        Auto-updates DB tracking when migrations have been renamed by fix command.
+        This allows developers to just run upgrade after pulling changes without
+        manually running fix.
+
+        Validates checksums match before updating to prevent incorrect matches.
+
+        Args:
+            driver: Database driver instance.
+
+        Returns:
+            Number of version records updated.
+        """
+        all_migrations = await self.runner.get_migration_files()
+        applied_migrations = await self.tracker.get_applied_migrations(driver)
+        applied_map = {m["version_num"]: m for m in applied_migrations}
+
+        conversion_map = generate_conversion_map(all_migrations)
+
+        updated_count = 0
+        for old_version, new_version in conversion_map.items():
+            if old_version in applied_map and new_version not in applied_map:
+                applied_checksum = applied_map[old_version]["checksum"]
+
+                file_path = next((path for v, path in all_migrations if v == new_version), None)
+                if file_path:
+                    migration = await self.runner.load_migration(file_path, new_version)
+                    if migration["checksum"] == applied_checksum:
+                        await self.tracker.update_version_record(driver, old_version, new_version)
+                        logger.info("Reconciled version: %s → %s", old_version, new_version)
+                        updated_count += 1
+                    else:
+                        logger.warning("Checksum mismatch for %s → %s, skipping auto-sync", old_version, new_version)
+
+        if updated_count > 0:
+            console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
+
+        return updated_count
+
+    async def upgrade(self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True) -> None:
         """Upgrade to a target revision.
 
         Validates migration order and warns if out-of-order migrations are detected.
@@ -393,9 +483,17 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             revision: Target revision or "head" for latest.
             allow_missing: If True, allow out-of-order migrations even in strict mode.
                 Defaults to False.
+            auto_sync: If True, automatically reconcile renamed migrations in database.
+                Defaults to True. Can be disabled via --no-auto-sync flag.
         """
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
+
+            if auto_sync:
+                migration_config = getattr(self.config, "migration_config", {}) or {}
+                config_auto_sync = migration_config.get("auto_sync", True)
+                if config_auto_sync:
+                    await self._synchronize_version_records(driver)
 
             current = await self.tracker.get_current_version(driver)
             all_migrations = await self.runner.get_migration_files()
