@@ -386,7 +386,7 @@ def get_config():
             os.chdir(original_dir)
 
         assert result.exit_code == 0
-        mock_commands.upgrade.assert_called_once_with(revision="head")
+        mock_commands.upgrade.assert_called_once_with(revision="head", auto_sync=True)
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -421,7 +421,7 @@ def get_config():
             os.chdir(original_dir)
 
         assert result.exit_code == 0
-        mock_commands.upgrade.assert_called_once_with(revision="abc123")
+        mock_commands.upgrade.assert_called_once_with(revision="abc123", auto_sync=True)
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -775,4 +775,4 @@ def get_multi_configs():
 
         assert result.exit_code == 0
         # Should only process the analytics_db config
-        mock_commands.upgrade.assert_called_once_with(revision="head")
+        mock_commands.upgrade.assert_called_once_with(revision="head", auto_sync=True)
