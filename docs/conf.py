@@ -61,7 +61,6 @@ extensions = [
     "sphinx_paramlinks",
     "sphinxcontrib.mermaid",
 ]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "msgspec": ("https://jcristharif.com/msgspec/", None),
@@ -155,7 +154,15 @@ html_favicon = "_static/favicon.png"
 templates_path = ["_templates"]
 html_js_files = ["versioning.js"]
 html_css_files = ["custom.css"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "PYPI_README.md", "STYLE_GUIDE.md", "VOICE_AUDIT_REPORT.md"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "PYPI_README.md",
+    "STYLE_GUIDE.md",
+    "VOICE_AUDIT_REPORT.md",
+    "guides/**",
+]
 html_show_sourcelink = True
 html_copy_source = True
 
