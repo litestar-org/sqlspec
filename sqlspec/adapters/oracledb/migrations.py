@@ -5,11 +5,12 @@ to handle Oracle's unique SQL syntax requirements.
 """
 
 import getpass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
-from sqlspec.builder import CreateTable, sql
+from sqlspec.builder import CreateTable, Select, sql
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -20,7 +21,16 @@ logger = get_logger("migrations.oracle")
 
 
 class OracleMigrationTrackerMixin:
-    """Mixin providing Oracle-specific migration table creation."""
+    """Mixin providing Oracle-specific migration table creation and querying.
+
+    Oracle has unique identifier handling rules:
+    - Unquoted identifiers are case-insensitive and stored as UPPERCASE
+    - Quoted identifiers are case-sensitive and stored exactly as written
+
+    This mixin overrides SQL builder methods to add quoted identifiers for
+    all column references, ensuring they match the lowercase column names
+    created by the migration table.
+    """
 
     __slots__ = ()
 
@@ -48,6 +58,36 @@ class OracleMigrationTrackerMixin:
             .column("checksum", "VARCHAR2(64)")
             .column("applied_by", "VARCHAR2(255)")
         )
+
+    def _get_current_version_sql(self) -> Select:
+        """Get Oracle-specific SQL for retrieving current version.
+
+        Uses unquoted identifiers that Oracle will automatically convert to uppercase.
+
+        Returns:
+            SQL builder object for version query.
+        """
+        return sql.select("VERSION_NUM").from_(self.version_table).order_by("EXECUTION_SEQUENCE DESC").limit(1)
+
+    def _get_applied_migrations_sql(self) -> Select:
+        """Get Oracle-specific SQL for retrieving all applied migrations.
+
+        Uses unquoted identifiers that Oracle will automatically convert to uppercase.
+
+        Returns:
+            SQL builder object for migrations query.
+        """
+        return sql.select("*").from_(self.version_table).order_by("EXECUTION_SEQUENCE")
+
+    def _get_next_execution_sequence_sql(self) -> Select:
+        """Get Oracle-specific SQL for retrieving next execution sequence.
+
+        Uses unquoted identifiers that Oracle will automatically convert to uppercase.
+
+        Returns:
+            SQL builder object for sequence query.
+        """
+        return sql.select("COALESCE(MAX(EXECUTION_SEQUENCE), 0) + 1 AS NEXT_SEQ").from_(self.version_table)
 
 
 class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["SyncDriverAdapterBase"]):
@@ -107,15 +147,13 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             driver: The database driver to use.
 
         Returns:
-            List of migration records as dictionaries.
+            List of migration records as dictionaries with lowercase keys.
         """
         result = driver.execute(self._get_applied_migrations_sql())
         if not result.data:
             return []
 
-        normalized_data = [{key.lower(): value for key, value in row.items()} for row in result.data]
-
-        return cast("list[dict[str, Any]]", normalized_data)
+        return [{key.lower(): value for key, value in row.items()} for row in result.data]
 
     def record_migration(
         self, driver: "SyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
@@ -129,8 +167,6 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
         """
-        from sqlspec.utils.version import parse_version
-
         applied_by = getpass.getuser()
         parsed_version = parse_version(version)
         version_type = parsed_version.type.value
@@ -213,15 +249,13 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             driver: The database driver to use.
 
         Returns:
-            List of migration records as dictionaries.
+            List of migration records as dictionaries with lowercase keys.
         """
         result = await driver.execute(self._get_applied_migrations_sql())
         if not result.data:
             return []
 
-        normalized_data = [{key.lower(): value for key, value in row.items()} for row in result.data]
-
-        return cast("list[dict[str, Any]]", normalized_data)
+        return [{key.lower(): value for key, value in row.items()} for row in result.data]
 
     async def record_migration(
         self, driver: "AsyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
@@ -235,7 +269,6 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
         """
-        from sqlspec.utils.version import parse_version
 
         applied_by = getpass.getuser()
         parsed_version = parse_version(version)
