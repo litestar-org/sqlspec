@@ -61,7 +61,7 @@ extensions = [
     "sphinx_paramlinks",
     "sphinxcontrib.mermaid",
 ]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "docs/guides/**"]
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "msgspec": ("https://jcristharif.com/msgspec/", None),
