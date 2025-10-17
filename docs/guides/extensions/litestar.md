@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Litestar Extension Guide
 
 Explains how to wire SQLSpec into Litestar using the official plugin, covering dependency injection, transaction strategies, session storage, and CLI integrations.

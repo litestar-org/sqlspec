@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # OracleDB Adapter Guide
 
 This guide provides specific instructions and best practices for working with the `oracledb` adapter in `sqlspec`.

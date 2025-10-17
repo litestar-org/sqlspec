@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Google BigQuery Adapter Guide
 
 This guide provides specific instructions for the `bigquery` adapter.

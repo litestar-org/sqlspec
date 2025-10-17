@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # SQLSpec Architecture Guide
 
 *A comprehensive guide for understanding and implementing SQLSpec components*

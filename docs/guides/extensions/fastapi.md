@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # FastAPI Integration Guide
 
 Shows how to integrate SQLSpec with FastAPI using dependency injection, lifespan management, and transaction control for async APIs.
