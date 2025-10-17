@@ -354,42 +354,19 @@ class SQLFileLoader:
         correlation_id = CorrelationContext.get()
         start_time = time.perf_counter()
 
-        logger.info("Loading SQL files", extra={"file_count": len(paths), "correlation_id": correlation_id})
-
-        loaded_count = 0
-        query_count_before = len(self._queries)
-
         try:
             for path in paths:
                 path_str = str(path)
                 if "://" in path_str:
-                    if self._load_single_file(path, None):
-                        loaded_count += 1
+                    self._load_single_file(path, None)
                 else:
                     path_obj = Path(path)
                     if path_obj.is_dir():
-                        loaded_count += self._load_directory(path_obj)
+                        self._load_directory(path_obj)
                     elif path_obj.exists():
-                        if self._load_single_file(path_obj, None):
-                            loaded_count += 1
+                        self._load_single_file(path_obj, None)
                     elif path_obj.suffix:
                         self._raise_file_not_found(str(path))
-
-            duration = time.perf_counter() - start_time
-            new_queries = len(self._queries) - query_count_before
-
-            logger.info(
-                "Loaded %d SQL files with %d new queries in %.3fms",
-                loaded_count,
-                new_queries,
-                duration * 1000,
-                extra={
-                    "files_loaded": loaded_count,
-                    "new_queries": new_queries,
-                    "duration_ms": duration * 1000,
-                    "correlation_id": correlation_id,
-                },
-            )
 
         except Exception as e:
             duration = time.perf_counter() - start_time
@@ -404,23 +381,20 @@ class SQLFileLoader:
             )
             raise
 
-    def _load_directory(self, dir_path: Path) -> int:
+    def _load_directory(self, dir_path: Path) -> None:
         """Load all SQL files from a directory.
 
-        Returns:
-            Number of files actually loaded (not previously cached).
+        Args:
+            dir_path: Directory path to load SQL files from.
         """
         sql_files = list(dir_path.rglob("*.sql"))
         if not sql_files:
-            return 0
+            return
 
-        loaded_count = 0
         for file_path in sql_files:
             relative_path = file_path.relative_to(dir_path)
             namespace_parts = relative_path.parent.parts
-            if self._load_single_file(file_path, ".".join(namespace_parts) if namespace_parts else None):
-                loaded_count += 1
-        return loaded_count
+            self._load_single_file(file_path, ".".join(namespace_parts) if namespace_parts else None)
 
     def _load_single_file(self, file_path: str | Path, namespace: str | None) -> bool:
         """Load a single SQL file with optional namespace.
