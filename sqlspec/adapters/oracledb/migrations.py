@@ -89,16 +89,94 @@ class OracleMigrationTrackerMixin:
         """
         return sql.select("COALESCE(MAX(EXECUTION_SEQUENCE), 0) + 1 AS NEXT_SEQ").from_(self.version_table)
 
+    def _get_existing_columns_sql(self) -> str:
+        """Get SQL to query existing columns in the tracking table.
+
+        Returns:
+            Raw SQL string for Oracle's USER_TAB_COLUMNS query.
+        """
+        return f"""
+            SELECT column_name
+            FROM user_tab_columns
+            WHERE table_name = '{self.version_table.upper()}'
+        """
+
+    def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
+        """Detect which columns are missing from the current schema.
+
+        Args:
+            existing_columns: Set of existing column names (uppercase).
+
+        Returns:
+            Set of missing column names (lowercase).
+        """
+        target_create = self._get_create_table_sql()
+        target_columns = {col.name.lower() for col in target_create.columns}
+        existing_lower = {col.lower() for col in existing_columns}
+        return target_columns - existing_lower
+
 
 class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["SyncDriverAdapterBase"]):
     """Oracle-specific sync migration tracker."""
 
     __slots__ = ()
 
+    def _migrate_schema_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
+        """Check for and add any missing columns to the tracking table.
+
+        Args:
+            driver: The database driver to use.
+        """
+        try:
+            result = driver.execute(self._get_existing_columns_sql())
+            existing_columns = {row["COLUMN_NAME"] for row in result.data}
+
+            missing_columns = self._detect_missing_columns(existing_columns)
+
+            if not missing_columns:
+                logger.debug("Migration tracking table schema is up-to-date")
+                return
+
+            logger.info("Migrating tracking table schema, adding columns: %s", ", ".join(sorted(missing_columns)))
+
+            for col_name in sorted(missing_columns):
+                self._add_column(driver, col_name)
+
+            driver.commit()
+            logger.info("Migration tracking table schema updated successfully")
+
+        except Exception as e:
+            logger.warning("Could not check or migrate tracking table schema: %s", e)
+
+    def _add_column(self, driver: "SyncDriverAdapterBase", column_name: str) -> None:
+        """Add a single column to the tracking table.
+
+        Args:
+            driver: The database driver to use.
+            column_name: Name of the column to add (lowercase).
+        """
+        target_create = self._get_create_table_sql()
+        column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
+
+        if not column_def:
+            return
+
+        default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
+        not_null_clause = " NOT NULL" if column_def.not_null else ""
+
+        alter_sql = f"""
+            ALTER TABLE {self.version_table}
+            ADD {column_def.name} {column_def.dtype}{default_clause}{not_null_clause}
+        """
+
+        driver.execute(alter_sql)
+        logger.debug("Added column %s to tracking table", column_name)
+
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
 
         Uses a PL/SQL block to make the operation atomic and prevent race conditions.
+        Also checks for and adds missing columns to support schema migrations.
 
         Args:
             driver: The database driver to use.
@@ -127,6 +205,8 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         """
         driver.execute_script(create_script)
         driver.commit()
+
+        self._migrate_schema_if_needed(driver)
 
     def get_current_version(self, driver: "SyncDriverAdapterBase") -> "str | None":
         """Get the latest applied migration version.
@@ -197,10 +277,62 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
 
     __slots__ = ()
 
+    async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
+        """Check for and add any missing columns to the tracking table.
+
+        Args:
+            driver: The database driver to use.
+        """
+        try:
+            result = await driver.execute(self._get_existing_columns_sql())
+            existing_columns = {row["COLUMN_NAME"] for row in result.data}
+
+            missing_columns = self._detect_missing_columns(existing_columns)
+
+            if not missing_columns:
+                logger.debug("Migration tracking table schema is up-to-date")
+                return
+
+            logger.info("Migrating tracking table schema, adding columns: %s", ", ".join(sorted(missing_columns)))
+
+            for col_name in sorted(missing_columns):
+                await self._add_column(driver, col_name)
+
+            await driver.commit()
+            logger.info("Migration tracking table schema updated successfully")
+
+        except Exception as e:
+            logger.warning("Could not check or migrate tracking table schema: %s", e)
+
+    async def _add_column(self, driver: "AsyncDriverAdapterBase", column_name: str) -> None:
+        """Add a single column to the tracking table.
+
+        Args:
+            driver: The database driver to use.
+            column_name: Name of the column to add (lowercase).
+        """
+        target_create = self._get_create_table_sql()
+        column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
+
+        if not column_def:
+            return
+
+        default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
+        not_null_clause = " NOT NULL" if column_def.not_null else ""
+
+        alter_sql = f"""
+            ALTER TABLE {self.version_table}
+            ADD {column_def.name} {column_def.dtype}{default_clause}{not_null_clause}
+        """
+
+        await driver.execute(alter_sql)
+        logger.debug("Added column %s to tracking table", column_name)
+
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
 
         Uses a PL/SQL block to make the operation atomic and prevent race conditions.
+        Also checks for and adds missing columns to support schema migrations.
 
         Args:
             driver: The database driver to use.
@@ -229,6 +361,8 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         """
         await driver.execute_script(create_script)
         await driver.commit()
+
+        await self._migrate_schema_if_needed(driver)
 
     async def get_current_version(self, driver: "AsyncDriverAdapterBase") -> "str | None":
         """Get the latest applied migration version.

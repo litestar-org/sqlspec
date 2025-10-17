@@ -795,3 +795,150 @@ def down():
         finally:
             if config.pool_instance:
                 await config.close_pool()
+
+
+async def test_oracledb_async_schema_migration_from_old_format(oracle_23ai_service: OracleService) -> None:
+    """Test automatic schema migration from old format (without execution_sequence) to new format.
+
+    This simulates the scenario where a user has an existing database with the old schema
+    (missing version_type and execution_sequence columns) and runs `db upgrade`.
+    """
+    test_id = "oracledb_async_schema_migration"
+    migration_table = f"sqlspec_migrations_{test_id}"
+
+    config = OracleAsyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 5,
+        },
+        migration_config={"version_table_name": migration_table},
+    )
+
+    try:
+        async with config.provide_session() as driver:
+            old_schema_sql = f"""
+                CREATE TABLE {migration_table} (
+                    version_num VARCHAR2(32) PRIMARY KEY,
+                    description VARCHAR2(2000),
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    execution_time_ms INTEGER,
+                    checksum VARCHAR2(64),
+                    applied_by VARCHAR2(255)
+                )
+            """
+            await driver.execute(old_schema_sql)
+            await driver.commit()
+
+            insert_sql = f"""
+                INSERT INTO {migration_table}
+                (version_num, description, execution_time_ms, checksum, applied_by)
+                VALUES (:1, :2, :3, :4, :5)
+            """
+            await driver.execute(insert_sql, ("0001", "test_migration", 100, "abc123", "testuser"))
+            await driver.commit()
+
+        AsyncMigrationCommands(config)
+        from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker
+
+        tracker = OracleAsyncMigrationTracker(migration_table)
+
+        async with config.provide_session() as driver:
+            await tracker.ensure_tracking_table(driver)
+
+            column_check_sql = f"""
+                SELECT column_name
+                FROM user_tab_columns
+                WHERE table_name = '{migration_table.upper()}'
+                ORDER BY column_name
+            """
+            result = await driver.execute(column_check_sql)
+            column_names = {row["COLUMN_NAME"] for row in result.data}
+
+            assert "VERSION_TYPE" in column_names, "VERSION_TYPE column should be added"
+            assert "EXECUTION_SEQUENCE" in column_names, "EXECUTION_SEQUENCE column should be added"
+            assert "VERSION_NUM" in column_names
+            assert "DESCRIPTION" in column_names
+
+            migration_data = await driver.execute(f"SELECT * FROM {migration_table}")
+            assert len(migration_data.data) == 1
+            assert migration_data.data[0]["VERSION_NUM"] == "0001"
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
+
+
+def test_oracledb_sync_schema_migration_from_old_format(oracle_23ai_service: OracleService) -> None:
+    """Test automatic schema migration from old format (without execution_sequence) to new format (sync version).
+
+    This simulates the scenario where a user has an existing database with the old schema
+    (missing version_type and execution_sequence columns) and runs `db upgrade`.
+    """
+    test_id = "oracledb_sync_schema_migration"
+    migration_table = f"sqlspec_migrations_{test_id}"
+
+    config = OracleSyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+        },
+        migration_config={"version_table_name": migration_table},
+    )
+
+    try:
+        with config.provide_session() as driver:
+            old_schema_sql = f"""
+                CREATE TABLE {migration_table} (
+                    version_num VARCHAR2(32) PRIMARY KEY,
+                    description VARCHAR2(2000),
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    execution_time_ms INTEGER,
+                    checksum VARCHAR2(64),
+                    applied_by VARCHAR2(255)
+                )
+            """
+            driver.execute(old_schema_sql)
+            driver.commit()
+
+            insert_sql = f"""
+                INSERT INTO {migration_table}
+                (version_num, description, execution_time_ms, checksum, applied_by)
+                VALUES (:1, :2, :3, :4, :5)
+            """
+            driver.execute(insert_sql, ("0001", "test_migration", 100, "abc123", "testuser"))
+            driver.commit()
+
+        from sqlspec.adapters.oracledb.migrations import OracleSyncMigrationTracker
+
+        tracker = OracleSyncMigrationTracker(migration_table)
+
+        with config.provide_session() as driver:
+            tracker.ensure_tracking_table(driver)
+
+            column_check_sql = f"""
+                SELECT column_name
+                FROM user_tab_columns
+                WHERE table_name = '{migration_table.upper()}'
+                ORDER BY column_name
+            """
+            result = driver.execute(column_check_sql)
+            column_names = {row["COLUMN_NAME"] for row in result.data}
+
+            assert "VERSION_TYPE" in column_names, "VERSION_TYPE column should be added"
+            assert "EXECUTION_SEQUENCE" in column_names, "EXECUTION_SEQUENCE column should be added"
+            assert "VERSION_NUM" in column_names
+            assert "DESCRIPTION" in column_names
+
+            migration_data = driver.execute(f"SELECT * FROM {migration_table}")
+            assert len(migration_data.data) == 1
+            assert migration_data.data[0]["VERSION_NUM"] == "0001"
+    finally:
+        if config.pool_instance:
+            config.close_pool()

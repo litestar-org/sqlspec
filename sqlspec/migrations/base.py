@@ -169,9 +169,54 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             .where(sql.version_num == old_version)
         )
 
+    def _get_check_column_exists_sql(self) -> Select:
+        """Get SQL to check what columns exist in the tracking table.
+
+        Returns a query that will fail gracefully if the table doesn't exist,
+        and returns column names if it does.
+
+        Returns:
+            SQL builder object for column check query.
+        """
+        return sql.select("*").from_(self.version_table).limit(0)
+
+    def _get_add_missing_columns_sql(self, missing_columns: "set[str]") -> "list[str]":
+        """Generate ALTER TABLE statements to add missing columns.
+
+        Args:
+            missing_columns: Set of column names that need to be added.
+
+        Returns:
+            List of SQL statements to execute.
+        """
+
+        statements = []
+        target_create = self._get_create_table_sql()
+
+        column_definitions = {col.name.lower(): col for col in target_create.columns}
+
+        for col_name in sorted(missing_columns):
+            if col_name in column_definitions:
+                col_def = column_definitions[col_name]
+                alter = sql.alter_table(self.version_table).add_column(
+                    name=col_def.name,
+                    dtype=col_def.dtype,
+                    default=col_def.default,
+                    not_null=col_def.not_null,
+                    unique=col_def.unique,
+                    comment=col_def.comment,
+                )
+                statements.append(str(alter))
+
+        return statements
+
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> Any:
-        """Create the migration tracking table if it doesn't exist."""
+        """Create the migration tracking table if it doesn't exist.
+
+        Implementations should also check for and add any missing columns
+        to support schema migrations from older versions.
+        """
         ...
 
     @abstractmethod
