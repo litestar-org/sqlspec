@@ -8,8 +8,9 @@ staging and production environments.
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from rich.console import Console
+
 from sqlspec.exceptions import OutOfOrderMigrationError
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 
 __all__ = ("MigrationGap", "detect_out_of_order_migrations", "format_out_of_order_warning")
 
-logger = get_logger("migrations.validation")
+console = Console()
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,9 @@ def detect_out_of_order_migrations(
     migration, which indicates they were created in branches that merged late or
     were cherry-picked across environments.
 
+    Extension migrations are excluded from out-of-order detection as they maintain
+    independent sequences within their own namespaces.
+
     Args:
         pending_versions: List of migration versions not yet applied.
         applied_versions: List of migration versions already applied.
@@ -58,6 +62,10 @@ def detect_out_of_order_migrations(
         Applied: [20251011120000, 20251012140000]
         Pending: [20251011130000, 20251013090000]
         Result: Gap for 20251011130000 (created between applied migrations)
+
+        Applied: [ext_litestar_0001, 0001, 0002]
+        Pending: [ext_adk_0001]
+        Result: [] (extensions excluded from out-of-order detection)
     """
     if not applied_versions or not pending_versions:
         return []
@@ -67,11 +75,17 @@ def detect_out_of_order_migrations(
     parsed_applied = [parse_version(v) for v in applied_versions]
     parsed_pending = [parse_version(v) for v in pending_versions]
 
-    latest_applied = max(parsed_applied)
+    core_applied = [v for v in parsed_applied if v.extension is None]
+    core_pending = [v for v in parsed_pending if v.extension is None]
 
-    for pending in parsed_pending:
+    if not core_applied or not core_pending:
+        return []
+
+    latest_applied = max(core_applied)
+
+    for pending in core_pending:
         if pending < latest_applied:
-            applied_after = [a for a in parsed_applied if a > pending]
+            applied_after = [a for a in core_applied if a > pending]
             if applied_after:
                 gaps.append(MigrationGap(missing_version=pending, applied_after=applied_after))
 
@@ -114,8 +128,8 @@ def format_out_of_order_warning(gaps: "list[MigrationGap]") -> str:
             "These migrations will be applied but may cause issues if they",
             "depend on schema changes from later migrations.",
             "",
-            "To prevent this in the future, rebase your branch before merging",
-            "or use strict_ordering mode in migration_config.",
+            "To prevent this in the future, ensure migrations are merged in",
+            "chronological order or use strict_ordering mode in migration_config.",
         )
     )
 
@@ -159,5 +173,5 @@ def validate_migration_order(
         msg = f"{warning_message}\n\nStrict ordering is enabled. Use --allow-missing to override."
         raise OutOfOrderMigrationError(msg)
 
-    logger.warning("Out-of-order migrations detected")
-    logger.warning(warning_message)
+    console.print("[yellow]Out-of-order migrations detected[/]")
+    console.print(f"[yellow]{warning_message}[/]")

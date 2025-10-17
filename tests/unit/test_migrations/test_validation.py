@@ -79,15 +79,33 @@ def test_detect_out_of_order_with_sequential() -> None:
     assert gaps[0].missing_version == parse_version("20251011120000")
 
 
-def test_detect_out_of_order_extension_versions() -> None:
-    """Test detection with extension migrations."""
-    pending: list[str] = ["ext_litestar_20251011130000"]
-    applied: list[str] = ["ext_litestar_20251012120000"]
+def test_detect_out_of_order_extension_versions_excluded() -> None:
+    """Test that extension migrations are excluded from out-of-order detection.
+
+    Extension migrations maintain independent sequences within their namespaces
+    and should not be flagged as out-of-order relative to other migrations.
+    """
+    pending: list[str] = ["ext_adk_0001", "ext_litestar_0001"]
+    applied: list[str] = ["0001", "0002", "ext_litestar_0002"]
+
+    gaps = detect_out_of_order_migrations(pending, applied)
+
+    assert gaps == []
+
+
+def test_detect_out_of_order_mixed_core_and_extension() -> None:
+    """Test detection with mixed core and extension migrations.
+
+    Only core migrations should be checked for out-of-order status.
+    """
+    pending: list[str] = ["20251011130000", "ext_litestar_0001"]
+    applied: list[str] = ["20251012120000", "ext_adk_0001"]
 
     gaps = detect_out_of_order_migrations(pending, applied)
 
     assert len(gaps) == 1
-    assert gaps[0].missing_version.extension == "litestar"
+    assert gaps[0].missing_version == parse_version("20251011130000")
+    assert gaps[0].missing_version.extension is None
 
 
 def test_format_out_of_order_warning_empty() -> None:
@@ -136,14 +154,15 @@ def test_validate_migration_order_no_gaps() -> None:
     validate_migration_order(pending, applied, strict_ordering=True)
 
 
-def test_validate_migration_order_warns_by_default(caplog: "Any") -> None:
+def test_validate_migration_order_warns_by_default(capsys: "Any") -> None:
     """Test validation warns but allows out-of-order migrations by default."""
     pending: list[str] = ["20251011130000"]
     applied: list[str] = ["20251012120000"]
 
     validate_migration_order(pending, applied, strict_ordering=False)
 
-    assert "Out-of-order migrations detected" in caplog.text
+    captured = capsys.readouterr()
+    assert "Out-of-order migrations detected" in captured.out
 
 
 def test_validate_migration_order_strict_raises() -> None:
