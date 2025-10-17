@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # SQLSpec Development Guides
 
 Comprehensive guides for developing with and contributing to SQLSpec.

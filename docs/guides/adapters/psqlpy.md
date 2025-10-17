@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # psqlpy Adapter Guide
 
 This guide provides specific instructions for the `psqlpy` adapter for PostgreSQL.

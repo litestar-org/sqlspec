@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # SQLSpec Data Flow: From Input to Result
 
 *A comprehensive guide to understanding SQLSpec's execution flow - Updated for current implementation*

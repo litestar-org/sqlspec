@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # MyPyC LLM Playbook
 
 Primer for agents compiling SQLSpec hot paths with MyPyC. Optimize build steps, target selection, and troubleshooting for minimal iteration time.

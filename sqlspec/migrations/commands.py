@@ -95,12 +95,16 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             return cast("str | None", current)
 
-    def upgrade(self, revision: str = "head") -> None:
+    def upgrade(self, revision: str = "head", *, dry_run: bool = False) -> None:
         """Upgrade to a target revision.
 
         Args:
             revision: Target revision or "head" for latest.
+            dry_run: If True, show what would be done without making changes.
         """
+        if dry_run:
+            console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
+
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
 
@@ -125,7 +129,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             for version, file_path in pending:
                 migration = self.runner.load_migration(file_path, version)
 
-                console.print(f"\n[cyan]Applying {version}:[/] {migration['description']}")
+                action_verb = "Would apply" if dry_run else "Applying"
+                console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
+
+                if dry_run:
+                    console.print(f"[dim]Migration file: {file_path}[/]")
+                    continue
 
                 try:
                     _, execution_time = self.runner.execute_upgrade(driver, migration)
@@ -138,12 +147,19 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     console.print(f"[red]✗ Failed: {e}[/]")
                     return
 
-    def downgrade(self, revision: str = "-1") -> None:
+            if dry_run:
+                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+
+    def downgrade(self, revision: str = "-1", *, dry_run: bool = False) -> None:
         """Downgrade to a target revision.
 
         Args:
             revision: Target revision or "-1" for one step back.
+            dry_run: If True, show what would be done without making changes.
         """
+        if dry_run:
+            console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
+
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
             applied = self.tracker.get_applied_migrations(driver)
@@ -172,7 +188,14 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     console.print(f"[red]Migration file not found for {version}[/]")
                     continue
                 migration = self.runner.load_migration(all_files[version], version)
-                console.print(f"\n[cyan]Reverting {version}:[/] {migration['description']}")
+
+                action_verb = "Would revert" if dry_run else "Reverting"
+                console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
+
+                if dry_run:
+                    console.print(f"[dim]Migration file: {all_files[version]}[/]")
+                    continue
+
                 try:
                     _, execution_time = self.runner.execute_downgrade(driver, migration)
                     self.tracker.remove_migration(driver, version)
@@ -180,6 +203,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 except Exception as e:
                     console.print(f"[red]✗ Failed: {e}[/]")
                     return
+
+            if dry_run:
+                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
 
     def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
@@ -279,12 +305,16 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             return cast("str | None", current)
 
-    async def upgrade(self, revision: str = "head") -> None:
+    async def upgrade(self, revision: str = "head", *, dry_run: bool = False) -> None:
         """Upgrade to a target revision.
 
         Args:
             revision: Target revision or "head" for latest.
+            dry_run: If True, show what would be done without making changes.
         """
+        if dry_run:
+            console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
+
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
 
@@ -305,7 +335,14 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
             for version, file_path in pending:
                 migration = await self.runner.load_migration(file_path, version)
-                console.print(f"\n[cyan]Applying {version}:[/] {migration['description']}")
+
+                action_verb = "Would apply" if dry_run else "Applying"
+                console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
+
+                if dry_run:
+                    console.print(f"[dim]Migration file: {file_path}[/]")
+                    continue
+
                 try:
                     _, execution_time = await self.runner.execute_upgrade(driver, migration)
                     await self.tracker.record_migration(
@@ -316,12 +353,19 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     console.print(f"[red]✗ Failed: {e}[/]")
                     return
 
-    async def downgrade(self, revision: str = "-1") -> None:
+            if dry_run:
+                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+
+    async def downgrade(self, revision: str = "-1", *, dry_run: bool = False) -> None:
         """Downgrade to a target revision.
 
         Args:
             revision: Target revision or "-1" for one step back.
+            dry_run: If True, show what would be done without making changes.
         """
+        if dry_run:
+            console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
+
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
 
@@ -351,7 +395,13 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     continue
 
                 migration = await self.runner.load_migration(all_files[version], version)
-                console.print(f"\n[cyan]Reverting {version}:[/] {migration['description']}")
+
+                action_verb = "Would revert" if dry_run else "Reverting"
+                console.print(f"\n[cyan]{action_verb} {version}:[/] {migration['description']}")
+
+                if dry_run:
+                    console.print(f"[dim]Migration file: {all_files[version]}[/]")
+                    continue
 
                 try:
                     _, execution_time = await self.runner.execute_downgrade(driver, migration)
@@ -360,6 +410,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 except Exception as e:
                     console.print(f"[red]✗ Failed: {e}[/]")
                     return
+
+            if dry_run:
+                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
 
     async def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.

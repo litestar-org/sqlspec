@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # DuckDB Adapter Guide
 
 This guide provides specific instructions for the `duckdb` adapter.

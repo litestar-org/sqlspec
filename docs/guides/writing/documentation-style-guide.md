@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Documentation Style Guide
 
 **Version:** 1.0

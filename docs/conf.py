@@ -36,6 +36,7 @@ suppress_warnings = [
     "docutils",  # Suppress docstring formatting warnings from source code
     "ref.doc",  # Suppress document reference warnings
     "toc.not_readable",  # Suppress cheat sheet files not in toctree warnings
+    "toc.excluded",  # Suppress toctree warnings for excluded guide documents
     "ref.python",  # Suppress duplicate object description warnings
 ]
 # -- General configuration ---------------------------------------------------
@@ -61,7 +62,7 @@ extensions = [
     "sphinx_paramlinks",
     "sphinxcontrib.mermaid",
 ]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "guides/*"]
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "msgspec": ("https://jcristharif.com/msgspec/", None),

@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Litestar LLM Playbook
 
 Primer for agents integrating SQLSpec with Litestar. Focuses on fast setup, dependency wiring, and consistent project patterns.

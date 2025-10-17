@@ -352,7 +352,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
                             create_migration_commands(config=config)
                         )
-                        await maybe_await(migration_commands.downgrade(revision=revision))
+                        await maybe_await(migration_commands.downgrade(revision=revision, dry_run=dry_run))
                         console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
                     except Exception as e:
                         console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
@@ -367,7 +367,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 if input_confirmed:
                     sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
                     migration_commands = create_migration_commands(config=sqlspec_config)
-                    await maybe_await(migration_commands.downgrade(revision=revision))
+                    await maybe_await(migration_commands.downgrade(revision=revision, dry_run=dry_run))
 
         run_(_downgrade_database)()
 
@@ -424,7 +424,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
                             create_migration_commands(config=config)
                         )
-                        await maybe_await(migration_commands.upgrade(revision=revision))
+                        await maybe_await(migration_commands.upgrade(revision=revision, dry_run=dry_run))
                         console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
                     except Exception as e:
                         console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
@@ -441,7 +441,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 if input_confirmed:
                     sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
                     migration_commands = create_migration_commands(config=sqlspec_config)
-                    await maybe_await(migration_commands.upgrade(revision=revision))
+                    await maybe_await(migration_commands.upgrade(revision=revision, dry_run=dry_run))
 
         run_(_upgrade_database)()
 

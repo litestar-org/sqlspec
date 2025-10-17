@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # aiosqlite Adapter Guide
 
 This guide provides specific instructions for the `aiosqlite` adapter.

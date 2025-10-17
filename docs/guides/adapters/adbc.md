@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # ADBC Adapter Guide
 
 This guide provides specific instructions for the `adbc` adapter.
