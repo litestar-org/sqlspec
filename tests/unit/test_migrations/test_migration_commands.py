@@ -350,7 +350,7 @@ def test_sync_upgrade_already_at_latest_version(sync_config: SqliteConfig) -> No
         patch.object(sync_config, "provide_session") as mock_session,
         patch("sqlspec.migrations.commands.console") as mock_console,
         patch.object(commands.runner, "get_migration_files", return_value=[("0001", mock_migration_file)]),
-        patch.object(commands.tracker, "get_current_version", return_value="0001"),
+        patch.object(commands.tracker, "get_applied_migrations", return_value=[{"version_num": "0001"}]),
     ):
         mock_session.return_value.__enter__.return_value = mock_driver
 
@@ -373,7 +373,7 @@ async def test_async_upgrade_already_at_latest_version(async_config: AiosqliteCo
         patch.object(async_config, "provide_session") as mock_session,
         patch("sqlspec.migrations.commands.console") as mock_console,
         patch.object(commands.runner, "get_migration_files", return_value=[("0001", mock_migration_file)]),
-        patch.object(commands.tracker, "get_current_version", return_value="0001"),
+        patch.object(commands.tracker, "get_applied_migrations", return_value=[{"version_num": "0001"}]),
     ):
         mock_session.return_value.__aenter__.return_value = mock_driver
 

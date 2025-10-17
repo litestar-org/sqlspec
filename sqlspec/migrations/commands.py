@@ -162,11 +162,14 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 if config_auto_sync:
                     self._synchronize_version_records(driver)
 
-            current = self.tracker.get_current_version(driver)
+            applied_migrations = self.tracker.get_applied_migrations(driver)
+            applied_versions = [m["version_num"] for m in applied_migrations]
+            applied_set = set(applied_versions)
+
             all_migrations = self.runner.get_migration_files()
             pending = []
             for version, file_path in all_migrations:
-                if (current is None or version > current) and (revision == "head" or version <= revision):
+                if version not in applied_set and (revision == "head" or version <= revision):
                     pending.append((version, file_path))
 
             if not pending:
@@ -177,9 +180,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 else:
                     console.print("[green]Already at latest version[/]")
                 return
-
-            applied_migrations = self.tracker.get_applied_migrations(driver)
-            applied_versions = [m["version_num"] for m in applied_migrations]
             pending_versions = [v for v, _ in pending]
 
             migration_config = getattr(self.config, "migration_config", {}) or {}
@@ -495,11 +495,14 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 if config_auto_sync:
                     await self._synchronize_version_records(driver)
 
-            current = await self.tracker.get_current_version(driver)
+            applied_migrations = await self.tracker.get_applied_migrations(driver)
+            applied_versions = [m["version_num"] for m in applied_migrations]
+            applied_set = set(applied_versions)
+
             all_migrations = await self.runner.get_migration_files()
             pending = []
             for version, file_path in all_migrations:
-                if (current is None or version > current) and (revision == "head" or version <= revision):
+                if version not in applied_set and (revision == "head" or version <= revision):
                     pending.append((version, file_path))
             if not pending:
                 if not all_migrations:
@@ -509,9 +512,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 else:
                     console.print("[green]Already at latest version[/]")
                 return
-
-            applied_migrations = await self.tracker.get_applied_migrations(driver)
-            applied_versions = [m["version_num"] for m in applied_migrations]
             pending_versions = [v for v, _ in pending]
 
             migration_config = getattr(self.config, "migration_config", {}) or {}
