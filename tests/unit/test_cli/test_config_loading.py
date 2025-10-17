@@ -127,3 +127,36 @@ async def get_database_config():
         assert result.exit_code == 0
         assert "async_test" in result.output
         assert "Migration Enabled" in result.output or "migrations enabled" in result.output
+
+
+def test_show_config_with_path_object(cleanup_test_modules: None) -> None:
+    """Test show-config handles Path objects in script_location without crashing."""
+    runner = CliRunner()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Create a test module with Path object in script_location
+        config_module = """
+from pathlib import Path
+from sqlspec.adapters.sqlite.config import SqliteConfig
+
+config = SqliteConfig(
+    bind_key="path_test",
+    pool_config={"database": ":memory:"},
+    migration_config={"enabled": True, "script_location": Path("custom_migrations")}
+)
+database_config = config
+"""
+        (Path(temp_dir) / "test_config.py").write_text(config_module)
+
+        # Change to the temp directory
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(temp_dir)
+            result = runner.invoke(add_migration_commands(), ["--config", "test_config.database_config", "show-config"])
+        finally:
+            os.chdir(original_cwd)
+
+        assert result.exit_code == 0
+        assert "path_test" in result.output
+        assert "custom_migrations" in result.output
+        assert "Migration Enabled" in result.output or "migrations enabled" in result.output

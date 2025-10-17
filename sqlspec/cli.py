@@ -566,7 +566,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         for config_name, config in migration_configs:
             migration_config = getattr(config, "migration_config", {})
             script_location = migration_config.get("script_location", "migrations")
-            table.add_row(config_name, script_location, "Migration Enabled")
+            table.add_row(config_name, str(script_location), "Migration Enabled")
 
         console.print(table)
         console.print(f"[blue]Found {len(migration_configs)} configuration(s) with migrations enabled.[/]")
