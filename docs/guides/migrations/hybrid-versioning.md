@@ -483,19 +483,25 @@ WHERE version_num = '20251011120000';
 **Example**:
 - Your database: `version_num = '20251011120000'`
 - Migration file (after pull): `0003_add_users.sql`
-- Running `migrate` tries to apply `0003` again (fails or causes duplicates)
 
-**Solution**: Run `fix` locally to update your database:
+**Solution (Automatic)**: Just run `upgrade` - auto-sync handles it:
+
+```bash
+git pull origin main              # Get renamed migration files
+sqlspec --config myapp.config upgrade # Auto-sync updates: 20251011120000 → 0003
+```
+
+**Solution (Manual)**: If you disabled auto-sync, run `fix`:
 
 ```bash
 git pull origin main              # Get renamed migration files
 sqlspec --config myapp.config fix # Updates your database: 20251011120000 → 0003
-sqlspec --config myapp.config migrate # Now sees 0003 already applied
+sqlspec --config myapp.config upgrade # Now sees 0003 already applied
 ```
 
-**Why this happens**: The `fix` command is idempotent - it safely detects that `0003` already exists in your database and just logs it without errors. This keeps your local database synchronized with the renamed files.
+**Why this happens**: Migration files were renamed but your local database still references the old timestamp version.
 
-**Best Practice**: Always run `fix` after pulling changes that include renamed migrations.
+**Best Practice**: Enable auto-sync (default) for automatic reconciliation. See [Auto-Sync section](#auto-sync-the-fix-command-on-autopilot) for details.
 
 ### CI Fails to Push
 
@@ -543,6 +549,327 @@ git add migrations/
 git commit -m "chore: convert all migrations to sequential"
 git push
 ```
+
+## Auto-Sync: The Fix Command on Autopilot
+
+SQLSpec now automatically reconciles renamed migrations when you run `upgrade`. No more manual `fix` commands after pulling changes.
+
+### How It Works
+
+When you run `upgrade`, SQLSpec:
+
+1. Checks if migration files have been renamed (timestamp → sequential)
+2. Validates checksums match between old and new versions
+3. Auto-updates your database tracking to match the renamed files
+4. Proceeds with normal migration workflow
+
+This happens transparently - you just run `upgrade` and it works.
+
+### Usage Scenarios
+
+#### Scenario 1: Pull and Go (The Happy Path)
+
+Your teammate merged a PR that converted migrations to sequential format.
+
+```bash
+# Your database before pull
+SELECT version_num FROM ddl_migrations;
+# 20251011120000  ← timestamp format
+
+git pull origin main
+
+# Migration files after pull
+ls migrations/
+# 0001_initial.sql
+# 0002_add_users.sql
+# 0003_add_products.sql  ← was 20251011120000_add_products.sql
+
+# Just run upgrade - auto-sync handles everything
+sqlspec --config myapp.config upgrade
+
+# Output:
+# Reconciled 1 version record(s)
+# Already at latest version
+
+# Your database after upgrade
+SELECT version_num FROM ddl_migrations;
+# 0003  ← automatically updated!
+```
+
+**Before auto-sync**: You'd need to manually run `fix` or update the database yourself.
+
+**With auto-sync**: Just `upgrade` and continue working.
+
+#### Scenario 2: Team Workflow (Multiple PRs)
+
+Three developers working on different features.
+
+```bash
+# Alice (feature/products branch)
+sqlspec --config myapp.config create-migration -m "add products table"
+# Creates: 20251011120000_add_products.sql
+
+# Bob (feature/orders branch)
+sqlspec --config myapp.config create-migration -m "add orders table"
+# Creates: 20251011121500_add_orders.sql
+
+# Carol (feature/invoices branch)
+sqlspec --config myapp.config create-migration -m "add invoices table"
+# Creates: 20251011123000_add_invoices.sql
+```
+
+**Alice's PR merges first:**
+
+```bash
+# CI runs: sqlspec --config myapp.config fix --yes --no-database
+# Renames: 20251011120000_add_products.sql → 0003_add_products.sql
+# Merged to main
+```
+
+**Bob pulls and continues:**
+
+```bash
+git pull origin main
+
+# Bob's local database still has: 20251011120000 (Alice's old timestamp)
+# Bob's migration files now have: 0003_add_products.sql (Alice's renamed)
+
+# Bob just runs upgrade to apply his changes
+sqlspec --config myapp.config upgrade
+
+# Output:
+# Reconciled 1 version record(s)  ← Alice's migration auto-synced
+# Found 1 pending migrations
+# Applying 20251011121500: add orders table
+# ✓ Applied in 15ms
+```
+
+**Bob's PR merges second:**
+
+```bash
+# CI converts Bob's timestamp → 0004
+# Merged to main
+```
+
+**Carol pulls and continues:**
+
+```bash
+git pull origin main
+
+# Carol's local database has:
+# - 20251011120000 (Alice's old timestamp)
+# - 20251011121500 (Bob's old timestamp)
+
+# Carol's migration files now have:
+# - 0003_add_products.sql (Alice's renamed)
+# - 0004_add_orders.sql (Bob's renamed)
+
+sqlspec --config myapp.config upgrade
+
+# Output:
+# Reconciled 2 version record(s)  ← Both auto-synced!
+# Found 1 pending migrations
+# Applying 20251011123000: add invoices table
+# ✓ Applied in 12ms
+```
+
+**Key takeaway**: No manual intervention needed. Each developer just pulls and runs `upgrade`.
+
+#### Scenario 3: Production Deployment
+
+Your production database has never seen timestamp versions.
+
+```bash
+# Production database
+SELECT version_num FROM ddl_migrations;
+# 0001
+# 0002
+# No timestamps - only sequential
+
+# Deploy new version with migrations 0003, 0004, 0005
+sqlspec --config prod.config upgrade
+
+# Output:
+# Found 3 pending migrations
+# Applying 0003: add products table
+# ✓ Applied in 45ms
+# Applying 0004: add orders table
+# ✓ Applied in 32ms
+# Applying 0005: add invoices table
+# ✓ Applied in 28ms
+```
+
+**Key takeaway**: Production never sees timestamps. Auto-sync is a no-op when all versions are already sequential.
+
+#### Scenario 4: Staging Environment Sync
+
+Staging database has old timestamp versions from before you adopted hybrid versioning.
+
+```bash
+# Staging database (mixed state)
+SELECT version_num FROM ddl_migrations;
+# 0001
+# 0002
+# 20251008100000  ← old timestamp from before hybrid versioning
+# 20251009150000  ← old timestamp
+# 20251010180000  ← old timestamp
+
+# Migration files (after fix command ran in CI)
+ls migrations/
+# 0001_initial.sql
+# 0002_add_users.sql
+# 0003_add_feature_x.sql  ← was 20251008100000
+# 0004_add_feature_y.sql  ← was 20251009150000
+# 0005_add_feature_z.sql  ← was 20251010180000
+# 0006_new_feature.sql    ← new migration
+
+sqlspec --config staging.config upgrade
+
+# Output:
+# Reconciled 3 version record(s)
+# Found 1 pending migrations
+# Applying 0006: new feature
+# ✓ Applied in 38ms
+
+# Staging database (cleaned up)
+SELECT version_num FROM ddl_migrations;
+# 0001
+# 0002
+# 0003  ← auto-synced from 20251008100000
+# 0004  ← auto-synced from 20251009150000
+# 0005  ← auto-synced from 20251010180000
+# 0006  ← newly applied
+```
+
+**Key takeaway**: Auto-sync gradually cleans up old timestamp versions as you deploy. No manual database updates needed.
+
+#### Scenario 5: Checksum Validation (Safety Check)
+
+Someone manually edited a migration file after it was applied.
+
+```bash
+# Database has timestamp version
+SELECT version_num, checksum FROM ddl_migrations WHERE version_num = '20251011120000';
+# 20251011120000 | a1b2c3d4e5f6...
+
+# Migration file renamed but content changed
+cat migrations/0003_add_products.sql
+# Different SQL than what was originally applied
+
+sqlspec --config myapp.config upgrade
+
+# Output:
+# Checksum mismatch for 20251011120000 → 0003, skipping auto-sync
+# Found 0 pending migrations
+
+# Database unchanged - safely prevented incorrect sync
+SELECT version_num FROM ddl_migrations;
+# 20251011120000  ← still has old version (not auto-synced)
+```
+
+**Key takeaway**: Auto-sync validates checksums before updating. Protects against corruption or incorrect renames.
+
+### Configuration Options
+
+#### Enable/Disable Auto-Sync
+
+Auto-sync is enabled by default. Disable via config:
+
+```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/mydb"},
+    migration_config={
+        "script_location": "migrations",
+        "enabled": True,
+        "auto_sync": False  # Disable auto-sync
+    }
+)
+```
+
+#### Disable Per-Command
+
+Disable for a single migration run:
+
+```bash
+sqlspec --config myapp.config upgrade --no-auto-sync
+```
+
+Useful when you want explicit control over version reconciliation.
+
+### When to Disable Auto-Sync
+
+Auto-sync is safe for most workflows, but disable if:
+
+1. **You want explicit control**: Run `fix` manually to see exactly what's being updated
+2. **Custom migration workflows**: You're using non-standard migration file organization
+3. **Debugging**: Isolate whether auto-sync is causing unexpected behavior
+
+### Troubleshooting Auto-Sync
+
+#### Auto-Sync Not Reconciling
+
+**Problem**: Auto-sync reports 0 reconciled records but you expected some.
+
+**Possible causes:**
+
+1. **Already synced**: Database already has sequential versions
+2. **No conversion map**: No timestamp migrations found in files
+3. **Version already exists**: New version already applied (edge case from parallel execution)
+
+**Debug steps:**
+
+```bash
+# Check what's in your database
+sqlspec --config myapp.config current --verbose
+
+# Check what's in your migration files
+ls -la migrations/
+
+# Try explicit fix to see what would convert
+sqlspec --config myapp.config fix --dry-run
+```
+
+#### Checksum Mismatch Warnings
+
+**Problem**: `Checksum mismatch for X → Y, skipping auto-sync`
+
+**Cause**: Migration content changed between when it was applied and when it was renamed.
+
+**Solution:**
+
+```bash
+# Option 1: Manual fix (if change was intentional)
+sqlspec --config myapp.config fix --yes
+
+# Option 2: Revert file changes (if change was accidental)
+git checkout migrations/0003_add_products.sql
+```
+
+### Migration from Manual Fix Workflow
+
+If you're currently using the manual `fix` workflow, auto-sync is backward-compatible:
+
+```bash
+# Old workflow (still works)
+git pull origin main
+sqlspec --config myapp.config fix  # Manual sync
+sqlspec --config myapp.config upgrade
+
+# New workflow (auto-sync handles it)
+git pull origin main
+sqlspec --config myapp.config upgrade  # Auto-sync runs automatically
+```
+
+Both workflows produce identical results. Auto-sync just eliminates the manual step.
+
+### Best Practices with Auto-Sync
+
+1. **Trust auto-sync in dev/staging**: Let it handle reconciliation automatically
+2. **Monitor in production**: Check reconciliation output in deployment logs
+3. **Use --no-auto-sync for debugging**: Disable temporarily to isolate issues
+4. **Keep checksums intact**: Don't edit migration files after they're applied
 
 ## Advanced Topics
 

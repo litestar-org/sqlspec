@@ -427,11 +427,16 @@ Apply pending migrations up to a specific revision.
 ``--no-prompt``
    Skip confirmation prompt.
 
+``--no-auto-sync``
+   Disable automatic version reconciliation. When enabled (default), SQLSpec automatically
+   updates database tracking when migrations are renamed from timestamp to sequential format.
+   Use this flag when you want explicit control over version reconciliation.
+
 **Examples:**
 
 .. code-block:: bash
 
-   # Upgrade to latest
+   # Upgrade to latest (with auto-sync enabled by default)
    sqlspec --config myapp.config upgrade
 
    # Upgrade to specific revision
@@ -451,6 +456,9 @@ Apply pending migrations up to a specific revision.
 
    # No confirmation
    sqlspec --config myapp.config upgrade --no-prompt
+
+   # Disable auto-sync for manual control
+   sqlspec --config myapp.config upgrade --no-auto-sync
 
 downgrade
 ^^^^^^^^^
@@ -603,6 +611,21 @@ The command automatically creates a timestamped backup before making changes:
 
 If conversion fails, files are automatically restored from backup.
 Remove backup with ``rm -rf migrations/.backup_*`` after verifying success.
+
+**Auto-Sync Integration:**
+
+As of SQLSpec 0.18+, the ``upgrade`` command automatically reconciles renamed migrations
+when you pull changes from teammates. This means developers typically don't need to run
+``fix`` manually after pulling - just run ``upgrade`` and it handles reconciliation
+automatically.
+
+The ``fix`` command is still useful for:
+
+- **Pre-merge CI**: Convert timestamps before merging to main branch
+- **Initial conversion**: One-time conversion of existing timestamp migrations
+- **Manual control**: When you've disabled auto-sync and want explicit control
+
+See the :ref:`hybrid-versioning-guide` for complete workflows and examples.
 
 **Use Cases:**
 
