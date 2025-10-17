@@ -495,10 +495,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 for config in configs:
                     migration_config = getattr(config, "migration_config", {})
                     target_directory = (
-                        migration_config.get("script_location", "migrations") if directory is None else directory
+                        str(migration_config.get("script_location", "migrations")) if directory is None else directory
                     )
                     migration_commands = create_migration_commands(config=config)
-                    await maybe_await(migration_commands.init(directory=cast("str", target_directory), package=package))
+                    await maybe_await(migration_commands.init(directory=target_directory, package=package))
 
         run_(_init_sqlspec)()
 
@@ -566,7 +566,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         for config_name, config in migration_configs:
             migration_config = getattr(config, "migration_config", {})
             script_location = migration_config.get("script_location", "migrations")
-            table.add_row(config_name, script_location, "Migration Enabled")
+            table.add_row(config_name, str(script_location), "Migration Enabled")
 
         console.print(table)
         console.print(f"[blue]Found {len(migration_configs)} configuration(s) with migrations enabled.[/]")

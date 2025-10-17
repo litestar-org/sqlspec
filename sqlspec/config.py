@@ -72,8 +72,8 @@ class MigrationConfig(TypedDict):
     All fields are optional with default values.
     """
 
-    script_location: NotRequired[str]
-    """Path to the migrations directory. Defaults to 'migrations'."""
+    script_location: NotRequired["str | Path"]
+    """Path to the migrations directory. Accepts string or Path object. Defaults to 'migrations'."""
 
     version_table_name: NotRequired[str]
     """Name of the table used to track applied migrations. Defaults to 'sqlspec_migrations'."""
@@ -329,7 +329,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """
         if directory is None:
             migration_config = self.migration_config or {}
-            directory = migration_config.get("script_location") or "migrations"
+            directory = str(migration_config.get("script_location") or "migrations")
 
         commands = self._ensure_migration_commands()
         assert directory is not None
