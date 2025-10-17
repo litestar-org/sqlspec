@@ -132,7 +132,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
                         updated_count += 1
                     else:
-                        console.print(f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]")
+                        console.print(
+                            f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
+                        )
 
         if updated_count > 0:
             console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
@@ -493,7 +495,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
                         updated_count += 1
                     else:
-                        console.print(f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]")
+                        console.print(
+                            f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
+                        )
 
         if updated_count > 0:
             console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")

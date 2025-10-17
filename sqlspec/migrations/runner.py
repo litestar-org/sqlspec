@@ -350,7 +350,9 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
-                loader = get_migration_loader(file_path, self.migrations_path, self.project_root, self.context, self.loader)
+                loader = get_migration_loader(
+                    file_path, self.migrations_path, self.project_root, self.context, self.loader
+                )
 
                 try:
                     up_sql = await_(loader.get_up_sql)(file_path)
@@ -510,7 +512,9 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
-                loader = get_migration_loader(file_path, self.migrations_path, self.project_root, self.context, self.loader)
+                loader = get_migration_loader(
+                    file_path, self.migrations_path, self.project_root, self.context, self.loader
+                )
 
                 try:
                     up_sql = await loader.get_up_sql(file_path)
