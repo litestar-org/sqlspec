@@ -227,7 +227,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         metadata = self._load_migration_metadata_common(file_path, version)
         context_to_use = self._get_context_for_migration(file_path)
 
-        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use, self.loader)
         loader.validate_migration_file(file_path)
 
         has_upgrade, has_downgrade = True, False
@@ -235,7 +235,6 @@ class SyncMigrationRunner(BaseMigrationRunner):
         if file_path.suffix == ".sql":
             version = metadata["version"]
             up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
-            self.loader.load_sql(file_path)
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
             try:
@@ -351,7 +350,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
-                loader = get_migration_loader(file_path, self.migrations_path, self.project_root, self.context)
+                loader = get_migration_loader(file_path, self.migrations_path, self.project_root, self.context, self.loader)
 
                 try:
                     up_sql = await_(loader.get_up_sql)(file_path)
@@ -392,7 +391,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         metadata = self._load_migration_metadata_common(file_path, version)
         context_to_use = self._get_context_for_migration(file_path)
 
-        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use, self.loader)
         loader.validate_migration_file(file_path)
 
         has_upgrade, has_downgrade = True, False
@@ -400,7 +399,6 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         if file_path.suffix == ".sql":
             version = metadata["version"]
             up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
-            await async_(self.loader.load_sql)(file_path)
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
             try:
@@ -512,7 +510,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
-                loader = get_migration_loader(file_path, self.migrations_path, self.project_root, self.context)
+                loader = get_migration_loader(file_path, self.migrations_path, self.project_root, self.context, self.loader)
 
                 try:
                     up_sql = await loader.get_up_sql(file_path)

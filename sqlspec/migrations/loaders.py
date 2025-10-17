@@ -77,9 +77,14 @@ class SQLFileLoader(BaseMigrationLoader):
 
     __slots__ = ("sql_loader",)
 
-    def __init__(self) -> None:
-        """Initialize SQL file loader."""
-        self.sql_loader: CoreSQLFileLoader = CoreSQLFileLoader()
+    def __init__(self, sql_loader: "CoreSQLFileLoader | None" = None) -> None:
+        """Initialize SQL file loader.
+
+        Args:
+            sql_loader: Optional shared SQLFileLoader instance to reuse.
+                If not provided, creates a new instance.
+        """
+        self.sql_loader: CoreSQLFileLoader = sql_loader if sql_loader is not None else CoreSQLFileLoader()
 
     async def get_up_sql(self, path: Path) -> list[str]:
         """Extract the 'up' SQL from a SQL migration file.
@@ -391,7 +396,11 @@ class PythonFileLoader(BaseMigrationLoader):
 
 
 def get_migration_loader(
-    file_path: Path, migrations_dir: Path, project_root: "Path | None" = None, context: "Any | None" = None
+    file_path: Path,
+    migrations_dir: Path,
+    project_root: "Path | None" = None,
+    context: "Any | None" = None,
+    sql_loader: "CoreSQLFileLoader | None" = None,
 ) -> BaseMigrationLoader:
     """Factory function to get appropriate loader for migration file.
 
@@ -400,6 +409,9 @@ def get_migration_loader(
         migrations_dir: Directory containing migration files.
         project_root: Optional project root directory for Python imports.
         context: Optional migration context to pass to Python migrations.
+        sql_loader: Optional shared SQLFileLoader instance for SQL migrations.
+            When provided, SQL files are loaded using this shared instance,
+            avoiding redundant file parsing.
 
     Returns:
         Appropriate loader instance for the file type.
@@ -412,6 +424,6 @@ def get_migration_loader(
     if suffix == ".py":
         return PythonFileLoader(migrations_dir, project_root, context)
     if suffix == ".sql":
-        return SQLFileLoader()
+        return SQLFileLoader(sql_loader)
     msg = f"Unsupported migration file type: {suffix}"
     raise MigrationLoadError(msg)

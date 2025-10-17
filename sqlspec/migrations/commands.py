@@ -129,10 +129,10 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     migration = self.runner.load_migration(file_path, new_version)
                     if migration["checksum"] == applied_checksum:
                         self.tracker.update_version_record(driver, old_version, new_version)
-                        logger.info("Reconciled version: %s → %s", old_version, new_version)
+                        console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
                         updated_count += 1
                     else:
-                        logger.warning("Checksum mismatch for %s → %s, skipping auto-sync", old_version, new_version)
+                        console.print(f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]")
 
         if updated_count > 0:
             console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
@@ -490,10 +490,10 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     migration = await self.runner.load_migration(file_path, new_version)
                     if migration["checksum"] == applied_checksum:
                         await self.tracker.update_version_record(driver, old_version, new_version)
-                        logger.info("Reconciled version: %s → %s", old_version, new_version)
+                        console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
                         updated_count += 1
                     else:
-                        logger.warning("Checksum mismatch for %s → %s, skipping auto-sync", old_version, new_version)
+                        console.print(f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]")
 
         if updated_count > 0:
             console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
