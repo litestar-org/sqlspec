@@ -7,6 +7,8 @@ to handle Oracle's unique SQL syntax requirements.
 import getpass
 from typing import TYPE_CHECKING, Any
 
+from rich.console import Console
+
 from sqlspec.builder import CreateTable, Select, sql
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.utils.logging import get_logger
@@ -18,6 +20,7 @@ if TYPE_CHECKING:
 __all__ = ("OracleAsyncMigrationTracker", "OracleSyncMigrationTracker")
 
 logger = get_logger("migrations.oracle")
+console = Console()
 
 
 class OracleMigrationTrackerMixin:
@@ -137,13 +140,15 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
                 logger.debug("Migration tracking table schema is up-to-date")
                 return
 
-            logger.info("Migrating tracking table schema, adding columns: %s", ", ".join(sorted(missing_columns)))
+            console.print(
+                f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
+            )
 
             for col_name in sorted(missing_columns):
                 self._add_column(driver, col_name)
 
             driver.commit()
-            logger.info("Migration tracking table schema updated successfully")
+            console.print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as e:
             logger.warning("Could not check or migrate tracking table schema: %s", e)
@@ -293,13 +298,15 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
                 logger.debug("Migration tracking table schema is up-to-date")
                 return
 
-            logger.info("Migrating tracking table schema, adding columns: %s", ", ".join(sorted(missing_columns)))
+            console.print(
+                f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
+            )
 
             for col_name in sorted(missing_columns):
                 await self._add_column(driver, col_name)
 
             await driver.commit()
-            logger.info("Migration tracking table schema updated successfully")
+            console.print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as e:
             logger.warning("Could not check or migrate tracking table schema: %s", e)
