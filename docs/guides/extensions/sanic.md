@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Sanic Integration Guide
 
 Details how to wire SQLSpec into Sanic and Sanic-Ext applications using listeners, middleware, and dependency registration.

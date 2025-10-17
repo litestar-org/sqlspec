@@ -834,14 +834,37 @@ See what would happen without executing:
 
    sqlspec --config myapp.config upgrade --dry-run
 
-Output:
+**Single Configuration Output:**
 
 .. code-block:: text
 
-   Dry run: Would upgrade 3 configuration(s)
+   DRY RUN MODE: No database changes will be applied
+
+   Found 2 pending migrations
+
+   Would apply 0001_initial: Initial migration
+   Migration file: migrations/versions/0001_initial.py
+
+   Would apply 0002_add_users: Add users table
+   Migration file: migrations/versions/0002_add_users.py
+
+   Dry run complete. No changes were made to the database.
+
+**Multi-Configuration Output:**
+
+When using ``--include`` or ``--exclude`` with multiple configs:
+
+.. code-block:: bash
+
+   sqlspec --config myapp.config upgrade --dry-run --include postgres --include mysql
+
+.. code-block:: text
+
+   Dry run: Would upgrade 2 configuration(s)
      • postgres
      • mysql
-     • analytics
+
+The dry-run mode will then show the detailed migration list for each configuration.
 
 Best Practices
 ==============

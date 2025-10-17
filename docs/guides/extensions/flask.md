@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Flask Integration Guide
 
 Explains how to combine SQLSpec with Flask applications using request-scoped sessions, CLI commands, and transaction helpers for synchronous drivers.

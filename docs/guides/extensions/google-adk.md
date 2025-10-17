@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Google ADK Extension Guide
 
 Describes how to persist Google Agent Development Kit (ADK) sessions and events with SQLSpec-backed stores, covering configuration, adapter selection, and operational patterns.

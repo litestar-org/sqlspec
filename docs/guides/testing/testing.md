@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Testing Guide for SQLSpec
 
 This document describes how we execute and structure tests across SQLSpec. It reflects our current strategy of using **pytest + pytest-databases** (with Docker services) and **pytest-xdist** for parallel execution. Follow these instructions whenever you add, update, or run tests locally or in CI.

@@ -358,7 +358,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
                             create_migration_commands(config=config)
                         )
-                        await maybe_await(migration_commands.downgrade(revision=revision))
+                        await maybe_await(migration_commands.downgrade(revision=revision, dry_run=dry_run))
                         console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
                     except Exception as e:
                         console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
@@ -373,7 +373,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 if input_confirmed:
                     sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
                     migration_commands = create_migration_commands(config=sqlspec_config)
-                    await maybe_await(migration_commands.downgrade(revision=revision))
+                    await maybe_await(migration_commands.downgrade(revision=revision, dry_run=dry_run))
 
         run_(_downgrade_database)()
 
@@ -432,7 +432,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
                             create_migration_commands(config=config)
                         )
-                        await maybe_await(migration_commands.upgrade(revision=revision, auto_sync=not no_auto_sync))
+                        await maybe_await(migration_commands.upgrade(revision=revision, auto_sync=not no_auto_sync, dry_run=dry_run))
                         console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
                     except Exception as e:
                         console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
@@ -449,7 +449,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 if input_confirmed:
                     sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
                     migration_commands = create_migration_commands(config=sqlspec_config)
-                    await maybe_await(migration_commands.upgrade(revision=revision, auto_sync=not no_auto_sync))
+                    await maybe_await(migration_commands.upgrade(revision=revision, auto_sync=not no_auto_sync, dry_run=dry_run))
 
         run_(_upgrade_database)()
 
@@ -503,10 +503,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 for config in configs:
                     migration_config = getattr(config, "migration_config", {})
                     target_directory = (
-                        migration_config.get("script_location", "migrations") if directory is None else directory
+                        str(migration_config.get("script_location", "migrations")) if directory is None else directory
                     )
                     migration_commands = create_migration_commands(config=config)
-                    await maybe_await(migration_commands.init(directory=cast("str", target_directory), package=package))
+                    await maybe_await(migration_commands.init(directory=target_directory, package=package))
 
         run_(_init_sqlspec)()
 
@@ -596,7 +596,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         for config_name, config in migration_configs:
             migration_config = getattr(config, "migration_config", {})
             script_location = migration_config.get("script_location", "migrations")
-            table.add_row(config_name, script_location, "Migration Enabled")
+            table.add_row(config_name, str(script_location), "Migration Enabled")
 
         console.print(table)
         console.print(f"[blue]Found {len(migration_configs)} configuration(s) with migrations enabled.[/]")

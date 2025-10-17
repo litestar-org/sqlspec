@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # SQLglot Guide for SQLSpec
 
 Comprehensive guide for SQL parsing, transformation, and optimization using SQLglot in SQLSpec.

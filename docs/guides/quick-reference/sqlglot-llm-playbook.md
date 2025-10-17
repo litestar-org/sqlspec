@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # SQLglot LLM Playbook
 
 Primer for autonomous agents working inside SQLSpec with SQLglot. Favors fast recall, minimal prompting, and accurate outputs.

@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # PostgreSQL Adapters Guide
 
 This guide covers `psycopg`, `asyncpg`, and `psqlpy`.

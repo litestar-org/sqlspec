@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # aiosql Extension Guide
 
 Focuses on loading aiosql-style SQL files inside SQLSpec, when to use the native loader versus the compatibility adapters, and how to keep query execution fast and type-safe.

@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # MyPyC Optimization Guide for SQLSpec
 
 Comprehensive guide for writing high-performance, mypyc-compilable Python code within SQLSpec.

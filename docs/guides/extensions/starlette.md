@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Starlette Integration Guide
 
 Outlines patterns for running SQLSpec inside Starlette applications using lifespan management, request dependencies, and middleware-driven transaction control.

@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # SQLite Adapters Guide
 
 This guide covers `sqlite3` (sync) and `aiosqlite` (async).

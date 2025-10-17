@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # asyncmy Adapter Guide
 
 This guide provides specific instructions for the `asyncmy` adapter for MySQL/MariaDB.

@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # SQLSpec Quick Reference
 
 *Essential patterns and commands for SQLSpec development - Updated for current implementation*

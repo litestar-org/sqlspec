@@ -36,6 +36,7 @@ suppress_warnings = [
     "docutils",  # Suppress docstring formatting warnings from source code
     "ref.doc",  # Suppress document reference warnings
     "toc.not_readable",  # Suppress cheat sheet files not in toctree warnings
+    "toc.excluded",  # Suppress toctree warnings for excluded guide documents
     "ref.python",  # Suppress duplicate object description warnings
 ]
 # -- General configuration ---------------------------------------------------
