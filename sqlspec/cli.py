@@ -495,10 +495,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 for config in configs:
                     migration_config = getattr(config, "migration_config", {})
                     target_directory = (
-                        migration_config.get("script_location", "migrations") if directory is None else directory
+                        str(migration_config.get("script_location", "migrations")) if directory is None else directory
                     )
                     migration_commands = create_migration_commands(config=config)
-                    await maybe_await(migration_commands.init(directory=cast("str", target_directory), package=package))
+                    await maybe_await(migration_commands.init(directory=target_directory, package=package))
 
         run_(_init_sqlspec)()
 
