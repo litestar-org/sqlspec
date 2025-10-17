@@ -363,15 +363,15 @@ class SQLFileLoader:
             for path in paths:
                 path_str = str(path)
                 if "://" in path_str:
-                    self._load_single_file(path, None)
-                    loaded_count += 1
+                    if self._load_single_file(path, None):
+                        loaded_count += 1
                 else:
                     path_obj = Path(path)
                     if path_obj.is_dir():
                         loaded_count += self._load_directory(path_obj)
                     elif path_obj.exists():
-                        self._load_single_file(path_obj, None)
-                        loaded_count += 1
+                        if self._load_single_file(path_obj, None):
+                            loaded_count += 1
                     elif path_obj.suffix:
                         self._raise_file_not_found(str(path))
 
@@ -405,33 +405,42 @@ class SQLFileLoader:
             raise
 
     def _load_directory(self, dir_path: Path) -> int:
-        """Load all SQL files from a directory."""
+        """Load all SQL files from a directory.
+
+        Returns:
+            Number of files actually loaded (not previously cached).
+        """
         sql_files = list(dir_path.rglob("*.sql"))
         if not sql_files:
             return 0
 
+        loaded_count = 0
         for file_path in sql_files:
             relative_path = file_path.relative_to(dir_path)
             namespace_parts = relative_path.parent.parts
-            self._load_single_file(file_path, ".".join(namespace_parts) if namespace_parts else None)
-        return len(sql_files)
+            if self._load_single_file(file_path, ".".join(namespace_parts) if namespace_parts else None):
+                loaded_count += 1
+        return loaded_count
 
-    def _load_single_file(self, file_path: str | Path, namespace: str | None) -> None:
+    def _load_single_file(self, file_path: str | Path, namespace: str | None) -> bool:
         """Load a single SQL file with optional namespace.
 
         Args:
             file_path: Path to the SQL file.
             namespace: Optional namespace prefix for queries.
+
+        Returns:
+            True if file was newly loaded, False if already cached.
         """
         path_str = str(file_path)
 
         if path_str in self._files:
-            return
+            return False
 
         cache_config = get_cache_config()
         if not cache_config.compiled_cache_enabled:
             self._load_file_without_cache(file_path, namespace)
-            return
+            return True
 
         cache_key_str = self._generate_file_cache_key(file_path)
         cache = get_cache()
@@ -455,7 +464,7 @@ class SQLFileLoader:
                         )
                 self._queries[namespaced_name] = statement
                 self._query_to_file[namespaced_name] = path_str
-            return
+            return True
 
         self._load_file_without_cache(file_path, namespace)
 
@@ -471,6 +480,8 @@ class SQLFileLoader:
 
             cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_statements=file_statements)
             cache.put("file", cache_key_str, cached_file_data)
+
+        return True
 
     def _load_file_without_cache(self, file_path: str | Path, namespace: str | None) -> None:
         """Load a single SQL file without using cache.

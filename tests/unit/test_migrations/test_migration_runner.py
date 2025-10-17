@@ -567,11 +567,15 @@ DROP TABLE test;
         sql_loader = SQLFileLoader()
 
         async def test_operations() -> None:
-            await sql_loader.get_up_sql(migration_file)
+            sql_loader.validate_migration_file(migration_file)
             path_str = str(migration_file)
             assert path_str in sql_loader.sql_loader._files
             assert sql_loader.sql_loader.has_query("migrate-0001-up")
             assert sql_loader.sql_loader.has_query("migrate-0001-down")
+
+            await sql_loader.get_up_sql(migration_file)
+            assert path_str in sql_loader.sql_loader._files
+
             await sql_loader.get_down_sql(migration_file)
             assert path_str in sql_loader.sql_loader._files
 

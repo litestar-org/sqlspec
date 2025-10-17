@@ -89,6 +89,10 @@ class SQLFileLoader(BaseMigrationLoader):
     async def get_up_sql(self, path: Path) -> list[str]:
         """Extract the 'up' SQL from a SQL migration file.
 
+        The SQL file must already be loaded via validate_migration_file()
+        before calling this method. This design ensures the file is loaded
+        exactly once during the migration process.
+
         Args:
             path: Path to SQL migration file.
 
@@ -98,8 +102,6 @@ class SQLFileLoader(BaseMigrationLoader):
         Raises:
             MigrationLoadError: If migration file is invalid or missing up query.
         """
-        self.sql_loader.load_sql(path)
-
         version = self._extract_version(path.name)
         up_query = f"migrate-{version}-up"
 
@@ -113,14 +115,16 @@ class SQLFileLoader(BaseMigrationLoader):
     async def get_down_sql(self, path: Path) -> list[str]:
         """Extract the 'down' SQL from a SQL migration file.
 
+        The SQL file must already be loaded via validate_migration_file()
+        before calling this method. This design ensures the file is loaded
+        exactly once during the migration process.
+
         Args:
             path: Path to SQL migration file.
 
         Returns:
             List containing single SQL statement for downgrade, or empty list.
         """
-        self.sql_loader.load_sql(path)
-
         version = self._extract_version(path.name)
         down_query = f"migrate-{version}-down"
 
