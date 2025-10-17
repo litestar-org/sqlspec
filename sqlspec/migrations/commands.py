@@ -139,7 +139,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
         return updated_count
 
-    def upgrade(self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False) -> None:
+    def upgrade(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
         """Upgrade to a target revision.
 
         Validates migration order and warns if out-of-order migrations are detected.
@@ -498,7 +500,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
         return updated_count
 
-    async def upgrade(self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False) -> None:
+    async def upgrade(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
         """Upgrade to a target revision.
 
         Validates migration order and warns if out-of-order migrations are detected.
