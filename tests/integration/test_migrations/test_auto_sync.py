@@ -204,7 +204,9 @@ def test_auto_sync_handles_multiple_migrations(sqlite_config: SqliteConfig, migr
     ]
 
     for filename, version, sql in migrations:
-        table_name = filename.split("_", 2)[2].rsplit(".", 1)[0]
+        name_without_ext = filename.rsplit(".", 1)[0]
+        parts = name_without_ext.split("_", 1)
+        table_name = parts[1].replace("create_", "") if len(parts) > 1 else name_without_ext
         content = f"""-- name: migrate-{version}-up
 {sql}
 
@@ -252,7 +254,9 @@ def test_auto_sync_preserves_execution_sequence(sqlite_config: SqliteConfig, mig
     ]
 
     for filename, version, sql in migrations:
-        table_name = filename.split("_", 2)[2].rsplit(".", 1)[0]
+        name_without_ext = filename.rsplit(".", 1)[0]
+        parts = name_without_ext.split("_", 1)
+        table_name = parts[1].replace("create_", "") if len(parts) > 1 else name_without_ext
         content = f"""-- name: migrate-{version}-up
 {sql}
 

@@ -322,6 +322,7 @@ async def test_async_upgrade_empty_migration_folder(async_config: AiosqliteConfi
     commands = AsyncMigrationCommands(async_config)
 
     mock_driver = AsyncMock()
+    mock_driver.driver_features = {}
     with (
         patch.object(async_config, "provide_session") as mock_session,
         patch("sqlspec.migrations.commands.console") as mock_console,
@@ -367,6 +368,7 @@ async def test_async_upgrade_already_at_latest_version(async_config: AiosqliteCo
     commands = AsyncMigrationCommands(async_config)
 
     mock_driver = AsyncMock()
+    mock_driver.driver_features = {}
     mock_migration_file = Path("/fake/migrations/0001_initial.sql")
 
     with (
