@@ -268,14 +268,18 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     continue
 
                 try:
-                    _, execution_time = self.runner.execute_upgrade(driver, migration)
-                    self.tracker.record_migration(
-                        driver, migration["version"], migration["description"], execution_time, migration["checksum"]
-                    )
+                    def record_version(exec_time: int) -> None:
+                        self.tracker.record_migration(
+                            driver, migration["version"], migration["description"], exec_time, migration["checksum"]
+                        )
+
+                    _, execution_time = self.runner.execute_upgrade(driver, migration, on_success=record_version)
                     console.print(f"[green]✓ Applied in {execution_time}ms[/]")
 
                 except Exception as e:
-                    console.print(f"[red]✗ Failed: {e}[/]")
+                    use_txn = self.runner._should_use_transaction(migration, self.config)
+                    rollback_msg = " (transaction rolled back)" if use_txn else ""
+                    console.print(f"[red]✗ Failed{rollback_msg}: {e}[/]")
                     return
 
             if dry_run:
@@ -332,11 +336,15 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     continue
 
                 try:
-                    _, execution_time = self.runner.execute_downgrade(driver, migration)
-                    self.tracker.remove_migration(driver, version)
+                    def remove_version(exec_time: int) -> None:
+                        self.tracker.remove_migration(driver, version)
+
+                    _, execution_time = self.runner.execute_downgrade(driver, migration, on_success=remove_version)
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
                 except Exception as e:
-                    console.print(f"[red]✗ Failed: {e}[/]")
+                    use_txn = self.runner._should_use_transaction(migration, self.config)
+                    rollback_msg = " (transaction rolled back)" if use_txn else ""
+                    console.print(f"[red]✗ Failed{rollback_msg}: {e}[/]")
                     return
 
             if dry_run:
@@ -695,13 +703,17 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     continue
 
                 try:
-                    _, execution_time = await self.runner.execute_upgrade(driver, migration)
-                    await self.tracker.record_migration(
-                        driver, migration["version"], migration["description"], execution_time, migration["checksum"]
-                    )
+                    async def record_version(exec_time: int) -> None:
+                        await self.tracker.record_migration(
+                            driver, migration["version"], migration["description"], exec_time, migration["checksum"]
+                        )
+
+                    _, execution_time = await self.runner.execute_upgrade(driver, migration, on_success=record_version)
                     console.print(f"[green]✓ Applied in {execution_time}ms[/]")
                 except Exception as e:
-                    console.print(f"[red]✗ Failed: {e}[/]")
+                    use_txn = self.runner._should_use_transaction(migration, self.config)
+                    rollback_msg = " (transaction rolled back)" if use_txn else ""
+                    console.print(f"[red]✗ Failed{rollback_msg}: {e}[/]")
                     return
 
             if dry_run:
@@ -759,11 +771,15 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     continue
 
                 try:
-                    _, execution_time = await self.runner.execute_downgrade(driver, migration)
-                    await self.tracker.remove_migration(driver, version)
+                    async def remove_version(exec_time: int) -> None:
+                        await self.tracker.remove_migration(driver, version)
+
+                    _, execution_time = await self.runner.execute_downgrade(driver, migration, on_success=remove_version)
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
                 except Exception as e:
-                    console.print(f"[red]✗ Failed: {e}[/]")
+                    use_txn = self.runner._should_use_transaction(migration, self.config)
+                    rollback_msg = " (transaction rolled back)" if use_txn else ""
+                    console.print(f"[red]✗ Failed{rollback_msg}: {e}[/]")
                     return
 
             if dry_run:

@@ -94,6 +94,9 @@ class MigrationConfig(TypedDict):
     include_extensions: NotRequired["list[str]"]
     """List of extension names whose migrations should be included. Extension migrations maintain separate versioning and are prefixed with 'ext_{name}_'."""
 
+    transactional: NotRequired[bool]
+    """Wrap migrations in transactions when supported. When enabled (default for adapters that support it), each migration runs in a transaction that is committed on success or rolled back on failure. This prevents partial migrations from leaving the database in an inconsistent state. Requires adapter support for transactional DDL. Defaults to True for PostgreSQL, SQLite, and DuckDB; False for MySQL, Oracle, and BigQuery. Individual migrations can override this with a '-- transactional: false' comment."""
+
 
 class LitestarConfig(TypedDict):
     """Configuration options for Litestar SQLSpec plugin.
@@ -260,6 +263,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     connection_type: "ClassVar[type[Any]]"
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
+    supports_transactional_ddl: "ClassVar[bool]" = False
     supports_native_arrow_import: "ClassVar[bool]" = False
     supports_native_arrow_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False

@@ -14,7 +14,6 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
-from sqlspec.utils.sync_tools import await_
 from sqlspec.utils.version import parse_version
 
 __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker")
@@ -395,7 +394,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
             try:
-                has_downgrade = bool(await_(loader.get_down_sql, raise_sync_error=False)(file_path))
+                has_downgrade = bool(loader.get_down_sql(file_path))
             except Exception:
                 has_downgrade = False
 
@@ -430,7 +429,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
 
         try:
             method = loader.get_up_sql if direction == "up" else loader.get_down_sql
-            sql_statements = await_(method, raise_sync_error=False)(file_path)
+            sql_statements = method(file_path)
 
         except Exception as e:
             if direction == "down":

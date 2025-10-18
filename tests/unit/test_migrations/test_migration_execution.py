@@ -546,11 +546,7 @@ DROP TABLE IF EXISTS nonexistent_table;
             migration = runner.load_migration(migration_file)
 
     with patch.object(migration["loader"], "get_up_sql") as mock_get_up_sql:
-
-        async def mock_get_up_error() -> None:
-            raise Exception("SQL syntax error")
-
-        mock_get_up_sql.return_value = mock_get_up_error()
+        mock_get_up_sql.side_effect = Exception("SQL syntax error")
 
         with pytest.raises(ValueError) as exc_info:
             runner.execute_upgrade(mock_driver, migration)

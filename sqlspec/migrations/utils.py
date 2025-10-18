@@ -44,13 +44,10 @@ Version: {version}
 Created: {datetime.now(timezone.utc).isoformat()}
 Author: {get_author()}
 
-Migration functions can use either naming convention:
-- Preferred: up()/down()
-- Alternate: migrate_up()/migrate_down()
-
+Migration functions must be named up() and down().
 Both can be synchronous or asynchronous:
-- def up(): ...
-- async def up(): ...
+- def up(): ... / async def up(): ...
+- def down(): ... / async def down(): ...
 """
 
 from typing import List, Union
@@ -62,9 +59,6 @@ def up() -> Union[str, List[str]]:
     Returns:
         SQL statement(s) to execute for upgrade.
         Can return a single string or list of strings.
-
-    Note: You can use either 'up()' or 'migrate_up()' for function names.
-    Both support async versions: 'async def up()' or 'async def migrate_up()'
     """
     return """
     CREATE TABLE example (
@@ -75,15 +69,12 @@ def up() -> Union[str, List[str]]:
 
 
 def down() -> Union[str, List[str]]:
-    """Reverse the migration.
+    """Reverse the migration (downgrade).
 
     Returns:
         SQL statement(s) to execute for downgrade.
         Can return a single string or list of strings.
         Return empty string or empty list if downgrade is not supported.
-
-    Note: You can use either 'down()' or 'migrate_down()' for function names.
-    Both support async versions: 'async def down()' or 'async def migrate_down()'
     """
     return "DROP TABLE example;"
 '''
