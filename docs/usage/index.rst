@@ -13,6 +13,7 @@ This section provides comprehensive guides on using SQLSpec for database operati
    query_builder
    sql_files
    cli
+   migrations
    framework_integrations
 
 Overview
@@ -37,6 +38,10 @@ SQLSpec provides a unified interface for database operations across multiple bac
 
 **Command Line Interface**
    Use the SQLSpec CLI for migrations, with shell completion support for bash, zsh, and fish.
+
+**Database Migrations**
+   Manage database schema changes with support for hybrid versioning, automatic schema migration,
+   and extension migrations.
 
 **Framework Integrations**
    Integrate SQLSpec with Litestar, FastAPI, and other Python web frameworks.

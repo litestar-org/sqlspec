@@ -26,7 +26,7 @@ __all__ = (
 logger = logging.getLogger(__name__)
 
 # Regex patterns for version detection
-SEQUENTIAL_PATTERN = re.compile(r"^(\d{1,4})$")
+SEQUENTIAL_PATTERN = re.compile(r"^(?!\d{14}$)(\d+)$")
 TIMESTAMP_PATTERN = re.compile(r"^(\d{14})$")
 EXTENSION_PATTERN = re.compile(r"^ext_(\w+)_(.+)$")
 
@@ -93,6 +93,17 @@ class MigrationVersion:
 
         return self.type == VersionType.SEQUENTIAL
 
+    def __le__(self, other: "MigrationVersion") -> bool:
+        """Check if version is less than or equal to another.
+
+        Args:
+            other: Version to compare against.
+
+        Returns:
+            True if this version is less than or equal to other.
+        """
+        return self == other or self < other
+
     def __eq__(self, other: object) -> bool:
         """Check version equality.
 
@@ -128,7 +139,7 @@ class MigrationVersion:
 def is_sequential_version(version_str: str) -> bool:
     """Check if version string is sequential format.
 
-    Sequential format: 1-4 digit number (0001, 42, 9999).
+    Sequential format: Any sequence of digits (0001, 42, 9999, 10000+).
 
     Args:
         version_str: Version string to check.
@@ -140,6 +151,8 @@ def is_sequential_version(version_str: str) -> bool:
         >>> is_sequential_version("0001")
         True
         >>> is_sequential_version("42")
+        True
+        >>> is_sequential_version("10000")
         True
         >>> is_sequential_version("20251011120000")
         False
@@ -221,15 +234,15 @@ def parse_version(version_str: str) -> MigrationVersion:
             extension=extension_name,
         )
 
-    if is_sequential_version(version_str):
-        return MigrationVersion(
-            raw=version_str, type=VersionType.SEQUENTIAL, sequence=int(version_str), timestamp=None, extension=None
-        )
-
     if is_timestamp_version(version_str):
         dt = datetime.strptime(version_str, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
         return MigrationVersion(
             raw=version_str, type=VersionType.TIMESTAMP, sequence=None, timestamp=dt, extension=None
+        )
+
+    if is_sequential_version(version_str):
+        return MigrationVersion(
+            raw=version_str, type=VersionType.SEQUENTIAL, sequence=int(version_str), timestamp=None, extension=None
         )
 
     msg = f"Invalid migration version format: {version_str}. Expected sequential (0001) or timestamp (YYYYMMDDHHmmss)."

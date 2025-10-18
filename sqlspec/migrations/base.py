@@ -210,6 +210,20 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
 
         return statements
 
+    def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
+        """Detect which columns are missing from the current schema.
+
+        Args:
+            existing_columns: Set of existing column names (may be uppercase/lowercase).
+
+        Returns:
+            Set of missing column names (lowercase).
+        """
+        target_create = self._get_create_table_sql()
+        target_columns = {col.name.lower() for col in target_create.columns}
+        existing_lower = {col.lower() for col in existing_columns}
+        return target_columns - existing_lower
+
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> Any:
         """Create the migration tracking table if it doesn't exist.
@@ -278,13 +292,14 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         Returns:
             The extracted version string or None.
         """
-        # Handle extension-prefixed versions (e.g., "ext_litestar_0001")
-        if filename.startswith("ext_"):
-            # This is already a prefixed version, return as-is
-            return filename
+        from pathlib import Path
 
-        # Regular version extraction
-        parts = filename.split("_", 1)
+        stem = Path(filename).stem
+
+        if stem.startswith("ext_"):
+            return stem
+
+        parts = stem.split("_", 1)
         return parts[0].zfill(4) if parts and parts[0].isdigit() else None
 
     def _calculate_checksum(self, content: str) -> str:

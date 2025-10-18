@@ -19,9 +19,10 @@ def test_is_sequential_version() -> None:
     assert is_sequential_version("42")
     assert is_sequential_version("9999")
     assert is_sequential_version("1")
+    assert is_sequential_version("00001")
+    assert is_sequential_version("10000")
 
     assert not is_sequential_version("20251011120000")
-    assert not is_sequential_version("00001")
     assert not is_sequential_version("abc")
     assert not is_sequential_version("")
 

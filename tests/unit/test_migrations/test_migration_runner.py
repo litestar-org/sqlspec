@@ -760,9 +760,7 @@ DROP TABLE test_table;
             down_sql = await sql_loader.get_down_sql(migration_file)
             file_count_after_down = len(sql_loader.sql_loader._files)
 
-            assert (
-                file_count_before_down == file_count_after_down
-            ), "get_down_sql() should not load additional files"
+            assert file_count_before_down == file_count_after_down, "get_down_sql() should not load additional files"
             assert len(down_sql) == 1
             assert "DROP TABLE test_table" in down_sql[0]
 

@@ -6,6 +6,9 @@ This module provides functionality to track applied migrations in the database.
 import os
 from typing import TYPE_CHECKING, Any
 
+from rich.console import Console
+
+from sqlspec.builder import sql
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.version import parse_version
@@ -21,14 +24,73 @@ logger = get_logger("migrations.tracker")
 class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
     """Synchronous migration version tracker."""
 
+    def _migrate_schema_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
+        """Check for and add any missing columns to the tracking table.
+
+        Uses the adapter's data_dictionary to query existing columns,
+        then compares to the target schema and adds missing columns one by one.
+
+        Args:
+            driver: The database driver to use.
+        """
+        try:
+            columns_data = driver.data_dictionary.get_columns(driver, self.version_table)
+            if not columns_data:
+                logger.debug("Migration tracking table does not exist yet")
+                return
+
+            existing_columns = {col["column_name"] for col in columns_data}
+            missing_columns = self._detect_missing_columns(existing_columns)
+
+            if not missing_columns:
+                logger.debug("Migration tracking table schema is up-to-date")
+                return
+
+            console = Console()
+            console.print(
+                f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
+            )
+
+            for col_name in sorted(missing_columns):
+                self._add_column(driver, col_name)
+
+            driver.commit()
+            console.print("[green]Migration tracking table schema updated successfully[/]")
+
+        except Exception as e:
+            logger.warning("Could not check or migrate tracking table schema: %s", e)
+
+    def _add_column(self, driver: "SyncDriverAdapterBase", column_name: str) -> None:
+        """Add a single column to the tracking table.
+
+        Args:
+            driver: The database driver to use.
+            column_name: Name of the column to add (lowercase).
+        """
+        target_create = self._get_create_table_sql()
+        column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
+
+        if not column_def:
+            return
+
+        alter_sql = sql.alter_table(self.version_table).add_column(
+            name=column_def.name, dtype=column_def.dtype, default=column_def.default, not_null=column_def.not_null
+        )
+        driver.execute(alter_sql)
+        logger.debug("Added column %s to tracking table", column_name)
+
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
+
+        Also checks for and adds any missing columns to support schema migrations.
 
         Args:
             driver: The database driver to use.
         """
         driver.execute(self._get_create_table_sql())
         self._safe_commit(driver)
+
+        self._migrate_schema_if_needed(driver)
 
     def get_current_version(self, driver: "SyncDriverAdapterBase") -> str | None:
         """Get the latest applied migration version.
@@ -140,15 +202,10 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
+        if driver.driver_features.get("autocommit", False):
+            return
+
         try:
-            connection = getattr(driver, "connection", None)
-            if connection and hasattr(connection, "autocommit") and getattr(connection, "autocommit", False):
-                return
-
-            driver_features = getattr(driver, "driver_features", {})
-            if driver_features and driver_features.get("autocommit", False):
-                return
-
             driver.commit()
         except Exception:
             logger.debug("Failed to commit transaction, likely due to autocommit being enabled")
@@ -157,14 +214,75 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
 class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
     """Asynchronous migration version tracker."""
 
+    async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
+        """Check for and add any missing columns to the tracking table.
+
+        Uses the driver's data_dictionary to query existing columns,
+        then compares to the target schema and adds missing columns one by one.
+
+        Args:
+            driver: The database driver to use.
+        """
+        try:
+            columns_data = await driver.data_dictionary.get_columns(driver, self.version_table)
+            if not columns_data:
+                logger.debug("Migration tracking table does not exist yet")
+                return
+
+            existing_columns = {col["column_name"] for col in columns_data}
+            missing_columns = self._detect_missing_columns(existing_columns)
+
+            if not missing_columns:
+                logger.debug("Migration tracking table schema is up-to-date")
+                return
+
+            from rich.console import Console
+
+            console = Console()
+            console.print(
+                f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
+            )
+
+            for col_name in sorted(missing_columns):
+                await self._add_column(driver, col_name)
+
+            await driver.commit()
+            console.print("[green]Migration tracking table schema updated successfully[/]")
+
+        except Exception as e:
+            logger.warning("Could not check or migrate tracking table schema: %s", e)
+
+    async def _add_column(self, driver: "AsyncDriverAdapterBase", column_name: str) -> None:
+        """Add a single column to the tracking table.
+
+        Args:
+            driver: The database driver to use.
+            column_name: Name of the column to add (lowercase).
+        """
+        target_create = self._get_create_table_sql()
+        column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
+
+        if not column_def:
+            return
+
+        alter_sql = sql.alter_table(self.version_table).add_column(
+            name=column_def.name, dtype=column_def.dtype, default=column_def.default, not_null=column_def.not_null
+        )
+        await driver.execute(alter_sql)
+        logger.debug("Added column %s to tracking table", column_name)
+
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
+
+        Also checks for and adds any missing columns to support schema migrations.
 
         Args:
             driver: The database driver to use.
         """
         await driver.execute(self._get_create_table_sql())
         await self._safe_commit_async(driver)
+
+        await self._migrate_schema_if_needed(driver)
 
     async def get_current_version(self, driver: "AsyncDriverAdapterBase") -> str | None:
         """Get the latest applied migration version.
@@ -276,15 +394,10 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
+        if driver.driver_features.get("autocommit", False):
+            return
+
         try:
-            connection = getattr(driver, "connection", None)
-            if connection and hasattr(connection, "autocommit") and getattr(connection, "autocommit", False):
-                return
-
-            driver_features = getattr(driver, "driver_features", {})
-            if driver_features and driver_features.get("autocommit", False):
-                return
-
             await driver.commit()
         except Exception:
             logger.debug("Failed to commit transaction, likely due to autocommit being enabled")

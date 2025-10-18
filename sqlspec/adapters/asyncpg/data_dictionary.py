@@ -1,7 +1,7 @@
 """PostgreSQL-specific data dictionary for metadata queries via asyncpg."""
 
 import re
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -113,6 +113,43 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
             "array": "ARRAY",
         }
         return type_map.get(type_category, "TEXT")
+
+    async def get_columns(
+        self, driver: AsyncDriverAdapterBase, table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get column information for a table using information_schema.
+
+        Args:
+            driver: AsyncPG driver instance
+            table: Table name to query columns for
+            schema: Schema name (None for default 'public')
+
+        Returns:
+            List of column metadata dictionaries with keys:
+                - column_name: Name of the column
+                - data_type: PostgreSQL data type
+                - is_nullable: Whether column allows NULL (YES/NO)
+                - column_default: Default value if any
+        """
+        asyncpg_driver = cast("AsyncpgDriver", driver)
+
+        if schema:
+            sql = f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = '{table}' AND table_schema = '{schema}'
+                ORDER BY ordinal_position
+            """
+        else:
+            sql = f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = '{table}' AND table_schema = 'public'
+                ORDER BY ordinal_position
+            """
+
+        result = await asyncpg_driver.execute(sql)
+        return result.data or []
 
     def list_available_features(self) -> "list[str]":
         """List available PostgreSQL feature flags.

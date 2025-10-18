@@ -1,7 +1,7 @@
 """MySQL-specific data dictionary for metadata queries via asyncmy."""
 
 import re
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -103,6 +103,43 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
             "blob": "BLOB",
         }
         return type_map.get(type_category, "VARCHAR(255)")
+
+    async def get_columns(
+        self, driver: AsyncDriverAdapterBase, table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get column information for a table using information_schema.
+
+        Args:
+            driver: AsyncMy driver instance
+            table: Table name to query columns for
+            schema: Schema name (database name in MySQL)
+
+        Returns:
+            List of column metadata dictionaries with keys:
+                - column_name: Name of the column
+                - data_type: MySQL data type
+                - is_nullable: Whether column allows NULL (YES/NO)
+                - column_default: Default value if any
+        """
+        asyncmy_driver = cast("AsyncmyDriver", driver)
+
+        if schema:
+            sql = f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = '{table}' AND table_schema = '{schema}'
+                ORDER BY ordinal_position
+            """
+        else:
+            sql = f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = '{table}'
+                ORDER BY ordinal_position
+            """
+
+        result = await asyncmy_driver.execute(sql)
+        return result.data or []
 
     def list_available_features(self) -> "list[str]":
         """List available MySQL feature flags.

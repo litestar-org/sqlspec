@@ -127,13 +127,15 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
     def _migrate_schema_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
         """Check for and add any missing columns to the tracking table.
 
+        Uses the driver's data dictionary to query existing columns from Oracle's
+        USER_TAB_COLUMNS metadata table.
+
         Args:
             driver: The database driver to use.
         """
         try:
-            result = driver.execute(self._get_existing_columns_sql())
-            existing_columns = {row["COLUMN_NAME"] for row in result.data}
-
+            columns_data = driver.data_dictionary.get_columns(driver, self.version_table)
+            existing_columns = {row["column_name"] for row in columns_data}
             missing_columns = self._detect_missing_columns(existing_columns)
 
             if not missing_columns:
@@ -285,13 +287,15 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
     async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
         """Check for and add any missing columns to the tracking table.
 
+        Uses the driver's data dictionary to query existing columns from Oracle's
+        USER_TAB_COLUMNS metadata table.
+
         Args:
             driver: The database driver to use.
         """
         try:
-            result = await driver.execute(self._get_existing_columns_sql())
-            existing_columns = {row["COLUMN_NAME"] for row in result.data}
-
+            columns_data = await driver.data_dictionary.get_columns(driver, self.version_table)
+            existing_columns = {row["column_name"] for row in columns_data}
             missing_columns = self._detect_missing_columns(existing_columns)
 
             if not missing_columns:

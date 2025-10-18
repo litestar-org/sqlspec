@@ -114,7 +114,13 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             Number of version records updated.
         """
         all_migrations = self.runner.get_migration_files()
-        applied_migrations = self.tracker.get_applied_migrations(driver)
+
+        try:
+            applied_migrations = self.tracker.get_applied_migrations(driver)
+        except Exception:
+            logger.debug("Could not fetch applied migrations for synchronization (table schema may be migrating)")
+            return 0
+
         applied_map = {m["version_num"]: m for m in applied_migrations}
 
         conversion_map = generate_conversion_map(all_migrations)
@@ -177,8 +183,16 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             all_migrations = self.runner.get_migration_files()
             pending = []
             for version, file_path in all_migrations:
-                if version not in applied_set and (revision == "head" or version <= revision):
-                    pending.append((version, file_path))
+                if version not in applied_set:
+                    if revision == "head":
+                        pending.append((version, file_path))
+                    else:
+                        from sqlspec.utils.version import parse_version
+
+                        parsed_version = parse_version(version)
+                        parsed_revision = parse_version(revision)
+                        if parsed_version <= parsed_revision:
+                            pending.append((version, file_path))
 
             if not pending:
                 if not all_migrations:
@@ -243,8 +257,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             elif revision == "base":
                 to_revert = list(reversed(applied))
             else:
+                from sqlspec.utils.version import parse_version
+
+                parsed_revision = parse_version(revision)
                 for migration in reversed(applied):
-                    if migration["version_num"] > revision:
+                    parsed_migration_version = parse_version(migration["version_num"])
+                    if parsed_migration_version > parsed_revision:
                         to_revert.append(migration)
 
             if not to_revert:
@@ -477,7 +495,13 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             Number of version records updated.
         """
         all_migrations = await self.runner.get_migration_files()
-        applied_migrations = await self.tracker.get_applied_migrations(driver)
+
+        try:
+            applied_migrations = await self.tracker.get_applied_migrations(driver)
+        except Exception:
+            logger.debug("Could not fetch applied migrations for synchronization (table schema may be migrating)")
+            return 0
+
         applied_map = {m["version_num"]: m for m in applied_migrations}
 
         conversion_map = generate_conversion_map(all_migrations)
@@ -540,8 +564,16 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             all_migrations = await self.runner.get_migration_files()
             pending = []
             for version, file_path in all_migrations:
-                if version not in applied_set and (revision == "head" or version <= revision):
-                    pending.append((version, file_path))
+                if version not in applied_set:
+                    if revision == "head":
+                        pending.append((version, file_path))
+                    else:
+                        from sqlspec.utils.version import parse_version
+
+                        parsed_version = parse_version(version)
+                        parsed_revision = parse_version(revision)
+                        if parsed_version <= parsed_revision:
+                            pending.append((version, file_path))
             if not pending:
                 if not all_migrations:
                     console.print(
@@ -604,8 +636,12 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             elif revision == "base":
                 to_revert = list(reversed(applied))
             else:
+                from sqlspec.utils.version import parse_version
+
+                parsed_revision = parse_version(revision)
                 for migration in reversed(applied):
-                    if migration["version_num"] > revision:
+                    parsed_migration_version = parse_version(migration["version_num"])
+                    if parsed_migration_version > parsed_revision:
                         to_revert.append(migration)
             if not to_revert:
                 console.print("[yellow]Nothing to downgrade[/]")
