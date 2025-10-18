@@ -19,6 +19,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.version import generate_conversion_map, generate_timestamp_version
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from sqlspec.config import AsyncConfigT, SyncConfigT
 
 __all__ = ("AsyncMigrationCommands", "SyncMigrationCommands", "create_migration_commands")
@@ -98,6 +100,39 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             return cast("str | None", current)
 
+    def _load_single_migration_checksum(self, version: str, file_path: "Path") -> "tuple[str, tuple[str, Path]] | None":
+        """Load checksum for a single migration.
+
+        Args:
+            version: Migration version.
+            file_path: Path to migration file.
+
+        Returns:
+            Tuple of (version, (checksum, file_path)) or None if load fails.
+        """
+        try:
+            migration = self.runner.load_migration(file_path, version)
+            return (version, (migration["checksum"], file_path))
+        except Exception as e:
+            logger.debug("Could not load migration %s for auto-sync: %s", version, e)
+            return None
+
+    def _load_migration_checksums(self, all_migrations: "list[tuple[str, Path]]") -> "dict[str, tuple[str, Path]]":
+        """Load checksums for all migrations.
+
+        Args:
+            all_migrations: List of (version, file_path) tuples.
+
+        Returns:
+            Dictionary mapping version to (checksum, file_path) tuples.
+        """
+        file_checksums = {}
+        for version, file_path in all_migrations:
+            result = self._load_single_migration_checksum(version, file_path)
+            if result:
+                file_checksums[result[0]] = result[1]
+        return file_checksums
+
     def _synchronize_version_records(self, driver: Any) -> int:
         """Synchronize database version records with migration files.
 
@@ -126,21 +161,32 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         conversion_map = generate_conversion_map(all_migrations)
 
         updated_count = 0
-        for old_version, new_version in conversion_map.items():
-            if old_version in applied_map and new_version not in applied_map:
-                applied_checksum = applied_map[old_version]["checksum"]
+        if conversion_map:
+            for old_version, new_version in conversion_map.items():
+                if old_version in applied_map and new_version not in applied_map:
+                    applied_checksum = applied_map[old_version]["checksum"]
 
-                file_path = next((path for v, path in all_migrations if v == new_version), None)
-                if file_path:
-                    migration = self.runner.load_migration(file_path, new_version)
-                    if migration["checksum"] == applied_checksum:
-                        self.tracker.update_version_record(driver, old_version, new_version)
-                        console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
+                    file_path = next((path for v, path in all_migrations if v == new_version), None)
+                    if file_path:
+                        migration = self.runner.load_migration(file_path, new_version)
+                        if migration["checksum"] == applied_checksum:
+                            self.tracker.update_version_record(driver, old_version, new_version)
+                            console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
+                            updated_count += 1
+                        else:
+                            console.print(
+                                f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
+                            )
+        else:
+            file_checksums = self._load_migration_checksums(all_migrations)
+
+            for applied_version, applied_record in applied_map.items():
+                for file_version, (file_checksum, _) in file_checksums.items():
+                    if file_version not in applied_map and applied_record["checksum"] == file_checksum:
+                        self.tracker.update_version_record(driver, applied_version, file_version)
+                        console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
                         updated_count += 1
-                    else:
-                        console.print(
-                            f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
-                        )
+                        break
 
         if updated_count > 0:
             console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
@@ -479,6 +525,43 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             return cast("str | None", current)
 
+    async def _load_single_migration_checksum(
+        self, version: str, file_path: "Path"
+    ) -> "tuple[str, tuple[str, Path]] | None":
+        """Load checksum for a single migration.
+
+        Args:
+            version: Migration version.
+            file_path: Path to migration file.
+
+        Returns:
+            Tuple of (version, (checksum, file_path)) or None if load fails.
+        """
+        try:
+            migration = await self.runner.load_migration(file_path, version)
+            return (version, (migration["checksum"], file_path))
+        except Exception as e:
+            logger.debug("Could not load migration %s for auto-sync: %s", version, e)
+            return None
+
+    async def _load_migration_checksums(
+        self, all_migrations: "list[tuple[str, Path]]"
+    ) -> "dict[str, tuple[str, Path]]":
+        """Load checksums for all migrations.
+
+        Args:
+            all_migrations: List of (version, file_path) tuples.
+
+        Returns:
+            Dictionary mapping version to (checksum, file_path) tuples.
+        """
+        file_checksums = {}
+        for version, file_path in all_migrations:
+            result = await self._load_single_migration_checksum(version, file_path)
+            if result:
+                file_checksums[result[0]] = result[1]
+        return file_checksums
+
     async def _synchronize_version_records(self, driver: Any) -> int:
         """Synchronize database version records with migration files.
 
@@ -507,21 +590,32 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         conversion_map = generate_conversion_map(all_migrations)
 
         updated_count = 0
-        for old_version, new_version in conversion_map.items():
-            if old_version in applied_map and new_version not in applied_map:
-                applied_checksum = applied_map[old_version]["checksum"]
+        if conversion_map:
+            for old_version, new_version in conversion_map.items():
+                if old_version in applied_map and new_version not in applied_map:
+                    applied_checksum = applied_map[old_version]["checksum"]
 
-                file_path = next((path for v, path in all_migrations if v == new_version), None)
-                if file_path:
-                    migration = await self.runner.load_migration(file_path, new_version)
-                    if migration["checksum"] == applied_checksum:
-                        await self.tracker.update_version_record(driver, old_version, new_version)
-                        console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
+                    file_path = next((path for v, path in all_migrations if v == new_version), None)
+                    if file_path:
+                        migration = await self.runner.load_migration(file_path, new_version)
+                        if migration["checksum"] == applied_checksum:
+                            await self.tracker.update_version_record(driver, old_version, new_version)
+                            console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
+                            updated_count += 1
+                        else:
+                            console.print(
+                                f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
+                            )
+        else:
+            file_checksums = await self._load_migration_checksums(all_migrations)
+
+            for applied_version, applied_record in applied_map.items():
+                for file_version, (file_checksum, _) in file_checksums.items():
+                    if file_version not in applied_map and applied_record["checksum"] == file_checksum:
+                        await self.tracker.update_version_record(driver, applied_version, file_version)
+                        console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
                         updated_count += 1
-                    else:
-                        console.print(
-                            f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
-                        )
+                        break
 
         if updated_count > 0:
             console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")

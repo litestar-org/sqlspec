@@ -304,15 +304,15 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
 
         Returns:
             List of column metadata dictionaries with keys:
-                - column_name: Name of the column (UPPERCASE in Oracle)
-                - data_type: Oracle data type
-                - data_length: Maximum length (for character types)
-                - nullable: 'Y' or 'N'
+                - COLUMN_NAME: Name of the column (UPPERCASE in Oracle)
+                - DATA_TYPE: Oracle data type
+                - DATA_LENGTH: Maximum length (for character types)
+                - NULLABLE: 'Y' or 'N'
         """
 
         oracle_driver = cast("OracleSyncDriver", driver)
         result = oracle_driver.execute(self._get_columns_sql(table, schema))
-        return result.data or []
+        return result.get_data()
 
     def list_available_features(self) -> "list[str]":
         """List available Oracle feature flags.
@@ -475,15 +475,15 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
 
         Returns:
             List of column metadata dictionaries with keys:
-                - column_name: Name of the column (UPPERCASE in Oracle)
-                - data_type: Oracle data type
-                - data_length: Maximum length (for character types)
-                - nullable: 'Y' or 'N'
+                - COLUMN_NAME: Name of the column (UPPERCASE in Oracle)
+                - DATA_TYPE: Oracle data type
+                - DATA_LENGTH: Maximum length (for character types)
+                - NULLABLE: 'Y' or 'N'
         """
 
         oracle_driver = cast("OracleAsyncDriver", driver)
         result = await oracle_driver.execute(self._get_columns_sql(table, schema))
-        return result.data or []
+        return result.get_data()
 
     def list_available_features(self) -> "list[str]":
         """List available Oracle feature flags.

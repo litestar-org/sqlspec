@@ -157,14 +157,31 @@ class SQLFileLoader(BaseMigrationLoader):
     def _extract_version(self, filename: str) -> str:
         """Extract version from filename.
 
+        Supports sequential (0001), timestamp (20251011120000), and extension-prefixed
+        (ext_litestar_0001) version formats.
+
         Args:
             filename: Migration filename to parse.
 
         Returns:
-            Zero-padded version string or empty string if invalid.
+            Version string or empty string if invalid.
         """
-        parts = filename.split("_", 1)
-        return parts[0].zfill(4) if parts and parts[0].isdigit() else ""
+        extension_version_parts = 3
+        timestamp_min_length = 4
+
+        name_without_ext = filename.rsplit(".", 1)[0]
+
+        if name_without_ext.startswith("ext_"):
+            parts = name_without_ext.split("_", 3)
+            if len(parts) >= extension_version_parts:
+                return f"{parts[0]}_{parts[1]}_{parts[2]}"
+            return ""
+
+        parts = name_without_ext.split("_", 1)
+        if parts and parts[0].isdigit():
+            return parts[0] if len(parts[0]) > timestamp_min_length else parts[0].zfill(4)
+
+        return ""
 
 
 class PythonFileLoader(BaseMigrationLoader):

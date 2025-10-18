@@ -172,7 +172,7 @@ def test_downgrade_with_sequential_versions(sqlite_config: SqliteConfig, migrati
     ]
 
     for filename, version, sql in migrations:
-        table_name = filename.split("_", 2)[1]
+        table_name = filename.split("_", 2)[2].rsplit(".", 1)[0]
         content = f"""-- name: migrate-{version}-up
 {sql}
 
@@ -201,7 +201,7 @@ def test_downgrade_with_timestamp_versions(sqlite_config: SqliteConfig, migratio
     ]
 
     for filename, version, sql in migrations:
-        table_name = filename.split("_", 2)[1]
+        table_name = filename.split("_", 2)[2].rsplit(".", 1)[0]
         content = f"""-- name: migrate-{version}-up
 {sql}
 
@@ -229,7 +229,7 @@ def test_downgrade_to_specific_version(sqlite_config: SqliteConfig, migrations_d
     ]
 
     for filename, version, sql in migrations:
-        table_name = filename.split("_", 2)[1]
+        table_name = filename.split("_", 2)[2].rsplit(".", 1)[0]
         content = f"""-- name: migrate-{version}-up
 {sql}
 
@@ -262,7 +262,7 @@ def test_downgrade_to_base(sqlite_config: SqliteConfig, migrations_dir: Path) ->
     ]
 
     for filename, version, sql in migrations:
-        table_name = filename.split("_", 2)[1]
+        table_name = filename.split("_", 2)[2].rsplit(".", 1)[0]
         content = f"""-- name: migrate-{version}-up
 {sql}
 
@@ -382,7 +382,7 @@ def test_downgrade_dry_run_shows_pending_downgrades(sqlite_config: SqliteConfig,
     ]
 
     for filename, version, sql in migrations:
-        table_name = filename.split("_", 2)[1]
+        table_name = filename.split("_", 2)[2].rsplit(".", 1)[0]
         content = f"""-- name: migrate-{version}-up
 {sql}
 

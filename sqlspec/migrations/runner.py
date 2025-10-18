@@ -4,7 +4,6 @@ This module provides separate sync and async migration runners with clean separa
 of concerns and proper type safety.
 """
 
-import operator
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -56,20 +55,31 @@ class BaseMigrationRunner(ABC):
     def _extract_version(self, filename: str) -> "str | None":
         """Extract version from filename.
 
+        Supports sequential (0001), timestamp (20251011120000), and extension-prefixed
+        (ext_litestar_0001) version formats.
+
         Args:
             filename: The migration filename.
 
         Returns:
             The extracted version string or None.
         """
-        # Handle extension-prefixed versions (e.g., "ext_litestar_0001")
-        if filename.startswith("ext_"):
-            # This is already a prefixed version, return as-is
-            return filename
+        extension_version_parts = 3
+        timestamp_min_length = 4
 
-        # Regular version extraction
-        parts = filename.split("_", 1)
-        return parts[0].zfill(4) if parts and parts[0].isdigit() else None
+        name_without_ext = filename.rsplit(".", 1)[0]
+
+        if name_without_ext.startswith("ext_"):
+            parts = name_without_ext.split("_", 3)
+            if len(parts) >= extension_version_parts:
+                return f"{parts[0]}_{parts[1]}_{parts[2]}"
+            return None
+
+        parts = name_without_ext.split("_", 1)
+        if parts and parts[0].isdigit():
+            return parts[0] if len(parts[0]) > timestamp_min_length else parts[0].zfill(4)
+
+        return None
 
     def _calculate_checksum(self, content: str) -> str:
         """Calculate MD5 checksum of migration content.
@@ -136,7 +146,16 @@ class BaseMigrationRunner(ABC):
                             prefixed_version = f"ext_{ext_name}_{version}"
                             migrations.append((prefixed_version, file_path))
 
-        return sorted(migrations, key=operator.itemgetter(0))
+        from sqlspec.utils.version import parse_version
+
+        def version_sort_key(migration_tuple: "tuple[str, Path]") -> "Any":
+            version_str = migration_tuple[0]
+            try:
+                return parse_version(version_str)
+            except ValueError:
+                return version_str
+
+        return sorted(migrations, key=version_sort_key)
 
     def get_migration_files(self) -> "list[tuple[str, Path]]":
         """Get all migration files sorted by version.
