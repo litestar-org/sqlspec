@@ -238,7 +238,7 @@ class BaseMigrationRunner(ABC):
 
         return context_to_use
 
-    def _should_use_transaction(self, migration: "dict[str, Any]", config: Any) -> bool:
+    def should_use_transaction(self, migration: "dict[str, Any]", config: Any) -> bool:
         """Determine if migration should run in a transaction.
 
         Args:
@@ -252,10 +252,10 @@ class BaseMigrationRunner(ABC):
             return False
 
         if migration.get("transactional") is not None:
-            return migration["transactional"]
+            return bool(migration["transactional"])
 
         migration_config = getattr(config, "migration_config", {}) or {}
-        return migration_config.get("transactional", True)
+        return bool(migration_config.get("transactional", True))
 
 
 class SyncMigrationRunner(BaseMigrationRunner):
@@ -305,7 +305,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         Args:
             driver: The sync database driver to use.
             migration: Migration metadata dictionary.
-            use_transaction: Override transaction behavior. If None, uses _should_use_transaction logic.
+            use_transaction: Override transaction behavior. If None, uses should_use_transaction logic.
             on_success: Callback invoked with execution_time_ms before commit (for version tracking).
 
         Returns:
@@ -317,7 +317,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         if use_transaction is None:
             config = self.context.config if self.context else None
-            use_transaction = self._should_use_transaction(migration, config) if config else False
+            use_transaction = self.should_use_transaction(migration, config) if config else False
 
         start_time = time.time()
 
@@ -357,7 +357,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         Args:
             driver: The sync database driver to use.
             migration: Migration metadata dictionary.
-            use_transaction: Override transaction behavior. If None, uses _should_use_transaction logic.
+            use_transaction: Override transaction behavior. If None, uses should_use_transaction logic.
             on_success: Callback invoked with execution_time_ms before commit (for version tracking).
 
         Returns:
@@ -369,7 +369,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         if use_transaction is None:
             config = self.context.config if self.context else None
-            use_transaction = self._should_use_transaction(migration, config) if config else False
+            use_transaction = self.should_use_transaction(migration, config) if config else False
 
         start_time = time.time()
 
@@ -523,7 +523,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         Args:
             driver: The async database driver to use.
             migration: Migration metadata dictionary.
-            use_transaction: Override transaction behavior. If None, uses _should_use_transaction logic.
+            use_transaction: Override transaction behavior. If None, uses should_use_transaction logic.
             on_success: Async callback invoked with execution_time_ms before commit (for version tracking).
 
         Returns:
@@ -535,7 +535,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         if use_transaction is None:
             config = self.context.config if self.context else None
-            use_transaction = self._should_use_transaction(migration, config) if config else False
+            use_transaction = self.should_use_transaction(migration, config) if config else False
 
         start_time = time.time()
 
@@ -575,7 +575,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         Args:
             driver: The async database driver to use.
             migration: Migration metadata dictionary.
-            use_transaction: Override transaction behavior. If None, uses _should_use_transaction logic.
+            use_transaction: Override transaction behavior. If None, uses should_use_transaction logic.
             on_success: Async callback invoked with execution_time_ms before commit (for version tracking).
 
         Returns:
@@ -587,7 +587,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         if use_transaction is None:
             config = self.context.config if self.context else None
-            use_transaction = self._should_use_transaction(migration, config) if config else False
+            use_transaction = self.should_use_transaction(migration, config) if config else False
 
         start_time = time.time()
 
@@ -661,7 +661,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         for version, file_path in migrations:
             if file_path.suffix == ".sql":
-                await async_(self.loader.load_sql)(file_path)
+                self.loader.load_sql(file_path)
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
