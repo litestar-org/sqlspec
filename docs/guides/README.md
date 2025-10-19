@@ -28,6 +28,12 @@ Optimization guides for SQLSpec:
 - [**SQLglot Guide**](performance/sqlglot.md) - SQL parsing, transformation, and optimization with SQLglot
 - [**MyPyC Guide**](performance/mypyc.md) - Compilation strategies for high-performance Python code
 
+## Migrations
+
+Database migration strategies and workflows:
+
+- [**Hybrid Versioning**](migrations/hybrid-versioning.md) - Combine timestamp and sequential versioning for optimal workflows
+
 ## Testing
 
 Testing strategies and patterns:
@@ -91,6 +97,8 @@ docs/guides/
 │   ├── oracle.md
 │   ├── postgres.md
 │   └── ...
+├── migrations/                  # Migration workflows
+│   └── hybrid-versioning.md
 ├── performance/                 # Performance optimization
 │   ├── sqlglot.md
 │   └── mypyc.md

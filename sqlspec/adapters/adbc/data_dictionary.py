@@ -1,7 +1,7 @@
 """ADBC multi-dialect data dictionary for metadata queries."""
 
 import re
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -267,6 +267,56 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             }
 
         return type_map.get(type_category, "TEXT")
+
+    def get_columns(
+        self, driver: SyncDriverAdapterBase, table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get column information for a table based on detected dialect.
+
+        Args:
+            driver: ADBC driver instance
+            table: Table name to query columns for
+            schema: Schema name (None for default)
+
+        Returns:
+            List of column metadata dictionaries with keys:
+                - column_name: Name of the column
+                - data_type: Database data type
+                - is_nullable or nullable: Whether column allows NULL
+                - column_default or default_value: Default value if any
+        """
+        dialect = self._get_dialect(driver)
+        adbc_driver = cast("AdbcDriver", driver)
+
+        if dialect == "sqlite":
+            result = adbc_driver.execute(f"PRAGMA table_info({table})")
+            return [
+                {
+                    "column_name": row["name"] if isinstance(row, dict) else row[1],
+                    "data_type": row["type"] if isinstance(row, dict) else row[2],
+                    "nullable": not (row["notnull"] if isinstance(row, dict) else row[3]),
+                    "default_value": row["dflt_value"] if isinstance(row, dict) else row[4],
+                }
+                for row in result.data or []
+            ]
+
+        if schema:
+            sql = f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = '{table}' AND table_schema = '{schema}'
+                ORDER BY ordinal_position
+            """
+        else:
+            sql = f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = '{table}'
+                ORDER BY ordinal_position
+            """
+
+        result = adbc_driver.execute(sql)
+        return result.data or []
 
     def list_available_features(self) -> "list[str]":
         """List available feature flags across all supported dialects.

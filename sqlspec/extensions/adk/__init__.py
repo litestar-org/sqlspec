@@ -38,8 +38,8 @@ Example (with extension_config):
     )
 """
 
+from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.extensions.adk.config import ADKConfig
 from sqlspec.extensions.adk.service import SQLSpecSessionService
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
 

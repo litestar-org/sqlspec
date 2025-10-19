@@ -1,7 +1,7 @@
 """SQLite-specific data dictionary for metadata queries."""
 
 import re
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -98,6 +98,36 @@ class SqliteSyncDataDictionary(SyncDataDictionaryBase):
 
         type_map = {"uuid": "TEXT", "boolean": "INTEGER", "timestamp": "TIMESTAMP", "text": "TEXT", "blob": "BLOB"}
         return type_map.get(type_category, "TEXT")
+
+    def get_columns(
+        self, driver: SyncDriverAdapterBase, table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get column information for a table using SQLite PRAGMA.
+
+        Args:
+            driver: SQLite driver instance
+            table: Table name to query columns for
+            schema: Schema name (unused in SQLite)
+
+        Returns:
+            List of column metadata dictionaries with keys:
+                - column_name: Name of the column
+                - data_type: SQLite data type
+                - nullable: Whether column allows NULL
+                - default_value: Default value if any
+        """
+        sqlite_driver = cast("SqliteDriver", driver)
+        result = sqlite_driver.execute(f"PRAGMA table_info({table})")
+
+        return [
+            {
+                "column_name": row["name"] if isinstance(row, dict) else row[1],
+                "data_type": row["type"] if isinstance(row, dict) else row[2],
+                "nullable": not (row["notnull"] if isinstance(row, dict) else row[3]),
+                "default_value": row["dflt_value"] if isinstance(row, dict) else row[4],
+            }
+            for row in result.data or []
+        ]
 
     def list_available_features(self) -> "list[str]":
         """List available SQLite feature flags.

@@ -1,7 +1,7 @@
 """DuckDB-specific data dictionary for metadata queries."""
 
 import re
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
@@ -103,6 +103,43 @@ class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
             "struct": "STRUCT",
         }
         return type_map.get(type_category, "VARCHAR")
+
+    def get_columns(
+        self, driver: SyncDriverAdapterBase, table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get column information for a table using information_schema.
+
+        Args:
+            driver: DuckDB driver instance
+            table: Table name to query columns for
+            schema: Schema name (None for default)
+
+        Returns:
+            List of column metadata dictionaries with keys:
+                - column_name: Name of the column
+                - data_type: DuckDB data type
+                - nullable: Whether column allows NULL (YES/NO)
+                - column_default: Default value if any
+        """
+        duckdb_driver = cast("DuckDBDriver", driver)
+
+        if schema:
+            sql = f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = '{table}' AND table_schema = '{schema}'
+                ORDER BY ordinal_position
+            """
+        else:
+            sql = f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = '{table}'
+                ORDER BY ordinal_position
+            """
+
+        result = duckdb_driver.execute(sql)
+        return result.data or []
 
     def list_available_features(self) -> "list[str]":
         """List available DuckDB feature flags.

@@ -567,12 +567,250 @@ DROP TABLE test;
         sql_loader = SQLFileLoader()
 
         async def test_operations() -> None:
-            await sql_loader.get_up_sql(migration_file)
+            sql_loader.validate_migration_file(migration_file)
             path_str = str(migration_file)
             assert path_str in sql_loader.sql_loader._files
             assert sql_loader.sql_loader.has_query("migrate-0001-up")
             assert sql_loader.sql_loader.has_query("migrate-0001-down")
+
+            await sql_loader.get_up_sql(migration_file)
+            assert path_str in sql_loader.sql_loader._files
+
             await sql_loader.get_down_sql(migration_file)
             assert path_str in sql_loader.sql_loader._files
 
         asyncio.run(test_operations())
+
+
+def test_no_duplicate_loading_during_migration_execution() -> None:
+    """Test that SQL files are loaded exactly once during migration execution.
+
+    Verifies fix for issue #118 - validates that running a migration loads
+    the SQL file only once, not multiple times. Checks that the file is in
+    the loader's cache after validation and remains there throughout the workflow.
+    """
+    import asyncio
+
+    from sqlspec.migrations.loaders import SQLFileLoader
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        migrations_path = Path(temp_dir)
+
+        migration_file = migrations_path / "0001_create_users.sql"
+        migration_content = """
+-- name: migrate-0001-up
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    username TEXT NOT NULL
+);
+
+-- name: migrate-0001-down
+DROP TABLE users;
+"""
+        migration_file.write_text(migration_content)
+
+        sql_loader = SQLFileLoader()
+
+        async def test_migration_workflow() -> None:
+            sql_loader.validate_migration_file(migration_file)
+
+            path_str = str(migration_file)
+            assert path_str in sql_loader.sql_loader._files, "File should be loaded after validation"
+            assert sql_loader.sql_loader.has_query("migrate-0001-up")
+            assert sql_loader.sql_loader.has_query("migrate-0001-down")
+
+            file_count_after_validation = len(sql_loader.sql_loader._files)
+
+            await sql_loader.get_up_sql(migration_file)
+            file_count_after_up = len(sql_loader.sql_loader._files)
+            assert file_count_after_validation == file_count_after_up, "get_up_sql should not load additional files"
+
+            await sql_loader.get_down_sql(migration_file)
+            file_count_after_down = len(sql_loader.sql_loader._files)
+            assert file_count_after_up == file_count_after_down, "get_down_sql should not load additional files"
+
+        asyncio.run(test_migration_workflow())
+
+
+def test_sql_file_loader_counter_accuracy_single_file() -> None:
+    """Test SQLFileLoader caching behavior for single file loading.
+
+    Verifies fix for issue #118 (Solution 2) - ensures that load_sql()
+    properly caches files. First call should load and parse the file,
+    second call should return immediately from cache without reparsing.
+    """
+    from sqlspec.loader import SQLFileLoader
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        test_file = temp_path / "test_queries.sql"
+        test_content = """
+-- name: get_user
+SELECT * FROM users WHERE id = :id;
+
+-- name: list_users
+SELECT * FROM users;
+
+-- name: delete_user
+DELETE FROM users WHERE id = :id;
+"""
+        test_file.write_text(test_content)
+
+        loader = SQLFileLoader()
+
+        loader.load_sql(test_file)
+        path_str = str(test_file)
+        assert path_str in loader._files, "First load should add file to cache"
+        assert len(loader._queries) == 3, "First load should parse 3 queries"
+
+        query_count_before_reload = len(loader._queries)
+        file_count_before_reload = len(loader._files)
+
+        loader.load_sql(test_file)
+
+        assert len(loader._queries) == query_count_before_reload, "Second load should not add new queries (cached)"
+        assert len(loader._files) == file_count_before_reload, "Second load should not add new files (cached)"
+
+
+def test_sql_file_loader_counter_accuracy_directory() -> None:
+    """Test SQLFileLoader caching behavior for directory loading.
+
+    Verifies that _load_directory() properly caches files and doesn't
+    reload them on subsequent calls.
+    """
+    from sqlspec.loader import SQLFileLoader
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        file1 = temp_path / "queries1.sql"
+        file1.write_text("""
+-- name: query1
+SELECT 1;
+""")
+
+        file2 = temp_path / "queries2.sql"
+        file2.write_text("""
+-- name: query2
+SELECT 2;
+""")
+
+        loader = SQLFileLoader()
+
+        loader.load_sql(temp_path)
+        assert len(loader._files) == 2, "First load should add 2 files to cache"
+        assert len(loader._queries) == 2, "First load should parse 2 queries"
+
+        query_count_before_reload = len(loader._queries)
+        file_count_before_reload = len(loader._files)
+
+        loader.load_sql(temp_path)
+
+        assert len(loader._queries) == query_count_before_reload, "Second load should not add new queries (all cached)"
+        assert len(loader._files) == file_count_before_reload, "Second load should not add new files (all cached)"
+
+
+def test_migration_workflow_single_load_design() -> None:
+    """Test that migration workflow respects single-load design.
+
+    Verifies fix for issue #118 (Solution 1) - confirms that:
+    1. validate_migration_file() loads the file and parses queries
+    2. get_up_sql() retrieves queries WITHOUT reloading the file
+    3. get_down_sql() retrieves queries WITHOUT reloading the file
+
+    All three operations should use the same cached file.
+    """
+    import asyncio
+
+    from sqlspec.migrations.loaders import SQLFileLoader
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        migrations_path = Path(temp_dir)
+
+        migration_file = migrations_path / "0001_test.sql"
+        migration_content = """
+-- name: migrate-0001-up
+CREATE TABLE test_table (id INTEGER);
+
+-- name: migrate-0001-down
+DROP TABLE test_table;
+"""
+        migration_file.write_text(migration_content)
+
+        sql_loader = SQLFileLoader()
+
+        async def test_workflow() -> None:
+            sql_loader.validate_migration_file(migration_file)
+
+            path_str = str(migration_file)
+            assert path_str in sql_loader.sql_loader._files, "File should be loaded after validation"
+            assert sql_loader.sql_loader.has_query("migrate-0001-up")
+            assert sql_loader.sql_loader.has_query("migrate-0001-down")
+
+            file_count_before_up = len(sql_loader.sql_loader._files)
+            up_sql = await sql_loader.get_up_sql(migration_file)
+            file_count_after_up = len(sql_loader.sql_loader._files)
+
+            assert file_count_before_up == file_count_after_up, "get_up_sql() should not load additional files"
+            assert len(up_sql) == 1
+            assert "CREATE TABLE test_table" in up_sql[0]
+
+            file_count_before_down = len(sql_loader.sql_loader._files)
+            down_sql = await sql_loader.get_down_sql(migration_file)
+            file_count_after_down = len(sql_loader.sql_loader._files)
+
+            assert file_count_before_down == file_count_after_down, "get_down_sql() should not load additional files"
+            assert len(down_sql) == 1
+            assert "DROP TABLE test_table" in down_sql[0]
+
+        asyncio.run(test_workflow())
+
+
+def test_migration_loader_does_not_reload_on_get_sql_calls() -> None:
+    """Test that get_up_sql and get_down_sql do not trigger file reloads.
+
+    Verifies that after validate_migration_file() loads the file,
+    subsequent calls to get_up_sql() and get_down_sql() retrieve
+    the cached queries without calling load_sql() again.
+    """
+    import asyncio
+
+    from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
+    from sqlspec.migrations.loaders import SQLFileLoader
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        migrations_path = Path(temp_dir)
+
+        migration_file = migrations_path / "0001_schema.sql"
+        migration_content = """
+-- name: migrate-0001-up
+CREATE TABLE products (id INTEGER, name TEXT);
+
+-- name: migrate-0001-down
+DROP TABLE products;
+"""
+        migration_file.write_text(migration_content)
+
+        sql_loader = SQLFileLoader()
+
+        call_counts = {"load_sql": 0}
+        original_load_sql = CoreSQLFileLoader.load_sql
+
+        def counting_load_sql(self: CoreSQLFileLoader, *args: Any, **kwargs: Any) -> None:
+            call_counts["load_sql"] += 1
+            return original_load_sql(self, *args, **kwargs)
+
+        with patch.object(CoreSQLFileLoader, "load_sql", counting_load_sql):
+
+            async def test_no_reload() -> None:
+                sql_loader.validate_migration_file(migration_file)
+                assert call_counts["load_sql"] == 1, "validate_migration_file should call load_sql exactly once"
+
+                await sql_loader.get_up_sql(migration_file)
+                assert call_counts["load_sql"] == 1, "get_up_sql should NOT call load_sql (should use cache)"
+
+                await sql_loader.get_down_sql(migration_file)
+                assert call_counts["load_sql"] == 1, "get_down_sql should NOT call load_sql (should use cache)"
+
+            asyncio.run(test_no_reload())

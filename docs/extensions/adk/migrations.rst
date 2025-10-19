@@ -148,7 +148,7 @@ SQLSpec includes a built-in migration for ADK tables:
 
    from sqlspec.extensions.adk.migrations import create_adk_tables_migration
 
-Location: ``sqlspec/extensions/adk/migrations/0001_create_adk_tables.py``
+Location: ``sqlspec/extensions/adk/migrations/``
 
 You can copy this template for custom migrations:
 

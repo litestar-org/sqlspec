@@ -4,7 +4,6 @@ This module provides separate sync and async migration runners with clean separa
 of concerns and proper type safety.
 """
 
-import operator
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -56,23 +55,38 @@ class BaseMigrationRunner(ABC):
     def _extract_version(self, filename: str) -> "str | None":
         """Extract version from filename.
 
+        Supports sequential (0001), timestamp (20251011120000), and extension-prefixed
+        (ext_litestar_0001) version formats.
+
         Args:
             filename: The migration filename.
 
         Returns:
             The extracted version string or None.
         """
-        # Handle extension-prefixed versions (e.g., "ext_litestar_0001")
-        if filename.startswith("ext_"):
-            # This is already a prefixed version, return as-is
-            return filename
+        extension_version_parts = 3
+        timestamp_min_length = 4
 
-        # Regular version extraction
-        parts = filename.split("_", 1)
-        return parts[0].zfill(4) if parts and parts[0].isdigit() else None
+        name_without_ext = filename.rsplit(".", 1)[0]
+
+        if name_without_ext.startswith("ext_"):
+            parts = name_without_ext.split("_", 3)
+            if len(parts) >= extension_version_parts:
+                return f"{parts[0]}_{parts[1]}_{parts[2]}"
+            return None
+
+        parts = name_without_ext.split("_", 1)
+        if parts and parts[0].isdigit():
+            return parts[0] if len(parts[0]) > timestamp_min_length else parts[0].zfill(4)
+
+        return None
 
     def _calculate_checksum(self, content: str) -> str:
         """Calculate MD5 checksum of migration content.
+
+        Canonicalizes content by excluding query name headers that change during
+        fix command (migrate-{version}-up/down). This ensures checksums remain
+        stable when converting timestamp versions to sequential format.
 
         Args:
             content: The migration file content.
@@ -81,8 +95,11 @@ class BaseMigrationRunner(ABC):
             MD5 checksum hex string.
         """
         import hashlib
+        import re
 
-        return hashlib.md5(content.encode()).hexdigest()  # noqa: S324
+        canonical_content = re.sub(r"^--\s*name:\s*migrate-[^-]+-(?:up|down)\s*$", "", content, flags=re.MULTILINE)
+
+        return hashlib.md5(canonical_content.encode()).hexdigest()  # noqa: S324
 
     @abstractmethod
     def load_migration(self, file_path: Path) -> Union["dict[str, Any]", "Coroutine[Any, Any, dict[str, Any]]"]:
@@ -129,7 +146,16 @@ class BaseMigrationRunner(ABC):
                             prefixed_version = f"ext_{ext_name}_{version}"
                             migrations.append((prefixed_version, file_path))
 
-        return sorted(migrations, key=operator.itemgetter(0))
+        from sqlspec.utils.version import parse_version
+
+        def version_sort_key(migration_tuple: "tuple[str, Path]") -> "Any":
+            version_str = migration_tuple[0]
+            try:
+                return parse_version(version_str)
+            except ValueError:
+                return version_str
+
+        return sorted(migrations, key=version_sort_key)
 
     def get_migration_files(self) -> "list[tuple[str, Path]]":
         """Get all migration files sorted by version.
@@ -220,7 +246,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         metadata = self._load_migration_metadata_common(file_path, version)
         context_to_use = self._get_context_for_migration(file_path)
 
-        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use, self.loader)
         loader.validate_migration_file(file_path)
 
         has_upgrade, has_downgrade = True, False
@@ -228,7 +254,6 @@ class SyncMigrationRunner(BaseMigrationRunner):
         if file_path.suffix == ".sql":
             version = metadata["version"]
             up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
-            self.loader.load_sql(file_path)
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
             try:
@@ -344,7 +369,9 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
-                loader = get_migration_loader(file_path, self.migrations_path, self.project_root, self.context)
+                loader = get_migration_loader(
+                    file_path, self.migrations_path, self.project_root, self.context, self.loader
+                )
 
                 try:
                     up_sql = await_(loader.get_up_sql)(file_path)
@@ -385,7 +412,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         metadata = self._load_migration_metadata_common(file_path, version)
         context_to_use = self._get_context_for_migration(file_path)
 
-        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use, self.loader)
         loader.validate_migration_file(file_path)
 
         has_upgrade, has_downgrade = True, False
@@ -393,7 +420,6 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         if file_path.suffix == ".sql":
             version = metadata["version"]
             up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
-            await async_(self.loader.load_sql)(file_path)
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
             try:
@@ -505,7 +531,9 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
-                loader = get_migration_loader(file_path, self.migrations_path, self.project_root, self.context)
+                loader = get_migration_loader(
+                    file_path, self.migrations_path, self.project_root, self.context, self.loader
+                )
 
                 try:
                     up_sql = await loader.get_up_sql(file_path)

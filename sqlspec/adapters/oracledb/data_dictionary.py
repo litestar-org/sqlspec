@@ -3,7 +3,7 @@
 
 import re
 from contextlib import suppress
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
@@ -105,6 +105,26 @@ class OracleDataDictionaryMixin:
     """Mixin providing Oracle-specific metadata queries."""
 
     __slots__ = ()
+
+    def _get_columns_sql(self, table: str, schema: "str | None" = None) -> str:
+        """Get SQL to query column metadata from Oracle data dictionary.
+
+        Uses USER_TAB_COLUMNS which returns column names in UPPERCASE.
+
+        Args:
+            table: Table name to query columns for
+            schema: Schema name (unused for USER_TAB_COLUMNS)
+
+        Returns:
+            SQL string for Oracle's USER_TAB_COLUMNS query
+        """
+        _ = schema
+        return f"""
+            SELECT column_name, data_type, data_length, nullable
+            FROM user_tab_columns
+            WHERE table_name = '{table.upper()}'
+            ORDER BY column_id
+        """
 
     def _get_oracle_version(self, driver: "OracleAsyncDriver | OracleSyncDriver") -> "OracleVersionInfo | None":
         """Get Oracle database version information.
@@ -272,6 +292,28 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         }
         return type_map.get(type_category, "VARCHAR2(255)")
 
+    def get_columns(
+        self, driver: SyncDriverAdapterBase, table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get column information for a table from Oracle data dictionary.
+
+        Args:
+            driver: Database driver instance
+            table: Table name to query columns for
+            schema: Schema name (ignored for USER_TAB_COLUMNS)
+
+        Returns:
+            List of column metadata dictionaries with keys:
+                - COLUMN_NAME: Name of the column (UPPERCASE in Oracle)
+                - DATA_TYPE: Oracle data type
+                - DATA_LENGTH: Maximum length (for character types)
+                - NULLABLE: 'Y' or 'N'
+        """
+
+        oracle_driver = cast("OracleSyncDriver", driver)
+        result = oracle_driver.execute(self._get_columns_sql(table, schema))
+        return result.get_data()
+
     def list_available_features(self) -> "list[str]":
         """List available Oracle feature flags.
 
@@ -420,6 +462,28 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         # Other Oracle-specific type mappings
         type_map = {"uuid": "RAW(16)", "boolean": "NUMBER(1)", "timestamp": "TIMESTAMP", "text": "CLOB", "blob": "BLOB"}
         return type_map.get(type_category, "VARCHAR2(255)")
+
+    async def get_columns(
+        self, driver: AsyncDriverAdapterBase, table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get column information for a table from Oracle data dictionary.
+
+        Args:
+            driver: Async database driver instance
+            table: Table name to query columns for
+            schema: Schema name (ignored for USER_TAB_COLUMNS)
+
+        Returns:
+            List of column metadata dictionaries with keys:
+                - COLUMN_NAME: Name of the column (UPPERCASE in Oracle)
+                - DATA_TYPE: Oracle data type
+                - DATA_LENGTH: Maximum length (for character types)
+                - NULLABLE: 'Y' or 'N'
+        """
+
+        oracle_driver = cast("OracleAsyncDriver", driver)
+        result = await oracle_driver.execute(self._get_columns_sql(table, schema))
+        return result.get_data()
 
     def list_available_features(self) -> "list[str]":
         """List available Oracle feature flags.

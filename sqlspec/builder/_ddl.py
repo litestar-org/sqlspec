@@ -349,6 +349,15 @@ class CreateTable(DDLBuilder):
         self._partition_by = partition_spec
         return self
 
+    @property
+    def columns(self) -> "list[ColumnDefinition]":
+        """Get the list of column definitions for this table.
+
+        Returns:
+            List of ColumnDefinition objects.
+        """
+        return self._columns
+
     def column(
         self,
         name: str,

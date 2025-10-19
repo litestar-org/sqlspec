@@ -11,11 +11,16 @@ from rich.table import Table
 from sqlspec.builder import sql
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import create_migration_file
+from sqlspec.migrations.validation import validate_migration_order
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.version import generate_conversion_map, generate_timestamp_version
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from sqlspec.config import AsyncConfigT, SyncConfigT
 
 __all__ = ("AsyncMigrationCommands", "SyncMigrationCommands", "create_migration_commands")
@@ -95,11 +100,114 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             return cast("str | None", current)
 
-    def upgrade(self, revision: str = "head", *, dry_run: bool = False) -> None:
+    def _load_single_migration_checksum(self, version: str, file_path: "Path") -> "tuple[str, tuple[str, Path]] | None":
+        """Load checksum for a single migration.
+
+        Args:
+            version: Migration version.
+            file_path: Path to migration file.
+
+        Returns:
+            Tuple of (version, (checksum, file_path)) or None if load fails.
+        """
+        try:
+            migration = self.runner.load_migration(file_path, version)
+            return (version, (migration["checksum"], file_path))
+        except Exception as e:
+            logger.debug("Could not load migration %s for auto-sync: %s", version, e)
+            return None
+
+    def _load_migration_checksums(self, all_migrations: "list[tuple[str, Path]]") -> "dict[str, tuple[str, Path]]":
+        """Load checksums for all migrations.
+
+        Args:
+            all_migrations: List of (version, file_path) tuples.
+
+        Returns:
+            Dictionary mapping version to (checksum, file_path) tuples.
+        """
+        file_checksums = {}
+        for version, file_path in all_migrations:
+            result = self._load_single_migration_checksum(version, file_path)
+            if result:
+                file_checksums[result[0]] = result[1]
+        return file_checksums
+
+    def _synchronize_version_records(self, driver: Any) -> int:
+        """Synchronize database version records with migration files.
+
+        Auto-updates DB tracking when migrations have been renamed by fix command.
+        This allows developers to just run upgrade after pulling changes without
+        manually running fix.
+
+        Validates checksums match before updating to prevent incorrect matches.
+
+        Args:
+            driver: Database driver instance.
+
+        Returns:
+            Number of version records updated.
+        """
+        all_migrations = self.runner.get_migration_files()
+
+        try:
+            applied_migrations = self.tracker.get_applied_migrations(driver)
+        except Exception:
+            logger.debug("Could not fetch applied migrations for synchronization (table schema may be migrating)")
+            return 0
+
+        applied_map = {m["version_num"]: m for m in applied_migrations}
+
+        conversion_map = generate_conversion_map(all_migrations)
+
+        updated_count = 0
+        if conversion_map:
+            for old_version, new_version in conversion_map.items():
+                if old_version in applied_map and new_version not in applied_map:
+                    applied_checksum = applied_map[old_version]["checksum"]
+
+                    file_path = next((path for v, path in all_migrations if v == new_version), None)
+                    if file_path:
+                        migration = self.runner.load_migration(file_path, new_version)
+                        if migration["checksum"] == applied_checksum:
+                            self.tracker.update_version_record(driver, old_version, new_version)
+                            console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
+                            updated_count += 1
+                        else:
+                            console.print(
+                                f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
+                            )
+        else:
+            file_checksums = self._load_migration_checksums(all_migrations)
+
+            for applied_version, applied_record in applied_map.items():
+                for file_version, (file_checksum, _) in file_checksums.items():
+                    if file_version not in applied_map and applied_record["checksum"] == file_checksum:
+                        self.tracker.update_version_record(driver, applied_version, file_version)
+                        console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
+                        updated_count += 1
+                        break
+
+        if updated_count > 0:
+            console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
+
+        return updated_count
+
+    def upgrade(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
         """Upgrade to a target revision.
+
+        Validates migration order and warns if out-of-order migrations are detected.
+        Out-of-order migrations can occur when branches merge in different orders
+        across environments.
 
         Args:
             revision: Target revision or "head" for latest.
+            allow_missing: If True, allow out-of-order migrations even in strict mode.
+                Defaults to False.
+            auto_sync: If True, automatically reconcile renamed migrations in database.
+                Defaults to True. Can be disabled via --no-auto-sync flag.
             dry_run: If True, show what would be done without making changes.
         """
         if dry_run:
@@ -108,12 +216,29 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
 
-            current = self.tracker.get_current_version(driver)
+            if auto_sync:
+                migration_config = getattr(self.config, "migration_config", {}) or {}
+                config_auto_sync = migration_config.get("auto_sync", True)
+                if config_auto_sync:
+                    self._synchronize_version_records(driver)
+
+            applied_migrations = self.tracker.get_applied_migrations(driver)
+            applied_versions = [m["version_num"] for m in applied_migrations]
+            applied_set = set(applied_versions)
+
             all_migrations = self.runner.get_migration_files()
             pending = []
             for version, file_path in all_migrations:
-                if (current is None or version > current) and (revision == "head" or version <= revision):
-                    pending.append((version, file_path))
+                if version not in applied_set:
+                    if revision == "head":
+                        pending.append((version, file_path))
+                    else:
+                        from sqlspec.utils.version import parse_version
+
+                        parsed_version = parse_version(version)
+                        parsed_revision = parse_version(revision)
+                        if parsed_version <= parsed_revision:
+                            pending.append((version, file_path))
 
             if not pending:
                 if not all_migrations:
@@ -123,6 +248,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 else:
                     console.print("[green]Already at latest version[/]")
                 return
+            pending_versions = [v for v, _ in pending]
+
+            migration_config = getattr(self.config, "migration_config", {}) or {}
+            strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
+
+            validate_migration_order(pending_versions, applied_versions, strict_ordering)
 
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
 
@@ -172,8 +303,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             elif revision == "base":
                 to_revert = list(reversed(applied))
             else:
+                from sqlspec.utils.version import parse_version
+
+                parsed_revision = parse_version(revision)
                 for migration in reversed(applied):
-                    if migration["version_num"] > revision:
+                    parsed_migration_version = parse_version(migration["version_num"])
+                    if parsed_migration_version > parsed_revision:
                         to_revert.append(migration)
 
             if not to_revert:
@@ -225,17 +360,104 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             console.print(f"[green]Database stamped at revision {revision}[/]")
 
     def revision(self, message: str, file_type: str = "sql") -> None:
-        """Create a new migration file.
+        """Create a new migration file with timestamp-based versioning.
+
+        Generates a unique timestamp version (YYYYMMDDHHmmss format) to avoid
+        conflicts when multiple developers create migrations concurrently.
 
         Args:
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
         """
-        existing = self.runner.get_migration_files()
-        next_num = int(existing[-1][0]) + 1 if existing else 1
-        next_version = str(next_num).zfill(4)
-        file_path = create_migration_file(self.migrations_path, next_version, message, file_type)
+        version = generate_timestamp_version()
+        file_path = create_migration_file(self.migrations_path, version, message, file_type)
         console.print(f"[green]Created migration:[/] {file_path}")
+
+    def fix(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
+        """Convert timestamp migrations to sequential format.
+
+        Implements hybrid versioning workflow where development uses timestamps
+        and production uses sequential numbers. Creates backup before changes
+        and provides rollback on errors.
+
+        Args:
+            dry_run: Preview changes without applying.
+            update_database: Update migration records in database.
+            yes: Skip confirmation prompt.
+
+        Examples:
+            >>> commands.fix(dry_run=True)  # Preview only
+            >>> commands.fix(yes=True)  # Auto-approve
+            >>> commands.fix(update_database=False)  # Files only
+        """
+        all_migrations = self.runner.get_migration_files()
+
+        conversion_map = generate_conversion_map(all_migrations)
+
+        if not conversion_map:
+            console.print("[yellow]No timestamp migrations found - nothing to convert[/]")
+            return
+
+        fixer = MigrationFixer(self.migrations_path)
+        renames = fixer.plan_renames(conversion_map)
+
+        table = Table(title="Migration Conversions")
+        table.add_column("Current Version", style="cyan")
+        table.add_column("New Version", style="green")
+        table.add_column("File")
+
+        for rename in renames:
+            table.add_row(rename.old_version, rename.new_version, rename.old_path.name)
+
+        console.print(table)
+        console.print(f"\n[yellow]{len(renames)} migrations will be converted[/]")
+
+        if dry_run:
+            console.print("[yellow][Preview Mode - No changes made][/]")
+            return
+
+        if not yes:
+            response = input("\nProceed with conversion? [y/N]: ")
+            if response.lower() != "y":
+                console.print("[yellow]Conversion cancelled[/]")
+                return
+
+        try:
+            backup_path = fixer.create_backup()
+            console.print(f"[green]✓ Created backup in {backup_path.name}[/]")
+
+            fixer.apply_renames(renames)
+            for rename in renames:
+                console.print(f"[green]✓ Renamed {rename.old_path.name} → {rename.new_path.name}[/]")
+
+            if update_database:
+                with self.config.provide_session() as driver:
+                    self.tracker.ensure_tracking_table(driver)
+                    applied_migrations = self.tracker.get_applied_migrations(driver)
+                    applied_versions = {m["version_num"] for m in applied_migrations}
+
+                    updated_count = 0
+                    for old_version, new_version in conversion_map.items():
+                        if old_version in applied_versions:
+                            self.tracker.update_version_record(driver, old_version, new_version)
+                            updated_count += 1
+
+                    if updated_count > 0:
+                        console.print(
+                            f"[green]✓ Updated {updated_count} version records in migration tracking table[/]"
+                        )
+                    else:
+                        console.print("[green]✓ No applied migrations to update in tracking table[/]")
+
+            fixer.cleanup()
+            console.print("[green]✓ Conversion complete![/]")
+
+        except Exception as e:
+            logger.exception("Fix command failed")
+            console.print(f"[red]✗ Error: {e}[/]")
+            fixer.rollback()
+            console.print("[yellow]Restored files from backup[/]")
+            raise
 
 
 class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
@@ -305,11 +527,118 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             return cast("str | None", current)
 
-    async def upgrade(self, revision: str = "head", *, dry_run: bool = False) -> None:
+    async def _load_single_migration_checksum(
+        self, version: str, file_path: "Path"
+    ) -> "tuple[str, tuple[str, Path]] | None":
+        """Load checksum for a single migration.
+
+        Args:
+            version: Migration version.
+            file_path: Path to migration file.
+
+        Returns:
+            Tuple of (version, (checksum, file_path)) or None if load fails.
+        """
+        try:
+            migration = await self.runner.load_migration(file_path, version)
+            return (version, (migration["checksum"], file_path))
+        except Exception as e:
+            logger.debug("Could not load migration %s for auto-sync: %s", version, e)
+            return None
+
+    async def _load_migration_checksums(
+        self, all_migrations: "list[tuple[str, Path]]"
+    ) -> "dict[str, tuple[str, Path]]":
+        """Load checksums for all migrations.
+
+        Args:
+            all_migrations: List of (version, file_path) tuples.
+
+        Returns:
+            Dictionary mapping version to (checksum, file_path) tuples.
+        """
+        file_checksums = {}
+        for version, file_path in all_migrations:
+            result = await self._load_single_migration_checksum(version, file_path)
+            if result:
+                file_checksums[result[0]] = result[1]
+        return file_checksums
+
+    async def _synchronize_version_records(self, driver: Any) -> int:
+        """Synchronize database version records with migration files.
+
+        Auto-updates DB tracking when migrations have been renamed by fix command.
+        This allows developers to just run upgrade after pulling changes without
+        manually running fix.
+
+        Validates checksums match before updating to prevent incorrect matches.
+
+        Args:
+            driver: Database driver instance.
+
+        Returns:
+            Number of version records updated.
+        """
+        all_migrations = await self.runner.get_migration_files()
+
+        try:
+            applied_migrations = await self.tracker.get_applied_migrations(driver)
+        except Exception:
+            logger.debug("Could not fetch applied migrations for synchronization (table schema may be migrating)")
+            return 0
+
+        applied_map = {m["version_num"]: m for m in applied_migrations}
+
+        conversion_map = generate_conversion_map(all_migrations)
+
+        updated_count = 0
+        if conversion_map:
+            for old_version, new_version in conversion_map.items():
+                if old_version in applied_map and new_version not in applied_map:
+                    applied_checksum = applied_map[old_version]["checksum"]
+
+                    file_path = next((path for v, path in all_migrations if v == new_version), None)
+                    if file_path:
+                        migration = await self.runner.load_migration(file_path, new_version)
+                        if migration["checksum"] == applied_checksum:
+                            await self.tracker.update_version_record(driver, old_version, new_version)
+                            console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
+                            updated_count += 1
+                        else:
+                            console.print(
+                                f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
+                            )
+        else:
+            file_checksums = await self._load_migration_checksums(all_migrations)
+
+            for applied_version, applied_record in applied_map.items():
+                for file_version, (file_checksum, _) in file_checksums.items():
+                    if file_version not in applied_map and applied_record["checksum"] == file_checksum:
+                        await self.tracker.update_version_record(driver, applied_version, file_version)
+                        console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
+                        updated_count += 1
+                        break
+
+        if updated_count > 0:
+            console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
+
+        return updated_count
+
+    async def upgrade(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
         """Upgrade to a target revision.
+
+        Validates migration order and warns if out-of-order migrations are detected.
+        Out-of-order migrations can occur when branches merge in different orders
+        across environments.
 
         Args:
             revision: Target revision or "head" for latest.
+            allow_missing: If True, allow out-of-order migrations even in strict mode.
+                Defaults to False.
+            auto_sync: If True, automatically reconcile renamed migrations in database.
+                Defaults to True. Can be disabled via --no-auto-sync flag.
             dry_run: If True, show what would be done without making changes.
         """
         if dry_run:
@@ -318,12 +647,29 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
 
-            current = await self.tracker.get_current_version(driver)
+            if auto_sync:
+                migration_config = getattr(self.config, "migration_config", {}) or {}
+                config_auto_sync = migration_config.get("auto_sync", True)
+                if config_auto_sync:
+                    await self._synchronize_version_records(driver)
+
+            applied_migrations = await self.tracker.get_applied_migrations(driver)
+            applied_versions = [m["version_num"] for m in applied_migrations]
+            applied_set = set(applied_versions)
+
             all_migrations = await self.runner.get_migration_files()
             pending = []
             for version, file_path in all_migrations:
-                if (current is None or version > current) and (revision == "head" or version <= revision):
-                    pending.append((version, file_path))
+                if version not in applied_set:
+                    if revision == "head":
+                        pending.append((version, file_path))
+                    else:
+                        from sqlspec.utils.version import parse_version
+
+                        parsed_version = parse_version(version)
+                        parsed_revision = parse_version(revision)
+                        if parsed_version <= parsed_revision:
+                            pending.append((version, file_path))
             if not pending:
                 if not all_migrations:
                     console.print(
@@ -332,6 +678,13 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 else:
                     console.print("[green]Already at latest version[/]")
                 return
+            pending_versions = [v for v, _ in pending]
+
+            migration_config = getattr(self.config, "migration_config", {}) or {}
+            strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
+
+            validate_migration_order(pending_versions, applied_versions, strict_ordering)
+
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
             for version, file_path in pending:
                 migration = await self.runner.load_migration(file_path, version)
@@ -379,8 +732,12 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             elif revision == "base":
                 to_revert = list(reversed(applied))
             else:
+                from sqlspec.utils.version import parse_version
+
+                parsed_revision = parse_version(revision)
                 for migration in reversed(applied):
-                    if migration["version_num"] > revision:
+                    parsed_migration_version = parse_version(migration["version_num"])
+                    if parsed_migration_version > parsed_revision:
                         to_revert.append(migration)
             if not to_revert:
                 console.print("[yellow]Nothing to downgrade[/]")
@@ -434,17 +791,104 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             console.print(f"[green]Database stamped at revision {revision}[/]")
 
     async def revision(self, message: str, file_type: str = "sql") -> None:
-        """Create a new migration file.
+        """Create a new migration file with timestamp-based versioning.
+
+        Generates a unique timestamp version (YYYYMMDDHHmmss format) to avoid
+        conflicts when multiple developers create migrations concurrently.
 
         Args:
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
         """
-        existing = await self.runner.get_migration_files()
-        next_num = int(existing[-1][0]) + 1 if existing else 1
-        next_version = str(next_num).zfill(4)
-        file_path = create_migration_file(self.migrations_path, next_version, message, file_type)
+        version = generate_timestamp_version()
+        file_path = create_migration_file(self.migrations_path, version, message, file_type)
         console.print(f"[green]Created migration:[/] {file_path}")
+
+    async def fix(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
+        """Convert timestamp migrations to sequential format.
+
+        Implements hybrid versioning workflow where development uses timestamps
+        and production uses sequential numbers. Creates backup before changes
+        and provides rollback on errors.
+
+        Args:
+            dry_run: Preview changes without applying.
+            update_database: Update migration records in database.
+            yes: Skip confirmation prompt.
+
+        Examples:
+            >>> await commands.fix(dry_run=True)  # Preview only
+            >>> await commands.fix(yes=True)  # Auto-approve
+            >>> await commands.fix(update_database=False)  # Files only
+        """
+        all_migrations = await self.runner.get_migration_files()
+
+        conversion_map = generate_conversion_map(all_migrations)
+
+        if not conversion_map:
+            console.print("[yellow]No timestamp migrations found - nothing to convert[/]")
+            return
+
+        fixer = MigrationFixer(self.migrations_path)
+        renames = fixer.plan_renames(conversion_map)
+
+        table = Table(title="Migration Conversions")
+        table.add_column("Current Version", style="cyan")
+        table.add_column("New Version", style="green")
+        table.add_column("File")
+
+        for rename in renames:
+            table.add_row(rename.old_version, rename.new_version, rename.old_path.name)
+
+        console.print(table)
+        console.print(f"\n[yellow]{len(renames)} migrations will be converted[/]")
+
+        if dry_run:
+            console.print("[yellow][Preview Mode - No changes made][/]")
+            return
+
+        if not yes:
+            response = input("\nProceed with conversion? [y/N]: ")
+            if response.lower() != "y":
+                console.print("[yellow]Conversion cancelled[/]")
+                return
+
+        try:
+            backup_path = fixer.create_backup()
+            console.print(f"[green]✓ Created backup in {backup_path.name}[/]")
+
+            fixer.apply_renames(renames)
+            for rename in renames:
+                console.print(f"[green]✓ Renamed {rename.old_path.name} → {rename.new_path.name}[/]")
+
+            if update_database:
+                async with self.config.provide_session() as driver:
+                    await self.tracker.ensure_tracking_table(driver)
+                    applied_migrations = await self.tracker.get_applied_migrations(driver)
+                    applied_versions = {m["version_num"] for m in applied_migrations}
+
+                    updated_count = 0
+                    for old_version, new_version in conversion_map.items():
+                        if old_version in applied_versions:
+                            await self.tracker.update_version_record(driver, old_version, new_version)
+                            updated_count += 1
+
+                    if updated_count > 0:
+                        console.print(
+                            f"[green]✓ Updated {updated_count} version records in migration tracking table[/]"
+                        )
+                    else:
+                        console.print("[green]✓ No applied migrations to update in tracking table[/]")
+
+            fixer.cleanup()
+            console.print("[green]✓ Conversion complete![/]")
+
+        except Exception as e:
+            logger.exception("Fix command failed")
+            console.print(f"[red]✗ Error: {e}[/]")
+            fixer.rollback()
+            console.print("[yellow]Restored files from backup[/]")
+            raise
 
 
 def create_migration_commands(

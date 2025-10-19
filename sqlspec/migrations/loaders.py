@@ -77,12 +77,21 @@ class SQLFileLoader(BaseMigrationLoader):
 
     __slots__ = ("sql_loader",)
 
-    def __init__(self) -> None:
-        """Initialize SQL file loader."""
-        self.sql_loader: CoreSQLFileLoader = CoreSQLFileLoader()
+    def __init__(self, sql_loader: "CoreSQLFileLoader | None" = None) -> None:
+        """Initialize SQL file loader.
+
+        Args:
+            sql_loader: Optional shared SQLFileLoader instance to reuse.
+                If not provided, creates a new instance.
+        """
+        self.sql_loader: CoreSQLFileLoader = sql_loader if sql_loader is not None else CoreSQLFileLoader()
 
     async def get_up_sql(self, path: Path) -> list[str]:
         """Extract the 'up' SQL from a SQL migration file.
+
+        The SQL file must already be loaded via validate_migration_file()
+        before calling this method. This design ensures the file is loaded
+        exactly once during the migration process.
 
         Args:
             path: Path to SQL migration file.
@@ -93,8 +102,6 @@ class SQLFileLoader(BaseMigrationLoader):
         Raises:
             MigrationLoadError: If migration file is invalid or missing up query.
         """
-        self.sql_loader.load_sql(path)
-
         version = self._extract_version(path.name)
         up_query = f"migrate-{version}-up"
 
@@ -108,14 +115,16 @@ class SQLFileLoader(BaseMigrationLoader):
     async def get_down_sql(self, path: Path) -> list[str]:
         """Extract the 'down' SQL from a SQL migration file.
 
+        The SQL file must already be loaded via validate_migration_file()
+        before calling this method. This design ensures the file is loaded
+        exactly once during the migration process.
+
         Args:
             path: Path to SQL migration file.
 
         Returns:
             List containing single SQL statement for downgrade, or empty list.
         """
-        self.sql_loader.load_sql(path)
-
         version = self._extract_version(path.name)
         down_query = f"migrate-{version}-down"
 
@@ -148,14 +157,31 @@ class SQLFileLoader(BaseMigrationLoader):
     def _extract_version(self, filename: str) -> str:
         """Extract version from filename.
 
+        Supports sequential (0001), timestamp (20251011120000), and extension-prefixed
+        (ext_litestar_0001) version formats.
+
         Args:
             filename: Migration filename to parse.
 
         Returns:
-            Zero-padded version string or empty string if invalid.
+            Version string or empty string if invalid.
         """
-        parts = filename.split("_", 1)
-        return parts[0].zfill(4) if parts and parts[0].isdigit() else ""
+        extension_version_parts = 3
+        timestamp_min_length = 4
+
+        name_without_ext = filename.rsplit(".", 1)[0]
+
+        if name_without_ext.startswith("ext_"):
+            parts = name_without_ext.split("_", 3)
+            if len(parts) >= extension_version_parts:
+                return f"{parts[0]}_{parts[1]}_{parts[2]}"
+            return ""
+
+        parts = name_without_ext.split("_", 1)
+        if parts and parts[0].isdigit():
+            return parts[0] if len(parts[0]) > timestamp_min_length else parts[0].zfill(4)
+
+        return ""
 
 
 class PythonFileLoader(BaseMigrationLoader):
@@ -391,7 +417,11 @@ class PythonFileLoader(BaseMigrationLoader):
 
 
 def get_migration_loader(
-    file_path: Path, migrations_dir: Path, project_root: "Path | None" = None, context: "Any | None" = None
+    file_path: Path,
+    migrations_dir: Path,
+    project_root: "Path | None" = None,
+    context: "Any | None" = None,
+    sql_loader: "CoreSQLFileLoader | None" = None,
 ) -> BaseMigrationLoader:
     """Factory function to get appropriate loader for migration file.
 
@@ -400,6 +430,9 @@ def get_migration_loader(
         migrations_dir: Directory containing migration files.
         project_root: Optional project root directory for Python imports.
         context: Optional migration context to pass to Python migrations.
+        sql_loader: Optional shared SQLFileLoader instance for SQL migrations.
+            When provided, SQL files are loaded using this shared instance,
+            avoiding redundant file parsing.
 
     Returns:
         Appropriate loader instance for the file type.
@@ -412,6 +445,6 @@ def get_migration_loader(
     if suffix == ".py":
         return PythonFileLoader(migrations_dir, project_root, context)
     if suffix == ".sql":
-        return SQLFileLoader()
+        return SQLFileLoader(sql_loader)
     msg = f"Unsupported migration file type: {suffix}"
     raise MigrationLoadError(msg)

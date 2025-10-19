@@ -1,7 +1,12 @@
 """BigQuery-specific data dictionary for metadata queries."""
 
+from typing import TYPE_CHECKING, Any, cast
+
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
 logger = get_logger("adapters.bigquery.data_dictionary")
 
@@ -82,6 +87,43 @@ class BigQuerySyncDataDictionary(SyncDataDictionaryBase):
             "bignumeric": "BIGNUMERIC",
         }
         return type_map.get(type_category, "STRING")
+
+    def get_columns(
+        self, driver: SyncDriverAdapterBase, table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get column information for a table using INFORMATION_SCHEMA.
+
+        Args:
+            driver: BigQuery driver instance
+            table: Table name to query columns for
+            schema: Schema name (dataset name in BigQuery)
+
+        Returns:
+            List of column metadata dictionaries with keys:
+                - column_name: Name of the column
+                - data_type: BigQuery data type
+                - is_nullable: Whether column allows NULL (YES/NO)
+                - column_default: Default value if any
+        """
+        bigquery_driver = cast("BigQueryDriver", driver)
+
+        if schema:
+            sql = f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM `{schema}.INFORMATION_SCHEMA.COLUMNS`
+                WHERE table_name = '{table}'
+                ORDER BY ordinal_position
+            """
+        else:
+            sql = f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE table_name = '{table}'
+                ORDER BY ordinal_position
+            """
+
+        result = bigquery_driver.execute(sql)
+        return result.data or []
 
     def list_available_features(self) -> "list[str]":
         """List available BigQuery feature flags.
