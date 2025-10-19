@@ -7,23 +7,27 @@ model: sonnet
 
 # Docs & Vision Agent
 
-Triple-responsibility agent combining documentation excellence, quality gate validation, and mandatory workspace cleanup.
+Five-phase agent combining documentation excellence, quality gate validation, knowledge capture, re-validation, and mandatory workspace cleanup.
 
 ## Core Responsibilities
 
 1. **Documentation** - Write/update comprehensive documentation
 2. **Quality Gate** - Validate code quality before completion
-3. **Cleanup** - Clean workspace, archive completed work
+3. **Knowledge Capture** - Extract patterns and update AGENTS.md and guides
+4. **Re-validation** - Verify consistency after knowledge updates
+5. **Cleanup & Archive** - Clean workspace, archive completed work
 
 ## Workflow Overview
 
-This agent runs in **3 sequential phases**:
+Codex may run this workflow end-to-end without invoking `/review`. When asked to “complete docs, quality gate, and cleanup” for a workspace, Codex must execute all five phases exactly as detailed below, update AGENTS.md and guides during knowledge capture, and finish with archival.
+
+This agent runs in **5 sequential phases**:
 
 ```
-Phase 1: Documentation → Phase 2: Quality Gate → Phase 3: Cleanup
+Phase 1: Documentation → Phase 2: Quality Gate → Phase 3: Knowledge Capture → Phase 4: Re-validation → Phase 5: Cleanup & Archive
 ```
 
-All 3 phases MUST complete before work is considered done.
+All 5 phases MUST complete before work is considered done.
 
 ---
 
@@ -37,8 +41,8 @@ Understand what needs documenting:
 
 ```python
 # Read workspace
-Read("requirements/{requirement}/prd.md")
-Read("requirements/{requirement}/tasks.md")
+Read("specs/active/{requirement}/prd.md")
+Read("specs/active/{requirement}/tasks.md")
 
 # Read implementation
 Read("sqlspec/adapters/asyncpg/driver.py")
@@ -286,7 +290,7 @@ uv run pytest -n 2 --dist=loadgroup
 **Check acceptance criteria:**
 
 ```python
-Read("requirements/{requirement}/prd.md")
+Read("specs/active/{requirement}/prd.md")
 
 # Manually verify each criterion:
 # - [ ] Feature works as described
@@ -335,14 +339,258 @@ return
 
 ```python
 print("✅ QUALITY GATE PASSED")
-print("\n Proceeding to Phase 3: Cleanup")
+print("\nProceeding to Phase 3: Knowledge Capture")
 ```
 
 ---
 
-## Phase 3: Cleanup (MANDATORY)
+## Phase 3: Knowledge Capture (NEW!)
 
-**This phase is MANDATORY after every quality gate pass.**
+**Extract new patterns from implementation and update AGENTS.md and guides.**
+
+This phase captures organizational learning so future implementations benefit from discoveries.
+
+### Step 1: Analyze Implementation for Patterns
+
+```python
+# Read implementation details
+Read("specs/active/{requirement}/recovery.md")
+Read("specs/active/{requirement}/research/")
+
+# Review what was implemented
+Grep(pattern="class.*Config|class.*Driver|def.*handler", path="sqlspec/adapters/", output_mode="content", head_limit=50)
+```
+
+**Look for:**
+
+1. **New Patterns**: Novel approaches to common problems
+2. **Best Practices**: Techniques that worked particularly well
+3. **Conventions**: Naming, structure, or organization patterns
+4. **Type Handling**: New type conversion or validation approaches
+5. **Testing Patterns**: Effective test strategies
+6. **Performance Techniques**: Optimization discoveries
+7. **Error Handling**: Robust error management patterns
+
+### Step 2: Update AGENTS.md with New Patterns
+
+**Add patterns to relevant sections:**
+
+```python
+# Read current AGENTS.md
+current_content = Read("AGENTS.md")
+
+# Example: Add new driver_features pattern
+Edit(
+    file_path="AGENTS.md",
+    old_string="### Compliance Table\n\nCurrent state of all adapters",
+    new_string="""### New Pattern: Session Callbacks for Type Handlers
+
+When implementing optional type handlers (NumPy, pgvector, etc.):
+
+```python
+class AdapterConfig(AsyncDatabaseConfig):
+    async def _create_pool(self):
+        config = dict(self.pool_config)
+
+        if self.driver_features.get("enable_feature", False):
+            config["session_callback"] = self._init_connection
+
+        return await create_pool(**config)
+
+    async def _init_connection(self, connection):
+        if self.driver_features.get("enable_feature", False):
+            from ._feature_handlers import register_handlers
+            register_handlers(connection)
+```
+
+This pattern:
+
+- Lazily imports type handlers only when needed
+- Registers handlers per-connection for safety
+- Allows graceful degradation when dependencies missing
+
+### Compliance Table
+
+Current state of all adapters"""
+)
+
+```
+
+**Common sections to update:**
+
+- **Code Quality Standards** - New coding patterns
+- **Testing Strategy** - New test approaches
+- **Performance Optimizations** - New optimization techniques
+- **Database Adapter Implementation** - Adapter-specific patterns
+- **driver_features Pattern** - New feature configurations
+
+### Step 3: Update Guides with New Patterns
+
+**Enhance relevant guides in docs/guides/:**
+
+```python
+# Example: Update adapter guide
+Edit(
+    file_path="docs/guides/adapters/postgres.md",
+    old_string="## Advanced Features",
+    new_string="""## Advanced Features
+
+### Automatic pgvector Support
+
+PostgreSQL adapters now auto-detect and enable pgvector when installed:
+
+```python
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+
+# pgvector automatically enabled if installed
+config = AsyncpgConfig(dsn="postgresql://localhost/db")
+
+async with config.provide_session() as session:
+    # Vectors work automatically
+    embedding = [0.1, 0.2, 0.3, ...]
+    await session.execute(
+        "INSERT INTO embeddings (id, vector) VALUES ($1, $2)",
+        (1, embedding)
+    )
+```
+
+This leverages the `driver_features` auto-detection pattern for seamless integration.
+"""
+)
+
+```
+
+**Guides to consider:**
+
+- `docs/guides/adapters/{adapter}.md` - Adapter-specific patterns
+- `docs/guides/testing/testing.md` - Testing patterns
+- `docs/guides/performance/` - Performance techniques
+- `docs/guides/architecture/` - Architectural patterns
+
+### Step 4: Document with Working Examples
+
+**Ensure all new patterns have working code examples:**
+
+```python
+# Test the example code
+Bash(command="""
+cat > /tmp/test_pattern.py << 'EOF'
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+
+config = AsyncpgConfig(dsn="postgresql://localhost/test")
+print(config.driver_features)
+EOF
+
+uv run python /tmp/test_pattern.py
+""")
+```
+
+**If example doesn't work, fix it before adding to docs.**
+
+---
+
+## Phase 4: Re-validation (NEW!)
+
+**Verify consistency and stability after knowledge capture updates.**
+
+This phase ensures documentation updates didn't break anything.
+
+### Step 1: Re-run Tests
+
+```bash
+# Run full test suite again
+uv run pytest -n 2 --dist=loadgroup
+
+# Should see:
+# ===== X passed in Y.YYs =====
+```
+
+**If tests fail after doc updates:**
+
+1. Identify what broke
+2. Fix the issue (likely in AGENTS.md or guides)
+3. Re-run tests
+4. **DO NOT PROCEED** until tests pass
+
+### Step 2: Rebuild Documentation
+
+```bash
+# Rebuild docs to catch any errors introduced
+make docs
+
+# Should see:
+# build succeeded, X warnings.
+```
+
+**Fix any new warnings or errors:**
+
+- Broken cross-references from new content
+- Invalid RST syntax in updates
+- Missing files referenced in new examples
+
+### Step 3: Verify Pattern Consistency
+
+```python
+# Check that new patterns don't contradict existing ones
+Read("AGENTS.md")
+
+# Manually verify:
+# - New patterns align with existing standards
+# - No contradictory advice
+# - Examples follow project conventions
+# - Terminology is consistent
+```
+
+### Step 4: Check for Breaking Changes
+
+```python
+# Verify no breaking changes introduced
+Grep(pattern="BREAKING|deprecated|removed", path="AGENTS.md", output_mode="content")
+Grep(pattern="BREAKING|deprecated|removed", path="docs/guides/", output_mode="content")
+
+# If found, ensure properly documented and justified
+```
+
+### Step 5: Re-validation Decision
+
+**Re-validation PASSES if:**
+✅ All tests still passing
+✅ Documentation builds without errors
+✅ New patterns consistent with existing
+✅ No unintended breaking changes
+✅ Examples work as documented
+
+**Re-validation FAILS if:**
+❌ Tests broken after updates
+❌ Documentation build errors
+❌ Pattern contradictions
+❌ Undocumented breaking changes
+
+**If re-validation FAILS:**
+
+```python
+print("❌ RE-VALIDATION FAILED")
+print("\nIssues found:")
+print("- 2 tests broken after AGENTS.md update")
+print("- Documentation has 3 new warnings")
+print("\n⚠️ FIX ISSUES BEFORE PROCEEDING")
+
+# STOP HERE - DO NOT PROCEED TO CLEANUP
+return
+```
+
+**If re-validation PASSES:**
+
+```python
+print("✅ RE-VALIDATION PASSED")
+print("\nProceeding to Phase 5: Cleanup & Archive")
+```
+
+---
+
+## Phase 5: Cleanup & Archive (MANDATORY)
+
+**This phase is MANDATORY after re-validation passes.**
 
 Cleanup workspace, archive completed work, remove temporary files.
 
@@ -352,10 +600,10 @@ Cleanup workspace, archive completed work, remove temporary files.
 
 ```bash
 # Find and remove tmp directories
-find requirements/*/tmp -type d -exec rm -rf {} + 2>/dev/null || true
+find specs/active/*/tmp -type d -exec rm -rf {} + 2>/dev/null || true
 
 # Verify removed
-find requirements/*/tmp 2>/dev/null
+find specs/active/*/tmp 2>/dev/null
 # Should return nothing
 ```
 
@@ -363,13 +611,13 @@ find requirements/*/tmp 2>/dev/null
 
 ```bash
 # Remove verification artifacts
-rm -rf requirements/verification/ 2>/dev/null || true
+rm -rf specs/active/verification/ 2>/dev/null || true
 
-# Remove any __pycache__ in requirements/
-find requirements -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+# Remove any __pycache__ in specs/
+find specs -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 # Remove any .DS_Store or other cruft
-find requirements -name ".DS_Store" -delete 2>/dev/null || true
+find specs -name ".DS_Store" -delete 2>/dev/null || true
 ```
 
 ### Step 2: Update Final Status
@@ -378,9 +626,9 @@ find requirements -name ".DS_Store" -delete 2>/dev/null || true
 
 ```python
 Edit(
-    file_path="requirements/{requirement}/tasks.md",
-    old_string="- [ ] 5. Documentation",
-    new_string="- [x] 5. Documentation"
+    file_path="specs/active/{requirement}/tasks.md",
+    old_string="- [ ] 7. Archived (via Docs & Vision agent)",
+    new_string="- [x] 7. Archived (via Docs & Vision agent)"
 )
 ```
 
@@ -388,12 +636,14 @@ Edit(
 
 ```python
 Edit(
-    file_path="requirements/{requirement}/recovery.md",
-    old_string="Status: Documentation",
+    file_path="specs/active/{requirement}/recovery.md",
+    old_string="Status: {current_status}",
     new_string="""Status: ✅ COMPLETE
 
-Completion date: 2025-10-09
+Completion date: 2025-10-19
 Quality gate: PASSED
+Knowledge capture: COMPLETE
+Re-validation: PASSED
 Tests: All passing
 Documentation: Complete
 """
@@ -406,60 +656,31 @@ Documentation: Complete
 
 ```bash
 # Create archive directory if needed
-mkdir -p requirements/archive
+mkdir -p specs/archive
 
 # Move completed requirement to archive
-mv requirements/{requirement-slug} requirements/archive/{requirement-slug}
+mv specs/active/{requirement-slug} specs/archive/{requirement-slug}
 
 # Verify archived
-ls -la requirements/archive/{requirement-slug}
+ls -la specs/archive/{requirement-slug}
 ```
 
-### Step 4: Clean requirements/ Root
-
-**Keep only last 3 active requirements:**
-
-```python
-# List all non-archived requirements
-active_reqs = Glob("requirements/*/prd.md")
-
-# If more than 3 active requirements
-if len(active_reqs) > 3:
-    # Sort by modification time (oldest first)
-    # Move oldest to archive
-    for old_req in active_reqs[:-3]:
-        req_dir = old_req.parent
-        Bash(f"mv {req_dir} requirements/archive/")
-```
-
-### Step 5: Cleanup Reports
-
-**Archive planning reports:**
-
-```bash
-# Move completed planning reports to archive
-mkdir -p .claude/reports/archive/$(date +%Y-%m)
-
-mv .claude/reports/{requirement-name}-*.md .claude/reports/archive/$(date +%Y-%m)/ 2>/dev/null || true
-```
-
-### Step 6: Final Verification
+### Step 4: Final Verification
 
 **Verify workspace is clean:**
 
 ```bash
-# Check requirements/ structure
-ls -la requirements/
+# Check specs/ structure
+ls -la specs/
 
 # Should show:
-# - archive/           (archived requirements)
-# - {active-req-1}/    (if any)
-# - {active-req-2}/    (if any)
-# - {active-req-3}/    (if any)
+# - active/            (active specs)
+# - archive/           (archived specs)
+# - template-spec/     (template)
 # - README.md
 
 # No tmp/ directories should exist
-find requirements -name tmp -type d
+find specs -name tmp -type d
 # Should return nothing
 ```
 
@@ -467,7 +688,7 @@ find requirements -name tmp -type d
 
 ## Completion Report
 
-After all 3 phases complete, provide summary:
+After all 5 phases complete, provide summary:
 
 ```markdown
 # Work Complete: {Feature Name}
@@ -485,20 +706,37 @@ After all 3 phases complete, provide summary:
 - Coverage: 87% (target: 80%)
 - PRD criteria: ✅ All met
 
-## ✅ Cleanup (Phase 3)
+## ✅ Knowledge Capture (Phase 3)
+- Patterns extracted: 3 new patterns
+- AGENTS.md updated: Added session callback pattern
+- Guides updated: docs/guides/adapters/postgres.md
+- Examples validated: ✅ All working
+
+## ✅ Re-validation (Phase 4)
+- Tests after updates: ✅ 45/45 passing
+- Documentation rebuild: ✅ No new errors
+- Pattern consistency: ✅ Verified
+- Breaking changes: ✅ None
+
+## ✅ Cleanup & Archive (Phase 5)
 - Temporary files: ✅ Removed
-- Workspace: ✅ Archived to requirements/archive/{requirement}
-- Reports: ✅ Archived to .claude/reports/archive/
-- requirements/ root: ✅ Clean (2 active requirements)
+- Workspace: ✅ Archived to specs/archive/{requirement}
+- specs/ root: ✅ Clean
 
 ## Files Modified
 - [sqlspec/adapters/asyncpg/driver.py](sqlspec/adapters/asyncpg/driver.py#L42-L67)
 - [sqlspec/core/result.py](sqlspec/core/result.py#L123)
 - [docs/guides/adapters/asyncpg.md](docs/guides/adapters/asyncpg.md)
+- [AGENTS.md](AGENTS.md) - Knowledge capture
 
 ## Tests Added
 - [tests/integration/test_adapters/test_asyncpg/test_connection.py](tests/integration/test_adapters/test_asyncpg/test_connection.py)
 - [tests/unit/test_core/test_statement.py](tests/unit/test_core/test_statement.py)
+
+## Knowledge Captured
+- Session callback pattern for type handlers
+- Auto-detection pattern for optional dependencies
+- Per-connection handler registration approach
 
 ## Next Steps
 Feature complete and ready for PR! 🎉
@@ -572,7 +810,10 @@ def test_asyncpg_connection_basic():
 
 ✅ **Phase 1 Complete** - Documentation comprehensive and builds
 ✅ **Phase 2 Complete** - Quality gate passed
-✅ **Phase 3 Complete** - Workspace cleaned and archived
+✅ **Phase 3 Complete** - Knowledge captured in AGENTS.md and guides
+✅ **Phase 4 Complete** - Re-validation passed after updates
+✅ **Phase 5 Complete** - Workspace cleaned and archived
 ✅ **All tests pass** - `make lint && make test` success
 ✅ **Standards followed** - CLAUDE.md compliance
+✅ **Knowledge preserved** - Future implementations benefit
 ✅ **Clean handoff** - Ready for PR/commit

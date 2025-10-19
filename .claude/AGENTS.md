@@ -1,236 +1,91 @@
 # Agent Coordination Guide
 
-Comprehensive guide for the SQLSpec agent system, covering agent responsibilities, workflow patterns, MCP tool usage, and workspace management.
+Comprehensive guide for the SQLSpec multi-agent workflow system. All agents (Claude Code, Gemini, Codex, etc.) should follow this workflow.
 
-## Agent Responsibilities Matrix
+## Quick Reference
 
-| Responsibility | Planner | Expert | Testing | Docs & Vision |
-|----------------|---------|--------|---------|---------------|
-| **Research** | ✅ Primary | ✅ Implementation details | ✅ Test patterns | ✅ Doc standards |
-| **Planning** | ✅ Primary | ❌ | ❌ | ❌ |
-| **Implementation** | ❌ | ✅ Primary | ✅ Tests only | ❌ |
-| **Testing** | ❌ | ✅ Verify own code | ✅ Primary | ✅ Run quality gate |
-| **Documentation** | ✅ PRD/tasks | ✅ Code comments | ✅ Test docs | ✅ Primary |
-| **Quality Gate** | ❌ | ❌ | ❌ | ✅ Primary |
-| **Cleanup** | ❌ | ❌ | ❌ | ✅ MANDATORY |
-| **Multi-Model Consensus** | ✅ Primary | ✅ Complex decisions | ❌ | ❌ |
-| **Workspace Management** | ✅ Create | ✅ Update | ✅ Update | ✅ Archive & Clean |
+- **Active work**: `specs/active/{requirement}/`
+- **Archived work**: `specs/archive/{requirement}/`
+- **Templates**: `specs/template-spec/`
+- **Main standards**: `AGENTS.md` (SQLSpec-specific patterns)
 
-## Workflow Phases
+## Agent Responsibilities
 
-### Phase 1: Planning (`/plan`)
+| Agent | Primary Role | Key Tools | Auto-Invoked By |
+|-------|--------------|-----------|-----------------|
+| **Planner** | Research & planning | zen.planner, zen.consensus, Context7, WebSearch | User (`/plan`) |
+| **Expert** | Implementation & orchestration | zen.debug, zen.thinkdeep, zen.analyze, Context7 | User (`/implement`) |
+| **Testing** | Comprehensive test creation | pytest, Bash | Expert (automatic) |
+| **Docs & Vision** | Documentation, QA, knowledge capture, cleanup | Sphinx, Bash | Expert (automatic) |
 
-**Agent:** Planner
-**Purpose:** Research-grounded planning and workspace creation
-
-**Steps:**
-
-1. Research guides, Context7, WebSearch
-2. Create structured plan with zen.planner
-3. Get consensus on complex decisions (zen.consensus)
-4. Create workspace in `requirements/{requirement}/`
-5. Write PRD, tasks, research, recovery docs
-
-**Output:**
+## Complete Workflow
 
 ```
-requirements/{requirement-slug}/
-├── prd.md          # Product Requirements Document
-├── tasks.md        # Implementation checklist
-├── research/       # Research findings
-│   └── plan.md    # Detailed plan
-├── tmp/            # Temporary files
-└── recovery.md     # Session resume guide
+User runs: /plan {feature-description}
+    ↓
+┌─────────────────────────────────────────────────────────────┐
+│                    PLANNER AGENT                             │
+│  • Research (guides, Context7, WebSearch)                   │
+│  • Use zen.planner for structured planning                  │
+│  • Get zen.consensus on complex decisions                   │
+│  • Create workspace: specs/active/{requirement}/            │
+│  • Write: prd.md, tasks.md, research/plan.md, recovery.md  │
+└─────────────────────────────────────────────────────────────┘
+    ↓
+User runs: /implement
+    ↓
+┌─────────────────────────────────────────────────────────────┐
+│                    EXPERT AGENT                              │
+│  1. Read plan (prd.md, tasks.md, research/plan.md)         │
+│  2. Research (guides, Context7)                             │
+│  3. Implement following AGENTS.md standards                 │
+│  4. Self-test & verify                                      │
+│  5. ──► Auto-Invoke Testing Agent (subagent)               │
+│         ├─► Create unit tests                              │
+│         ├─► Create integration tests                       │
+│         ├─► Test edge cases                                │
+│         └─► Verify coverage & all tests pass               │
+│  6. ──► Auto-Invoke Docs & Vision Agent (subagent)         │
+│         ├─► Phase 1: Update documentation                  │
+│         ├─► Phase 2: Quality gate validation               │
+│         ├─► Phase 3: Knowledge capture (AGENTS.md+guides)  │
+│         ├─► Phase 4: Re-validate after updates             │
+│         ├─► Phase 5: Clean tmp/ and archive                │
+│         └─► Generate completion report                      │
+│  7. Return complete summary                                 │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**Hand off to:** Expert agent for implementation
+## Agent-Specific Guidance
 
-### Phase 2: Implementation (`/implement`)
+### For Planner Agent
 
-**Agent:** Expert
-**Purpose:** Write clean, type-safe, performant code
+**Responsibilities:**
 
-**Steps:**
+- Research-grounded planning
+- Structured planning with zen.planner
+- Multi-model consensus for complex decisions
+- Workspace creation in `specs/active/`
 
-1. Read workspace (prd.md, tasks.md, research/plan.md)
-2. Research implementation details (guides, Context7)
-3. Implement following CLAUDE.md standards
-4. Run tests to verify
-5. Update workspace (tasks.md, recovery.md)
-
-**Tools Used:**
-
-- zen.debug (systematic debugging)
-- zen.thinkdeep (complex decisions)
-- zen.analyze (code analysis)
-- Context7 (library docs)
-
-**Output:**
-
-- Production code in sqlspec/
-- Updated workspace files
-
-**Hand off to:** Testing agent for comprehensive tests
-
-### Phase 3: Testing (`/test`)
-
-**Agent:** Testing
-**Purpose:** Create comprehensive unit and integration tests
-
-**Steps:**
-
-1. Read implementation
-2. Consult testing guide
-3. Create unit tests (tests/unit/)
-4. Create integration tests (tests/integration/)
-5. Test edge cases
-6. Verify coverage (80%+ adapters, 90%+ core)
-7. Update workspace
-
-**Output:**
-
-- Unit tests in tests/unit/
-- Integration tests in tests/integration/
-- Updated workspace files
-
-**Hand off to:** Docs & Vision for documentation and quality gate
-
-### Phase 4: Review (`/review`)
-
-**Agent:** Docs & Vision
-**Purpose:** Documentation, quality gate, and MANDATORY cleanup
-
-**3 Sequential Phases:**
-
-1. **Documentation:**
-   - Update docs/guides/
-   - Update API reference
-   - Build docs locally
-
-2. **Quality Gate (MANDATORY):**
-   - Run `make lint` (must pass)
-   - Check for anti-patterns (hasattr, workaround naming, class tests)
-   - Run full test suite (must pass)
-   - Verify PRD acceptance criteria
-   - **BLOCKS if quality gate fails**
-
-3. **Cleanup (MANDATORY):**
-   - Remove all tmp/ directories
-   - Archive requirement to requirements/archive/
-   - Keep only last 3 active requirements
-   - Archive planning reports
-
-**Output:**
-
-- Complete documentation
-- Clean workspace
-- Archived requirement
-- Work ready for PR/commit
-
-## Agent Invocation Patterns
-
-### Planner Invoking Consensus
-
-For complex architectural decisions:
+**Workflow:**
 
 ```python
-Task(
-    subagent_type="general-purpose",
-    description="Get multi-model consensus on API design",
-    prompt="""
-Use zen.consensus to get multi-model agreement:
+# 1. Research first
+Read("docs/guides/...")
+mcp__context7__get-library-docs(...)
+WebSearch(query="...")
 
-Question: Should we use Protocol or ABC for driver base class?
-
-Models to consult:
-- gemini-2.5-pro (neutral stance)
-- openai/gpt-5 (neutral stance)
-
-Include relevant files for context:
-- sqlspec/protocols.py
-- sqlspec/adapters/asyncpg/driver.py
-
-Write consensus findings to requirements/{requirement}/research/consensus.md
-"""
-)
-```
-
-### Expert Invoking Debugging
-
-For systematic debugging:
-
-```python
-Task(
-    subagent_type="general-purpose",
-    description="Debug asyncpg connection pool deadlock",
-    prompt="""
-Use zen.debug for systematic debugging:
-
-Problem: AsyncPG connection pool deadlocks under high load
-
-Use zen.debug to:
-1. State hypothesis about root cause
-2. Investigate code paths
-3. Check for leaked connections
-4. Verify pool configuration
-5. Test fix
-
-Write findings to requirements/{requirement}/tmp/debug-{issue}.md
-"""
-)
-```
-
-### Testing Invoking Test Generation
-
-Testing agent is usually NOT invoked by other agents - it's invoked directly via `/test` command.
-
-### Docs & Vision Blocking on Quality Gate
-
-Quality gate BLOCKS completion if standards not met:
-
-```markdown
-❌ QUALITY GATE FAILED
-
-Issues found:
-- 3 files with hasattr() defensive patterns
-- 2 tests using class-based structure
-- make lint has 5 errors
-
-⚠️ WORK NOT COMPLETE
-Do NOT proceed to cleanup phase.
-Fix issues above and re-run quality gate.
-```
-
-## MCP Tools Matrix
-
-### Tool: zen.planner
-
-**Who uses:** Planner agent
-**Purpose:** Structured, multi-step planning
-**When:** Creating detailed implementation plans
-
-**Example:**
-
-```python
+# 2. Use zen.planner for structured planning
 mcp__zen__planner(
-    step="Plan vector search implementation for Oracle and PostgreSQL",
+    step="Plan vector search implementation",
     step_number=1,
     total_steps=6,
     next_step_required=True
 )
-```
 
-### Tool: zen.consensus
-
-**Who uses:** Planner, Expert
-**Purpose:** Multi-model decision verification
-**When:** Complex architectural decisions, significant API changes
-
-**Example:**
-
-```python
+# 3. Get consensus on complex decisions
 mcp__zen__consensus(
-    step="Evaluate: Protocol vs ABC for driver base class",
+    step="Evaluate: Protocol vs ABC for driver base",
     models=[
         {"model": "gemini-2.5-pro", "stance": "neutral"},
         {"model": "openai/gpt-5", "stance": "neutral"}
@@ -238,417 +93,462 @@ mcp__zen__consensus(
     relevant_files=["sqlspec/protocols.py"],
     next_step_required=False
 )
+
+# 4. Create workspace
+Write("specs/active/{requirement}/prd.md", ...)
+Write("specs/active/{requirement}/tasks.md", ...)
+Write("specs/active/{requirement}/research/plan.md", ...)
+Write("specs/active/{requirement}/recovery.md", ...)
 ```
 
-### Tool: zen.debug
+**Output:** Complete workspace in `specs/active/{requirement}/`
 
-**Who uses:** Expert
-**Purpose:** Systematic debugging workflow
-**When:** Complex bugs, mysterious errors, performance issues
+### For Expert Agent
 
-**Example:**
+**Responsibilities:**
+
+- Implementation following AGENTS.md standards
+- Auto-invoke Testing agent when implementation complete
+- Auto-invoke Docs & Vision agent after tests pass
+- Orchestrate entire development lifecycle
+
+**Workflow:**
 
 ```python
-mcp__zen__debug(
-    step="Investigate memory leak in long-running connections",
-    step_number=1,
-    total_steps=5,
-    hypothesis="Result cache holds strong references to connection objects",
-    findings="Cache never evicts old entries",
-    confidence="medium",
-    next_step_required=True
+# 1. Read the plan
+Read("specs/active/{requirement}/prd.md")
+Read("specs/active/{requirement}/tasks.md")
+Read("specs/active/{requirement}/research/plan.md")
+
+# 2. Research implementation details
+Read(f"docs/guides/adapters/{adapter}.md")
+Read("docs/guides/performance/sqlglot-best-practices.md")
+Read("AGENTS.md")  # Code quality standards
+mcp__context7__get-library-docs(...)  # Library-specific docs
+
+# 3. Implement with quality standards (see AGENTS.md)
+Edit(file_path="...", old_string="...", new_string="...")
+
+# 4. Self-test
+Bash(command="uv run pytest tests/integration/test_adapters/test_asyncpg/ -v")
+Bash(command="make lint")
+
+# 5. AUTO-INVOKE Testing Agent (MANDATORY)
+Task(
+    subagent_type="testing",
+    description="Create comprehensive test suite",
+    prompt=f"""
+Create comprehensive tests for specs/active/{requirement}.
+
+Requirements:
+1. Read specs/active/{requirement}/prd.md for acceptance criteria
+2. Create unit tests for all new functionality
+3. Create integration tests for affected adapters
+4. Test edge cases (empty, errors, boundaries)
+5. Achieve >80% coverage
+6. Update specs/active/{requirement}/tasks.md
+7. Update specs/active/{requirement}/recovery.md
+
+All tests must pass before returning control.
+"""
 )
-```
 
-### Tool: zen.thinkdeep
+# 6. AUTO-INVOKE Docs & Vision Agent (MANDATORY)
+Task(
+    subagent_type="docs-vision",
+    description="Documentation, quality gate, knowledge capture, archive",
+    prompt=f"""
+Complete 5-phase workflow for specs/active/{requirement}:
 
-**Who uses:** Expert
-**Purpose:** Deep analysis for complex decisions
-**When:** Architecture decisions, complex refactoring
+Phase 1 - Documentation:
+• Update Sphinx documentation
+• Create/update guides in docs/guides/
+• Validate code examples
+• Build docs without errors
 
-**Example:**
+Phase 2 - Quality Gate:
+• Verify all PRD acceptance criteria met
+• Verify all tests passing
+• Check AGENTS.md standards compliance
+• BLOCK if any criteria not met
 
-```python
-mcp__zen__thinkdeep(
-    step="Analyze if we should use Protocol vs ABC for driver base class",
-    step_number=1,
-    total_steps=3,
-    hypothesis="Protocol better for runtime type checking without inheritance",
-    findings="Protocols work with type guards, avoid diamond problem",
-    focus_areas=["architecture", "performance"],
-    confidence="high",
-    next_step_required=True
+Phase 3 - Knowledge Capture (MANDATORY):
+• Analyze implementation for new patterns
+• Extract best practices and conventions
+• Update AGENTS.md with new patterns/examples
+• Update relevant guides in docs/guides/
+• Document with working code examples
+
+Phase 4 - Re-validation (MANDATORY):
+• Re-run tests after documentation updates
+• Rebuild documentation
+• Check pattern consistency
+• Verify no breaking changes
+• BLOCK if re-validation fails
+
+Phase 5 - Cleanup & Archive (MANDATORY):
+• Remove all tmp/ directories
+• Move specs/active/{requirement} to specs/archive/
+• Generate completion report
+
+Return comprehensive summary when complete.
+"""
 )
+
+# 7. Update workspace
+Edit("specs/active/{requirement}/tasks.md", ...)
+Edit("specs/active/{requirement}/recovery.md", ...)
 ```
 
-### Tool: zen.analyze
+**IMPORTANT:** Expert MUST NOT mark work complete until Docs & Vision agent confirms:
 
-**Who uses:** Expert
-**Purpose:** Code analysis (architecture, performance, security)
-**When:** Code review, performance optimization, security audit
+- Quality gate passed
+- Knowledge captured in AGENTS.md and guides
+- Spec archived to specs/archive/
 
-**Example:**
+### For Testing Agent
+
+**Responsibilities:**
+
+- Create comprehensive unit tests
+- Create integration tests for all affected adapters
+- Test edge cases and error conditions
+- Achieve required coverage (>80% adapters, >90% core)
+
+**Auto-invoked by:** Expert agent
+
+**Workflow:**
 
 ```python
-mcp__zen__analyze(
-    step="Analyze oracle adapter for performance bottlenecks",
-    step_number=1,
-    total_steps=3,
-    analysis_type="performance",
-    findings="Found N+1 query pattern in result mapping",
-    confidence="high",
-    next_step_required=True
+# 1. Read implementation context
+Read("specs/active/{requirement}/prd.md")
+Read("specs/active/{requirement}/recovery.md")
+Read("docs/guides/testing/testing.md")
+
+# 2. Create unit tests
+Write("tests/unit/test_{module}/test_{feature}.py", ...)
+
+# 3. Create integration tests
+Write("tests/integration/test_adapters/test_{adapter}/test_{feature}.py", ...)
+
+# 4. Verify all tests pass
+Bash(command="uv run pytest -n 2 --dist=loadgroup")
+Bash(command="uv run pytest --cov")
+
+# 5. Update workspace
+Edit("specs/active/{requirement}/tasks.md", ...)
+Edit("specs/active/{requirement}/recovery.md", ...)
+```
+
+**Must verify:** All tests passing before returning control to Expert
+
+### For Docs & Vision Agent
+
+**Responsibilities:**
+
+- Update documentation (Sphinx, guides)
+- Quality gate validation (BLOCKS if fails)
+- **Knowledge capture** - Update AGENTS.md and guides with new patterns
+- **Re-validation** - Verify consistency after documentation updates
+- Cleanup and archive (MANDATORY)
+
+**Auto-invoked by:** Expert agent
+
+**5-Phase Workflow:**
+
+#### Phase 1: Documentation
+
+```python
+# Update API reference
+Edit("docs/reference/adapters.rst", ...)
+
+# Create/update guides
+Write("docs/guides/{category}/{guide}.md", ...)
+
+# Build docs
+Bash(command="make docs")
+```
+
+#### Phase 2: Quality Gate (BLOCKS IF FAILS)
+
+```bash
+# Run all checks - MUST PASS
+make lint
+uv run pytest -n 2 --dist=loadgroup
+
+# Verify PRD acceptance criteria
+# Check AGENTS.md standards compliance
+# BLOCK if any failures
+```
+
+#### Phase 3: Knowledge Capture (MANDATORY - NEW)
+
+```python
+# 1. Analyze implementation for new patterns
+Read("sqlspec/adapters/{adapter}/{module}.py")
+
+# 2. Extract patterns and add to AGENTS.md
+Edit(
+    file_path="AGENTS.md",
+    old_string="### Compliance Table",
+    new_string="""### New Pattern: {Pattern Name}
+
+When implementing {pattern}:
+
+```python
+# Example code showing the pattern
+class ExampleClass:
+    def example_method(self):
+        # Pattern implementation
+        pass
+```
+
+**Why this pattern:**
+
+- Reason 1
+- Reason 2
+
+**Example from {adapter}:**
+See `sqlspec/adapters/{adapter}/{file}.py:{line}`
+
+### Compliance Table"""
+
 )
-```
 
-### Tool: Context7
+# 3. Update relevant guides
 
-**Who uses:** All agents
-**Purpose:** Get up-to-date library documentation
-**When:** Need current API reference for libraries (asyncpg, oracledb, etc.)
+Edit("docs/guides/{category}/{guide}.md", ...)
 
-**Example:**
-
-```python
-# Step 1: Resolve library ID
-mcp__context7__resolve-library-id(libraryName="asyncpg")
-
-# Step 2: Get docs
-mcp__context7__get-library-docs(
-    context7CompatibleLibraryID="/MagicStack/asyncpg",
-    topic="connection pooling"
-)
-```
-
-### Tool: WebSearch
-
-**Who uses:** All agents
-**Purpose:** Research current best practices (2025+)
-**When:** Need recent best practices, database-specific patterns
-
-**Example:**
-
-```python
-WebSearch(query="PostgreSQL 16 connection pooling best practices 2025")
-```
-
-## Workspace Management
-
-### Structure
+# 4. Document with working examples
 
 ```
-requirements/
-├── {requirement-1}/      # Active requirement
-│   ├── prd.md
-│   ├── tasks.md
-│   ├── recovery.md
-│   ├── research/
-│   │   └── plan.md
-│   └── tmp/              # Cleaned by Docs & Vision
-├── {requirement-2}/      # Active requirement
-├── {requirement-3}/      # Active requirement
-├── archive/              # Completed requirements
+
+**What to capture in AGENTS.md:**
+- New design patterns discovered
+- Performance optimizations applied
+- Type annotation patterns
+- Error handling approaches
+- Testing strategies
+- Database-specific patterns
+
+**How to update AGENTS.md:**
+- Add to existing sections (don't create new top-level sections)
+- Include working code examples
+- Reference actual files with line numbers
+- Explain WHY not just WHAT
+
+#### Phase 4: Re-validation (MANDATORY - NEW)
+
+```bash
+# Re-run tests after doc updates
+uv run pytest -n 2 --dist=loadgroup
+
+# Rebuild docs
+make docs
+
+# Verify pattern consistency across project
+# Check no breaking changes introduced
+
+# BLOCK if re-validation fails
+```
+
+#### Phase 5: Cleanup & Archive (MANDATORY)
+
+```bash
+# Remove tmp files
+find specs/active/{requirement}/tmp -type f -delete
+rmdir specs/active/{requirement}/tmp
+
+# Archive requirement
+mv specs/active/{requirement} specs/archive/{requirement}
+
+# Generate completion report
+```
+
+## Workspace Structure
+
+```
+specs/
+├── active/                    # Current work (gitignored)
+│   └── {requirement}/
+│       ├── prd.md            # Product requirements
+│       ├── tasks.md          # Implementation checklist
+│       ├── recovery.md       # Session resume guide
+│       ├── research/         # Research findings
+│       │   └── plan.md
+│       └── tmp/              # Temp files (cleaned by Docs & Vision)
+├── archive/                   # Completed work (gitignored)
 │   └── {old-requirement}/
-└── README.md
+└── template-spec/             # Template files (committed)
+    ├── prd.md
+    ├── tasks.md
+    ├── recovery.md
+    └── README.md
 ```
 
-### Cleanup Protocol (MANDATORY)
-
-**When:** After every `/review` (Docs & Vision agent)
-
-**Steps:**
-
-1. Remove all tmp/ directories:
-
-   ```bash
-   find requirements/*/tmp -type d -exec rm -rf {} +
-   ```
-
-2. Archive completed requirement:
-
-   ```bash
-   mv requirements/{requirement} requirements/archive/{requirement}
-   ```
-
-3. Keep only last 3 active requirements:
-
-   ```bash
-   # If more than 3 active, move oldest to archive
-   ```
-
-**This is MANDATORY - never skip cleanup.**
+## Cross-Agent Patterns
 
 ### Session Continuity
 
-To resume work across sessions/context resets:
-
-```python
-# 1. List active requirements
-Glob("requirements/*/prd.md")
-
-# 2. Read recovery.md to understand status
-Read("requirements/{requirement}/recovery.md")
-
-# 3. Check task progress
-Read("requirements/{requirement}/tasks.md")
-
-# 4. Review PRD for full context
-Read("requirements/{requirement}/prd.md")
-
-# 5. Review planning details
-Read("requirements/{requirement}/research/plan.md")
-```
-
-## Code Quality Standards
-
-All agents MUST enforce CLAUDE.md standards:
-
-### ✅ ALWAYS DO
-
-- **Type hints:** Stringified for custom types: `def foo(config: "SQLConfig"):`
-- **Type guards:** `if supports_where(obj):` from `sqlspec.utils.type_guards`
-- **Clean names:** `process_query()`, `execute_batch()`
-- **Top-level imports:** Except TYPE_CHECKING
-- **Function-based tests:** `def test_something():`
-- **Early returns:** Guard clauses for edge cases
-- **Functions under 75 lines:** Extract helpers if longer
-
-### ❌ NEVER DO
-
-- **Future annotations:** `from __future__ import annotations`
-- **Defensive patterns:** `hasattr()`, `getattr()`
-- **Workaround naming:** `_optimized`, `_with_cache`, `_fallback`
-- **Nested imports:** Except TYPE_CHECKING
-- **Class-based tests:** `class TestSomething:`
-- **Magic numbers:** Use named constants
-- **Comments:** Use docstrings instead
-
-## Guides Reference
-
-All agents should consult guides before implementing:
-
-### Adapter Guides
-
-```
-docs/guides/adapters/
-├── adbc.md
-├── aiosqlite.md
-├── asyncmy.md
-├── bigquery.md
-├── duckdb.md
-├── mysql.md
-├── oracle.md          # Most comprehensive
-├── postgres.md
-├── psqlpy.md
-└── sqlite.md
-```
-
-### Performance Guides
-
-```
-docs/guides/performance/
-├── sqlglot-best-practices.md
-├── sqlglot-cheat-sheet.md
-├── mypyc-optimizations.md
-└── mypyc-guide.md
-```
-
-### Architecture Guides
-
-```
-docs/guides/architecture/
-├── architecture.md
-└── data-flow.md
-```
-
-### Testing Guide
-
-```
-docs/guides/testing/
-└── testing.md
-```
-
-### Quick Reference
-
-```
-docs/guides/quick-reference/
-└── quick-reference.md
-```
-
-## Recovery Patterns
-
-### After Context Reset
+To resume work after context reset:
 
 ```python
 # 1. Find active work
-active_requirements = Glob("requirements/*/prd.md")
+Glob("specs/active/*/prd.md")
 
-# 2. For each active requirement, check status
-for req_prd in active_requirements:
-    req_dir = req_prd.parent
-    recovery = Read(f"{req_dir}/recovery.md")
-    # Shows: Status, Last updated, Next steps
+# 2. Read recovery.md for each
+Read("specs/active/{requirement}/recovery.md")
 
 # 3. Resume from most recent
-Read("{most_recent_requirement}/recovery.md")  # Clear next steps
-Read("{most_recent_requirement}/tasks.md")      # See what's done
+Read("specs/active/{requirement}/tasks.md")
 ```
 
-### After Session Timeout
+### Quality Standards
 
-Same as context reset - recovery.md has all needed info.
+All agents enforce AGENTS.md standards:
 
-### After Cleanup
+✅ **ALWAYS:**
 
-If requirement archived:
+- Stringified type hints: `def foo(config: "SQLConfig"):`
+- Type guards: `if supports_where(obj):`
+- Function-based tests: `def test_something():`
+- Functions under 75 lines
 
-```python
-# Find in archive
-Glob("requirements/archive/*/prd.md")
+❌ **NEVER:**
 
-# Can still read archived requirements
-Read("requirements/archive/{requirement}/recovery.md")
+- `from __future__ import annotations`
+- Defensive patterns: `hasattr()`, `getattr()`
+- Class-based tests: `class TestSomething:`
+- Nested imports (except TYPE_CHECKING)
+
+See `AGENTS.md` for complete standards.
+
+## Model-Specific Instructions
+
+### For Codex
+
+Codex can emulate slash commands by following agent workflows:
+
+**To run implementation phase:**
+
+```
+Follow every step in expert.md workflow, then auto-invoke Testing and Docs & Vision agents as subagents.
+Always read specs/active/{requirement}/ before making changes.
 ```
 
-## Command Workflow
+See `.claude/agents/expert.md` lines 22-23 for details.
 
-### Full Feature Development
+### For Gemini
 
-```bash
-# 1. Plan
-/plan implement vector search for Oracle and PostgreSQL
+Gemini can use the same workflow patterns. When asked to "implement feature X":
 
-# Creates: requirements/vector-search/
+1. **Check for existing workspace**: `Glob("specs/active/*/prd.md")`
+2. **If workspace exists**: Follow Expert workflow (read plan → research → implement → auto-invoke Testing → auto-invoke Docs & Vision)
+3. **If no workspace**: Suggest user run `/plan` first, or create minimal workspace yourself
 
-# 2. Implement
-/implement
+**Gemini-specific macro for implementation:**
 
-# Modifies code, updates workspace
+```
+You are implementing {feature} for SQLSpec. Follow this workflow:
 
-# 3. Test
-/test
+PHASE 1 - Read Plan:
+• Read specs/active/{requirement}/prd.md
+• Read specs/active/{requirement}/tasks.md
+• Read specs/active/{requirement}/research/plan.md
 
-# Creates tests, verifies passing
+PHASE 2 - Research:
+• Read AGENTS.md for code standards
+• Read docs/guides/adapters/{adapter}.md
+• Read docs/guides/performance/sqlglot-best-practices.md
+• Use zen.chat or Context7 for library docs
 
-# 4. Review (3 phases: docs → quality gate → cleanup)
-/review
+PHASE 3 - Implement:
+• Follow AGENTS.md standards ruthlessly
+• Self-test with: uv run pytest tests/...
+• Update specs/active/{requirement}/tasks.md
 
-# Phase 1: Documentation
-# Phase 2: Quality gate (must pass)
-# Phase 3: Cleanup (mandatory)
+PHASE 4 - Auto-Invoke Testing Agent:
+• Use zen.chat with testing agent instructions
+• Pass requirement name and acceptance criteria
+• Wait for confirmation all tests pass
 
-# Result: requirements/vector-search/ → requirements/archive/vector-search/
+PHASE 5 - Auto-Invoke Docs & Vision Agent:
+• Use zen.chat with docs-vision agent instructions
+• Pass requirement name
+• Wait for 5-phase completion (docs, QA, knowledge, re-validation, archive)
+
+PHASE 6 - Complete:
+• Verify spec archived to specs/archive/
+• Return comprehensive summary
 ```
 
-### Bug Fix Workflow
+### For Claude Code
 
-```bash
-# 1. Plan (optional for simple bugs)
-/plan fix connection pool deadlock in asyncpg
+Claude Code uses native slash commands:
 
-# 2. Debug and implement
-/implement
+- `/plan {feature}` - Invokes Planner agent
+- `/implement` - Invokes Expert agent (auto-invokes Testing and Docs & Vision)
+- `/test` - Directly invokes Testing agent (rarely needed)
+- `/review` - Directly invokes Docs & Vision agent (rarely needed)
 
-# Expert uses zen.debug for systematic investigation
+## MCP Tools Reference
 
-# 3. Test
-/test
+### zen.planner
 
-# Add regression test
+- **Who**: Planner agent
+- **When**: Structured multi-step planning
+- **Pattern**: Iterative steps with branching/revision
 
-# 4. Review
-/review
+### zen.consensus
 
-# Quality gate + cleanup
-```
+- **Who**: Planner, Expert
+- **When**: Complex architectural decisions
+- **Pattern**: Multi-model consultation with stances
 
-## Best Practices
+### zen.debug
 
-### For Planner
+- **Who**: Expert
+- **When**: Systematic debugging, root cause analysis
+- **Pattern**: Hypothesis-driven investigation
 
-1. **Always research first** - guides, Context7, WebSearch
-2. **Use zen.planner** for complex work
-3. **Get consensus** on significant decisions
-4. **Create complete workspace** - don't skip files
-5. **Write clear recovery.md** - enable easy resume
+### zen.thinkdeep
 
-### For Expert
+- **Who**: Expert
+- **When**: Deep analysis for complex decisions
+- **Pattern**: Multi-step reasoning with evidence
 
-1. **Read the plan first** - don't guess
-2. **Consult guides** - adapters, performance, architecture
-3. **Use zen tools** for complex work (debug, thinkdeep, analyze)
-4. **Follow CLAUDE.md** ruthlessly
-5. **Update workspace** continuously
-6. **Test as you go** - don't wait for Testing agent
+### zen.analyze
 
-### For Testing
+- **Who**: Expert
+- **When**: Code analysis (architecture, performance, security)
+- **Pattern**: Systematic code review
 
-1. **Consult testing guide** before creating tests
-2. **Function-based tests** always (no classes)
-3. **Mark appropriately** - @pytest.mark.asyncio, @pytest.mark.postgres, etc.
-4. **Test edge cases** - empty, None, errors, concurrency
-5. **Verify coverage** - 80%+ adapters, 90%+ core
-6. **All tests must pass** before handoff
+### zen.chat
 
-### For Docs & Vision
+- **Who**: Any agent (especially Gemini)
+- **When**: General collaboration, brainstorming, sub-agent emulation
+- **Pattern**: Conversational with context files
 
-1. **Phase 1 (Docs)** - Comprehensive and clear
-2. **Phase 2 (Quality Gate)** - BLOCK if standards not met
-3. **Phase 3 (Cleanup)** - MANDATORY, never skip
-4. **Archive systematically** - maintain clean workspace
-5. **Final verification** - one last `make lint && make test`
+### Context7
 
-## Troubleshooting
+- **Who**: All agents
+- **When**: Need library documentation
+- **Pattern**: Resolve library ID → Get docs with topic
 
-### Quality Gate Failing
+### WebSearch
 
-```markdown
-**Problem:** Quality gate keeps failing
-
-**Solution:**
-1. Check specific failure reasons
-2. Fix anti-patterns (hasattr, workaround naming, class tests)
-3. Run `make fix` to auto-fix lint issues
-4. Re-run quality gate
-5. DO NOT proceed to cleanup until passing
-```
-
-### Workspace Getting Cluttered
-
-```markdown
-**Problem:** requirements/ has too many folders
-
-**Solution:**
-1. Run `/review` on oldest requirements
-2. Let Docs & Vision archive them
-3. Manually archive if needed:
-   mv requirements/{old-requirement} requirements/archive/
-4. Keep only 3 active requirements
-```
-
-### Lost Context Across Sessions
-
-```markdown
-**Problem:** Can't remember what I was working on
-
-**Solution:**
-1. Read requirements/*/recovery.md for all active requirements
-2. Each recovery.md has:
-   - Current status
-   - Last updated date
-   - Next steps
-3. Resume from most recent
-```
+- **Who**: All agents
+- **When**: Research current best practices (2025+)
+- **Pattern**: Search query with date filtering
 
 ## Summary
 
-This agent system provides:
+This workflow ensures:
 
-✅ **Structured workflow** - Plan → Implement → Test → Review
-✅ **Quality enforcement** - CLAUDE.md standards mandatory
-✅ **Research-grounded** - Guides + Context7 + WebSearch
-✅ **Session continuity** - Workspace enables resume
-✅ **Cleanup protocol** - Mandatory workspace management
-✅ **MCP tool integration** - zen.planner, zen.debug, zen.consensus, Context7
+✅ **Automated orchestration** - Expert agent handles entire lifecycle
+✅ **Knowledge preservation** - Every feature updates AGENTS.md and guides
+✅ **Quality assurance** - Multi-phase validation before completion
+✅ **Session continuity** - Workspace enables cross-session resume
+✅ **Multi-model support** - Works with Claude Code, Gemini, Codex
 
-All agents work together to ensure high-quality, well-tested, well-documented code that follows SQLSpec's strict standards.
+The key innovation: **Knowledge Capture (Phase 3)** and **Re-validation (Phase 4)** ensure every feature improves the project's documentation and maintains consistency.

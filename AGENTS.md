@@ -1034,3 +1034,212 @@ class AdapterDriverFeatures(TypedDict):
 - **Type Handler Pattern** (above): Implementation details for type handlers used with `driver_features`
 - **Optional Dependency Handling**: See `sqlspec.typing` for detection constants
 - **Testing Standards**: See Testing Strategy section for general testing requirements
+
+## Agent Workflow Coordination
+
+### Automated Multi-Agent Workflow
+
+SQLSpec uses a coordinated multi-agent system where the Expert agent orchestrates the complete development lifecycle:
+
+```
+User runs: /implement {feature-name}
+
+┌─────────────────────────────────────────────────────────────┐
+│                      EXPERT AGENT                            │
+│                                                              │
+│  1. Read Plan & Research (from specs/active/{feature}/)    │
+│  2. Implement Feature (following AGENTS.md standards)      │
+│  3. Self-Test & Verify                                      │
+│  4. ──► Auto-Invoke Testing Agent (subagent)               │
+│         │                                                    │
+│         ├─► Create unit tests                              │
+│         ├─► Create integration tests (all adapters)        │
+│         ├─► Test edge cases                                │
+│         └─► Verify coverage & all tests pass               │
+│  5. ──► Auto-Invoke Docs & Vision Agent (subagent)         │
+│         │                                                    │
+│         ├─► Phase 1: Update documentation                  │
+│         ├─► Phase 2: Quality gate validation               │
+│         ├─► Phase 3: Knowledge capture (AGENTS.md+guides)  │
+│         ├─► Phase 4: Re-validate after updates             │
+│         ├─► Phase 5: Clean tmp/ and archive                │
+│         └─► Generate completion report                      │
+│  6. Return Complete Summary                                 │
+└─────────────────────────────────────────────────────────────┘
+
+Result: Feature implemented, tested, documented, archived - all automatically!
+```
+
+### Codex-Oriented Workflow Usage
+
+Codex can execute the same lifecycle without invoking Claude slash commands. Use the prompts below to engage Codex directly while keeping the workflow artifacts identical.
+
+- **General Rule**: Tell Codex which phase to emulate (`plan`, `implement`, `test`, `review`) and point to the active workspace root (`specs/active/{slug}/` preferred). Codex will create the folder if it does not exist.
+- **Codex `/plan` Equivalent**: Ask “Codex: run planning for {feature}” and provide any context. Codex must (1) research via docs/guides/ as outlined in `.claude/agents/planner.md`, (2) write or update `prd.md`, `tasks.md`, `research/plan.md`, `recovery.md`, and (3) ensure `tmp/` exists. Planning output follows the same structure the Planner agent would create.
+- **Codex `/implement` Equivalent**: Ask Codex to “execute implementation phase for {workspace}”. Codex then reads the workspace, consults guides, writes code under `sqlspec/`, updates tasks, and runs local checks exactly as described in `.claude/agents/expert.md`. When the plan calls for sub-agents, Codex continues by emulating the Testing and Docs & Vision phases in order.
+- **Codex `/test` Equivalent**: Request “Codex: perform testing phase for {workspace}”. Codex creates or updates pytest suites, ensures coverage thresholds, and records progress in `tasks.md`, mirroring `.claude/agents/testing.md`.
+- **Codex `/review` Equivalent**: Request “Codex: run docs, quality gate, and cleanup for {workspace}”. Codex completes the five Docs & Vision phases—documentation, quality gate, knowledge capture (including AGENTS.md and guides updates), re-validation, and workspace archival.
+- **Knowledge Capture Reminder**: Whenever Codex finishes implementation or review work, it must update this AGENTS.md and any relevant guides with new patterns so Claude and other assistants inherit the learnings.
+
+**Key Workflow Principles**:
+
+- **Single Command**: `/implement` handles entire lifecycle
+- **No Manual Steps**: Testing, docs, and archival automatic
+- **Knowledge Preservation**: Patterns captured in AGENTS.md and guides
+- **Quality Assurance**: Multi-phase validation before completion
+- **Session Resumability**: All work tracked in specs/active/{feature}/
+
+### Knowledge Capture Process
+
+After every feature implementation, the Docs & Vision agent **must** extract and preserve new patterns:
+
+#### Step 1: Analyze Implementation
+
+Review what was built for reusable patterns:
+
+- **New Patterns**: Novel approaches to common problems
+- **Best Practices**: Techniques that worked particularly well
+- **Conventions**: Naming, structure, or organization patterns
+- **Type Handling**: New type conversion or validation approaches
+- **Testing Patterns**: Effective test strategies
+- **Performance Techniques**: Optimization discoveries
+
+#### Step 2: Update AGENTS.md
+
+Add patterns to relevant sections in this file:
+
+- **Code Quality Standards** - New coding patterns
+- **Testing Strategy** - New test approaches
+- **Performance Optimizations** - New optimization techniques
+- **Database Adapter Implementation** - Adapter-specific patterns
+- **driver_features Pattern** - New feature configurations
+
+Example addition:
+
+```python
+# In Docs & Vision agent
+Edit(
+    file_path="AGENTS.md",
+    old_string="### Compliance Table",
+    new_string="""### New Pattern: Session Callbacks for Type Handlers
+
+When implementing optional type handlers:
+
+```python
+class AdapterConfig(AsyncDatabaseConfig):
+    async def _create_pool(self):
+        config = dict(self.pool_config)
+        if self.driver_features.get("enable_feature", False):
+            config["session_callback"] = self._init_connection
+        return await create_pool(**config)
+
+    async def _init_connection(self, connection):
+        if self.driver_features.get("enable_feature", False):
+            from ._feature_handlers import register_handlers
+            register_handlers(connection)
+```
+
+### Compliance Table"""
+
+)
+
+```
+
+#### Step 3: Update docs/guides/
+
+Enhance relevant guides with new patterns:
+
+- `docs/guides/adapters/{adapter}.md` - Adapter-specific patterns
+- `docs/guides/testing/testing.md` - Testing patterns
+- `docs/guides/performance/` - Performance techniques
+- `docs/guides/architecture/` - Architectural patterns
+
+#### Step 4: Validate Examples
+
+Ensure all new patterns have working code examples that execute successfully.
+
+## Re-validation Protocol
+
+After updating AGENTS.md or guides, the Docs & Vision agent **must** re-validate to ensure consistency:
+
+### Step 1: Re-run Tests
+
+```bash
+uv run pytest -n 2 --dist=loadgroup
+```
+
+**All tests must still pass** after documentation updates.
+
+### Step 2: Rebuild Documentation
+
+```bash
+make docs
+```
+
+**Documentation must build without new errors** after updates.
+
+### Step 3: Verify Pattern Consistency
+
+Manually check that:
+
+- New patterns align with existing standards
+- No contradictory advice introduced
+- Examples follow project conventions
+- Terminology is consistent
+
+### Step 4: Check for Breaking Changes
+
+Verify no unintended breaking changes in documentation updates.
+
+### Step 5: Block if Re-validation Fails
+
+**DO NOT archive the spec** if re-validation fails:
+
+- Fix issues introduced by documentation updates
+- Re-run re-validation
+- Only proceed to archival when all checks pass
+
+## Workspace Management
+
+### Folder Structure
+
+```
+specs/
+├── active/                     # Active work (gitignored)
+│   ├── {feature-name}/
+│   │   ├── prd.md             # Product Requirements Document
+│   │   ├── tasks.md           # Phase-by-phase checklist
+│   │   ├── recovery.md        # Session resume guide
+│   │   ├── research/          # Research findings
+│   │   └── tmp/               # Temporary files (cleaned by Docs & Vision)
+│   └── .gitkeep
+├── archive/                    # Completed work (gitignored)
+│   └── {completed-feature}/
+├── template-spec/              # Template structure (committed)
+│   ├── prd.md
+│   ├── tasks.md
+│   ├── recovery.md
+│   ├── README.md
+│   ├── research/.gitkeep
+│   └── tmp/.gitkeep
+└── README.md
+```
+
+### Lifecycle
+
+1. **Planning**: Planner creates `specs/active/{feature}/`
+2. **Implementation**: Expert implements, auto-invokes Testing and Docs & Vision
+3. **Testing**: Testing agent creates comprehensive test suite (automatic)
+4. **Documentation**: Docs & Vision updates docs (automatic)
+5. **Knowledge Capture**: Docs & Vision extracts patterns (automatic)
+6. **Re-validation**: Docs & Vision verifies consistency (automatic)
+7. **Archive**: Docs & Vision moves to `specs/archive/{feature}/` (automatic)
+
+### Session Resumability
+
+Any agent can resume work by reading:
+
+1. `specs/active/{feature}/recovery.md` - Current status and next steps
+2. `specs/active/{feature}/tasks.md` - What's complete
+3. `specs/active/{feature}/prd.md` - Full requirements
+4. `specs/active/{feature}/research/` - Findings and analysis

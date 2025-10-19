@@ -2,21 +2,24 @@ Create comprehensive tests for the implemented feature.
 
 Invoke the Testing agent to:
 
-1. **Read Implementation** - Understand what needs testing
-2. **Consult Guide** - Reference docs/guides/testing/testing.md
-3. **Create Unit Tests** - Test individual components (tests/unit/)
-4. **Create Integration Tests** - Test with real databases (tests/integration/)
-5. **Test Edge Cases** - Empty inputs, None values, errors, concurrency
-6. **Verify Coverage** - Ensure 80%+ for adapters, 90%+ for core
-7. **Run Tests** - Verify all tests pass
+1. **Read Implementation** - Load prd.md, recovery.md from specs/active/{requirement}/
+2. **Create Unit Tests** - Test individual components in isolation
+3. **Create Integration Tests** - Test with real database connections
+4. **Test Edge Cases** - Empty inputs, None values, errors, concurrency
+5. **Validate Coverage** - Ensure >80% coverage for adapters, >90% for core
+6. **Update Workspace** - Mark test tasks complete
 
 The testing agent should:
-- Use function-based tests (def test_something():)
-- Mark tests appropriately (@pytest.mark.asyncio, @pytest.mark.postgres, etc.)
-- Use pytest-databases fixtures (postgres_url, oracle_url, etc.)
-- Test both success and error paths
-- Update workspace when complete
 
-After testing, hand off to documentation and quality gate.
+- Use function-based tests (NO class-based tests)
+- Follow pytest patterns from docs/guides/testing/testing.md
+- Test all affected database adapters
+- Use pytest markers (@pytest.mark.postgres, etc.)
+- Verify all tests pass before returning
 
-Next step: Run `/review` for documentation, quality gate, and cleanup.
+**Note:** This command is typically not needed manually because `/implement` automatically invokes the Testing agent. Use this only if you need to:
+- Re-create tests after manual changes
+- Add additional test coverage
+- Debug test failures
+
+After testing, Expert agent will auto-invoke Docs & Vision for documentation, quality gate, knowledge capture, and archival.

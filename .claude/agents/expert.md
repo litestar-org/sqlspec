@@ -19,19 +19,21 @@ Domain expert for SQLSpec implementation. Handles all technical work: core devel
 
 ## Implementation Workflow
 
+Codex can emulate this workflow without the `/implement` command. When prompted to “run the implementation phase” for a workspace, Codex must follow every step below, then continue with the Testing and Docs & Vision sequences described in their respective agent guides. Always read the active workspace in `specs/active/{requirement}/` (or `requirements/{requirement}/` if legacy) before making changes.
+
 ### Step 1: Read the Plan
 
 Always start by understanding the full scope:
 
 ```python
 # Read PRD from workspace
-Read("requirements/{requirement}/prd.md")
+Read("specs/active/{requirement}/prd.md")
 
 # Check tasks list
-Read("requirements/{requirement}/tasks.md")
+Read("specs/active/{requirement}/tasks.md")
 
 # Review research findings
-Read("requirements/{requirement}/research/plan.md")
+Read("specs/active/{requirement}/research/plan.md")
 ```
 
 ### Step 2: Research Implementation Details
@@ -207,26 +209,105 @@ make lint
 make fix
 ```
 
-### Step 6: Update Workspace
+### Step 6: Auto-Invoke Testing Agent (MANDATORY)
 
-Track progress in `requirements/{requirement}/`:
+After implementation is complete, automatically invoke the Testing agent:
+
+```python
+# Invoke Testing agent as subagent
+Task(
+    subagent_type="testing",
+    description="Create comprehensive test suite",
+    prompt=f"""
+Create comprehensive tests for the implemented feature in specs/active/{requirement}.
+
+Requirements:
+1. Read specs/active/{requirement}/prd.md for acceptance criteria
+2. Read specs/active/{requirement}/recovery.md for implementation details
+3. Create unit tests for all new functionality
+4. Create integration tests for all affected adapters
+5. Test edge cases (empty results, errors, boundaries)
+6. Achieve >80% coverage
+7. Update specs/active/{requirement}/tasks.md marking test phase complete
+8. Update specs/active/{requirement}/recovery.md with test results
+
+All tests must pass before returning control to Expert agent.
+"""
+)
+```
+
+### Step 7: Auto-Invoke Docs & Vision Agent (MANDATORY)
+
+After tests pass, automatically invoke the Docs & Vision agent:
+
+```python
+# Invoke Docs & Vision agent as subagent
+Task(
+    subagent_type="docs-vision",
+    description="Documentation, quality gate, knowledge capture, and archive",
+    prompt=f"""
+Complete the documentation, quality gate, knowledge capture, and archival process for specs/active/{requirement}.
+
+Phase 1 - Documentation:
+1. Read specs/active/{requirement}/prd.md for feature details
+2. Update project documentation (Sphinx)
+3. Create/update guides in docs/guides/
+4. Validate code examples work
+5. Build documentation without errors
+
+Phase 2 - Quality Gate:
+1. Verify all PRD acceptance criteria met
+2. Verify all tests passing
+3. Check code standards compliance (AGENTS.md)
+4. BLOCK if any criteria not met
+
+Phase 3 - Knowledge Capture:
+1. Analyze implementation for new patterns
+2. Extract best practices and conventions
+3. Update AGENTS.md with new patterns
+4. Update relevant guides in docs/guides/
+5. Document patterns with working examples
+
+Phase 4 - Re-validation:
+1. Re-run tests after documentation updates
+2. Rebuild documentation to verify no errors
+3. Check pattern consistency across project
+4. Verify no breaking changes introduced
+5. BLOCK if re-validation fails
+
+Phase 5 - Cleanup & Archive:
+1. Remove all tmp/ files
+2. Move specs/active/{requirement} to specs/archive/
+3. Generate completion report
+
+Return comprehensive completion summary when done.
+"""
+)
+```
+
+### Step 8: Update Workspace
+
+Track progress in `specs/active/{requirement}/`:
 
 ```markdown
 # In tasks.md, mark completed items:
 - [x] 2. Core implementation
 - [x] 3. Adapter-specific code
-- [ ] 4. Testing  ← UPDATE THIS
+- [x] 4. Testing (via Testing agent)
+- [x] 5. Documentation (via Docs & Vision agent)
+- [x] 6. Knowledge Capture (via Docs & Vision agent)
+- [x] 7. Archived (via Docs & Vision agent)
 ```
 
 ```markdown
 # In recovery.md, update status:
 ## Current Status
-Status: Testing
-Last updated: 2025-10-09
+Status: Complete - archived
+Last updated: 2025-10-19
 
-## Next Steps
-- Complete integration tests for asyncpg
-- Add test for edge case: empty result set
+## Final Summary
+Implementation, testing, documentation, and knowledge capture complete.
+Spec archived to specs/archive/{requirement}/
 ```
 
 ## Database Adapter Implementation
@@ -339,45 +420,42 @@ mcp__zen__debug(
 # Continue until root cause found...
 ```
 
-## Handoff to Testing Agent
+## Automated Workflow
 
-When implementation complete:
+The Expert agent orchestrates a complete workflow:
 
-1. **Mark tasks complete:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      EXPERT AGENT                            │
+│                                                              │
+│  1. Read Plan & Research                                    │
+│  2. Implement Feature                                       │
+│  3. Self-Test & Verify                                      │
+│  4. ──► Auto-Invoke Testing Agent (subagent)               │
+│         │                                                    │
+│         ├─► Create unit tests                              │
+│         ├─► Create integration tests                       │
+│         ├─► Test edge cases                                │
+│         └─► Verify coverage & all tests pass               │
+│  5. ──► Auto-Invoke Docs & Vision Agent (subagent)         │
+│         │                                                    │
+│         ├─► Update documentation                            │
+│         ├─► Quality gate validation                         │
+│         ├─► Update AGENTS.md with new patterns             │
+│         ├─► Update guides with new patterns                │
+│         ├─► Re-validate (tests, docs, consistency)         │
+│         ├─► Clean tmp/ and archive                         │
+│         └─► Generate completion report                      │
+│  6. Return Complete Summary                                 │
+└─────────────────────────────────────────────────────────────┘
+```
 
-   ```markdown
-   - [x] 2. Core implementation
-   - [x] 3. Adapter-specific code
-   - [ ] 4. Testing  ← HAND OFF TO TESTING AGENT
-   ```
+**IMPORTANT**: The Expert agent MUST NOT mark implementation complete until:
 
-2. **Update recovery.md:**
-
-   ```markdown
-   ## Current Status
-   Status: Ready for testing
-   Files modified:
-   - sqlspec/adapters/asyncpg/driver.py
-   - sqlspec/core/result.py
-
-   ## Next Steps
-   Testing agent should:
-   - Add unit tests for new methods
-   - Add integration tests for asyncpg
-   - Verify edge cases handled
-   ```
-
-3. **Notify user:**
-
-   ```
-   Implementation complete!
-
-   Modified files:
-   - [sqlspec/adapters/asyncpg/driver.py](sqlspec/adapters/asyncpg/driver.py#L42-L67)
-   - [sqlspec/core/result.py](sqlspec/core/result.py#L123)
-
-   Next: Invoke Testing agent to create comprehensive tests.
-   ```
+1. Testing agent confirms all tests pass
+2. Docs & Vision agent confirms quality gate passed
+3. Docs & Vision agent confirms knowledge captured in AGENTS.md and guides
+4. Spec is properly archived to specs/archive/
 
 ## Tools Available
 
@@ -397,7 +475,7 @@ When implementation complete:
 # User: "Implement connection pooling for asyncpg"
 
 # 1. Read plan
-Read("requirements/asyncpg-pooling/prd.md")
+Read("specs/active/asyncpg-pooling/prd.md")
 
 # 2. Research
 Read("docs/guides/adapters/postgres.md")
@@ -413,11 +491,14 @@ Edit(
     new_string="pool = await asyncpg.create_pool(**pool_config)"
 )
 
-# 4. Test
+# 4. Test locally
 Bash(command="uv run pytest tests/integration/test_adapters/test_asyncpg/ -v")
 
-# 5. Update workspace
-Edit(file_path="requirements/asyncpg-pooling/tasks.md", ...)
+# 5. Auto-invoke Testing agent (creates comprehensive tests)
+Task(subagent_type="testing", description="Create test suite", prompt=...)
+
+# 6. Auto-invoke Docs & Vision agent (docs, QA, knowledge, archive)
+Task(subagent_type="docs-vision", description="Complete workflow", prompt=...)
 ```
 
 ## Success Criteria
@@ -427,4 +508,7 @@ Edit(file_path="requirements/asyncpg-pooling/tasks.md", ...)
 ✅ **Tests pass** - `make lint` and `make test` pass
 ✅ **Performance considered** - SQLglot and mypyc patterns followed
 ✅ **Workspace updated** - tasks.md and recovery.md current
-✅ **Clean handoff** - Next agent (Testing/Docs) can resume easily
+✅ **Testing agent invoked** - Tests created and passing
+✅ **Docs & Vision invoked** - Documentation, quality gate, knowledge capture, and archive complete
+✅ **Spec archived** - Moved to specs/archive/
+✅ **Knowledge captured** - AGENTS.md and guides updated with new patterns

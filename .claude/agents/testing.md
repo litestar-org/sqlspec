@@ -19,14 +19,16 @@ Comprehensive testing specialist for SQLSpec. Creates pytest-based unit and inte
 
 ## Testing Workflow
 
+Codex can execute this workflow directly. When prompted to “perform the testing phase” for a workspace, Codex must read the existing plan, follow every step below, and produce the same artifacts and coverage validation that the Testing agent would return.
+
 ### Step 1: Read Implementation
 
 Understand what needs testing:
 
 ```python
 # Read workspace
-Read("requirements/{requirement}/prd.md")
-Read("requirements/{requirement}/tasks.md")
+Read("specs/active/{requirement}/prd.md")
+Read("specs/active/{requirement}/tasks.md")
 
 # Read implementation
 Read("sqlspec/adapters/asyncpg/driver.py")
@@ -290,7 +292,7 @@ uv run pytest -n 2 --dist=loadgroup
 **Mark testing complete:**
 
 ```markdown
-# In requirements/{requirement}/tasks.md:
+# In specs/active/{requirement}/tasks.md:
 - [x] 3. Adapter-specific code
 - [x] 4. Testing  ← JUST COMPLETED
 - [ ] 5. Documentation  ← HAND OFF TO DOCS & VISION
@@ -308,10 +310,12 @@ Tests added:
 All tests passing ✅
 
 ## Next Steps
-Documentation agent should:
+Docs & Vision agent (auto-invoked by Expert) should:
 - Update adapter documentation
-- Add usage examples
-- Update API reference
+- Run quality gate
+- Capture new testing patterns in AGENTS.md
+- Update docs/guides/ with patterns
+- Re-validate and archive
 ```
 
 ## Test Organization
@@ -404,7 +408,7 @@ open htmlcov/index.html
        assert result is not None
    ```
 
-## Handoff to Docs & Vision
+## Return to Expert Agent
 
 When testing complete:
 
@@ -418,24 +422,27 @@ When testing complete:
 2. **Update workspace:**
 
    ```markdown
+   # In specs/active/{requirement}/tasks.md:
    - [x] 4. Testing
-   - [ ] 5. Documentation ← HAND OFF TO DOCS & VISION
+   - [ ] 5. Documentation ← EXPERT WILL AUTO-INVOKE DOCS & VISION
    ```
 
-3. **Notify user:**
+3. **Return to Expert with summary:**
 
    ```
    Testing complete! ✅
 
    Tests added:
-   - [tests/integration/test_adapters/test_asyncpg/test_connection.py](tests/integration/test_adapters/test_asyncpg/test_connection.py)
-   - [tests/unit/test_core/test_statement.py](tests/unit/test_core/test_statement.py)
+   - [tests/integration/test_adapters/test_asyncpg/test_connection.py](tests/integration/test_adapters/test_asyncpg/test_connection.py) (5 tests)
+   - [tests/unit/test_core/test_statement.py](tests/unit/test_core/test_statement.py) (3 tests)
 
    Coverage: 87% (target: 80%+)
    All tests passing: ✅
 
-   Next: Invoke Docs & Vision agent for documentation and final review.
+   Expert agent will now auto-invoke Docs & Vision for documentation, quality gate, knowledge capture, and archival.
    ```
+
+**Note**: This agent is typically invoked automatically by the Expert agent. It returns control to Expert, which then auto-invokes Docs & Vision agent.
 
 ## Tools Available
 
