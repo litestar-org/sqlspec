@@ -123,3 +123,20 @@ class MigrationContext:
             Metadata value or default.
         """
         return self._execution_metadata.get(key, default)
+
+    def validate_async_usage(self, migration_func: Any) -> None:
+        """Validate proper usage of async functions in migration context.
+
+        Args:
+            migration_func: The migration function to validate.
+        """
+        if inspect.iscoroutinefunction(migration_func) and not self.is_async_execution and not self.is_async_driver:
+            msg = (
+                "Async migration function detected but execution context is sync. "
+                "Consider using async database configuration or sync migration functions."
+            )
+            logger.warning(msg)
+
+        if not inspect.iscoroutinefunction(migration_func) and self.is_async_driver:
+            self.set_execution_metadata("mixed_execution", value=True)
+            logger.debug("Sync migration function in async driver context - using compatibility mode")

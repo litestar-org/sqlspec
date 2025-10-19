@@ -1,5 +1,6 @@
 """Integration tests for async migrations functionality."""
 
+import asyncio
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -155,14 +156,17 @@ async def down(context):
         context = MigrationContext(dialect="postgres")
         loader = PythonFileLoader(temp_migration_dir, temp_migration_dir.parent, context)
 
-        # Test that loader handles async migrations correctly
-        up_sql = loader.get_up_sql(migration_file)
-        assert len(up_sql) == 1
-        assert "CREATE TABLE users" in up_sql[0]
+        # Test async execution
+        async def test_async_loading() -> None:
+            up_sql = await loader.get_up_sql(migration_file)
+            assert len(up_sql) == 1
+            assert "CREATE TABLE users" in up_sql[0]
 
-        down_sql = loader.get_down_sql(migration_file)
-        assert len(down_sql) == 1
-        assert "DROP TABLE users" in down_sql[0]
+            down_sql = await loader.get_down_sql(migration_file)
+            assert len(down_sql) == 1
+            assert "DROP TABLE users" in down_sql[0]
+
+        asyncio.run(test_async_loading())
 
     def test_mixed_sync_async_migration_loading(self, temp_migration_dir: Any) -> None:
         """Test loading both sync and async migrations in the same directory."""
@@ -198,6 +202,24 @@ async def down(context):
         assert "0001" in versions
         assert "0002" in versions
 
+    def test_migration_context_validation(self) -> None:
+        """Test migration context async usage validation."""
+        context = MigrationContext()
+
+        # Test with sync function
+        def sync_migration() -> list[str]:
+            return ["CREATE TABLE test (id INT);"]
+
+        # Should not raise any exceptions
+        context.validate_async_usage(sync_migration)
+
+        # Test with async function
+        async def async_migration() -> list[str]:
+            return ["CREATE TABLE test (id INT);"]
+
+        # Should handle async function validation
+        context.validate_async_usage(async_migration)
+
     def test_error_handling_in_async_migrations(self, temp_migration_dir: Any) -> None:
         """Test error handling in async migration execution."""
         # Create migration with error
@@ -216,8 +238,11 @@ def down(context):
         loader = PythonFileLoader(temp_migration_dir, temp_migration_dir.parent, context)
 
         # Test that error is properly raised
-        with pytest.raises(Exception):  # Should raise the ValueError from migration
-            loader.get_up_sql(error_migration)
+        async def test_error_handling() -> None:
+            with pytest.raises(Exception):  # Should raise the ValueError from migration
+                await loader.get_up_sql(error_migration)
+
+        asyncio.run(test_error_handling())
 
     def test_config_resolver_with_list_configs(self) -> None:
         """Test config resolver with list of configurations."""
