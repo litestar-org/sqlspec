@@ -4,6 +4,7 @@ This module provides separate sync and async migration runners with clean separa
 of concerns and proper type safety.
 """
 
+import inspect
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -420,7 +421,11 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         try:
             method = loader.get_up_sql if direction == "up" else loader.get_down_sql
-            sql_statements = await_(method, raise_sync_error=False)(file_path)
+            sql_statements = (
+                await_(method, raise_sync_error=False)(file_path)
+                if inspect.iscoroutinefunction(method)
+                else method(file_path)
+            )
 
         except Exception as e:
             if direction == "down":
