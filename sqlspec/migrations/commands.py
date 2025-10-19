@@ -443,9 +443,11 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                             updated_count += 1
 
                     if updated_count > 0:
-                        console.print(f"[green]✓ Updated {updated_count} database records[/]")
+                        console.print(
+                            f"[green]✓ Updated {updated_count} version records in migration tracking table[/]"
+                        )
                     else:
-                        console.print("[yellow]No database records to update[/]")
+                        console.print("[green]✓ No applied migrations to update in tracking table[/]")
 
             fixer.cleanup()
             console.print("[green]✓ Conversion complete![/]")
@@ -872,9 +874,11 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                             updated_count += 1
 
                     if updated_count > 0:
-                        console.print(f"[green]✓ Updated {updated_count} database records[/]")
+                        console.print(
+                            f"[green]✓ Updated {updated_count} version records in migration tracking table[/]"
+                        )
                     else:
-                        console.print("[yellow]No database records to update[/]")
+                        console.print("[green]✓ No applied migrations to update in tracking table[/]")
 
             fixer.cleanup()
             console.print("[green]✓ Conversion complete![/]")

@@ -335,7 +335,6 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             raise ValueError(msg)
 
         driver.commit()
-        logger.info("Updated migration version: %s -> %s", old_version, new_version)
 
 
 class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["AsyncDriverAdapterBase"]):
@@ -531,4 +530,3 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             raise ValueError(msg)
 
         await driver.commit()
-        logger.info("Updated migration version: %s -> %s", old_version, new_version)
