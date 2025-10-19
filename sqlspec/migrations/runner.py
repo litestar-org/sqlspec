@@ -4,6 +4,7 @@ This module provides separate sync and async migration runners with clean separa
 of concerns and proper type safety.
 """
 
+import inspect
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -13,6 +14,7 @@ from sqlspec.core.statement import SQL
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import async_, await_
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
@@ -419,7 +421,12 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         try:
             method = loader.get_up_sql if direction == "up" else loader.get_down_sql
-            sql_statements = method(file_path)
+            import inspect
+
+            if inspect.iscoroutinefunction(method):
+                sql_statements = await_(method, raise_sync_error=False)(file_path)
+            else:
+                sql_statements = method(file_path)
 
         except Exception as e:
             if direction == "down":
@@ -452,8 +459,19 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 )
 
                 try:
-                    up_sql = loader.get_up_sql(file_path)
-                    down_sql = loader.get_down_sql(file_path)
+                    get_up = loader.get_up_sql
+                    get_down = loader.get_down_sql
+
+                    up_sql = (
+                        await_(get_up, raise_sync_error=False)(file_path)
+                        if inspect.iscoroutinefunction(get_up)
+                        else get_up(file_path)
+                    )
+                    down_sql = (
+                        await_(get_down, raise_sync_error=False)(file_path)
+                        if inspect.iscoroutinefunction(get_down)
+                        else get_down(file_path)
+                    )
 
                     if up_sql:
                         all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
@@ -637,7 +655,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         try:
             method = loader.get_up_sql if direction == "up" else loader.get_down_sql
-            sql_statements = method(file_path)
+            sql_statements = await method(file_path)
 
         except Exception as e:
             if direction == "down":
@@ -661,7 +679,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         for version, file_path in migrations:
             if file_path.suffix == ".sql":
-                self.loader.load_sql(file_path)
+                await async_(self.loader.load_sql)(file_path)
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
@@ -670,8 +688,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                 )
 
                 try:
-                    up_sql = loader.get_up_sql(file_path)
-                    down_sql = loader.get_down_sql(file_path)
+                    up_sql = await loader.get_up_sql(file_path)
+                    down_sql = await loader.get_down_sql(file_path)
 
                     if up_sql:
                         all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])

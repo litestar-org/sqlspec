@@ -4,7 +4,6 @@ This module provides loader classes for different migration file formats.
 """
 
 import abc
-import asyncio
 import inspect
 import sys
 import types
@@ -30,7 +29,7 @@ class BaseMigrationLoader(abc.ABC):
     __slots__ = ()
 
     @abc.abstractmethod
-    def get_up_sql(self, path: Path) -> list[str]:
+    async def get_up_sql(self, path: Path) -> list[str]:
         """Load and return the 'up' SQL statements from a migration file.
 
         Args:
@@ -45,7 +44,7 @@ class BaseMigrationLoader(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def get_down_sql(self, path: Path) -> list[str]:
+    async def get_down_sql(self, path: Path) -> list[str]:
         """Load and return the 'down' SQL statements from a migration file.
 
         Args:
@@ -87,7 +86,7 @@ class SQLFileLoader(BaseMigrationLoader):
         """
         self.sql_loader: CoreSQLFileLoader = sql_loader if sql_loader is not None else CoreSQLFileLoader()
 
-    def get_up_sql(self, path: Path) -> list[str]:
+    async def get_up_sql(self, path: Path) -> list[str]:
         """Extract the 'up' SQL from a SQL migration file.
 
         The SQL file must already be loaded via validate_migration_file()
@@ -113,7 +112,7 @@ class SQLFileLoader(BaseMigrationLoader):
         sql_obj = self.sql_loader.get_sql(up_query)
         return [sql_obj.sql]
 
-    def get_down_sql(self, path: Path) -> list[str]:
+    async def get_down_sql(self, path: Path) -> list[str]:
         """Extract the 'down' SQL from a SQL migration file.
 
         The SQL file must already be loaded via validate_migration_file()
@@ -202,7 +201,7 @@ class PythonFileLoader(BaseMigrationLoader):
         self.project_root = project_root if project_root is not None else self._find_project_root(migrations_dir)
         self.context = context
 
-    def get_up_sql(self, path: Path) -> list[str]:
+    async def get_up_sql(self, path: Path) -> list[str]:
         """Load Python migration and execute upgrade function.
 
         Args:
@@ -217,26 +216,37 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            if not (hasattr(module, "up") and callable(module.up)):
-                msg = f"No upgrade function found in {path}. Expected 'up()'"
+            upgrade_func = None
+            func_name = None
+
+            if hasattr(module, "up") and callable(module.up):
+                upgrade_func = module.up
+                func_name = "up"
+            elif hasattr(module, "migrate_up") and callable(module.migrate_up):
+                upgrade_func = module.migrate_up
+                func_name = "migrate_up"
+            else:
+                msg = f"No upgrade function found in {path}. Expected 'up()' or 'migrate_up()'"
                 raise MigrationLoadError(msg)
 
-            upgrade_func = module.up
+            if not callable(upgrade_func):
+                msg = f"'{func_name}' is not callable in {path}"
+                raise MigrationLoadError(msg)
 
             # Check if function accepts context parameter
             sig = inspect.signature(upgrade_func)
             accepts_context = "context" in sig.parameters or len(sig.parameters) > 0
 
             if inspect.iscoroutinefunction(upgrade_func):
-                sql_result = asyncio.run(
-                    upgrade_func(self.context) if accepts_context and self.context else upgrade_func()
+                sql_result = (
+                    await upgrade_func(self.context) if accepts_context and self.context else await upgrade_func()
                 )
             else:
                 sql_result = upgrade_func(self.context) if accepts_context and self.context else upgrade_func()
 
             return self._normalize_and_validate_sql(sql_result, path)
 
-    def get_down_sql(self, path: Path) -> list[str]:
+    async def get_down_sql(self, path: Path) -> list[str]:
         """Load Python migration and execute downgrade function.
 
         Args:
@@ -248,18 +258,25 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            if not (hasattr(module, "down") and callable(module.down)):
+            downgrade_func = None
+
+            if hasattr(module, "down") and callable(module.down):
+                downgrade_func = module.down
+            elif hasattr(module, "migrate_down") and callable(module.migrate_down):
+                downgrade_func = module.migrate_down
+            else:
                 return []
 
-            downgrade_func = module.down
+            if not callable(downgrade_func):
+                return []
 
             # Check if function accepts context parameter
             sig = inspect.signature(downgrade_func)
             accepts_context = "context" in sig.parameters or len(sig.parameters) > 0
 
             if inspect.iscoroutinefunction(downgrade_func):
-                sql_result = asyncio.run(
-                    downgrade_func(self.context) if accepts_context and self.context else downgrade_func()
+                sql_result = (
+                    await downgrade_func(self.context) if accepts_context and self.context else await downgrade_func()
                 )
             else:
                 sql_result = downgrade_func(self.context) if accepts_context and self.context else downgrade_func()
@@ -278,14 +295,21 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            if not (hasattr(module, "up") and callable(module.up)):
-                msg = f"Migration {path} missing required upgrade function. Expected 'up()'"
+            upgrade_func = None
+            func_name = None
+
+            if hasattr(module, "up") and callable(module.up):
+                upgrade_func = module.up
+                func_name = "up"
+            elif hasattr(module, "migrate_up") and callable(module.migrate_up):
+                upgrade_func = module.migrate_up
+                func_name = "migrate_up"
+            else:
+                msg = f"Migration {path} missing required upgrade function. Expected 'up()' or 'migrate_up()'"
                 raise MigrationLoadError(msg)
 
-            upgrade_func = module.up
-
             if not callable(upgrade_func):
-                msg = f"Migration {path} 'up' is not callable"
+                msg = f"Migration {path} '{func_name}' is not callable"
                 raise MigrationLoadError(msg)
 
     def _find_project_root(self, start_path: Path) -> Path:

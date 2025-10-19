@@ -236,11 +236,17 @@ def down():
 
         runner = create_migration_runner_with_metadata(migrations_path)
 
-        with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+        with (
+            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+            patch("sqlspec.migrations.base.await_") as mock_await,
+        ):
             mock_loader = Mock()
             mock_loader.validate_migration_file = Mock()
-            mock_loader.get_down_sql = Mock(return_value=["UPDATE settings SET initialized = false"])
+            mock_loader.get_up_sql = Mock()
+            mock_loader.get_down_sql = Mock()
             mock_get_loader.return_value = mock_loader
+
+            mock_await.return_value = Mock(return_value=True)
 
             metadata = runner.load_migration(migration_file)
 
@@ -254,44 +260,44 @@ def test_get_migration_sql_upgrade_success() -> None:
     """Test successful upgrade SQL generation."""
     runner = create_test_migration_runner()
 
-    mock_loader = Mock()
-    mock_loader.get_up_sql = Mock(return_value=["CREATE TABLE test (id INTEGER PRIMARY KEY);"])
-
     migration = {
         "version": "0001",
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": mock_loader,
+        "loader": Mock(),
     }
 
-    result = runner._get_migration_sql(migration, "up")
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        mock_await.return_value = Mock(return_value=["CREATE TABLE test (id INTEGER PRIMARY KEY);"])
 
-    assert result is not None
-    assert isinstance(result, list)
-    assert result == ["CREATE TABLE test (id INTEGER PRIMARY KEY);"]
+        result = runner._get_migration_sql(migration, "up")
+
+        assert result is not None
+        assert isinstance(result, list)
+        assert result == ["CREATE TABLE test (id INTEGER PRIMARY KEY);"]
 
 
 def test_get_migration_sql_downgrade_success() -> None:
     """Test successful downgrade SQL generation."""
     runner = create_test_migration_runner()
 
-    mock_loader = Mock()
-    mock_loader.get_down_sql = Mock(return_value=["DROP TABLE test;"])
-
     migration = {
         "version": "0001",
         "has_upgrade": True,
         "has_downgrade": True,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": mock_loader,
+        "loader": Mock(),
     }
 
-    result = runner._get_migration_sql(migration, "down")
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        mock_await.return_value = Mock(return_value=["DROP TABLE test;"])
 
-    assert result is not None
-    assert isinstance(result, list)
-    assert result == ["DROP TABLE test;"]
+        result = runner._get_migration_sql(migration, "down")
+
+        assert result is not None
+        assert isinstance(result, list)
+        assert result == ["DROP TABLE test;"]
 
 
 def test_get_migration_sql_no_downgrade_warning() -> None:
@@ -335,39 +341,42 @@ def test_get_migration_sql_loader_exception_upgrade() -> None:
     """Test handling of loader exceptions during upgrade SQL generation."""
     runner = create_test_migration_runner()
 
-    mock_loader = Mock()
-    mock_loader.get_up_sql = Mock(side_effect=Exception("Loader failed to parse migration"))
-
     migration = {
         "version": "0001",
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": mock_loader,
+        "loader": Mock(),
     }
 
-    with pytest.raises(ValueError) as exc_info:
-        runner._get_migration_sql(migration, "up")
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        mock_await.return_value = Mock(side_effect=Exception("Loader failed to parse migration"))
 
-    assert "Failed to load upgrade for migration 0001" in str(exc_info.value)
+        with pytest.raises(ValueError) as exc_info:
+            runner._get_migration_sql(migration, "up")
+
+        assert "Failed to load upgrade for migration 0001" in str(exc_info.value)
 
 
 def test_get_migration_sql_loader_exception_downgrade() -> None:
     """Test handling of loader exceptions during downgrade SQL generation."""
     runner = create_test_migration_runner()
 
-    mock_loader = Mock()
-    mock_loader.get_down_sql = Mock(side_effect=Exception("Downgrade loader failed"))
-
     migration = {
         "version": "0001",
         "has_upgrade": True,
         "has_downgrade": True,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": mock_loader,
+        "loader": Mock(),
     }
 
-    with patch("sqlspec.migrations.base.logger") as mock_logger:
+    with patch("sqlspec.migrations.base.await_") as mock_await, patch("sqlspec.migrations.base.logger") as mock_logger:
+
+        def mock_loader_function() -> None:
+            raise Exception("Downgrade loader failed")
+
+        mock_await.return_value = mock_loader_function
+
         result = runner._get_migration_sql(migration, "down")
 
         assert result is None
@@ -381,40 +390,40 @@ def test_get_migration_sql_empty_statements() -> None:
     """Test handling when migration loader returns empty statements."""
     runner = create_test_migration_runner()
 
-    mock_loader = Mock()
-    mock_loader.get_up_sql = Mock(return_value=[])
-
     migration = {
         "version": "0001",
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": mock_loader,
+        "loader": Mock(),
     }
 
-    result = runner._get_migration_sql(migration, "up")
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        mock_await.return_value = Mock(return_value=[])
 
-    assert result is None
+        result = runner._get_migration_sql(migration, "up")
+
+        assert result is None
 
 
 def test_get_migration_sql_none_statements() -> None:
     """Test handling when migration loader returns None."""
     runner = create_test_migration_runner()
 
-    mock_loader = Mock()
-    mock_loader.get_up_sql = Mock(return_value=None)
-
     migration = {
         "version": "0001",
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": mock_loader,
+        "loader": Mock(),
     }
 
-    result = runner._get_migration_sql(migration, "up")
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        mock_await.return_value = Mock(return_value=None)
 
-    assert result is None
+        result = runner._get_migration_sql(migration, "up")
+
+        assert result is None
 
 
 def test_invalid_migration_version_handling() -> None:
@@ -538,6 +547,7 @@ def test_sql_loader_caches_files() -> None:
     The SQLFileLoader should NOT call clear_cache() before operations,
     allowing CoreSQLFileLoader's internal caching to work properly.
     """
+    import asyncio
 
     from sqlspec.migrations.loaders import SQLFileLoader
 
@@ -556,17 +566,20 @@ DROP TABLE test;
 
         sql_loader = SQLFileLoader()
 
-        sql_loader.validate_migration_file(migration_file)
-        path_str = str(migration_file)
-        assert path_str in sql_loader.sql_loader._files
-        assert sql_loader.sql_loader.has_query("migrate-0001-up")
-        assert sql_loader.sql_loader.has_query("migrate-0001-down")
+        async def test_operations() -> None:
+            sql_loader.validate_migration_file(migration_file)
+            path_str = str(migration_file)
+            assert path_str in sql_loader.sql_loader._files
+            assert sql_loader.sql_loader.has_query("migrate-0001-up")
+            assert sql_loader.sql_loader.has_query("migrate-0001-down")
 
-        sql_loader.get_up_sql(migration_file)
-        assert path_str in sql_loader.sql_loader._files
+            await sql_loader.get_up_sql(migration_file)
+            assert path_str in sql_loader.sql_loader._files
 
-        sql_loader.get_down_sql(migration_file)
-        assert path_str in sql_loader.sql_loader._files
+            await sql_loader.get_down_sql(migration_file)
+            assert path_str in sql_loader.sql_loader._files
+
+        asyncio.run(test_operations())
 
 
 def test_no_duplicate_loading_during_migration_execution() -> None:
@@ -576,6 +589,7 @@ def test_no_duplicate_loading_during_migration_execution() -> None:
     the SQL file only once, not multiple times. Checks that the file is in
     the loader's cache after validation and remains there throughout the workflow.
     """
+    import asyncio
 
     from sqlspec.migrations.loaders import SQLFileLoader
 
@@ -597,22 +611,25 @@ DROP TABLE users;
 
         sql_loader = SQLFileLoader()
 
-        sql_loader.validate_migration_file(migration_file)
+        async def test_migration_workflow() -> None:
+            sql_loader.validate_migration_file(migration_file)
 
-        path_str = str(migration_file)
-        assert path_str in sql_loader.sql_loader._files, "File should be loaded after validation"
-        assert sql_loader.sql_loader.has_query("migrate-0001-up")
-        assert sql_loader.sql_loader.has_query("migrate-0001-down")
+            path_str = str(migration_file)
+            assert path_str in sql_loader.sql_loader._files, "File should be loaded after validation"
+            assert sql_loader.sql_loader.has_query("migrate-0001-up")
+            assert sql_loader.sql_loader.has_query("migrate-0001-down")
 
-        file_count_after_validation = len(sql_loader.sql_loader._files)
+            file_count_after_validation = len(sql_loader.sql_loader._files)
 
-        sql_loader.get_up_sql(migration_file)
-        file_count_after_up = len(sql_loader.sql_loader._files)
-        assert file_count_after_validation == file_count_after_up, "get_up_sql should not load additional files"
+            await sql_loader.get_up_sql(migration_file)
+            file_count_after_up = len(sql_loader.sql_loader._files)
+            assert file_count_after_validation == file_count_after_up, "get_up_sql should not load additional files"
 
-        sql_loader.get_down_sql(migration_file)
-        file_count_after_down = len(sql_loader.sql_loader._files)
-        assert file_count_after_up == file_count_after_down, "get_down_sql should not load additional files"
+            await sql_loader.get_down_sql(migration_file)
+            file_count_after_down = len(sql_loader.sql_loader._files)
+            assert file_count_after_up == file_count_after_down, "get_down_sql should not load additional files"
+
+        asyncio.run(test_migration_workflow())
 
 
 def test_sql_file_loader_counter_accuracy_single_file() -> None:
@@ -704,6 +721,7 @@ def test_migration_workflow_single_load_design() -> None:
 
     All three operations should use the same cached file.
     """
+    import asyncio
 
     from sqlspec.migrations.loaders import SQLFileLoader
 
@@ -722,28 +740,31 @@ DROP TABLE test_table;
 
         sql_loader = SQLFileLoader()
 
-        sql_loader.validate_migration_file(migration_file)
+        async def test_workflow() -> None:
+            sql_loader.validate_migration_file(migration_file)
 
-        path_str = str(migration_file)
-        assert path_str in sql_loader.sql_loader._files, "File should be loaded after validation"
-        assert sql_loader.sql_loader.has_query("migrate-0001-up")
-        assert sql_loader.sql_loader.has_query("migrate-0001-down")
+            path_str = str(migration_file)
+            assert path_str in sql_loader.sql_loader._files, "File should be loaded after validation"
+            assert sql_loader.sql_loader.has_query("migrate-0001-up")
+            assert sql_loader.sql_loader.has_query("migrate-0001-down")
 
-        file_count_before_up = len(sql_loader.sql_loader._files)
-        up_sql = sql_loader.get_up_sql(migration_file)
-        file_count_after_up = len(sql_loader.sql_loader._files)
+            file_count_before_up = len(sql_loader.sql_loader._files)
+            up_sql = await sql_loader.get_up_sql(migration_file)
+            file_count_after_up = len(sql_loader.sql_loader._files)
 
-        assert file_count_before_up == file_count_after_up, "get_up_sql() should not load additional files"
-        assert len(up_sql) == 1
-        assert "CREATE TABLE test_table" in up_sql[0]
+            assert file_count_before_up == file_count_after_up, "get_up_sql() should not load additional files"
+            assert len(up_sql) == 1
+            assert "CREATE TABLE test_table" in up_sql[0]
 
-        file_count_before_down = len(sql_loader.sql_loader._files)
-        down_sql = sql_loader.get_down_sql(migration_file)
-        file_count_after_down = len(sql_loader.sql_loader._files)
+            file_count_before_down = len(sql_loader.sql_loader._files)
+            down_sql = await sql_loader.get_down_sql(migration_file)
+            file_count_after_down = len(sql_loader.sql_loader._files)
 
-        assert file_count_before_down == file_count_after_down, "get_down_sql() should not load additional files"
-        assert len(down_sql) == 1
-        assert "DROP TABLE test_table" in down_sql[0]
+            assert file_count_before_down == file_count_after_down, "get_down_sql() should not load additional files"
+            assert len(down_sql) == 1
+            assert "DROP TABLE test_table" in down_sql[0]
+
+        asyncio.run(test_workflow())
 
 
 def test_migration_loader_does_not_reload_on_get_sql_calls() -> None:
@@ -753,6 +774,8 @@ def test_migration_loader_does_not_reload_on_get_sql_calls() -> None:
     subsequent calls to get_up_sql() and get_down_sql() retrieve
     the cached queries without calling load_sql() again.
     """
+    import asyncio
+
     from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
     from sqlspec.migrations.loaders import SQLFileLoader
 
@@ -779,11 +802,15 @@ DROP TABLE products;
             return original_load_sql(self, *args, **kwargs)
 
         with patch.object(CoreSQLFileLoader, "load_sql", counting_load_sql):
-            sql_loader.validate_migration_file(migration_file)
-            assert call_counts["load_sql"] == 1, "validate_migration_file should call load_sql exactly once"
 
-            sql_loader.get_up_sql(migration_file)
-            assert call_counts["load_sql"] == 1, "get_up_sql should NOT call load_sql (should use cache)"
+            async def test_no_reload() -> None:
+                sql_loader.validate_migration_file(migration_file)
+                assert call_counts["load_sql"] == 1, "validate_migration_file should call load_sql exactly once"
 
-            sql_loader.get_down_sql(migration_file)
-            assert call_counts["load_sql"] == 1, "get_down_sql should NOT call load_sql (should use cache)"
+                await sql_loader.get_up_sql(migration_file)
+                assert call_counts["load_sql"] == 1, "get_up_sql should NOT call load_sql (should use cache)"
+
+                await sql_loader.get_down_sql(migration_file)
+                assert call_counts["load_sql"] == 1, "get_down_sql should NOT call load_sql (should use cache)"
+
+            asyncio.run(test_no_reload())

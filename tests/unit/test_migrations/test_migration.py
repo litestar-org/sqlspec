@@ -278,11 +278,17 @@ def down():
 
         runner = MockMigrationRunner(migrations_path)
 
-        with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+        with (
+            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+            patch("sqlspec.migrations.base.await_") as mock_await,
+        ):
             mock_loader = Mock()
             mock_loader.validate_migration_file = Mock()
-            mock_loader.get_down_sql = Mock(return_value=["DELETE FROM users WHERE name = 'admin';"])
+            mock_loader.get_up_sql = Mock()
+            mock_loader.get_down_sql = Mock()
             mock_get_loader.return_value = mock_loader
+
+            mock_await.return_value = Mock(return_value=True)
 
             metadata = runner._load_migration_metadata(migration_file)
 
@@ -316,11 +322,17 @@ async def down():
 
         runner = MockMigrationRunner(migrations_path)
 
-        with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+        with (
+            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+            patch("sqlspec.migrations.base.await_") as mock_await,
+        ):
             mock_loader = Mock()
             mock_loader.validate_migration_file = Mock()
-            mock_loader.get_down_sql = Mock(return_value=["DELETE FROM users WHERE name = 'admin';"])
+            mock_loader.get_up_sql = Mock()
+            mock_loader.get_down_sql = Mock()
             mock_get_loader.return_value = mock_loader
+
+            mock_await.return_value = Mock(return_value=True)
 
             metadata = runner._load_migration_metadata(migration_file)
 
@@ -353,11 +365,17 @@ async def down():
 
         runner = MockMigrationRunner(migrations_path)
 
-        with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+        with (
+            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+            patch("sqlspec.migrations.base.await_") as mock_await,
+        ):
             mock_loader = Mock()
             mock_loader.validate_migration_file = Mock()
-            mock_loader.get_down_sql = Mock(return_value=["DELETE FROM users WHERE name = 'admin';"])
+            mock_loader.get_up_sql = Mock()
+            mock_loader.get_down_sql = Mock()
             mock_get_loader.return_value = mock_loader
+
+            mock_await.return_value = Mock(return_value=True)
 
             metadata = runner._load_migration_metadata(migration_file)
 
@@ -475,11 +493,17 @@ async def down():
 
         migration_files = sorted(migrations_path.glob("*"), key=lambda p: p.name)
 
-        with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+        with (
+            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+            patch("sqlspec.migrations.base.await_") as mock_await,
+        ):
             mock_loader = Mock()
             mock_loader.validate_migration_file = Mock()
-            mock_loader.get_down_sql = Mock(return_value=["DELETE SQL"])
+            mock_loader.get_up_sql = Mock()
+            mock_loader.get_down_sql = Mock()
             mock_get_loader.return_value = mock_loader
+
+            mock_await.return_value = Mock(return_value=True)
 
             all_metadata = []
             for migration_file in migration_files:
@@ -574,42 +598,42 @@ def test_get_migration_sql_upgrade() -> None:
     """Test getting upgrade SQL from migration."""
     runner = MockMigrationRunner()
 
-    mock_loader = Mock()
-    mock_loader.get_up_sql = Mock(return_value=["CREATE TABLE test (id INTEGER);"])
-
     migration = {
         "version": "0001",
         "has_upgrade": True,
         "has_downgrade": True,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": mock_loader,
+        "loader": Mock(),
     }
 
-    result = runner._get_migration_sql(migration, "up")
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        mock_await.return_value = lambda file_path: ["CREATE TABLE test (id INTEGER);"]
 
-    assert isinstance(result, list)
-    assert result == ["CREATE TABLE test (id INTEGER);"]
+        result = runner._get_migration_sql(migration, "up")
+
+        assert isinstance(result, list)
+        assert result == ["CREATE TABLE test (id INTEGER);"]
 
 
 def test_get_migration_sql_downgrade() -> None:
     """Test getting downgrade SQL from migration."""
     runner = MockMigrationRunner()
 
-    mock_loader = Mock()
-    mock_loader.get_down_sql = Mock(return_value=["DROP TABLE test;"])
-
     migration = {
         "version": "0001",
         "has_upgrade": True,
         "has_downgrade": True,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": mock_loader,
+        "loader": Mock(),
     }
 
-    result = runner._get_migration_sql(migration, "down")
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        mock_await.return_value = lambda file_path: ["DROP TABLE test;"]
 
-    assert isinstance(result, list)
-    assert result == ["DROP TABLE test;"]
+        result = runner._get_migration_sql(migration, "down")
+
+        assert isinstance(result, list)
+        assert result == ["DROP TABLE test;"]
 
 
 def test_get_migration_sql_no_downgrade() -> None:
@@ -653,45 +677,41 @@ def test_get_migration_sql_loader_error() -> None:
     """Test handling loader errors during SQL generation."""
     runner = MockMigrationRunner()
 
-    mock_loader_upgrade = Mock()
-    mock_loader_upgrade.get_up_sql = Mock(side_effect=Exception("Loader error"))
-
     migration = {
         "version": "0001",
         "has_upgrade": True,
         "has_downgrade": True,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": mock_loader_upgrade,
+        "loader": Mock(),
     }
 
-    with pytest.raises(ValueError) as exc_info:
-        runner._get_migration_sql(migration, "up")
-    assert "Failed to load upgrade" in str(exc_info.value)
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        mock_await.side_effect = Exception("Loader error")
 
-    mock_loader_downgrade = Mock()
-    mock_loader_downgrade.get_down_sql = Mock(side_effect=Exception("Loader error"))
-    migration["loader"] = mock_loader_downgrade
+        with pytest.raises(ValueError) as exc_info:
+            runner._get_migration_sql(migration, "up")
+        assert "Failed to load upgrade" in str(exc_info.value)
 
-    with patch("sqlspec.migrations.base.logger") as mock_logger:
-        result = runner._get_migration_sql(migration, "down")
-        assert result is None
-        mock_logger.warning.assert_called()
+        with patch("sqlspec.migrations.base.logger") as mock_logger:
+            result = runner._get_migration_sql(migration, "down")
+            assert result is None
+            mock_logger.warning.assert_called()
 
 
 def test_get_migration_sql_empty_statements() -> None:
     """Test handling when loader returns empty statements."""
     runner = MockMigrationRunner()
 
-    mock_loader = Mock()
-    mock_loader.get_up_sql = Mock(return_value=[])
-
     migration = {
         "version": "0001",
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": mock_loader,
+        "loader": Mock(),
     }
 
-    result = runner._get_migration_sql(migration, "up")
-    assert result is None
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        mock_await.return_value = lambda file_path: []
+
+        result = runner._get_migration_sql(migration, "up")
+        assert result is None
