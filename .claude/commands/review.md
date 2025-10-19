@@ -1,33 +1,42 @@
-Run documentation, quality gate, and mandatory cleanup.
+Complete documentation, quality gate, knowledge capture, and archival for the implemented feature.
 
-Invoke the Docs & Vision agent to run all 3 phases:
+Invoke the Docs & Vision agent to run the full 5-phase workflow:
 
-## Phase 1: Documentation
+**Phase 1: Documentation**
+- Update API documentation
+- Create/update guides in docs/guides/
+- Validate code examples work
+- Build documentation without errors
 
-- Update docs/guides/ as needed
-- Update API reference (docs/reference/)
-- Add usage examples
-- Build docs locally to verify
+**Phase 2: Quality Gate**
+- Verify all PRD acceptance criteria met
+- Verify all tests passing
+- Check code standards compliance (AGENTS.md)
+- BLOCK if any criteria not met
 
-## Phase 2: Quality Gate (MANDATORY)
+**Phase 3: Knowledge Capture (NEW!)**
+- Analyze implementation for new patterns
+- Extract best practices and conventions
+- **Update AGENTS.md with new patterns**
+- **Update relevant guides in docs/guides/**
+- Document patterns with working examples
 
-- Run `make lint` - must pass
-- Check for anti-patterns (hasattr, workaround naming, class tests)
-- Run full test suite - must pass
-- Verify PRD acceptance criteria met
+**Phase 4: Re-validation (NEW!)**
+- Re-run tests after documentation updates
+- Rebuild documentation to verify no errors
+- Check pattern consistency across project
+- Verify no breaking changes introduced
+- BLOCK if re-validation fails
 
-**Quality gate MUST pass before proceeding to cleanup.**
+**Phase 5: Cleanup & Archive**
+- Remove all tmp/ files
+- Move specs/active/{requirement} to specs/archive/
+- Generate completion report
 
-## Phase 3: Cleanup (MANDATORY)
+**Note:** This command is typically not needed manually because `/implement` automatically invokes Docs & Vision. Use this only if you need to:
+- Re-run validation after manual changes
+- Regenerate documentation
+- Force re-archival
+- Update AGENTS.md with new patterns after manual implementation
 
-- Remove all requirements/*/tmp/ directories
-- Archive completed requirement to requirements/archive/
-- Keep only last 3 active requirements in requirements/
-- Archive planning reports to .claude/reports/archive/
-- Verify workspace is clean
-
-**Cleanup is MANDATORY - never skip this phase.**
-
-After review complete, work is ready for commit/PR.
-
-Final step: Run `make lint && make test` one more time, then commit!
+After review, feature is documented, validated, patterns captured, and archived!

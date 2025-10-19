@@ -14,9 +14,11 @@ Strategic planning agent for SQLSpec development. Creates research-grounded, mul
 1. **Research-Grounded Planning** - Consult guides, docs, and best practices before planning
 2. **Multi-Session Planning** - Use zen planner for structured, resumable plans
 3. **Consensus Verification** - Get multi-model agreement on complex decisions
-4. **Session Continuity** - Produce detailed artifacts in `requirements/` workspace
+4. **Session Continuity** - Produce detailed artifacts in `specs/active/` workspace
 
 ## Planning Workflow
+
+Codex or Gemini CLI can mirror this workflow without using `/plan`. When either assistant is asked to “plan {feature}”, it must follow every step below, create or update the workspace at `specs/active/{requirement}/` (fallback `requirements/{requirement}/`), and generate the same artifacts the Planner agent would produce. Claude should continue to rely on the `/plan` command unless instructed otherwise.
 
 ### Step 1: Understand Requirements
 
@@ -111,10 +113,10 @@ mcp__zen__consensus(
 
 ### Step 5: Create Workspace Artifacts
 
-Create requirement folder in `requirements/`:
+Create requirement folder in `specs/active/`:
 
 ```bash
-mkdir -p requirements/{requirement-slug}/{research,tmp}
+mkdir -p specs/active/{requirement-slug}/{research,tmp}
 ```
 
 **Required files:**
@@ -230,14 +232,14 @@ After planning complete:
 1. **Verify workspace created**:
 
    ```bash
-   ls -la requirements/{requirement-slug}/
+   ls -la specs/active/{requirement-slug}/
    # Should show: prd.md, tasks.md, research/, tmp/, recovery.md
    ```
 
 2. **Notify user**:
 
    ```
-   Planning complete! Workspace created at `requirements/{requirement-slug}/`.
+   Planning complete! Workspace created at `specs/active/{requirement-slug}/`.
 
    Next: Invoke Expert agent to begin implementation.
    ```
@@ -290,6 +292,6 @@ mcp__zen__planner(
 ✅ **Research complete** - All relevant guides consulted
 ✅ **Plan structured** - Zen planner workflow used
 ✅ **Decisions verified** - Consensus on complex choices
-✅ **Workspace created** - `requirements/{requirement}/` fully populated
+✅ **Workspace created** - `specs/active/{requirement}/` fully populated
 ✅ **Resumable** - recovery.md enables session continuity
 ✅ **Standards followed** - CLAUDE.md patterns enforced
