@@ -85,11 +85,11 @@ async def test_store_delete_nonexistent(oracle_store: OracleAsyncStore) -> None:
 
 async def test_store_expiration_with_int(oracle_store: OracleAsyncStore) -> None:
     """Test session expiration with integer seconds."""
-    await oracle_store.set("expiring_session", b"data", expires_in=1)
+    await oracle_store.set("expiring_session", b"data", expires_in=2)
 
     assert await oracle_store.exists("expiring_session")
 
-    await asyncio.sleep(1.1)
+    await asyncio.sleep(2.1)
 
     result = await oracle_store.get("expiring_session")
     assert result is None
@@ -98,11 +98,11 @@ async def test_store_expiration_with_int(oracle_store: OracleAsyncStore) -> None
 
 async def test_store_expiration_with_timedelta(oracle_store: OracleAsyncStore) -> None:
     """Test session expiration with timedelta."""
-    await oracle_store.set("expiring_session", b"data", expires_in=timedelta(seconds=1))
+    await oracle_store.set("expiring_session", b"data", expires_in=timedelta(seconds=2))
 
     assert await oracle_store.exists("expiring_session")
 
-    await asyncio.sleep(1.1)
+    await asyncio.sleep(2.1)
 
     result = await oracle_store.get("expiring_session")
     assert result is None
