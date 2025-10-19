@@ -88,6 +88,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
     connection_type: "ClassVar[type[BigQueryConnection]]" = BigQueryConnection
+    supports_transactional_ddl: ClassVar[bool] = False
 
     def __init__(
         self,

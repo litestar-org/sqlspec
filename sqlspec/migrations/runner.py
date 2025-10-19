@@ -4,6 +4,7 @@ This module provides separate sync and async migration runners with clean separa
 of concerns and proper type safety.
 """
 
+import inspect
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -16,7 +17,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_, await_
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine
+    from collections.abc import Awaitable, Callable, Coroutine
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
@@ -175,11 +176,20 @@ class BaseMigrationRunner(ABC):
         Returns:
             Partial migration metadata dictionary.
         """
+        import re
+
         content = file_path.read_text(encoding="utf-8")
         checksum = self._calculate_checksum(content)
         if version is None:
             version = self._extract_version(file_path.name)
         description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
+
+        transactional_match = re.search(
+            r"^--\s*transactional:\s*(true|false)\s*$", content, re.MULTILINE | re.IGNORECASE
+        )
+        transactional = None
+        if transactional_match:
+            transactional = transactional_match.group(1).lower() == "true"
 
         return {
             "version": version,
@@ -187,6 +197,7 @@ class BaseMigrationRunner(ABC):
             "file_path": file_path,
             "checksum": checksum,
             "content": content,
+            "transactional": transactional,
         }
 
     def _get_context_for_migration(self, file_path: Path) -> "MigrationContext | None":
@@ -229,6 +240,25 @@ class BaseMigrationRunner(ABC):
 
         return context_to_use
 
+    def should_use_transaction(self, migration: "dict[str, Any]", config: Any) -> bool:
+        """Determine if migration should run in a transaction.
+
+        Args:
+            migration: Migration metadata dictionary.
+            config: The database configuration instance.
+
+        Returns:
+            True if migration should be wrapped in a transaction.
+        """
+        if not config.supports_transactional_ddl:
+            return False
+
+        if migration.get("transactional") is not None:
+            return bool(migration["transactional"])
+
+        migration_config = getattr(config, "migration_config", {}) or {}
+        return bool(migration_config.get("transactional", True))
+
 
 class SyncMigrationRunner(BaseMigrationRunner):
     """Synchronous migration runner with pure sync methods."""
@@ -264,12 +294,21 @@ class SyncMigrationRunner(BaseMigrationRunner):
         metadata.update({"has_upgrade": has_upgrade, "has_downgrade": has_downgrade, "loader": loader})
         return metadata
 
-    def execute_upgrade(self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]") -> "tuple[str | None, int]":
+    def execute_upgrade(
+        self,
+        driver: "SyncDriverAdapterBase",
+        migration: "dict[str, Any]",
+        *,
+        use_transaction: "bool | None" = None,
+        on_success: "Callable[[int], None] | None" = None,
+    ) -> "tuple[str | None, int]":
         """Execute an upgrade migration.
 
         Args:
             driver: The sync database driver to use.
             migration: Migration metadata dictionary.
+            use_transaction: Override transaction behavior. If None, uses should_use_transaction logic.
+            on_success: Callback invoked with execution_time_ms before commit (for version tracking).
 
         Returns:
             Tuple of (sql_content, execution_time_ms).
@@ -278,22 +317,50 @@ class SyncMigrationRunner(BaseMigrationRunner):
         if upgrade_sql_list is None:
             return None, 0
 
+        if use_transaction is None:
+            config = self.context.config if self.context else None
+            use_transaction = self.should_use_transaction(migration, config) if config else False
+
         start_time = time.time()
 
-        for sql_statement in upgrade_sql_list:
-            if sql_statement.strip():
-                driver.execute_script(sql_statement)
-        execution_time = int((time.time() - start_time) * 1000)
+        if use_transaction:
+            try:
+                driver.begin()
+                for sql_statement in upgrade_sql_list:
+                    if sql_statement.strip():
+                        driver.execute_script(sql_statement)
+                execution_time = int((time.time() - start_time) * 1000)
+                if on_success:
+                    on_success(execution_time)
+                driver.commit()
+            except Exception:
+                driver.rollback()
+                raise
+        else:
+            for sql_statement in upgrade_sql_list:
+                if sql_statement.strip():
+                    driver.execute_script(sql_statement)
+            execution_time = int((time.time() - start_time) * 1000)
+            if on_success:
+                on_success(execution_time)
+
         return None, execution_time
 
     def execute_downgrade(
-        self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]"
+        self,
+        driver: "SyncDriverAdapterBase",
+        migration: "dict[str, Any]",
+        *,
+        use_transaction: "bool | None" = None,
+        on_success: "Callable[[int], None] | None" = None,
     ) -> "tuple[str | None, int]":
         """Execute a downgrade migration.
 
         Args:
             driver: The sync database driver to use.
             migration: Migration metadata dictionary.
+            use_transaction: Override transaction behavior. If None, uses should_use_transaction logic.
+            on_success: Callback invoked with execution_time_ms before commit (for version tracking).
 
         Returns:
             Tuple of (sql_content, execution_time_ms).
@@ -302,12 +369,33 @@ class SyncMigrationRunner(BaseMigrationRunner):
         if downgrade_sql_list is None:
             return None, 0
 
+        if use_transaction is None:
+            config = self.context.config if self.context else None
+            use_transaction = self.should_use_transaction(migration, config) if config else False
+
         start_time = time.time()
 
-        for sql_statement in downgrade_sql_list:
-            if sql_statement.strip():
-                driver.execute_script(sql_statement)
-        execution_time = int((time.time() - start_time) * 1000)
+        if use_transaction:
+            try:
+                driver.begin()
+                for sql_statement in downgrade_sql_list:
+                    if sql_statement.strip():
+                        driver.execute_script(sql_statement)
+                execution_time = int((time.time() - start_time) * 1000)
+                if on_success:
+                    on_success(execution_time)
+                driver.commit()
+            except Exception:
+                driver.rollback()
+                raise
+        else:
+            for sql_statement in downgrade_sql_list:
+                if sql_statement.strip():
+                    driver.execute_script(sql_statement)
+            execution_time = int((time.time() - start_time) * 1000)
+            if on_success:
+                on_success(execution_time)
+
         return None, execution_time
 
     def _get_migration_sql_sync(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
@@ -333,15 +421,11 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         try:
             method = loader.get_up_sql if direction == "up" else loader.get_down_sql
-            # Check if the method is async and handle appropriately
-            import inspect
-
-            if inspect.iscoroutinefunction(method):
-                # For async methods, use await_ to run in sync context
-                sql_statements = await_(method, raise_sync_error=False)(file_path)
-            else:
-                # For sync methods, call directly
-                sql_statements = method(file_path)
+            sql_statements = (
+                await_(method, raise_sync_error=False)(file_path)
+                if inspect.iscoroutinefunction(method)
+                else method(file_path)
+            )
 
         except Exception as e:
             if direction == "down":
@@ -374,8 +458,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 )
 
                 try:
-                    up_sql = await_(loader.get_up_sql)(file_path)
-                    down_sql = await_(loader.get_down_sql)(file_path)
+                    up_sql = await_(loader.get_up_sql, raise_sync_error=False)(file_path)
+                    down_sql = await_(loader.get_down_sql, raise_sync_error=False)(file_path)
 
                     if up_sql:
                         all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
@@ -433,13 +517,20 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         return metadata
 
     async def execute_upgrade(
-        self, driver: "AsyncDriverAdapterBase", migration: "dict[str, Any]"
+        self,
+        driver: "AsyncDriverAdapterBase",
+        migration: "dict[str, Any]",
+        *,
+        use_transaction: "bool | None" = None,
+        on_success: "Callable[[int], Awaitable[None]] | None" = None,
     ) -> "tuple[str | None, int]":
         """Execute an upgrade migration.
 
         Args:
             driver: The async database driver to use.
             migration: Migration metadata dictionary.
+            use_transaction: Override transaction behavior. If None, uses should_use_transaction logic.
+            on_success: Async callback invoked with execution_time_ms before commit (for version tracking).
 
         Returns:
             Tuple of (sql_content, execution_time_ms).
@@ -448,22 +539,50 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         if upgrade_sql_list is None:
             return None, 0
 
+        if use_transaction is None:
+            config = self.context.config if self.context else None
+            use_transaction = self.should_use_transaction(migration, config) if config else False
+
         start_time = time.time()
 
-        for sql_statement in upgrade_sql_list:
-            if sql_statement.strip():
-                await driver.execute_script(sql_statement)
-        execution_time = int((time.time() - start_time) * 1000)
+        if use_transaction:
+            try:
+                await driver.begin()
+                for sql_statement in upgrade_sql_list:
+                    if sql_statement.strip():
+                        await driver.execute_script(sql_statement)
+                execution_time = int((time.time() - start_time) * 1000)
+                if on_success:
+                    await on_success(execution_time)
+                await driver.commit()
+            except Exception:
+                await driver.rollback()
+                raise
+        else:
+            for sql_statement in upgrade_sql_list:
+                if sql_statement.strip():
+                    await driver.execute_script(sql_statement)
+            execution_time = int((time.time() - start_time) * 1000)
+            if on_success:
+                await on_success(execution_time)
+
         return None, execution_time
 
     async def execute_downgrade(
-        self, driver: "AsyncDriverAdapterBase", migration: "dict[str, Any]"
+        self,
+        driver: "AsyncDriverAdapterBase",
+        migration: "dict[str, Any]",
+        *,
+        use_transaction: "bool | None" = None,
+        on_success: "Callable[[int], Awaitable[None]] | None" = None,
     ) -> "tuple[str | None, int]":
         """Execute a downgrade migration.
 
         Args:
             driver: The async database driver to use.
             migration: Migration metadata dictionary.
+            use_transaction: Override transaction behavior. If None, uses should_use_transaction logic.
+            on_success: Async callback invoked with execution_time_ms before commit (for version tracking).
 
         Returns:
             Tuple of (sql_content, execution_time_ms).
@@ -472,12 +591,33 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         if downgrade_sql_list is None:
             return None, 0
 
+        if use_transaction is None:
+            config = self.context.config if self.context else None
+            use_transaction = self.should_use_transaction(migration, config) if config else False
+
         start_time = time.time()
 
-        for sql_statement in downgrade_sql_list:
-            if sql_statement.strip():
-                await driver.execute_script(sql_statement)
-        execution_time = int((time.time() - start_time) * 1000)
+        if use_transaction:
+            try:
+                await driver.begin()
+                for sql_statement in downgrade_sql_list:
+                    if sql_statement.strip():
+                        await driver.execute_script(sql_statement)
+                execution_time = int((time.time() - start_time) * 1000)
+                if on_success:
+                    await on_success(execution_time)
+                await driver.commit()
+            except Exception:
+                await driver.rollback()
+                raise
+        else:
+            for sql_statement in downgrade_sql_list:
+                if sql_statement.strip():
+                    await driver.execute_script(sql_statement)
+            execution_time = int((time.time() - start_time) * 1000)
+            if on_success:
+                await on_success(execution_time)
+
         return None, execution_time
 
     async def _get_migration_sql_async(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":

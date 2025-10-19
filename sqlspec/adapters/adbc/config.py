@@ -100,6 +100,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
     driver_type: ClassVar[type[AdbcDriver]] = AdbcDriver
     connection_type: "ClassVar[type[AdbcConnection]]" = AdbcConnection
+    supports_transactional_ddl: ClassVar[bool] = False
 
     def __init__(
         self,

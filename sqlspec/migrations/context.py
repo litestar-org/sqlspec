@@ -129,9 +129,6 @@ class MigrationContext:
 
         Args:
             migration_func: The migration function to validate.
-
-        Raises:
-            RuntimeError: If async function is used inappropriately.
         """
         if inspect.iscoroutinefunction(migration_func) and not self.is_async_execution and not self.is_async_driver:
             msg = (
