@@ -76,6 +76,37 @@ class TestMigrationContext:
 
         asyncio.run(test_async_mode())
 
+    def test_validate_async_usage_with_async_function(self) -> None:
+        """Test async function validation."""
+        context = MigrationContext()
+
+        async def async_migration() -> list[str]:
+            return ["CREATE TABLE test (id INT);"]
+
+        # Should log warning when async function used in non-async context
+        # Since we're outside async context and no driver is set, both should be False
+        context.validate_async_usage(async_migration)
+
+    def test_validate_async_usage_with_sync_function(self) -> None:
+        """Test sync function validation in async context."""
+        context = MigrationContext()
+
+        def sync_migration() -> list[str]:
+            return ["CREATE TABLE test (id INT);"]
+
+        # Mock async driver by setting a mock driver
+        mock_async_driver = Mock()
+
+        async def mock_execute() -> None:
+            pass
+
+        mock_async_driver.execute_script = mock_execute
+        context.driver = mock_async_driver
+
+        context.validate_async_usage(sync_migration)
+        # Should set mixed execution metadata
+        assert context.get_execution_metadata("mixed_execution") is True
+
     def test_from_config_class_method(self) -> None:
         """Test creating context from config."""
         mock_config = Mock()
