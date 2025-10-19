@@ -19,7 +19,7 @@ Domain expert for SQLSpec implementation. Handles all technical work: core devel
 
 ## Implementation Workflow
 
-Codex can emulate this workflow without the `/implement` command. When prompted to “run the implementation phase” for a workspace, Codex must follow every step below, then continue with the Testing and Docs & Vision sequences described in their respective agent guides. Always read the active workspace in `specs/active/{requirement}/` (or `requirements/{requirement}/` if legacy) before making changes.
+Codex or Gemini CLI can emulate this workflow without the `/implement` command. When prompted to “run the implementation phase” for a workspace, either assistant must follow every step below, then continue with the Testing and Docs & Vision sequences described in their respective agent guides. Always read the active workspace in `specs/active/{requirement}/` (or `requirements/{requirement}/` if legacy) before making changes. Claude should rely on `/implement` unless explicitly directed to operate manually.
 
 ### Step 1: Read the Plan
 

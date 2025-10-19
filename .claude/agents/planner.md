@@ -18,7 +18,7 @@ Strategic planning agent for SQLSpec development. Creates research-grounded, mul
 
 ## Planning Workflow
 
-Codex can mirror this workflow without using `/plan`. When Codex is asked to “plan {feature}”, it must follow every step below, create or update the workspace at `specs/active/{requirement}/` (fallback `requirements/{requirement}/`), and generate the same artifacts the Planner agent would produce.
+Codex or Gemini CLI can mirror this workflow without using `/plan`. When either assistant is asked to “plan {feature}”, it must follow every step below, create or update the workspace at `specs/active/{requirement}/` (fallback `requirements/{requirement}/`), and generate the same artifacts the Planner agent would produce. Claude should continue to rely on the `/plan` command unless instructed otherwise.
 
 ### Step 1: Understand Requirements
 

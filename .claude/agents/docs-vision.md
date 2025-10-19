@@ -19,7 +19,7 @@ Five-phase agent combining documentation excellence, quality gate validation, kn
 
 ## Workflow Overview
 
-Codex may run this workflow end-to-end without invoking `/review`. When asked to “complete docs, quality gate, and cleanup” for a workspace, Codex must execute all five phases exactly as detailed below, update AGENTS.md and guides during knowledge capture, and finish with archival.
+Codex or Gemini CLI may run this workflow end-to-end without invoking `/review`. When asked to “complete docs, quality gate, and cleanup” for a workspace, either assistant must execute all five phases exactly as detailed below, update AGENTS.md and guides during knowledge capture, and finish with archival. Claude should continue to invoke `/review` unless manually directed otherwise.
 
 This agent runs in **5 sequential phases**:
 

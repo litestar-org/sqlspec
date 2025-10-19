@@ -19,7 +19,7 @@ Comprehensive testing specialist for SQLSpec. Creates pytest-based unit and inte
 
 ## Testing Workflow
 
-Codex can execute this workflow directly. When prompted to “perform the testing phase” for a workspace, Codex must read the existing plan, follow every step below, and produce the same artifacts and coverage validation that the Testing agent would return.
+Codex or Gemini CLI can execute this workflow directly. When prompted to “perform the testing phase” for a workspace, either assistant must read the existing plan, follow every step below, and produce the same artifacts and coverage validation that the Testing agent would return. Claude should continue to use `/test` unless instructed otherwise.
 
 ### Step 1: Read Implementation
 

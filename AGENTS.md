@@ -1075,11 +1075,30 @@ Result: Feature implemented, tested, documented, archived - all automatically!
 Codex can execute the same lifecycle without invoking Claude slash commands. Use the prompts below to engage Codex directly while keeping the workflow artifacts identical.
 
 - **General Rule**: Tell Codex which phase to emulate (`plan`, `implement`, `test`, `review`) and point to the active workspace root (`specs/active/{slug}/` preferred). Codex will create the folder if it does not exist.
-- **Codex `/plan` Equivalent**: Ask “Codex: run planning for {feature}” and provide any context. Codex must (1) research via docs/guides/ as outlined in `.claude/agents/planner.md`, (2) write or update `prd.md`, `tasks.md`, `research/plan.md`, `recovery.md`, and (3) ensure `tmp/` exists. Planning output follows the same structure the Planner agent would create.
-- **Codex `/implement` Equivalent**: Ask Codex to “execute implementation phase for {workspace}”. Codex then reads the workspace, consults guides, writes code under `sqlspec/`, updates tasks, and runs local checks exactly as described in `.claude/agents/expert.md`. When the plan calls for sub-agents, Codex continues by emulating the Testing and Docs & Vision phases in order.
-- **Codex `/test` Equivalent**: Request “Codex: perform testing phase for {workspace}”. Codex creates or updates pytest suites, ensures coverage thresholds, and records progress in `tasks.md`, mirroring `.claude/agents/testing.md`.
-- **Codex `/review` Equivalent**: Request “Codex: run docs, quality gate, and cleanup for {workspace}”. Codex completes the five Docs & Vision phases—documentation, quality gate, knowledge capture (including AGENTS.md and guides updates), re-validation, and workspace archival.
+- **Codex `/plan` Equivalent**: Ask "Codex: run planning for {feature}" and provide any context. Codex must (1) research via docs/guides/ as outlined in `.claude/agents/planner.md`, (2) write or update `prd.md`, `tasks.md`, `research/plan.md`, `recovery.md`, and (3) ensure `tmp/` exists. Planning output follows the same structure the Planner agent would create.
+- **Codex `/implement` Equivalent**: Ask Codex to "execute implementation phase for {workspace}". Codex then reads the workspace, consults guides, writes code under `sqlspec/`, updates tasks, and runs local checks exactly as described in `.claude/agents/expert.md`. When the plan calls for sub-agents, Codex continues by emulating the Testing and Docs & Vision phases in order.
+- **Codex `/test` Equivalent**: Request "Codex: perform testing phase for {workspace}". Codex creates or updates pytest suites, ensures coverage thresholds, and records progress in `tasks.md`, mirroring `.claude/agents/testing.md`.
+- **Codex `/review` Equivalent**: Request "Codex: run docs, quality gate, and cleanup for {workspace}". Codex completes the five Docs & Vision phases—documentation, quality gate, knowledge capture (including AGENTS.md and guides updates), re-validation, and workspace archival.
 - **Knowledge Capture Reminder**: Whenever Codex finishes implementation or review work, it must update this AGENTS.md and any relevant guides with new patterns so Claude and other assistants inherit the learnings.
+
+### Gemini CLI Workflow Usage
+
+Gemini CLI can execute the same lifecycle. Direct Gemini to the desired phase and reference the active workspace so it mirrors the Planner, Expert, Testing, and Docs & Vision agents.
+
+- **General Rule**: Specify the phase (`plan`, `implement`, `test`, `review`) and point Gemini to `specs/active/{slug}/` (fallback `requirements/{slug}/`). Gemini should create the workspace if it is missing and follow `.claude/agents/{agent}.md` for detailed steps.
+- **Gemini `/plan` Equivalent**: Prompt "Gemini: plan {feature} using AGENTS.md." Gemini reads the guides, writes `prd.md`, `tasks.md`, `research/plan.md`, `recovery.md`, and ensures a `tmp/` directory exists.
+- **Gemini `/implement` Equivalent**: Prompt "Gemini: run implementation phase for {workspace}." Gemini reads the workspace artifacts, implements code per `.claude/agents/expert.md`, and continues by emulating the Testing and Docs & Vision workflows in sequence.
+- **Gemini `/test` Equivalent**: Prompt "Gemini: execute testing phase for {workspace}." Gemini creates or updates pytest suites, verifies coverage targets, and records progress in `tasks.md` exactly like the Testing agent.
+- **Gemini `/review` Equivalent**: Prompt "Gemini: perform docs, quality gate, and cleanup for {workspace}." Gemini completes all five Docs & Vision phases, including knowledge capture updates to AGENTS.md and guides, followed by archival.
+- **Prompt Templates**: If using Gemini CLI prompt files, include a directive to consult the relevant agent guide plus this section so each invocation stays aligned.
+
+### Claude Workflow Usage
+
+Claude already maps to these phases through the slash commands defined in `.claude/commands/`. Use the commands or free-form prompts—the agent guides remain the source of truth.
+
+- **Default Flow**: `/plan`, `/implement`, `/test`, `/review` trigger the Planner, Expert, Testing, and Docs & Vision workflows automatically.
+- **Manual Prompts**: When not using slash commands, instruct Claude which phase to run and provide the workspace path so it follows the same sequence.
+- **Knowledge Capture Expectation**: Claude must update AGENTS.md and guides during the Docs & Vision phase before archiving, regardless of invocation style.
 
 **Key Workflow Principles**:
 
