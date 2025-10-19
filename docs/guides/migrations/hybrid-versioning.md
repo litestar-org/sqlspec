@@ -1,4 +1,5 @@
 (hybrid-versioning-guide)=
+
 # Hybrid Versioning Guide
 
 **Combine timestamp and sequential migration numbering for optimal development and production workflows.**
@@ -147,6 +148,7 @@ sqlspec --config myapp.config fix --dry-run
 ```
 
 Output:
+
 ```
 ╭─────────────────────────────────────────────────────────╮
 │ Migration Conversions                                    │
@@ -170,6 +172,7 @@ sqlspec --config myapp.config fix
 ```
 
 You'll be prompted:
+
 ```
 Proceed with conversion? [y/N]: y
 
@@ -481,6 +484,7 @@ WHERE version_num = '20251011120000';
 **Problem**: Teammate ran `fix` and merged to main. You pull changes and your local database still has timestamp version.
 
 **Example**:
+
 - Your database: `version_num = '20251011120000'`
 - Migration file (after pull): `0003_add_users.sql`
 
@@ -875,21 +879,43 @@ Both workflows produce identical results. Auto-sync just eliminates the manual s
 
 ### Extension Migrations
 
-Extension migrations maintain separate numbering:
+**Important**: The `fix` command only affects **user-created** migrations, not packaged extension migrations that ship with SQLSpec.
+
+#### Packaged Extension Migrations (NOT affected by `fix`)
+
+Migrations included with SQLSpec extensions are **always sequential**:
 
 ```
-Before fix:
-├── 0001_initial.sql
-├── ext_litestar_20251011120000_feature.sql
-├── ext_adk_20251012130000_other.sql
+sqlspec/extensions/
+├── adk/migrations/
+│   └── 0001_create_adk_tables.py      ← Always sequential
+└── litestar/migrations/
+    └── 0001_create_session_table.py   ← Always sequential
 
-After fix:
-├── 0001_initial.sql
-├── ext_litestar_0001_feature.sql       ← Converted
-├── ext_adk_0001_other.sql              ← Converted
+Database tracking:
+- ext_adk_0001
+- ext_litestar_0001
 ```
 
-Each extension has its own sequence counter.
+These are pre-built migrations that ship with the library and are never converted.
+
+#### User-Created Extension Migrations (Affected by `fix`)
+
+If you create custom migrations for extension functionality, they follow the standard hybrid workflow:
+
+```
+Before fix (your development branch):
+├── 0001_initial.sql
+├── ext_adk_0001_create_adk_tables.sql         ← Packaged (sequential)
+├── 20251011120000_custom_adk_columns.sql      ← Your custom migration (timestamp)
+
+After fix (merged to main):
+├── 0001_initial.sql
+├── ext_adk_0001_create_adk_tables.sql         ← Unchanged (packaged)
+├── 0002_custom_adk_columns.sql                ← Converted to sequential
+```
+
+Each extension has its own sequence counter for user-created migrations.
 
 ### Multiple Databases
 

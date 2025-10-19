@@ -65,32 +65,56 @@ class OracleMigrationTrackerMixin:
     def _get_current_version_sql(self) -> Select:
         """Get Oracle-specific SQL for retrieving current version.
 
-        Uses unquoted identifiers that Oracle will automatically convert to uppercase.
+        Uses uppercase column names with lowercase aliases to match Python expectations.
+        Oracle stores unquoted identifiers as UPPERCASE, so we query UPPERCASE columns
+        and alias them as quoted "lowercase" for result consistency.
 
         Returns:
             SQL builder object for version query.
         """
-        return sql.select("VERSION_NUM").from_(self.version_table).order_by("EXECUTION_SEQUENCE DESC").limit(1)
+        return (
+            sql.select('VERSION_NUM AS "version_num"')
+            .from_(self.version_table)
+            .order_by("EXECUTION_SEQUENCE DESC")
+            .limit(1)
+        )
 
     def _get_applied_migrations_sql(self) -> Select:
         """Get Oracle-specific SQL for retrieving all applied migrations.
 
-        Uses unquoted identifiers that Oracle will automatically convert to uppercase.
+        Uses uppercase column names with lowercase aliases to match Python expectations.
+        Oracle stores unquoted identifiers as UPPERCASE, so we query UPPERCASE columns
+        and alias them as quoted "lowercase" for result consistency.
 
         Returns:
             SQL builder object for migrations query.
         """
-        return sql.select("*").from_(self.version_table).order_by("EXECUTION_SEQUENCE")
+        return (
+            sql.select(
+                'VERSION_NUM AS "version_num"',
+                'VERSION_TYPE AS "version_type"',
+                'EXECUTION_SEQUENCE AS "execution_sequence"',
+                'DESCRIPTION AS "description"',
+                'APPLIED_AT AS "applied_at"',
+                'EXECUTION_TIME_MS AS "execution_time_ms"',
+                'CHECKSUM AS "checksum"',
+                'APPLIED_BY AS "applied_by"',
+            )
+            .from_(self.version_table)
+            .order_by("EXECUTION_SEQUENCE")
+        )
 
     def _get_next_execution_sequence_sql(self) -> Select:
         """Get Oracle-specific SQL for retrieving next execution sequence.
 
-        Uses unquoted identifiers that Oracle will automatically convert to uppercase.
+        Uses uppercase column names with lowercase alias to match Python expectations.
+        Oracle stores unquoted identifiers as UPPERCASE, so we query UPPERCASE columns
+        and alias them as quoted "lowercase" for result consistency.
 
         Returns:
             SQL builder object for sequence query.
         """
-        return sql.select("COALESCE(MAX(EXECUTION_SEQUENCE), 0) + 1 AS NEXT_SEQ").from_(self.version_table)
+        return sql.select('COALESCE(MAX(EXECUTION_SEQUENCE), 0) + 1 AS "next_seq"').from_(self.version_table)
 
     def _get_existing_columns_sql(self) -> str:
         """Get SQL to query existing columns in the tracking table.
@@ -225,7 +249,8 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             The current migration version or None if no migrations applied.
         """
         result = driver.execute(self._get_current_version_sql())
-        return result.data[0]["VERSION_NUM"] if result.data else None
+        data = result.get_data()
+        return data[0]["version_num"] if data else None
 
     def get_applied_migrations(self, driver: "SyncDriverAdapterBase") -> "list[dict[str, Any]]":
         """Get all applied migrations in order.
@@ -237,10 +262,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             List of migration records as dictionaries with lowercase keys.
         """
         result = driver.execute(self._get_applied_migrations_sql())
-        if not result.data:
-            return []
-
-        return [{key.lower(): value for key, value in row.items()} for row in result.data]
+        return result.get_data()
 
     def record_migration(
         self, driver: "SyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
@@ -259,7 +281,8 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         version_type = parsed_version.type.value
 
         next_seq_result = driver.execute(self._get_next_execution_sequence_sql())
-        execution_sequence = next_seq_result.data[0]["NEXT_SEQ"] if next_seq_result.data else 1
+        seq_data = next_seq_result.get_data()
+        execution_sequence = seq_data[0]["next_seq"] if seq_data else 1
 
         record_sql = self._get_record_migration_sql(
             version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
@@ -276,6 +299,41 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         """
         remove_sql = self._get_remove_migration_sql(version)
         driver.execute(remove_sql)
+        driver.commit()
+
+    def update_version_record(self, driver: "SyncDriverAdapterBase", old_version: str, new_version: str) -> None:
+        """Update migration version record from timestamp to sequential.
+
+        Updates version_num and version_type while preserving execution_sequence,
+        applied_at, and other tracking metadata. Used during fix command.
+
+        Idempotent: If the version is already updated, logs and continues without error.
+        This allows fix command to be safely re-run after pulling changes.
+
+        Args:
+            driver: The database driver to use.
+            old_version: Current timestamp version string.
+            new_version: New sequential version string.
+
+        Raises:
+            ValueError: If neither old_version nor new_version found in database.
+        """
+        parsed_new_version = parse_version(new_version)
+        new_version_type = parsed_new_version.type.value
+
+        result = driver.execute(self._get_update_version_sql(old_version, new_version, new_version_type))
+
+        if result.rows_affected == 0:
+            check_result = driver.execute(self._get_applied_migrations_sql())
+            applied_versions = {row["version_num"] for row in check_result.data} if check_result.data else set()
+
+            if new_version in applied_versions:
+                logger.debug("Version already updated: %s -> %s", old_version, new_version)
+                return
+
+            msg = f"Migration {old_version} not found in database for update to {new_version}"
+            raise ValueError(msg)
+
         driver.commit()
 
 
@@ -385,7 +443,8 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             The current migration version or None if no migrations applied.
         """
         result = await driver.execute(self._get_current_version_sql())
-        return result.data[0]["VERSION_NUM"] if result.data else None
+        data = result.get_data()
+        return data[0]["version_num"] if data else None
 
     async def get_applied_migrations(self, driver: "AsyncDriverAdapterBase") -> "list[dict[str, Any]]":
         """Get all applied migrations in order.
@@ -397,10 +456,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             List of migration records as dictionaries with lowercase keys.
         """
         result = await driver.execute(self._get_applied_migrations_sql())
-        if not result.data:
-            return []
-
-        return [{key.lower(): value for key, value in row.items()} for row in result.data]
+        return result.get_data()
 
     async def record_migration(
         self, driver: "AsyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
@@ -420,7 +476,8 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         version_type = parsed_version.type.value
 
         next_seq_result = await driver.execute(self._get_next_execution_sequence_sql())
-        execution_sequence = next_seq_result.data[0]["NEXT_SEQ"] if next_seq_result.data else 1
+        seq_data = next_seq_result.get_data()
+        execution_sequence = seq_data[0]["next_seq"] if seq_data else 1
 
         record_sql = self._get_record_migration_sql(
             version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
@@ -437,4 +494,39 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         """
         remove_sql = self._get_remove_migration_sql(version)
         await driver.execute(remove_sql)
+        await driver.commit()
+
+    async def update_version_record(self, driver: "AsyncDriverAdapterBase", old_version: str, new_version: str) -> None:
+        """Update migration version record from timestamp to sequential.
+
+        Updates version_num and version_type while preserving execution_sequence,
+        applied_at, and other tracking metadata. Used during fix command.
+
+        Idempotent: If the version is already updated, logs and continues without error.
+        This allows fix command to be safely re-run after pulling changes.
+
+        Args:
+            driver: The database driver to use.
+            old_version: Current timestamp version string.
+            new_version: New sequential version string.
+
+        Raises:
+            ValueError: If neither old_version nor new_version found in database.
+        """
+        parsed_new_version = parse_version(new_version)
+        new_version_type = parsed_new_version.type.value
+
+        result = await driver.execute(self._get_update_version_sql(old_version, new_version, new_version_type))
+
+        if result.rows_affected == 0:
+            check_result = await driver.execute(self._get_applied_migrations_sql())
+            applied_versions = {row["version_num"] for row in check_result.data} if check_result.data else set()
+
+            if new_version in applied_versions:
+                logger.debug("Version already updated: %s -> %s", old_version, new_version)
+                return
+
+            msg = f"Migration {old_version} not found in database for update to {new_version}"
+            raise ValueError(msg)
+
         await driver.commit()

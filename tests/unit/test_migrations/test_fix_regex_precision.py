@@ -316,3 +316,53 @@ def test_regex_pattern_boundary_conditions(temp_migrations_dir: Path) -> None:
 
         assert replaced_up == f"-- name: migrate-{new_version}-up"
         assert replaced_down == f"-- name: migrate-{new_version}-down"
+
+
+def test_update_file_content_updates_version_comment(temp_migrations_dir: Path) -> None:
+    """Test version comment in migration header is updated."""
+    fixer = MigrationFixer(temp_migrations_dir)
+
+    file_path = temp_migrations_dir / "20251019204218_create_products.sql"
+    content = """-- SQLSpec Migration
+-- Version: 20251019204218
+-- Description: create products table
+-- Created: 2025-10-19T20:42:18.123456
+
+-- name: migrate-20251019204218-up
+CREATE TABLE products (id INTEGER PRIMARY KEY);
+
+-- name: migrate-20251019204218-down
+DROP TABLE products;
+"""
+
+    file_path.write_text(content)
+
+    fixer.update_file_content(file_path, "20251019204218", "0001")
+
+    updated = file_path.read_text()
+
+    assert "-- Version: 0001" in updated
+    assert "-- Version: 20251019204218" not in updated
+    assert "-- name: migrate-0001-up" in updated
+    assert "-- name: migrate-0001-down" in updated
+    assert "-- Description: create products table" in updated
+
+
+def test_update_file_content_preserves_version_comment_format(temp_migrations_dir: Path) -> None:
+    """Test version comment format is preserved during update."""
+    fixer = MigrationFixer(temp_migrations_dir)
+
+    file_path = temp_migrations_dir / "0001_initial.sql"
+    content = """-- SQLSpec Migration
+-- Version:  0001
+-- Another comment
+"""
+
+    file_path.write_text(content)
+
+    fixer.update_file_content(file_path, "0001", "0002")
+
+    updated = file_path.read_text()
+
+    assert "-- Version:  0002" in updated
+    assert "-- Another comment" in updated

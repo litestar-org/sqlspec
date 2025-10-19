@@ -1,4 +1,4 @@
-# AGENS.md
+# AGENTS.md
 
 This file provides guidance to Gemini, Claude Code, Codex, and other agents when working with code in this repository.
 
@@ -10,6 +10,96 @@ This file provides guidance to Gemini, Claude Code, Codex, and other agents when
 - **Seek clarification**: Ask follow-up questions when requirements are ambiguous or could be interpreted multiple ways
 - **Propose improvements**: Suggest better patterns, more robust solutions, or cleaner implementations when appropriate
 - **Be a thoughtful collaborator**: Act as a good teammate who helps improve the overall quality and direction of the project
+
+## Pull Request Guidelines
+
+### PR Description Standards (MANDATORY)
+
+Pull request descriptions MUST be concise, factual, and human-readable. Avoid excessive detail that should live in documentation or commit messages.
+
+**Maximum length**: ~30-40 lines for typical features
+**Tone**: Direct, clear, professional - no marketing language or excessive enthusiasm
+
+**Required sections**:
+
+1. **Summary** (2-3 sentences): What does this do and why?
+2. **The Problem** (2-4 lines): What issue does this solve?
+3. **The Solution** (2-4 lines): How does it solve it?
+4. **Key Features** (3-5 bullet points): Most important capabilities
+5. **Example** (optional): Brief code example if it clarifies usage
+6. **Link to docs** (if comprehensive guide exists)
+
+**PROHIBITED content**:
+
+- Extensive test coverage tables (this belongs in CI reports)
+- Detailed file change lists (GitHub shows this automatically)
+- Quality metrics and linting results (CI handles this)
+- Commit-by-commit breakdown (git history shows this)
+- Implementation details (belongs in code comments/docs)
+- Excessive formatting (tables, sections, subsections)
+- Marketing language or hype
+
+**Example of GOOD PR description**:
+
+```markdown
+## Summary
+
+Adds hybrid versioning for migrations: timestamps in development (no conflicts),
+sequential in production (deterministic ordering). Includes an automated
+`sqlspec fix` command to convert between formats.
+
+Closes #116
+
+## The Problem
+
+- Sequential migrations (0001, 0002): merge conflicts when multiple devs create migrations
+- Timestamp migrations (20251011120000): no conflicts, but ordering depends on creation time
+
+## The Solution
+
+Use timestamps during development, convert to sequential before merging:
+
+    $ sqlspec create-migration -m "add users"
+    Created: 20251011120000_add_users.sql
+
+    $ sqlspec fix --yes
+    ✓ Converted to 0003_add_users.sql
+
+## Key Features
+
+- Automated conversion via `sqlspec fix` command
+- Updates database tracking to prevent errors
+- Idempotent - safe to re-run after pulling changes
+- Stable checksums through conversions
+
+See [docs/guides/migrations/hybrid-versioning.md](docs/guides/migrations/hybrid-versioning.md)
+for full documentation.
+```
+
+**Example of BAD PR description**:
+
+```markdown
+## Summary
+[800+ lines of excessive detail including test counts, file changes,
+quality metrics, implementation details, commit lists, etc.]
+```
+
+**CI Integration examples** - Keep to 5-10 lines maximum:
+
+```yaml
+# GitHub Actions example
+- run: sqlspec fix --yes
+- run: git add migrations/ && git commit && git push
+```
+
+**When to include more detail**:
+
+- Breaking changes warrant a "Breaking Changes" section
+- Complex architectural changes may need a "Design Decisions" section
+- Security fixes may need a "Security Impact" section
+
+Keep it focused: the PR description should help reviewers understand WHAT and WHY quickly.
+Implementation details belong in code, commits, and documentation.
 
 ## Common Development Commands
 
@@ -53,7 +143,7 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 2. **Adapters (`sqlspec/adapters/`)**: Database-specific implementations. Each adapter consists of:
    - `config.py`: Configuration classes specific to the database
    - `driver.py`: Driver implementation (sync/async) that executes queries
-   - `_types.py`: Type definitions specific to the adapter or other uncompilable mypyc onbjects
+   - `_types.py`: Type definitions specific to the adapter or other uncompilable mypyc objects
    - Supported adapters: `adbc`, `aiosqlite`, `asyncmy`, `asyncpg`, `bigquery`, `duckdb`, `oracledb`, `psqlpy`, `psycopg`, `sqlite`
 
 3. **Driver System (`sqlspec/driver/`)**: Base classes and mixins for all database drivers:
