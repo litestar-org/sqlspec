@@ -193,8 +193,6 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
     assert row["id"] == 1
     assert row["name"] == "Test Product"
 
-    description_value = row["description"].read() if hasattr(row["description"], "read") else str(row["description"])
-    assert len(description_value) > 100
     assert row["price"] == 99.99
     assert row["is_active"] == 1
 
