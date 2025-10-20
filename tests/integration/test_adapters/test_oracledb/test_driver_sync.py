@@ -430,6 +430,12 @@ def test_sync_lowercase_columns_default(oracle_sync_session: OracleSyncDriver) -
         name: str
 
     result = oracle_sync_session.execute("SELECT id, name FROM test_case_table")
+    row_dict = result.get_first()
+    assert row_dict is not None
+    assert "id" in row_dict
+    assert "ID" not in row_dict
+    assert row_dict["id"] == 1
+
     hydrated = result.get_first(schema_type=Product)
     assert hydrated is not None
     assert hydrated.id == 1
@@ -467,6 +473,7 @@ def test_sync_uppercase_columns_when_disabled(oracle_sync_config: OracleSyncConf
         row = result.get_first()
         assert row is not None
         assert "ID" in row
+        assert "id" not in row
         with pytest.raises(msgspec.ValidationError):
             result.get_first(schema_type=Product)
 
