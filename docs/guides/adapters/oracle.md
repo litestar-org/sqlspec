@@ -102,6 +102,122 @@ If `use_in_memory=True` but In-Memory is not available/licensed, table creation 
 
 **Recommendation:** Use `use_in_memory=False` (default) unless you have confirmed licensing and configuration.
 
+## CLOB/BLOB Handling
+
+Oracle's `oracledb` driver returns LOB (Large Object) handles for CLOB and BLOB columns, which must be read before use. SQLSpec **automatically reads CLOB columns into strings** to provide seamless integration with typed schemas like msgspec and Pydantic.
+
+### Automatic CLOB Hydration
+
+CLOB values are automatically read and converted to Python strings:
+
+```python
+from sqlspec.adapters.oracledb import OracleAsyncConfig
+import msgspec
+
+class Article(msgspec.Struct):
+    id: int
+    title: str
+    content: str  # CLOB column automatically becomes string
+
+config = OracleAsyncConfig(pool_config={"dsn": "oracle://..."})
+
+async with config.provide_session() as session:
+    # Insert large text content
+    large_text = "x" * 5000  # >4KB content
+    await session.execute(
+        "INSERT INTO articles (id, title, content) VALUES (:1, :2, :3)",
+        (1, "My Article", large_text)
+    )
+
+    # Query returns string, not LOB handle
+    result = await session.execute(
+        "SELECT id, title, content FROM articles WHERE id = :1",
+        (1,)
+    )
+
+    # Works seamlessly with msgspec
+    article = result.get_first(schema_type=Article)
+    assert isinstance(article.content, str)
+    assert len(article.content) == 5000
+```
+
+### JSON Detection in CLOBs
+
+When CLOB content contains JSON, it is automatically detected and parsed into Python dictionaries:
+
+```python
+import json
+
+class Document(msgspec.Struct):
+    id: int
+    metadata: dict  # JSON stored in CLOB
+
+# Store JSON in CLOB
+metadata = {"key": "value", "nested": {"data": "example"}}
+await session.execute(
+    "INSERT INTO documents (id, metadata) VALUES (:1, :2)",
+    (1, json.dumps(metadata))
+)
+
+# Retrieved as parsed dict, not string
+result = await session.execute(
+    "SELECT id, metadata FROM documents WHERE id = :1",
+    (1,)
+)
+doc = result.get_first(schema_type=Document)
+assert isinstance(doc.metadata, dict)
+assert doc.metadata["key"] == "value"
+```
+
+### BLOB Handling (Binary Data)
+
+BLOB columns remain as bytes and are not converted to strings:
+
+```python
+class FileRecord(msgspec.Struct):
+    id: int
+    data: bytes  # BLOB column remains bytes
+
+binary_data = b"\x00\x01\x02\x03" * 2000
+await session.execute(
+    "INSERT INTO files (id, data) VALUES (:1, :2)",
+    (1, binary_data)
+)
+
+result = await session.execute(
+    "SELECT id, data FROM files WHERE id = :1",
+    (1,)
+)
+file_record = result.get_first(schema_type=FileRecord)
+assert isinstance(file_record.data, bytes)
+```
+
+### Before and After
+
+**Before (manual workaround required):**
+
+```python
+# Had to use DBMS_LOB.SUBSTR, truncating to 4000 chars
+result = await session.execute(
+    "SELECT id, DBMS_LOB.SUBSTR(content, 4000) as content FROM articles"
+)
+```
+
+**After (automatic, no truncation):**
+
+```python
+# CLOB automatically read to full string
+result = await session.execute(
+    "SELECT id, content FROM articles"
+)
+```
+
+### Performance Considerations
+
+- **Memory usage:** Large CLOBs (>100MB) are fully materialized into memory. For multi-GB CLOBs, consider using database-side processing or pagination.
+- **Sync vs Async:** Both sync and async drivers perform automatic CLOB hydration with equivalent performance.
+- **Multiple CLOBs:** All CLOB columns in a result row are hydrated automatically.
+
 ## Column Name Normalization
 
 Oracle returns unquoted identifiers in uppercase (for example `ID`, `PRODUCT_NAME`). When those rows feed into schema libraries that expect snake_case fields, the uppercase keys can trigger validation errors. SQLSpec resolves this automatically through the `enable_lowercase_column_names` driver feature, which is **enabled by default**.

@@ -619,6 +619,230 @@ async def test_numpy_vector_roundtrip(oracle_session):
 - Test against actual databases using the docker infrastructure
 - The SQL builder API is experimental and will change significantly
 
+## LOB (Large Object) Hydration Pattern
+
+### Overview
+
+Some database drivers (Oracle, PostgreSQL with large objects) return handle objects for large data types that must be explicitly read before use. SQLSpec provides automatic hydration to ensure typed schemas receive concrete Python values.
+
+### When to Use LOB Hydration
+
+Use LOB hydration helpers when:
+
+- Database driver returns handle objects (LOB, AsyncLOB) instead of concrete values
+- Typed schemas (msgspec, Pydantic) expect concrete types (str, bytes, dict)
+- Users would otherwise need manual workarounds (`DBMS_LOB.SUBSTR`)
+
+### Implementation Pattern
+
+**Step 1: Create Hydration Helpers**
+
+Add helpers in the adapter's `driver.py` to read LOB handles:
+
+```python
+def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
+    """Coerce LOB handles to concrete values for synchronous execution.
+
+    Processes each value in the row, reading LOB objects and applying
+    type detection for JSON values stored in CLOBs.
+
+    Args:
+        row: Tuple of column values from database fetch.
+
+    Returns:
+        List of coerced values with LOBs read to strings/bytes.
+    """
+    coerced_values: list[Any] = []
+    for value in row:
+        if hasattr(value, "read"):  # Duck-typing for LOB detection
+            try:
+                processed_value = value.read()
+            except Exception:
+                coerced_values.append(value)
+                continue
+            if isinstance(processed_value, str):
+                processed_value = _type_converter.convert_if_detected(processed_value)
+            coerced_values.append(processed_value)
+        else:
+            coerced_values.append(value)
+    return coerced_values
+
+
+async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
+    """Coerce LOB handles to concrete values for asynchronous execution.
+
+    Processes each value in the row, reading LOB objects asynchronously
+    and applying type detection for JSON values stored in CLOBs.
+
+    Args:
+        row: Tuple of column values from database fetch.
+
+    Returns:
+        List of coerced values with LOBs read to strings/bytes.
+    """
+    coerced_values: list[Any] = []
+    for value in row:
+        if hasattr(value, "read"):
+            try:
+                processed_value = await _type_converter.process_lob(value)
+            except Exception:
+                coerced_values.append(value)
+                continue
+            if isinstance(processed_value, str):
+                processed_value = _type_converter.convert_if_detected(processed_value)
+            coerced_values.append(processed_value)
+        else:
+            coerced_values.append(value)
+    return coerced_values
+```
+
+**Step 2: Integrate into Execution Path**
+
+Call hydration helpers before dict construction in `_execute_statement`:
+
+```python
+# Sync driver
+async for row in cursor:
+    coerced = _coerce_sync_row_values(row)
+    rows.append(dict(zip(columns, coerced)))
+
+# Async driver
+async for row in cursor:
+    coerced = await _coerce_async_row_values(row)
+    rows.append(dict(zip(columns, coerced)))
+```
+
+### Key Design Principles
+
+**Duck-Typing for LOB Detection**:
+
+- Use `hasattr(value, "read")` to detect LOB handles
+- This is appropriate duck-typing, NOT defensive programming
+- Avoids importing driver-specific types
+
+**Error Handling**:
+
+- Catch exceptions during LOB reading
+- Fall back to original value on error
+- Prevents breaking queries with unexpected handle types
+
+**Type Detection After Reading**:
+
+- Apply `convert_if_detected()` to string results
+- Enables JSON detection for JSON-in-CLOB scenarios
+- Preserves binary data (bytes) without conversion
+
+**Separation of Concerns**:
+
+- Hydration happens at result-fetching layer
+- Type conversion handled by existing type converter
+- Schema conversion remains unchanged
+
+### Testing Requirements
+
+**Integration Tests** - Test with real database and typed schemas:
+
+```python
+import msgspec
+
+class Article(msgspec.Struct):
+    id: int
+    content: str  # CLOB column
+
+async def test_clob_msgspec_hydration(session):
+    large_text = "x" * 5000  # >4KB to ensure CLOB
+    await session.execute(
+        "INSERT INTO articles (id, content) VALUES (:1, :2)",
+        (1, large_text)
+    )
+
+    result = await session.execute(
+        "SELECT id, content FROM articles WHERE id = :1",
+        (1,)
+    )
+
+    article = result.get_first(schema_type=Article)
+    assert isinstance(article.content, str)
+    assert article.content == large_text
+```
+
+**Test Coverage Areas**:
+
+1. Basic CLOB/text LOB hydration to string
+2. BLOB/binary LOB hydration to bytes
+3. JSON detection in CLOB content
+4. Mixed CLOB and regular columns
+5. Multiple LOB columns in one row
+6. NULL/empty LOB handling
+7. Both sync and async drivers
+
+### Performance Considerations
+
+**Memory Usage**:
+
+- LOBs are fully materialized into memory
+- Document limitations for very large LOBs (>100MB)
+- Consider pagination for multi-GB LOBs
+
+**Sync vs Async**:
+
+- Sync uses `.read()` directly
+- Async uses `await` for LOB reading
+- Both approaches have equivalent performance
+
+### Examples from Existing Adapters
+
+**Oracle CLOB Hydration** (`oracledb/driver.py`):
+
+- Automatically reads CLOB handles to strings
+- Preserves BLOB as bytes
+- Enables JSON detection for JSON-in-CLOB
+- No configuration required - always enabled
+- Eliminates need for `DBMS_LOB.SUBSTR` workaround
+
+### Documentation Requirements
+
+When implementing LOB hydration:
+
+1. **Update adapter guide** - Document new behavior and before/after comparison
+2. **Add examples** - Show typed schema usage without manual workarounds
+3. **Note performance** - Mention memory considerations for large LOBs
+4. **Show JSON detection** - Demonstrate automatic JSON parsing in LOBs
+
+Example documentation structure:
+
+```markdown
+## CLOB/BLOB Handling
+
+### Automatic CLOB Hydration
+
+CLOB values are automatically read and converted to Python strings:
+
+[Example with msgspec]
+
+### JSON Detection in CLOBs
+
+[Example showing JSON parsing]
+
+### BLOB Handling (Binary Data)
+
+BLOB columns remain as bytes:
+
+[Example with bytes]
+
+### Before and After
+
+**Before (manual workaround):**
+[SQL with DBMS_LOB.SUBSTR]
+
+**After (automatic):**
+[Clean SQL without workarounds]
+
+### Performance Considerations
+- Memory usage notes
+- When to use pagination
+```
+
 ## driver_features Pattern
 
 ### Overview
