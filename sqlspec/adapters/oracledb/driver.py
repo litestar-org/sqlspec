@@ -52,6 +52,15 @@ _type_converter = OracleTypeConverter()
 IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 
 
+__all__ = (
+    "OracleAsyncDriver",
+    "OracleAsyncExceptionHandler",
+    "OracleSyncDriver",
+    "OracleSyncExceptionHandler",
+    "oracledb_statement_config",
+)
+
+
 def _normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":
     should_lowercase = driver_features.get("enable_lowercase_column_names", False)
     if not should_lowercase:
@@ -65,13 +74,61 @@ def _normalize_column_names(column_names: "list[str]", driver_features: "dict[st
     return normalized
 
 
-__all__ = (
-    "OracleAsyncDriver",
-    "OracleAsyncExceptionHandler",
-    "OracleSyncDriver",
-    "OracleSyncExceptionHandler",
-    "oracledb_statement_config",
-)
+def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
+    """Coerce LOB handles to concrete values for synchronous execution.
+
+    Processes each value in the row, reading LOB objects and applying
+    type detection for JSON values stored in CLOBs.
+
+    Args:
+        row: Tuple of column values from database fetch.
+
+    Returns:
+        List of coerced values with LOBs read to strings/bytes.
+    """
+    coerced_values: list[Any] = []
+    for value in row:
+        if hasattr(value, "read"):
+            try:
+                processed_value = value.read()
+            except Exception:
+                coerced_values.append(value)
+                continue
+            if isinstance(processed_value, str):
+                processed_value = _type_converter.convert_if_detected(processed_value)
+            coerced_values.append(processed_value)
+        else:
+            coerced_values.append(value)
+    return coerced_values
+
+
+async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "list[Any]":
+    """Coerce LOB handles to concrete values for asynchronous execution.
+
+    Processes each value in the row, reading LOB objects asynchronously
+    and applying type detection for JSON values stored in CLOBs.
+
+    Args:
+        row: Tuple of column values from database fetch.
+
+    Returns:
+        List of coerced values with LOBs read to strings/bytes.
+    """
+    coerced_values: list[Any] = []
+    for value in row:
+        if hasattr(value, "read"):
+            try:
+                processed_value = await _type_converter.process_lob(value)
+            except Exception:
+                coerced_values.append(value)
+                continue
+            if isinstance(processed_value, str):
+                processed_value = _type_converter.convert_if_detected(processed_value)
+            coerced_values.append(processed_value)
+        else:
+            coerced_values.append(value)
+    return coerced_values
+
 
 ORA_CHECK_CONSTRAINT = 2290
 ORA_INTEGRITY_RANGE_START = 2200
@@ -487,8 +544,8 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             column_names = [col[0] for col in cursor.description or []]
             column_names = _normalize_column_names(column_names, self.driver_features)
 
-            # Oracle returns tuples - convert to consistent dict format
-            data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
+            # Oracle returns tuples - convert to consistent dict format after LOB hydration
+            data = [dict(zip(column_names, _coerce_sync_row_values(row), strict=False)) for row in fetched_data]
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
@@ -680,8 +737,11 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             column_names = [col[0] for col in cursor.description or []]
             column_names = _normalize_column_names(column_names, self.driver_features)
 
-            # Oracle returns tuples - convert to consistent dict format
-            data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
+            # Oracle returns tuples - convert to consistent dict format after LOB hydration
+            data = []
+            for row in fetched_data:
+                coerced_row = await _coerce_async_row_values(row)
+                data.append(dict(zip(column_names, coerced_row, strict=False)))
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
