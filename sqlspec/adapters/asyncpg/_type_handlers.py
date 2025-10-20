@@ -61,5 +61,11 @@ async def register_pgvector_support(connection: "AsyncpgConnection") -> None:
 
         await pgvector.asyncpg.register_vector(connection)
         logger.debug("Registered pgvector support on asyncpg connection")
+    except ValueError as exc:
+        message = str(exc).lower()
+        if "unknown type" in message and "vector" in message:
+            logger.debug("Skipping pgvector registration because extension is unavailable")
+            return
+        logger.exception("Failed to register pgvector support")
     except Exception:
         logger.exception("Failed to register pgvector support")
