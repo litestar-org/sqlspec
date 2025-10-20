@@ -1240,6 +1240,7 @@ PostgreSQL's pgvector extension enables vector similarity search. SQLSpec automa
 - PostgreSQL with pgvector extension installed
 - ``pgvector`` Python package installed
 - Automatic registration (no configuration needed)
+- Extension registration failures are downgraded to debug logs, so missing pgvector keeps the connection usable without vector support
 
 **Adapters with pgvector support**:
 - ``asyncpg`` - Async PostgreSQL driver
