@@ -54,7 +54,7 @@ The Oracle session stores (`OracleAsyncStore` and `OracleSyncStore`) support opt
 
 ```python
 from sqlspec.adapters.oracledb import OracleAsyncConfig
-from sqlspec.adapters.oracledb.litestar.store import OracleAsyncStore
+from sqlspec.adapters.oracledb.litestar import OracleAsyncStore
 
 config = OracleAsyncConfig(pool_config={"dsn": "oracle://..."})
 
@@ -102,19 +102,39 @@ If `use_in_memory=True` but In-Memory is not available/licensed, table creation 
 
 **Recommendation:** Use `use_in_memory=False` (default) unless you have confirmed licensing and configuration.
 
-### Performance Characteristics
+## Column Name Normalization
 
-**In-Memory Session Store Performance:**
+Oracle returns unquoted identifiers in uppercase (for example `ID`, `PRODUCT_NAME`). When those rows feed into schema libraries that expect snake_case fields, the uppercase keys can trigger validation errors. SQLSpec resolves this automatically through the `enable_lowercase_column_names` driver feature, which is **enabled by default**.
 
-- Read operations: 2-5x faster for single lookups
-- Scan operations: 10-50x faster for bulk operations
-- Write operations: Negligible impact (asynchronous population)
-- Memory usage: ~2-3x table size (dual format storage)
+```python
+from sqlspec.adapters.oracledb import OracleAsyncConfig
 
-**Memory Sizing Example:**
+config = OracleAsyncConfig(
+    pool_config={"dsn": "oracle://..."},
+    driver_features={"enable_lowercase_column_names": True},
+)
+```
 
-- 1M sessions × 5KB avg = ~5GB table size
-- In-Memory requirement: ~10-15GB (with compression)
+### How normalization works
+
+- Identifiers matching Oracle's implicit uppercase pattern (`^(?!\d)(?:[A-Z0-9_]+)$`) are lowercased.
+- Quoted or user-defined aliases (mixed case, symbols, or names beginning with digits) retain their original casing.
+- Disabling the feature restores Oracle's native uppercase behaviour:
+
+```python
+config = OracleAsyncConfig(
+    pool_config={"dsn": "oracle://..."},
+    driver_features={"enable_lowercase_column_names": False},
+)
+```
+
+### When to opt out
+
+- You rely on two columns that differ only by case (for example `ID` and `Id`).
+- You intentionally alias everything in uppercase and want to preserve that style.
+- You prefer to manage casing entirely in SQL using quoted identifiers.
+
+In those scenarios set `enable_lowercase_column_names=False`. Otherwise, keep the default for seamless msgspec/pydantic hydration without extra SQL aliases.
 
 ## NumPy Vector Support (Oracle 23ai+)
 
@@ -283,12 +303,14 @@ await session.execute(
 ### Error Handling
 
 **Unsupported dtype:**
+
 ```python
 vector = np.array([1.0, 2.0], dtype=np.float16)  # Not supported
 # Raises: TypeError: Unsupported NumPy dtype for Oracle VECTOR: float16
 ```
 
 **Dimension mismatch:**
+
 ```python
 vector = np.random.rand(512).astype(np.float32)
 # Trying to insert into VECTOR(768, FLOAT32) column
@@ -296,6 +318,7 @@ vector = np.random.rand(512).astype(np.float32)
 ```
 
 **NumPy not installed:**
+
 ```python
 # With enable_numpy_vectors=True but NumPy not installed
 # Falls back to array.array (Python stdlib)

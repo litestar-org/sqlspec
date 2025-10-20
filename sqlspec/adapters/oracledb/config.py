@@ -93,9 +93,13 @@ class OracleDriverFeatures(TypedDict):
         Defaults to True when NumPy is installed.
         Provides automatic bidirectional conversion between NumPy ndarrays and Oracle VECTOR columns.
         Supports float32, float64, int8, and uint8 dtypes.
+    enable_lowercase_column_names: Normalize implicit Oracle uppercase column names to lowercase.
+        Targets unquoted Oracle identifiers that default to uppercase while preserving quoted case-sensitive aliases.
+        Defaults to True for compatibility with schema libraries expecting snake_case fields.
     """
 
     enable_numpy_vectors: NotRequired[bool]
+    enable_lowercase_column_names: NotRequired[bool]
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
@@ -140,6 +144,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         if "enable_numpy_vectors" not in processed_driver_features:
             processed_driver_features["enable_numpy_vectors"] = NUMPY_INSTALLED
+        if "enable_lowercase_column_names" not in processed_driver_features:
+            processed_driver_features["enable_lowercase_column_names"] = True
 
         super().__init__(
             pool_config=processed_pool_config,
@@ -297,6 +303,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         if "enable_numpy_vectors" not in processed_driver_features:
             processed_driver_features["enable_numpy_vectors"] = NUMPY_INSTALLED
+        if "enable_lowercase_column_names" not in processed_driver_features:
+            processed_driver_features["enable_lowercase_column_names"] = True
 
         super().__init__(
             pool_config=processed_pool_config,

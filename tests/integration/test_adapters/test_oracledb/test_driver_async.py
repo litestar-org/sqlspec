@@ -2,9 +2,10 @@
 
 from typing import Any, Literal
 
+import msgspec
 import pytest
 
-from sqlspec.adapters.oracledb import OracleAsyncDriver
+from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver
 from sqlspec.core.result import SQLResult
 
 pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.asyncio(loop_scope="function")]
@@ -413,4 +414,68 @@ async def test_oracle_for_share_locking_unsupported(oracle_async_session: Oracle
     finally:
         await oracle_async_session.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        )
+
+
+async def test_async_lowercase_columns_default(oracle_async_session: OracleAsyncDriver) -> None:
+    """Ensure implicit Oracle column names hydrate to lowercase when feature enabled."""
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    await oracle_async_session.execute_script("""
+        CREATE TABLE test_case_table (
+            id NUMBER PRIMARY KEY,
+            name VARCHAR2(50)
+        )
+    """)
+
+    await oracle_async_session.execute("INSERT INTO test_case_table (id, name) VALUES (:1, :2)", (1, "widget"))
+
+    class Product(msgspec.Struct):
+        id: int
+        name: str
+
+    result = await oracle_async_session.execute("SELECT id, name FROM test_case_table")
+    hydrated = result.get_first(schema_type=Product)
+    assert hydrated is not None
+    assert hydrated.id == 1
+    assert hydrated.name == "widget"
+
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+    )
+
+
+async def test_async_uppercase_columns_when_disabled(oracle_async_config: OracleAsyncConfig) -> None:
+    """Ensure disabling lowercase feature preserves uppercase columns."""
+    custom_config = OracleAsyncConfig(
+        pool_config=dict(oracle_async_config.pool_config), driver_features={"enable_lowercase_column_names": False}
+    )
+
+    async with custom_config.provide_session() as session:
+        await session.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
+        await session.execute_script("""
+            CREATE TABLE test_case_table (
+                id NUMBER PRIMARY KEY,
+                name VARCHAR2(50)
+            )
+        """)
+
+        await session.execute("INSERT INTO test_case_table (id, name) VALUES (:1, :2)", (1, "widget"))
+
+        class Product(msgspec.Struct):
+            id: int
+            name: str
+
+        result = await session.execute("SELECT id, name FROM test_case_table")
+        row = result.get_first()
+        assert row is not None
+        assert "ID" in row
+        with pytest.raises(msgspec.ValidationError):
+            result.get_first(schema_type=Product)
+
+        await session.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
         )
