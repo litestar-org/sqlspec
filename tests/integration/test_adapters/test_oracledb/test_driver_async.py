@@ -50,7 +50,7 @@ async def test_async_select(oracle_async_session: OracleAsyncDriver, parameters:
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["NAME"] == "test_name"
+    assert select_result.data[0]["name"] == "test_name"
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -138,14 +138,14 @@ async def test_async_insert_with_sequence(oracle_async_session: OracleAsyncDrive
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    last_id = result.data[0]["LAST_ID"]
+    last_id = result.data[0]["last_id"]
 
     verify_result = await oracle_async_session.execute("SELECT id, name FROM test_table WHERE id = :1", (last_id,))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    assert verify_result.data[0]["NAME"] == "test_name"
-    assert verify_result.data[0]["ID"] == last_id
+    assert verify_result.data[0]["name"] == "test_name"
+    assert verify_result.data[0]["id"] == last_id
 
     await oracle_async_session.execute_script("""
         BEGIN
@@ -184,7 +184,7 @@ async def test_async_execute_many_insert(oracle_async_session: OracleAsyncDriver
     count_result = await oracle_async_session.execute(select_sql)
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["COUNT"] == len(parameters_list)
+    assert count_result.data[0]["count"] == len(parameters_list)
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_many_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -213,7 +213,7 @@ async def test_async_execute_script(oracle_async_session: OracleAsyncDriver) -> 
     select_result = await oracle_async_session.execute("SELECT COUNT(*) as count FROM test_script_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["COUNT"] == 2
+    assert select_result.data[0]["count"] == 2
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_script_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -250,7 +250,7 @@ async def test_async_update_operation(oracle_async_session: OracleAsyncDriver) -
     select_result = await oracle_async_session.execute("SELECT name FROM test_table WHERE name = :1", ("updated_name",))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["NAME"] == "updated_name"
+    assert select_result.data[0]["name"] == "updated_name"
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -285,7 +285,7 @@ async def test_async_delete_operation(oracle_async_session: OracleAsyncDriver) -
     select_result = await oracle_async_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["COUNT"] == 0
+    assert select_result.data[0]["count"] == 0
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -321,8 +321,8 @@ async def test_oracle_for_update_locking(oracle_async_session: OracleAsyncDriver
             sql.select("id", "name", "value").from_("test_table").where_eq("name", "oracle_lock").for_update()
         )
         assert result is not None
-        assert result["NAME"] == "oracle_lock"
-        assert result["VALUE"] == 100
+        assert result["name"] == "oracle_lock"
+        assert result["value"] == 100
 
         await oracle_async_session.commit()
     except Exception:
@@ -363,7 +363,7 @@ async def test_oracle_for_update_nowait(oracle_async_session: OracleAsyncDriver)
             sql.select("*").from_("test_table").where_eq("name", "oracle_nowait").for_update(nowait=True)
         )
         assert result is not None
-        assert result["NAME"] == "oracle_nowait"
+        assert result["name"] == "oracle_nowait"
 
         await oracle_async_session.commit()
     except Exception:

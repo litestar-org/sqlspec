@@ -9,6 +9,10 @@ from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
 
+
+def _lower_keys(row: dict[str, object]) -> dict[str, object]:
+    return {key.lower(): value for key, value in row.items()}
+
 pytestmark = pytest.mark.xdist_group("oracle")
 
 
@@ -64,9 +68,10 @@ def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> No
     assert select_result.data is not None
     assert len(select_result.data) == 4
 
-    first_row = select_result.data[0]
-    assert first_row["NAME"] == "plsql_test"
-    assert first_row["CALCULATED_VALUE"] == 130
+    rows = [_lower_keys(row) for row in select_result.data]
+    first_row = rows[0]
+    assert first_row["name"] == "plsql_test"
+    assert first_row["calculated_value"] == 130
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_plsql_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -129,13 +134,14 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
     assert select_result.data is not None
     assert len(select_result.data) == 2
 
-    first_row = select_result.data[0]
-    assert first_row["INPUT_VALUE"] == 5
-    assert first_row["OUTPUT_VALUE"] == 20
+    rows = [_lower_keys(row) for row in select_result.data]
+    first_row = rows[0]
+    assert first_row["input_value"] == 5
+    assert first_row["output_value"] == 20
 
-    second_row = select_result.data[1]
-    assert second_row["INPUT_VALUE"] == 10
-    assert second_row["OUTPUT_VALUE"] == 30
+    second_row = rows[1]
+    assert second_row["input_value"] == 10
+    assert second_row["output_value"] == 30
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP PROCEDURE test_procedure'; EXCEPTION WHEN OTHERS THEN NULL; END;"
@@ -182,14 +188,14 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = select_result.data[0]
-    assert row["ID"] == 1
-    assert row["NAME"] == "Test Product"
+    row = _lower_keys(select_result.data[0])
+    assert row["id"] == 1
+    assert row["name"] == "Test Product"
 
-    description_value = row["DESCRIPTION"].read() if hasattr(row["DESCRIPTION"], "read") else str(row["DESCRIPTION"])
+    description_value = row["description"].read() if hasattr(row["description"], "read") else str(row["description"])
     assert len(description_value) > 100
-    assert row["PRICE"] == 99.99
-    assert row["IS_ACTIVE"] == 1
+    assert row["price"] == 99.99
+    assert row["is_active"] == 1
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_datatypes_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -241,16 +247,17 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
     assert result.data is not None
     assert len(result.data) == 6
 
-    it_employees = [row for row in result.data if row["DEPARTMENT"] == "IT"]
+    rows = [_lower_keys(row) for row in result.data]
+    it_employees = [row for row in rows if row["department"] == "IT"]
     assert len(it_employees) == 3
 
-    it_sorted = sorted(it_employees, key=operator.itemgetter("SALARY"), reverse=True)
-    assert it_sorted[0]["DEPT_RANK"] == 1
-    assert it_sorted[1]["DEPT_RANK"] == 2
-    assert it_sorted[2]["DEPT_RANK"] == 3
+    it_sorted = sorted(it_employees, key=operator.itemgetter("salary"), reverse=True)
+    assert it_sorted[0]["dept_rank"] == 1
+    assert it_sorted[1]["dept_rank"] == 2
+    assert it_sorted[2]["dept_rank"] == 3
 
     for emp in it_employees:
-        assert emp["DEPT_TOTAL_SALARY"] == 183000
+        assert emp["dept_total_salary"] == 183000
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_analytics_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -345,7 +352,7 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
     assert select_result.data is not None
     assert len(select_result.data) == 3
 
-    names = [row["NAME"] for row in select_result.data]
+    names = [row["name"] for row in (_lower_keys(row) for row in select_result.data)]
     assert "First Record" in names
     assert "Exception Handled" in names
     assert "Final Record" in names

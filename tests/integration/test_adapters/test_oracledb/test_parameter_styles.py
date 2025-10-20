@@ -7,6 +7,14 @@ import pytest
 from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 
+
+def _lower_dict(data: dict[str, Any]) -> dict[str, Any]:
+    return {key.lower(): value for key, value in data.items()}
+
+
+def _lower_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_lower_dict(row) for row in rows]
+
 pytestmark = pytest.mark.xdist_group("oracle")
 
 OracleParamData = tuple[Any, ...] | list[Any] | dict[str, Any]
@@ -34,8 +42,11 @@ def test_sync_oracle_parameter_styles(
     assert result.data is not None
     assert len(result.data) == len(expected_rows)
 
-    for i, expected_row in enumerate(expected_rows):
-        actual_row = result.data[i]
+    actual_rows = _lower_rows(result.data)
+    expected_rows_lower = [_lower_dict(row) for row in expected_rows]
+
+    for i, expected_row in enumerate(expected_rows_lower):
+        actual_row = actual_rows[i]
         for key, expected_value in expected_row.items():
             assert actual_row[key] == expected_value
 
@@ -66,8 +77,11 @@ async def test_async_oracle_parameter_styles(
     assert result.data is not None
     assert len(result.data) == len(expected_rows)
 
-    for i, expected_row in enumerate(expected_rows):
-        actual_row = result.data[i]
+    actual_rows = _lower_rows(result.data)
+    expected_rows_lower = [_lower_dict(row) for row in expected_rows]
+
+    for i, expected_row in enumerate(expected_rows_lower):
+        actual_row = actual_rows[i]
         for key, expected_value in expected_row.items():
             assert actual_row[key] == expected_value
 
@@ -101,10 +115,10 @@ def test_sync_oracle_insert_with_named_params(oracle_sync_session: OracleSyncDri
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = select_result.data[0]
-    assert row["NAME"] == "Alice Johnson"
-    assert row["AGE"] == 30
-    assert row["CITY"] == "Oracle City"
+    row = _lower_dict(select_result.data[0])
+    assert row["name"] == "Alice Johnson"
+    assert row["age"] == 30
+    assert row["city"] == "Oracle City"
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_params_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -151,9 +165,9 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = select_result.data[0]
-    assert row["NAME"] == "Updated User"
-    assert row["STATUS"] == "ACTIVE"
+    row = _lower_dict(select_result.data[0])
+    assert row["name"] == "Updated User"
+    assert row["status"] == "ACTIVE"
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_mixed_params_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -192,7 +206,8 @@ def test_sync_oracle_in_clause_with_params(oracle_sync_session: OracleSyncDriver
     assert result.data is not None
     assert len(result.data) == 4
 
-    categories = [row["CATEGORY"] for row in result.data]
+    rows = _lower_rows(result.data)
+    categories = [row["category"] for row in rows]
     assert all(cat in ["TYPE_A", "TYPE_B"] for cat in categories)
     assert "TYPE_C" not in categories
 
@@ -233,15 +248,16 @@ async def test_async_oracle_null_parameter_handling(oracle_async_session: Oracle
     assert isinstance(null_result, SQLResult)
     assert null_result.data is not None
     assert len(null_result.data) == 1
-    assert null_result.data[0]["ID"] == 1
+    assert _lower_rows(null_result.data)[0]["id"] == 1
 
     select_not_null_sql = "SELECT id, name, optional_field FROM test_null_params_table WHERE optional_field IS NOT NULL"
     not_null_result = await oracle_async_session.execute(select_not_null_sql)
     assert isinstance(not_null_result, SQLResult)
     assert not_null_result.data is not None
     assert len(not_null_result.data) == 1
-    assert not_null_result.data[0]["ID"] == 2
-    assert not_null_result.data[0]["OPTIONAL_FIELD"] == "Not Null"
+    not_null_row = _lower_rows(not_null_result.data)[0]
+    assert not_null_row["id"] == 2
+    assert not_null_row["optional_field"] == "Not Null"
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_null_params_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -287,9 +303,9 @@ def test_sync_oracle_date_parameter_handling(oracle_sync_session: OracleSyncDriv
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = select_result.data[0]
-    assert row["EVENT_NAME"] == "Oracle Conference"
-    assert row["FORMATTED_DATE"] == "2024-06-15"
+    row = _lower_dict(select_result.data[0])
+    assert row["event_name"] == "Oracle Conference"
+    assert row["formatted_date"] == "2024-06-15"
 
     range_sql = """
         SELECT COUNT(*) as event_count
@@ -301,7 +317,7 @@ def test_sync_oracle_date_parameter_handling(oracle_sync_session: OracleSyncDriv
     range_result = oracle_sync_session.execute(range_sql, {"start_date": "2024-01-01", "end_date": "2024-12-31"})
     assert isinstance(range_result, SQLResult)
     assert range_result.data is not None
-    assert range_result.data[0]["EVENT_COUNT"] == 1
+    assert range_result.data[0]["event_count"] == 1
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_date_params_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -355,19 +371,19 @@ def test_sync_oracle_comprehensive_none_parameter_handling(oracle_sync_session: 
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = select_result.data[0]
-    assert row["ID"] == 1
-    assert row["TEXT_FIELD"] == "Test Value"
-    assert row["NUMBER_FIELD"] is None
-    assert row["DATE_FIELD"] is None
-    assert row["TIMESTAMP_FIELD"] is None
+    row = _lower_dict(select_result.data[0])
+    assert row["id"] == 1
+    assert row["text_field"] == "Test Value"
+    assert row["number_field"] is None
+    assert row["date_field"] is None
+    assert row["timestamp_field"] is None
     # CLOB handling may vary - check if it's accessible
-    clob_value = row["CLOB_FIELD"]
+    clob_value = row["clob_field"]
     if hasattr(clob_value, "read"):
         assert clob_value.read() == "CLOB content"
     else:
         assert str(clob_value) == "CLOB content"
-    assert row["RAW_FIELD"] is None
+    assert row["raw_field"] is None
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_comprehensive_none_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -404,11 +420,11 @@ def test_sync_oracle_all_none_parameters(oracle_sync_session: OracleSyncDriver) 
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
-    row = select_result.data[0]
-    assert row["ID"] is None
-    assert row["FIELD1"] is None
-    assert row["FIELD2"] is None
-    assert row["FIELD3"] is None
+    row = _lower_dict(select_result.data[0])
+    assert row["id"] is None
+    assert row["field1"] is None
+    assert row["field2"] is None
+    assert row["field3"] is None
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_all_none_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -453,12 +469,12 @@ def test_sync_oracle_none_parameters_with_execute_many(oracle_sync_session: Orac
     assert len(select_result.data) == len(batch_data)
 
     # Check each record
-    for i, row in enumerate(select_result.data):
+    for i, row in enumerate(_lower_rows(select_result.data)):
         expected = batch_data[i]
-        assert row["ID"] == expected["id"]
-        assert row["NAME"] == expected["name"]
-        assert row["VALUE"] == expected["value"]
-        assert row["ACTIVE"] == expected["active"]
+        assert row["id"] == expected["id"]
+        assert row["name"] == expected["name"]
+        assert row["value"] == expected["value"]
+        assert row["active"] == expected["active"]
 
     # Test query with None parameter in WHERE clause
     select_with_none = oracle_sync_session.execute(
@@ -467,7 +483,7 @@ def test_sync_oracle_none_parameters_with_execute_many(oracle_sync_session: Orac
     assert isinstance(select_with_none, SQLResult)
     assert select_with_none.data is not None
     # Should find records with NULL names (records 2, 4)
-    null_name_ids = [row["ID"] for row in select_with_none.data]
+    null_name_ids = [row["id"] for row in _lower_rows(select_with_none.data)]
     assert 2 in null_name_ids
     assert 4 in null_name_ids
 
@@ -546,19 +562,21 @@ async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: Or
     assert len(select_result.data) == 3
 
     # Check record 1 (None LOBs)
-    row1 = select_result.data[0]
-    assert row1["ID"] == 1
-    assert row1["DESCRIPTION"] == "Document with no content"
-    assert row1["DOCUMENT_CONTENT"] is None
-    assert row1["RAW_DATA"] is None
+    rows = _lower_rows(select_result.data)
+
+    row1 = rows[0]
+    assert row1["id"] == 1
+    assert row1["description"] == "Document with no content"
+    assert row1["document_content"] is None
+    assert row1["raw_data"] is None
 
     # Check record 2 (with LOB data)
-    row2 = select_result.data[1]
-    assert row2["ID"] == 2
-    assert row2["DESCRIPTION"] == "Document with content"
+    row2 = rows[1]
+    assert row2["id"] == 2
+    assert row2["description"] == "Document with content"
     # LOB data might need special handling to read
-    if row2["DOCUMENT_CONTENT"] is not None:
-        clob_content = row2["DOCUMENT_CONTENT"]
+    if row2["document_content"] is not None:
+        clob_content = row2["document_content"]
         if hasattr(clob_content, "read"):
             content = await clob_content.read()  # Async read for CLOB
             assert "This is test CLOB content" in content
@@ -566,11 +584,11 @@ async def test_async_oracle_lob_none_parameter_handling(oracle_async_session: Or
             assert "This is test CLOB content" in str(clob_content)
 
     # Check record 3 (all None)
-    row3 = select_result.data[2]
-    assert row3["ID"] == 3
-    assert row3["DESCRIPTION"] is None
-    assert row3["DOCUMENT_CONTENT"] is None
-    assert row3["RAW_DATA"] is None
+    row3 = rows[2]
+    assert row3["id"] == 3
+    assert row3["description"] is None
+    assert row3["document_content"] is None
+    assert row3["raw_data"] is None
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_lob_none_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -652,29 +670,31 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
     assert len(select_result.data) == 3
 
     # Check record 1 (None JSON)
-    row1 = select_result.data[0]
-    assert row1["ID"] == 1
-    assert row1["NAME"] == "Record with no JSON"
-    assert row1["METADATA"] is None
-    assert row1["SETTINGS"] is None
+    rows = _lower_rows(select_result.data)
+
+    row1 = rows[0]
+    assert row1["id"] == 1
+    assert row1["name"] == "Record with no JSON"
+    assert row1["metadata"] is None
+    assert row1["settings"] is None
 
     # Check record 2 (with JSON data)
-    row2 = select_result.data[1]
-    assert row2["ID"] == 2
-    assert row2["NAME"] == "Record with JSON"
+    row2 = rows[1]
+    assert row2["id"] == 2
+    assert row2["name"] == "Record with JSON"
     # JSON might be returned as string or object depending on Oracle version
-    metadata_value = str(row2["METADATA"]) if row2["METADATA"] is not None else None
-    settings_value = str(row2["SETTINGS"]) if row2["SETTINGS"] is not None else None
+    metadata_value = str(row2["metadata"]) if row2["metadata"] is not None else None
+    settings_value = str(row2["settings"]) if row2["settings"] is not None else None
     assert metadata_value is not None and "key" in metadata_value
     assert settings_value is not None and "theme" in settings_value
 
     # Check record 3 (partial JSON)
-    row3 = select_result.data[2]
-    assert row3["ID"] == 3
-    assert row3["NAME"] == "Partial JSON"
-    metadata_value = str(row3["METADATA"]) if row3["METADATA"] is not None else None
+    row3 = rows[2]
+    assert row3["id"] == 3
+    assert row3["name"] == "Partial JSON"
+    metadata_value = str(row3["metadata"]) if row3["metadata"] is not None else None
     assert metadata_value is not None and "status" in metadata_value
-    assert row3["SETTINGS"] is None
+    assert row3["settings"] is None
 
     # Test querying with None JSON parameter
     query_result = await oracle_async_session.execute(
@@ -683,7 +703,7 @@ async def test_async_oracle_json_none_parameter_handling(oracle_async_session: O
     assert isinstance(query_result, SQLResult)
     assert query_result.data is not None
     # Should find record 1 (both NULL)
-    null_json_ids = [row["ID"] for row in query_result.data if row["ID"] == 1]
+    null_json_ids = [row["id"] for row in _lower_rows(query_result.data) if row["id"] == 1]
     assert len(null_json_ids) >= 1
 
     await oracle_async_session.execute_script(
@@ -743,8 +763,8 @@ def test_sync_oracle_parameter_count_validation_with_none(oracle_sync_session: O
         assert isinstance(select_result, SQLResult)
         if select_result.data and len(select_result.data) > 0:
             # If a record was inserted, field3 should be NULL due to missing parameter
-            row = select_result.data[0]
-            assert row["FIELD3"] is None
+            row = _lower_dict(select_result.data[0])
+            assert row["field3"] is None
     except Exception as e:
         # If it fails, that's also acceptable behavior - missing parameters should fail
         assert "field3" in str(e).lower() or "parameter" in str(e).lower() or "bind" in str(e).lower()
@@ -777,20 +797,20 @@ def test_sync_oracle_parameter_count_validation_with_none(oracle_sync_session: O
     assert num_records in [1, 2]  # Either 1 (missing param failed) or 2 (missing param succeeded)
 
     # First insert - explicit None values (this should always be present)
-    row1 = select_result.data[0]
-    assert row1["ID"] == 1
-    assert row1["FIELD1"] is None
-    assert row1["FIELD2"] == 42
-    assert row1["FIELD3"] is None
+    row1 = _lower_dict(select_result.data[0])
+    assert row1["id"] == 1
+    assert row1["field1"] is None
+    assert row1["field2"] == 42
+    assert row1["field3"] is None
 
     # If there's a second record, it should be from the missing parameter case
     if num_records == 2:
         # Second insert - missing parameter treated as None/NULL
-        row2 = select_result.data[1]
-        assert row2["ID"] == 2
-        assert row2["FIELD1"] == "test"
-        assert row2["FIELD2"] is None
-        assert row2["FIELD3"] is None  # Missing parameter treated as NULL
+        row2 = _lower_dict(select_result.data[1])
+        assert row2["id"] == 2
+        assert row2["field1"] == "test"
+        assert row2["field2"] is None
+        assert row2["field3"] is None  # Missing parameter treated as NULL
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_param_count_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
