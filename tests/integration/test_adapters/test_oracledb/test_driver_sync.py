@@ -2,9 +2,10 @@
 
 from typing import Any, Literal
 
+import msgspec
 import pytest
 
-from sqlspec.adapters.oracledb import OracleSyncDriver
+from sqlspec.adapters.oracledb import OracleSyncConfig, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 
 pytestmark = pytest.mark.xdist_group("oracle")
@@ -49,7 +50,7 @@ def test_sync_select(oracle_sync_session: OracleSyncDriver, parameters: Any, sty
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
-    assert select_result.data[0]["NAME"] == "test_name"
+    assert select_result.data[0]["name"] == "test_name"
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -135,14 +136,14 @@ def test_sync_insert_with_sequence(oracle_sync_session: OracleSyncDriver) -> Non
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
-    last_id = result.data[0]["LAST_ID"]
+    last_id = result.data[0]["last_id"]
 
     verify_result = oracle_sync_session.execute("SELECT id, name FROM test_table WHERE id = :1", (last_id,))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
-    assert verify_result.data[0]["NAME"] == "test_name"
-    assert verify_result.data[0]["ID"] == last_id
+    assert verify_result.data[0]["name"] == "test_name"
+    assert verify_result.data[0]["id"] == last_id
 
     oracle_sync_session.execute_script("""
         BEGIN
@@ -181,7 +182,7 @@ def test_sync_execute_many_insert(oracle_sync_session: OracleSyncDriver) -> None
     count_result = oracle_sync_session.execute(select_sql)
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["COUNT"] == len(parameters_list)
+    assert count_result.data[0]["count"] == len(parameters_list)
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_many_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -210,7 +211,7 @@ def test_sync_execute_script(oracle_sync_session: OracleSyncDriver) -> None:
     select_result = oracle_sync_session.execute("SELECT COUNT(*) as count FROM test_script_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["COUNT"] == 2
+    assert select_result.data[0]["count"] == 2
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_script_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -245,7 +246,7 @@ def test_sync_update_operation(oracle_sync_session: OracleSyncDriver) -> None:
     select_result = oracle_sync_session.execute("SELECT name FROM test_table WHERE name = :1", ("updated_name",))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["NAME"] == "updated_name"
+    assert select_result.data[0]["name"] == "updated_name"
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -278,7 +279,7 @@ def test_sync_delete_operation(oracle_sync_session: OracleSyncDriver) -> None:
     select_result = oracle_sync_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["COUNT"] == 0
+    assert select_result.data[0]["count"] == 0
 
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -314,8 +315,8 @@ def test_oracle_sync_for_update_locking(oracle_sync_session: OracleSyncDriver) -
             sql.select("id", "name", "value").from_("test_table").where_eq("name", "oracle_sync_lock").for_update()
         )
         assert result is not None
-        assert result["NAME"] == "oracle_sync_lock"
-        assert result["VALUE"] == 100
+        assert result["name"] == "oracle_sync_lock"
+        assert result["value"] == 100
 
         oracle_sync_session.commit()
     except Exception:
@@ -356,7 +357,7 @@ def test_oracle_sync_for_update_nowait(oracle_sync_session: OracleSyncDriver) ->
             sql.select("*").from_("test_table").where_eq("name", "oracle_sync_nowait").for_update(nowait=True)
         )
         assert result is not None
-        assert result["NAME"] == "oracle_sync_nowait"
+        assert result["name"] == "oracle_sync_nowait"
 
         oracle_sync_session.commit()
     except Exception:
@@ -407,4 +408,75 @@ def test_oracle_sync_for_share_locking_unsupported(oracle_sync_session: OracleSy
     finally:
         oracle_sync_session.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        )
+
+
+def test_sync_lowercase_columns_default(oracle_sync_session: OracleSyncDriver) -> None:
+    """Ensure implicit Oracle column names hydrate to lowercase when feature enabled."""
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    oracle_sync_session.execute_script("""
+        CREATE TABLE test_case_table (
+            id NUMBER PRIMARY KEY,
+            name VARCHAR2(50)
+        )
+    """)
+
+    oracle_sync_session.execute("INSERT INTO test_case_table (id, name) VALUES (:1, :2)", (1, "widget"))
+
+    class Product(msgspec.Struct):
+        id: int
+        name: str
+
+    result = oracle_sync_session.execute("SELECT id, name FROM test_case_table")
+    row_dict = result.get_first()
+    assert row_dict is not None
+    assert "id" in row_dict
+    assert "ID" not in row_dict
+    assert row_dict["id"] == 1
+
+    hydrated = result.get_first(schema_type=Product)
+    assert hydrated is not None
+    assert hydrated.id == 1
+    assert hydrated.name == "widget"
+
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+    )
+
+
+def test_sync_uppercase_columns_when_disabled(oracle_sync_config: OracleSyncConfig) -> None:
+    """Ensure disabling lowercase feature preserves uppercase columns."""
+    custom_config = OracleSyncConfig(
+        pool_config=dict(oracle_sync_config.pool_config), driver_features={"enable_lowercase_column_names": False}
+    )
+
+    with custom_config.provide_session() as session:
+        session.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
+        session.execute_script("""
+            CREATE TABLE test_case_table (
+                id NUMBER PRIMARY KEY,
+                name VARCHAR2(50)
+            )
+        """)
+
+        session.execute("INSERT INTO test_case_table (id, name) VALUES (:1, :2)", (1, "widget"))
+
+        class Product(msgspec.Struct):
+            id: int
+            name: str
+
+        result = session.execute("SELECT id, name FROM test_case_table")
+        row = result.get_first()
+        assert row is not None
+        assert "ID" in row
+        assert "id" not in row
+        with pytest.raises(msgspec.ValidationError):
+            result.get_first(schema_type=Product)
+
+        session.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table'; EXCEPTION WHEN OTHERS THEN NULL; END;"
         )

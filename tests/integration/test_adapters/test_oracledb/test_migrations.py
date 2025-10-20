@@ -78,8 +78,8 @@ def down():
 
                 users_result = driver.execute(f"SELECT * FROM {users_table}")
                 assert len(users_result.data) == 1
-                assert users_result.data[0]["NAME"] == "John Doe"
-                assert users_result.data[0]["EMAIL"] == "john@example.com"
+                assert users_result.data[0]["name"] == "John Doe"
+                assert users_result.data[0]["email"] == "john@example.com"
 
             commands.downgrade("base")
 
@@ -160,8 +160,8 @@ def down():
 
                 users_result = await driver.execute(f"SELECT * FROM {users_table}")
                 assert len(users_result.data) == 1
-                assert users_result.data[0]["NAME"] == "John Doe"
-                assert users_result.data[0]["EMAIL"] == "john@example.com"
+                assert users_result.data[0]["name"] == "John Doe"
+                assert users_result.data[0]["email"] == "john@example.com"
 
             await commands.downgrade("base")
 
@@ -857,16 +857,16 @@ async def test_oracledb_async_schema_migration_from_old_format(oracle_23ai_servi
                 ORDER BY column_name
             """
             result = await driver.execute(column_check_sql)
-            column_names = {row["COLUMN_NAME"] for row in result.data}
+            column_names = {str(row["column_name"]).lower() for row in result.data}
 
-            assert "VERSION_TYPE" in column_names, "VERSION_TYPE column should be added"
-            assert "EXECUTION_SEQUENCE" in column_names, "EXECUTION_SEQUENCE column should be added"
-            assert "VERSION_NUM" in column_names
-            assert "DESCRIPTION" in column_names
+            assert "version_type" in column_names, "VERSION_TYPE column should be added"
+            assert "execution_sequence" in column_names, "EXECUTION_SEQUENCE column should be added"
+            assert "version_num" in column_names
+            assert "description" in column_names
 
             migration_data = await driver.execute(f"SELECT * FROM {migration_table}")
             assert len(migration_data.data) == 1
-            assert migration_data.data[0]["VERSION_NUM"] == "0001"
+            assert migration_data.data[0]["version_num"] == "0001"
     finally:
         if config.pool_instance:
             await config.close_pool()
@@ -929,16 +929,16 @@ def test_oracledb_sync_schema_migration_from_old_format(oracle_23ai_service: Ora
                 ORDER BY column_name
             """
             result = driver.execute(column_check_sql)
-            column_names = {row["COLUMN_NAME"] for row in result.data}
+            column_names = {str(row["column_name"]).lower() for row in result.data}
 
-            assert "VERSION_TYPE" in column_names, "VERSION_TYPE column should be added"
-            assert "EXECUTION_SEQUENCE" in column_names, "EXECUTION_SEQUENCE column should be added"
-            assert "VERSION_NUM" in column_names
-            assert "DESCRIPTION" in column_names
+            assert "version_type" in column_names, "VERSION_TYPE column should be added"
+            assert "execution_sequence" in column_names, "EXECUTION_SEQUENCE column should be added"
+            assert "version_num" in column_names
+            assert "description" in column_names
 
             migration_data = driver.execute(f"SELECT * FROM {migration_table}")
             assert len(migration_data.data) == 1
-            assert migration_data.data[0]["VERSION_NUM"] == "0001"
+            assert migration_data.data[0]["version_num"] == "0001"
     finally:
         if config.pool_instance:
             config.close_pool()

@@ -81,7 +81,7 @@ async def test_numpy_float32_insert_and_select(oracle_numpy_async_config: Oracle
         result = await session.select_one("SELECT * FROM test_float32 WHERE id = :1", (1,))
 
         assert result is not None
-        retrieved_vector = result["VECTOR_DATA"]
+        retrieved_vector = result["vector_data"]
 
         assert isinstance(retrieved_vector, np.ndarray)
         assert retrieved_vector.dtype == np.float32
@@ -117,7 +117,7 @@ async def test_numpy_float64_insert_and_select(oracle_numpy_async_config: Oracle
         result = await session.select_one("SELECT * FROM test_float64 WHERE id = :1", (1,))
 
         assert result is not None
-        retrieved_vector = result["VECTOR_DATA"]
+        retrieved_vector = result["vector_data"]
 
         assert isinstance(retrieved_vector, np.ndarray)
         assert retrieved_vector.dtype == np.float64
@@ -157,7 +157,7 @@ async def test_numpy_uint8_binary_vector(oracle_numpy_async_config: OracleAsyncC
         result = await session.select_one("SELECT * FROM test_binary WHERE id = :1", (1,))
 
         assert result is not None
-        retrieved_vector = result["VECTOR_DATA"]
+        retrieved_vector = result["vector_data"]
 
         assert isinstance(retrieved_vector, np.ndarray)
         assert retrieved_vector.dtype == np.uint8
@@ -193,7 +193,7 @@ async def test_numpy_int8_vector(oracle_numpy_async_config: OracleAsyncConfig) -
         result = await session.select_one("SELECT * FROM test_int8 WHERE id = :1", (1,))
 
         assert result is not None
-        retrieved_vector = result["VECTOR_DATA"]
+        retrieved_vector = result["vector_data"]
 
         assert isinstance(retrieved_vector, np.ndarray)
         assert retrieved_vector.dtype == np.int8
@@ -232,7 +232,7 @@ async def test_large_embedding_vector(oracle_numpy_async_config: OracleAsyncConf
         result = await session.select_one("SELECT * FROM test_embeddings WHERE id = :1", (1,))
 
         assert result is not None
-        retrieved_vector = result["EMBEDDING"]
+        retrieved_vector = result["embedding"]
 
         assert isinstance(retrieved_vector, np.ndarray)
         assert retrieved_vector.shape == (1536,)
@@ -263,7 +263,7 @@ async def test_vector_null_handling(oracle_numpy_async_config: OracleAsyncConfig
         result = await session.select_one("SELECT * FROM test_nulls WHERE id = :1", (1,))
 
         assert result is not None
-        assert result["VECTOR_DATA"] is None
+        assert result["vector_data"] is None
 
 
 async def test_numpy_disabled_by_default(oracle_async_config: OracleAsyncConfig) -> None:
@@ -300,7 +300,7 @@ async def test_numpy_disabled_by_default(oracle_async_config: OracleAsyncConfig)
         result = await session.select_one("SELECT * FROM test_no_numpy WHERE id = :1", (1,))
 
         assert result is not None
-        retrieved = result["VECTOR_DATA"]
+        retrieved = result["vector_data"]
 
         assert isinstance(retrieved, array.array)
         assert not isinstance(retrieved, np.ndarray)
@@ -334,7 +334,7 @@ def test_sync_numpy_vector_operations(oracle_numpy_sync_config: OracleSyncConfig
         result = session.select_one("SELECT * FROM test_sync_vectors WHERE id = :1", (1,))
 
         assert result is not None
-        retrieved_vector = result["VECTOR_DATA"]
+        retrieved_vector = result["vector_data"]
 
         assert isinstance(retrieved_vector, np.ndarray)
         np.testing.assert_array_almost_equal(retrieved_vector, original_vector)
@@ -371,6 +371,6 @@ async def test_batch_insert_numpy_vectors(oracle_numpy_async_config: OracleAsync
         assert len(results) == 5
 
         for idx, result in enumerate(results):
-            retrieved_vector = result["VECTOR_DATA"]
+            retrieved_vector = result["vector_data"]
             assert isinstance(retrieved_vector, np.ndarray)
             np.testing.assert_array_almost_equal(retrieved_vector, vectors[idx], decimal=5)

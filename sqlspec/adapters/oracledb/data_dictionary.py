@@ -120,7 +120,11 @@ class OracleDataDictionaryMixin:
         """
         _ = schema
         return f"""
-            SELECT column_name, data_type, data_length, nullable
+            SELECT
+                column_name AS "column_name",
+                data_type AS "data_type",
+                data_length AS "data_length",
+                nullable AS "nullable"
             FROM user_tab_columns
             WHERE table_name = '{table.upper()}'
             ORDER BY column_id
@@ -135,7 +139,7 @@ class OracleDataDictionaryMixin:
         Returns:
             Oracle version information or None if detection fails
         """
-        banner = driver.select_value("SELECT banner FROM v$version WHERE banner LIKE 'Oracle%'")
+        banner = driver.select_value("SELECT banner AS \"banner\" FROM v$version WHERE banner LIKE 'Oracle%'")
 
         # Parse version from banner like "Oracle Database 21c Enterprise Edition Release 21.0.0.0.0 - Production"
         # or "Oracle Database 19c Standard Edition 2 Release 19.0.0.0.0 - Production"
@@ -170,7 +174,7 @@ class OracleDataDictionaryMixin:
             Compatible parameter value or None if detection fails
         """
         try:
-            compatible = driver.select_value("SELECT value FROM v$parameter WHERE name = 'compatible'")
+            compatible = driver.select_value("SELECT value AS \"value\" FROM v$parameter WHERE name = 'compatible'")
             logger.debug("Detected Oracle compatible parameter: %s", compatible)
             return str(compatible)
         except Exception:
@@ -216,7 +220,7 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         Returns:
             True if this is an Autonomous Database, False otherwise
         """
-        result = driver.select_value_or_none("SELECT COUNT(*) as cnt FROM v$pdbs WHERE cloud_identity IS NOT NULL")
+        result = driver.select_value_or_none('SELECT COUNT(1) AS "cnt" FROM v$pdbs WHERE cloud_identity IS NOT NULL')
         return bool(result and int(result) > 0)
 
     def get_version(self, driver: SyncDriverAdapterBase) -> "OracleVersionInfo | None":
@@ -304,10 +308,10 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
 
         Returns:
             List of column metadata dictionaries with keys:
-                - COLUMN_NAME: Name of the column (UPPERCASE in Oracle)
-                - DATA_TYPE: Oracle data type
-                - DATA_LENGTH: Maximum length (for character types)
-                - NULLABLE: 'Y' or 'N'
+                - column_name: Name of the column
+                - data_type: Oracle data type
+                - data_length: Maximum length (for character types)
+                - nullable: 'Y' or 'N'
         """
 
         oracle_driver = cast("OracleSyncDriver", driver)
@@ -345,7 +349,7 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
             Oracle version information or None if detection fails
         """
         banner = await cast("OracleAsyncDriver", driver).select_value(
-            "SELECT banner FROM v$version WHERE banner LIKE 'Oracle%'"
+            "SELECT banner AS \"banner\" FROM v$version WHERE banner LIKE 'Oracle%'"
         )
 
         version_match = ORACLE_VERSION_PATTERN.search(str(banner))
@@ -385,7 +389,9 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
             Compatible parameter value or None if detection fails
         """
         try:
-            compatible = await driver.select_value("SELECT value FROM v$parameter WHERE name = 'compatible'")
+            compatible = await driver.select_value(
+                "SELECT value AS \"value\" FROM v$parameter WHERE name = 'compatible'"
+            )
             logger.debug("Detected Oracle compatible parameter: %s", compatible)
             return str(compatible)
         except Exception:
@@ -403,7 +409,7 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         """
         # Check for cloud_identity in v$pdbs (most reliable for Autonomous)
         with suppress(Exception):
-            result = await driver.execute("SELECT COUNT(*) as cnt FROM v$pdbs WHERE cloud_identity IS NOT NULL")
+            result = await driver.execute('SELECT COUNT(1) AS "cnt" FROM v$pdbs WHERE cloud_identity IS NOT NULL')
             if result.data:
                 count = result.data[0]["cnt"] if isinstance(result.data[0], dict) else result.data[0][0]
                 if int(count) > 0:
@@ -475,10 +481,10 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
 
         Returns:
             List of column metadata dictionaries with keys:
-                - COLUMN_NAME: Name of the column (UPPERCASE in Oracle)
-                - DATA_TYPE: Oracle data type
-                - DATA_LENGTH: Maximum length (for character types)
-                - NULLABLE: 'Y' or 'N'
+                - column_name: Name of the column
+                - data_type: Oracle data type
+                - data_length: Maximum length (for character types)
+                - nullable: 'Y' or 'N'
         """
 
         oracle_driver = cast("OracleAsyncDriver", driver)

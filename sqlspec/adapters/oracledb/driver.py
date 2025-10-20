@@ -2,7 +2,8 @@
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Any
+import re
+from typing import TYPE_CHECKING, Any, Final
 
 import oracledb
 from oracledb import AsyncCursor, Cursor
@@ -47,6 +48,22 @@ logger = logging.getLogger(__name__)
 LARGE_STRING_THRESHOLD = 3000  # Threshold for large string parameters to avoid ORA-01704
 
 _type_converter = OracleTypeConverter()
+
+IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
+
+
+def _normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":
+    should_lowercase = driver_features.get("enable_lowercase_column_names", False)
+    if not should_lowercase:
+        return column_names
+    normalized: list[str] = []
+    for name in column_names:
+        if name and IMPLICIT_UPPER_COLUMN_PATTERN.fullmatch(name):
+            normalized.append(name.lower())
+        else:
+            normalized.append(name)
+    return normalized
+
 
 __all__ = (
     "OracleAsyncDriver",
@@ -468,6 +485,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
+            column_names = _normalize_column_names(column_names, self.driver_features)
 
             # Oracle returns tuples - convert to consistent dict format
             data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
@@ -660,6 +678,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
+            column_names = _normalize_column_names(column_names, self.driver_features)
 
             # Oracle returns tuples - convert to consistent dict format
             data = [dict(zip(column_names, row, strict=False)) for row in fetched_data]
