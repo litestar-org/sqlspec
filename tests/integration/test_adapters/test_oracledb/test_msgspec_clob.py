@@ -147,8 +147,7 @@ async def test_oracle_async_mixed_clob_varchar2_msgspec(oracle_async_session: Or
     """)
 
     await oracle_async_session.execute(
-        "INSERT INTO test_mixed_types (id, title, body) VALUES (:1, :2, :3)",
-        (1, "Short Title", LARGE_TEXT_CONTENT),
+        "INSERT INTO test_mixed_types (id, title, body) VALUES (:1, :2, :3)", (1, "Short Title", LARGE_TEXT_CONTENT)
     )
 
     result = await oracle_async_session.execute("SELECT id, title, body FROM test_mixed_types WHERE id = :1", (1,))
@@ -184,8 +183,7 @@ def test_oracle_sync_mixed_clob_varchar2_msgspec(oracle_sync_session: OracleSync
     """)
 
     oracle_sync_session.execute(
-        "INSERT INTO test_mixed_sync (id, title, body) VALUES (:1, :2, :3)",
-        (1, "Short Title", LARGE_TEXT_CONTENT),
+        "INSERT INTO test_mixed_sync (id, title, body) VALUES (:1, :2, :3)", (1, "Short Title", LARGE_TEXT_CONTENT)
     )
 
     result = oracle_sync_session.execute("SELECT id, title, body FROM test_mixed_sync WHERE id = :1", (1,))
