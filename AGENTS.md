@@ -557,6 +557,103 @@ if "enable_feature" not in driver_features:
     driver_features["enable_feature"] = OPTIONAL_PACKAGE_INSTALLED
 ```
 
+### Error Handling in Type Handlers
+
+When implementing type handlers that register optional database extensions, distinguish between expected and unexpected failures:
+
+**Expected Failures** (graceful degradation) → **DEBUG level**:
+
+- Database extension not enabled (e.g., `CREATE EXTENSION vector` not run)
+- Optional Python package not installed
+- Database version doesn't support the feature
+
+**Unexpected Failures** (need investigation) → **WARNING or ERROR level**:
+
+- Network errors during registration
+- Permission issues
+- Invalid configuration
+- Unknown exceptions
+
+**Pattern for Extension Registration**:
+
+```python
+async def register_optional_extension(connection):
+    """Register optional database extension support.
+
+    Gracefully handles missing extensions with DEBUG logging.
+    """
+    if not OPTIONAL_PACKAGE_INSTALLED:
+        logger.debug("Optional package not installed - skipping extension support")
+        return
+
+    try:
+        import optional_package
+        await optional_package.register(connection)
+        logger.debug("Registered optional extension support")
+    except SpecificExpectedError as error:
+        message = str(error).lower()
+        if "extension not found" in message or "type not found" in message:
+            logger.debug("Skipping extension registration - extension not enabled in database")
+            return
+        logger.warning("Unexpected error during extension registration: %s", error)
+    except Exception:
+        logger.exception("Failed to register optional extension")
+```
+
+**Real-World Example - PostgreSQL pgvector**:
+
+Different PostgreSQL drivers raise different error messages for the same condition (pgvector extension not enabled):
+
+```python
+# AsyncPG - raises ValueError("unknown type: public.vector")
+async def register_pgvector_support(connection):
+    if not PGVECTOR_INSTALLED:
+        logger.debug("pgvector not installed - skipping vector type support")
+        return
+
+    try:
+        import pgvector.asyncpg
+        await pgvector.asyncpg.register_vector(connection)
+        logger.debug("Registered pgvector support on asyncpg connection")
+    except ValueError as exc:
+        message = str(exc).lower()
+        if "unknown type" in message and "vector" in message:
+            logger.debug("Skipping pgvector registration - extension not enabled in database")
+            return
+        logger.warning("Unexpected error during pgvector registration: %s", exc)
+    except Exception:
+        logger.exception("Failed to register pgvector support")
+
+# Psycopg - raises ValueError("vector type not found in the database")
+def register_pgvector_sync(connection):
+    if not PGVECTOR_INSTALLED:
+        logger.debug("pgvector not installed - skipping vector type handlers")
+        return
+
+    try:
+        import pgvector.psycopg
+        pgvector.psycopg.register_vector(connection)
+        logger.debug("Registered pgvector type handlers on psycopg sync connection")
+    except ValueError as error:
+        message = str(error).lower()
+        if "vector type not found" in message:
+            logger.debug("Skipping pgvector registration - extension not enabled in database")
+            return
+        logger.warning("Unexpected error during pgvector registration: %s", error)
+    except Exception:
+        logger.exception("Failed to register pgvector for psycopg sync")
+```
+
+**Key Principles**:
+
+1. Check for **specific error messages** to identify expected vs unexpected failures
+2. Use **DEBUG** for expected graceful degradation (extension not available)
+3. Use **WARNING** for unexpected issues during optional feature setup
+4. Use **ERROR/exception** for critical failures
+5. Provide **clear, actionable log messages**
+6. Never break application flow on expected failures
+7. Match error message checks to **actual driver behavior** (different drivers raise different messages)
+
 ### Examples from Existing Adapters
 
 **Oracle NumPy VECTOR Support** (`oracledb/_numpy_handlers.py`):

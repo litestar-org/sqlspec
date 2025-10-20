@@ -41,10 +41,10 @@ def register_pgvector_sync(connection: "Connection[Any]") -> None:
         logger.debug("Registered pgvector type handlers on psycopg sync connection")
     except ValueError as error:
         message = str(error).lower()
-        if "unknown type" in message and "vector" in message:
-            logger.debug("Skipping pgvector registration because extension is unavailable")
+        if "vector type not found" in message:
+            logger.debug("Skipping pgvector registration - extension not enabled in database")
             return
-        logger.debug("Failed to register pgvector for psycopg sync: %s", error)
+        logger.warning("Unexpected error during pgvector registration: %s", error)
     except Exception:
         logger.exception("Failed to register pgvector for psycopg sync")
 
@@ -72,9 +72,9 @@ async def register_pgvector_async(connection: "AsyncConnection[Any]") -> None:
         logger.debug("Registered pgvector type handlers on psycopg async connection")
     except ValueError as error:
         message = str(error).lower()
-        if "unknown type" in message and "vector" in message:
-            logger.debug("Skipping pgvector registration because extension is unavailable")
+        if "vector type not found" in message:
+            logger.debug("Skipping pgvector registration - extension not enabled in database")
             return
-        logger.debug("Failed to register pgvector for psycopg async: %s", error)
+        logger.warning("Unexpected error during pgvector registration: %s", error)
     except Exception:
         logger.exception("Failed to register pgvector for psycopg async")
