@@ -603,6 +603,15 @@ The database tracks both version and execution order separately to handle
 out-of-order migrations gracefully (e.g., from late-merging branches).
 """
 
+    def _get_init_init_content(self) -> str:
+        """Get __init__.py content for migration directory initialization.
+
+        Returns:
+            Python module docstring content for the __init__.py file.
+        """
+        return """Migrations.
+"""
+
     def init_directory(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.
 
@@ -618,7 +627,8 @@ out-of-order migrations gracefully (e.g., from late-merging branches).
         migrations_dir.mkdir(parents=True, exist_ok=True)
 
         if package:
-            (migrations_dir / "__init__.py").touch()
+            init = migrations_dir / "__init__.py"
+            init.write_text(self._get_init_init_content())
 
         readme = migrations_dir / "README.md"
         readme.write_text(self._get_init_readme_content())
