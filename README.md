@@ -361,23 +361,18 @@ In this example we demonstrate how to create a basic configuration that integrat
 # ///
 
 from litestar import Litestar, get
-
+from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
-
+from sqlspec.extensions.litestar import SQLSpecPlugin
 
 @get("/")
 async def simple_sqlite(db_session: AiosqliteDriver) -> dict[str, str]:
     return await db_session.select_one("SELECT 'Hello, world!' AS greeting")
 
 
-sqlspec = SQLSpec(
-    config=DatabaseConfig(
-        config=AiosqliteConfig(pool_config={"database": ":memory:"}), # built in local pooling
-        commit_mode="autocommit"
-    )
-)
-app = Litestar(route_handlers=[simple_sqlite], plugins=[sqlspec])
+sqlspec = SQLSpec()
+sqlspec.add_config(AiosqliteConfig(pool_config={"database": ":memory:"}))
+app = Litestar(route_handlers=[simple_sqlite], plugins=[SQLSpecPlugin(sqlspec)])
 ```
 
 ## Inspiration and Future Direction
