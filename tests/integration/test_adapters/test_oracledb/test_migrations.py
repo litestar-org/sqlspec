@@ -857,7 +857,7 @@ async def test_oracledb_async_schema_migration_from_old_format(oracle_23ai_servi
                 ORDER BY column_name
             """
             result = await driver.execute(column_check_sql)
-            column_names = {row["column_name"] for row in result.data}
+            column_names = {str(row["column_name"]).lower() for row in result.data}
 
             assert "version_type" in column_names, "VERSION_TYPE column should be added"
             assert "execution_sequence" in column_names, "EXECUTION_SEQUENCE column should be added"
@@ -929,7 +929,7 @@ def test_oracledb_sync_schema_migration_from_old_format(oracle_23ai_service: Ora
                 ORDER BY column_name
             """
             result = driver.execute(column_check_sql)
-            column_names = {row["column_name"] for row in result.data}
+            column_names = {str(row["column_name"]).lower() for row in result.data}
 
             assert "version_type" in column_names, "VERSION_TYPE column should be added"
             assert "execution_sequence" in column_names, "EXECUTION_SEQUENCE column should be added"

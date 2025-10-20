@@ -13,6 +13,7 @@ from sqlspec.core.statement import SQL, StatementConfig
 def _lower_keys(row: dict[str, object]) -> dict[str, object]:
     return {key.lower(): value for key, value in row.items()}
 
+
 pytestmark = pytest.mark.xdist_group("oracle")
 
 

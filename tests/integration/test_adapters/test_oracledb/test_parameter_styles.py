@@ -15,6 +15,7 @@ def _lower_dict(data: dict[str, Any]) -> dict[str, Any]:
 def _lower_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [_lower_dict(row) for row in rows]
 
+
 pytestmark = pytest.mark.xdist_group("oracle")
 
 OracleParamData = tuple[Any, ...] | list[Any] | dict[str, Any]
