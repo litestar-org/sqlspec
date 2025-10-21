@@ -42,7 +42,9 @@ async def test_inmemory_enabled_creates_session_table_with_inmemory_async(
         assert row is not None, "Session table should exist"
         inmemory_status, inmemory_priority = row[0], row[1]
         assert inmemory_status == "ENABLED", f"Session table should have INMEMORY enabled, got: {inmemory_status}"
-        assert inmemory_priority == "HIGH", f"Session table should have INMEMORY PRIORITY HIGH, got: {inmemory_priority}"
+        assert inmemory_priority == "HIGH", (
+            f"Session table should have INMEMORY PRIORITY HIGH, got: {inmemory_priority}"
+        )
 
     finally:
         async with config.provide_connection() as conn:

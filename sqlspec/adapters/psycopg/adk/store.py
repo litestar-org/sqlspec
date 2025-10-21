@@ -181,9 +181,9 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(cast("Query", self._get_create_sessions_table_sql()))
-            await cur.execute(cast("Query", self._get_create_events_table_sql()))
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(await self._get_create_sessions_table_sql())
+            await driver.execute_script(await self._get_create_events_table_sql())
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
@@ -626,9 +626,9 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
 
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(cast("Query", self._get_create_sessions_table_sql()))
-            cur.execute(cast("Query", self._get_create_events_table_sql()))
+        with self._config.provide_session() as driver:
+            driver.execute_script(self._get_create_sessions_table_sql())
+            driver.execute_script(self._get_create_events_table_sql())
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     def create_session(
