@@ -84,7 +84,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         """
         super().__init__(config)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.
 
         Returns:
@@ -125,7 +125,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             WHERE state != '{{}}'::jsonb;
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for events.
 
         Returns:

@@ -81,7 +81,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
         super().__init__(config)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.
 
         Returns:
@@ -122,7 +122,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             WHERE state != '{{}}'::jsonb;
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for events.
 
         Returns:
@@ -180,22 +180,13 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """Create both sessions and events tables if they don't exist.
 
         Notes:
-            Psqlpy doesn't support multiple statements in a single execute.
-            Splits SQL statements and executes them separately.
+            Uses driver.execute_script() which handles multiple statements.
             Creates sessions table first, then events table (FK dependency).
         """
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            sessions_sql = self._get_create_sessions_table_sql()
-            for statement in sessions_sql.split(";"):
-                statement = statement.strip()
-                if statement:
-                    await conn.execute(statement, [])
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(await self._get_create_sessions_table_sql())
+            await driver.execute_script(await self._get_create_events_table_sql())
 
-            events_sql = self._get_create_events_table_sql()
-            for statement in events_sql.split(";"):
-                statement = statement.strip()
-                if statement:
-                    await conn.execute(statement, [])
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(

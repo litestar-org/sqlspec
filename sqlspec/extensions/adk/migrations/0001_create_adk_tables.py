@@ -114,8 +114,8 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
     store_instance = store_class(config=context.config)
 
     return [
-        store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
-        store_instance._get_create_events_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_create_events_table_sql(),  # pyright: ignore[reportPrivateUsage]
     ]
 
 

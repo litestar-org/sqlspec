@@ -41,8 +41,11 @@ async def test_inmemory_enabled_creates_sessions_table_with_inmemory_async(
             row = await cursor.fetchone()
 
         assert row is not None, "Sessions table should exist"
-        inmemory_status = row[0]
+        inmemory_status, inmemory_priority = row[0], row[1]
         assert inmemory_status == "ENABLED", f"Sessions table should have INMEMORY enabled, got: {inmemory_status}"
+        assert inmemory_priority == "HIGH", (
+            f"Sessions table should have INMEMORY PRIORITY HIGH, got: {inmemory_priority}"
+        )
 
     finally:
         async with config.provide_connection() as conn:
@@ -80,8 +83,9 @@ async def test_inmemory_enabled_creates_events_table_with_inmemory_async(
             row = await cursor.fetchone()
 
         assert row is not None, "Events table should exist"
-        inmemory_status = row[0]
+        inmemory_status, inmemory_priority = row[0], row[1]
         assert inmemory_status == "ENABLED", f"Events table should have INMEMORY enabled, got: {inmemory_status}"
+        assert inmemory_priority == "HIGH", f"Events table should have INMEMORY PRIORITY HIGH, got: {inmemory_priority}"
 
     finally:
         async with config.provide_connection() as conn:
@@ -310,7 +314,7 @@ def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT inmemory
+                SELECT inmemory, inmemory_priority
                 FROM user_tables
                 WHERE table_name IN ('ADK_SESSIONS', 'ADK_EVENTS')
                 ORDER BY table_name
@@ -321,8 +325,9 @@ def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
         assert len(rows) == 2, "Both tables should exist"
 
         for row in rows:
-            inmemory_status = row[0]
+            inmemory_status, inmemory_priority = row[0], row[1]
             assert inmemory_status == "ENABLED", f"Table should have INMEMORY enabled, got: {inmemory_status}"
+            assert inmemory_priority == "HIGH", f"Table should have INMEMORY PRIORITY HIGH, got: {inmemory_priority}"
 
     finally:
         with config.provide_connection() as conn:
@@ -350,7 +355,7 @@ def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT inmemory
+                SELECT inmemory, inmemory_priority
                 FROM user_tables
                 WHERE table_name IN ('ADK_SESSIONS', 'ADK_EVENTS')
                 """
