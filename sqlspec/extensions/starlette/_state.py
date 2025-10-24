@@ -4,13 +4,13 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
 
-__all__ = ("CommitMode", "_ConfigState")
+__all__ = ("CommitMode", "SQLSpecConfigState")
 
 CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
 
 
 @dataclass
-class _ConfigState:
+class SQLSpecConfigState:
     """Internal state for each database configuration.
 
     Tracks all configuration parameters needed for middleware and session management.

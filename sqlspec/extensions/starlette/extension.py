@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.base import SQLSpec
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.starlette._state import _ConfigState
+from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import get_or_create_session
 from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
 from sqlspec.utils.logging import get_logger
@@ -37,7 +37,8 @@ class SQLSpecPlugin:
         from sqlspec.extensions.starlette import SQLSpecPlugin
 
         sqlspec = SQLSpec()
-        config = AsyncpgConfig(
+        sqlspec.add_config(AsyncpgConfig(
+            bind_key="default",
             pool_config={"dsn": "postgresql://localhost/mydb"},
             extension_config={
                 "starlette": {
@@ -45,8 +46,7 @@ class SQLSpecPlugin:
                     "session_key": "db"
                 }
             }
-        )
-        sqlspec.add_config(config, name="default")
+        ))
 
         app = Starlette()
         db_ext = SQLSpecPlugin(sqlspec, app)
@@ -68,7 +68,7 @@ class SQLSpecPlugin:
             app: Optional Starlette application to initialize immediately.
         """
         self._sqlspec = sqlspec
-        self._config_states: list[_ConfigState] = []
+        self._config_states: list[SQLSpecConfigState] = []
 
         for cfg in self._sqlspec.configs.values():
             settings = self._extract_starlette_settings(cfg)
@@ -106,7 +106,7 @@ class SQLSpecPlugin:
             "extra_rollback_statuses": starlette_config.get("extra_rollback_statuses"),
         }
 
-    def _create_config_state(self, config: Any, settings: "dict[str, Any]") -> _ConfigState:
+    def _create_config_state(self, config: Any, settings: "dict[str, Any]") -> SQLSpecConfigState:
         """Create configuration state object.
 
         Args:
@@ -116,7 +116,7 @@ class SQLSpecPlugin:
         Returns:
             Configuration state instance.
         """
-        return _ConfigState(
+        return SQLSpecConfigState(
             config=config,
             connection_key=settings["connection_key"],
             pool_key=settings["pool_key"],
@@ -133,9 +133,6 @@ class SQLSpecPlugin:
 
         Args:
             app: Starlette application instance.
-
-        Raises:
-            ImproperConfigurationError: If duplicate keys found.
         """
         self._validate_unique_keys()
 
@@ -169,7 +166,7 @@ class SQLSpecPlugin:
 
             all_keys.update(keys)
 
-    def _add_middleware(self, app: "Starlette", config_state: _ConfigState) -> None:
+    def _add_middleware(self, app: "Starlette", config_state: SQLSpecConfigState) -> None:
         """Add transaction middleware for configuration.
 
         Args:
@@ -218,9 +215,6 @@ class SQLSpecPlugin:
 
         Returns:
             Database session (driver instance).
-
-        Raises:
-            ValueError: If key specified but not found.
         """
         config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
 
@@ -235,15 +229,12 @@ class SQLSpecPlugin:
 
         Returns:
             Database connection object.
-
-        Raises:
-            ValueError: If key specified but not found.
         """
         config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
 
         return getattr(request.state, config_state.connection_key)
 
-    def _get_config_state_by_key(self, key: str) -> _ConfigState:
+    def _get_config_state_by_key(self, key: str) -> SQLSpecConfigState:
         """Get configuration state by session key.
 
         Args:

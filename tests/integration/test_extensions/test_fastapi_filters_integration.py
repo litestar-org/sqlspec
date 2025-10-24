@@ -1,21 +1,22 @@
 """Integration tests for FastAPI filter dependencies with real HTTP requests."""
 
-from typing import Annotated
+from collections.abc import Generator
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.base import SQLSpec
-from sqlspec.core.filters import FilterTypes
+from sqlspec.core.filters import BeforeAfterFilter, FilterTypes, LimitOffsetFilter
 from sqlspec.extensions.fastapi import SQLSpecPlugin
 from sqlspec.extensions.fastapi.providers import dep_cache
 
 
 @pytest.fixture(autouse=True)
-def _clear_dependency_cache():
+def _clear_dependency_cache() -> Generator[None, None, None]:
     """Clear the dependency cache before each test to prevent test pollution."""
     dep_cache.dependencies.clear()
     yield
@@ -24,25 +25,20 @@ def _clear_dependency_cache():
 
 def test_fastapi_id_filter_dependency() -> None:
     """Test ID filter dependency with actual HTTP request."""
-    sql = SQLSpec()
+    sqlspec = SQLSpec()
     config = AiosqliteConfig(
         pool_config={"database": ":memory:"},
-        extension_config={
-            "starlette": {
-                "commit_mode": "manual",
-                "session_key": "db",
-            }
-        },
+        extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
     )
-    sql.add_config(config)
+    sqlspec.add_config(config)
 
     app = FastAPI()
-    db_ext = SQLSpecPlugin(sql, app=app)
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
 
     @app.get("/users")
     async def list_users(
         filters: Annotated[list[FilterTypes], Depends(db_ext.provide_filters({"id_filter": UUID}))],
-    ):
+    ) -> dict[str, Any]:
         return {"filter_count": len(filters), "filters": [type(f).__name__ for f in filters]}
 
     with TestClient(app) as client:
@@ -63,22 +59,21 @@ def test_fastapi_id_filter_dependency() -> None:
 
 def test_fastapi_search_filter_dependency() -> None:
     """Test search filter dependency with actual HTTP request."""
-    sql = SQLSpec()
+    sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "manual"}},
+        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
     )
-    sql.add_config(config)
+    sqlspec.add_config(config)
 
     app = FastAPI()
-    db_ext = SQLSpecPlugin(sql, app=app)
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
 
     @app.get("/users")
     async def list_users(
-        filters: Annotated[list[FilterTypes], Depends(
-            db_ext.provide_filters({"search": "name,email", "search_ignore_case": True})
-        )],
-    ):
+        filters: Annotated[
+            list[FilterTypes], Depends(db_ext.provide_filters({"search": "name,email", "search_ignore_case": True}))
+        ],
+    ) -> dict[str, Any]:
         return {"filter_count": len(filters), "filters": [type(f).__name__ for f in filters]}
 
     with TestClient(app) as client:
@@ -103,22 +98,19 @@ def test_fastapi_search_filter_dependency() -> None:
 
 def test_fastapi_pagination_filter_dependency() -> None:
     """Test pagination filter dependency with actual HTTP request."""
-    sql = SQLSpec()
+    sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "manual"}},
+        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
     )
-    sql.add_config(config)
+    sqlspec.add_config(config)
 
     app = FastAPI()
-    db_ext = SQLSpecPlugin(sql, app=app)
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
 
     @app.get("/users")
     async def list_users(
         filters: Annotated[list[FilterTypes], Depends(db_ext.provide_filters({"pagination_type": "limit_offset"}))],
-    ):
-        from sqlspec.core.filters import LimitOffsetFilter
-
+    ) -> dict[str, Any]:
         pagination = next((f for f in filters if isinstance(f, LimitOffsetFilter)), None)
         if pagination:
             return {"limit": pagination.limit, "offset": pagination.offset}
@@ -148,20 +140,19 @@ def test_fastapi_pagination_filter_dependency() -> None:
 
 def test_fastapi_order_by_filter_dependency() -> None:
     """Test order by filter dependency with actual HTTP request."""
-    sql = SQLSpec()
+    sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "manual"}},
+        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
     )
-    sql.add_config(config)
+    sqlspec.add_config(config)
 
     app = FastAPI()
-    db_ext = SQLSpecPlugin(sql, app=app)
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
 
     @app.get("/users")
     async def list_users(
         filters: Annotated[list[FilterTypes], Depends(db_ext.provide_filters({"sort_field": "created_at"}))],
-    ):
+    ) -> dict[str, Any]:
         from sqlspec.core.filters import OrderByFilter
 
         order_by = next((f for f in filters if isinstance(f, OrderByFilter)), None)
@@ -193,22 +184,19 @@ def test_fastapi_order_by_filter_dependency() -> None:
 
 def test_fastapi_date_range_filter_dependency() -> None:
     """Test date range filter dependency with actual HTTP request."""
-    sql = SQLSpec()
+    sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "manual"}},
+        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
     )
-    sql.add_config(config)
+    sqlspec.add_config(config)
 
     app = FastAPI()
-    db_ext = SQLSpecPlugin(sql, app=app)
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
 
     @app.get("/users")
     async def list_users(
         filters: Annotated[list[FilterTypes], Depends(db_ext.provide_filters({"created_at": True}))],
-    ):
-        from sqlspec.core.filters import BeforeAfterFilter
-
+    ) -> dict[str, Any]:
         date_filter = next((f for f in filters if isinstance(f, BeforeAfterFilter)), None)
         if date_filter:
             return {
@@ -249,33 +237,27 @@ def test_fastapi_date_range_filter_dependency() -> None:
 
 def test_fastapi_multiple_filters_combined() -> None:
     """Test combining multiple filter types in one request."""
-    sql = SQLSpec()
+    sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "manual"}},
+        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
     )
-    sql.add_config(config)
+    sqlspec.add_config(config)
 
     app = FastAPI()
-    db_ext = SQLSpecPlugin(sql, app=app)
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
 
     @app.get("/users")
     async def list_users(
-        filters: Annotated[list[FilterTypes], Depends(
-            db_ext.provide_filters(
-                {
-                    "id_filter": UUID,
-                    "search": "name",
-                    "pagination_type": "limit_offset",
-                    "sort_field": "created_at",
-                }
-            )
-        )],
-    ):
-        return {
-            "filter_count": len(filters),
-            "filter_types": sorted(type(f).__name__ for f in filters),
-        }
+        filters: Annotated[
+            list[FilterTypes],
+            Depends(
+                db_ext.provide_filters(
+                    {"id_filter": UUID, "search": "name", "pagination_type": "limit_offset", "sort_field": "created_at"}
+                )
+            ),
+        ],
+    ) -> dict[str, Any]:
+        return {"filter_count": len(filters), "filter_types": sorted(type(f).__name__ for f in filters)}
 
     with TestClient(app) as client:
         # All filters provided
@@ -286,12 +268,7 @@ def test_fastapi_multiple_filters_combined() -> None:
         assert response.status_code == 200
         data = response.json()
         assert data["filter_count"] == 4
-        assert set(data["filter_types"]) == {
-            "InCollectionFilter",
-            "SearchFilter",
-            "LimitOffsetFilter",
-            "OrderByFilter",
-        }
+        assert set(data["filter_types"]) == {"InCollectionFilter", "SearchFilter", "LimitOffsetFilter", "OrderByFilter"}
 
         # Partial filters
         response = client.get(f"/users?ids={test_id}")
@@ -303,18 +280,17 @@ def test_fastapi_multiple_filters_combined() -> None:
 
 def test_fastapi_filter_with_actual_query_execution() -> None:
     """Test filters applied to actual SQL query execution."""
-    sql = SQLSpec()
+    sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "autocommit"}},
+        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "autocommit"}}
     )
-    sql.add_config(config)
+    sqlspec.add_config(config)
 
     app = FastAPI()
-    db_ext = SQLSpecPlugin(sql, app=app)
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
 
     @app.post("/setup")
-    async def setup(db=Depends(db_ext.session_dependency())):
+    async def setup(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))]) -> dict[str, Any]:
         await db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
         await db.execute("INSERT INTO users (name, age) VALUES ('Alice', 30)")
         await db.execute("INSERT INTO users (name, age) VALUES ('Bob', 25)")
@@ -323,21 +299,16 @@ def test_fastapi_filter_with_actual_query_execution() -> None:
 
     @app.get("/users")
     async def list_users(
-        db=Depends(db_ext.session_dependency()),
-        filters: list[FilterTypes] = Depends(
-            db_ext.provide_filters({"pagination_type": "limit_offset", "sort_field": "name"})
-        ),
-    ):
-        from sqlspec import sql as _sql
-
-        stmt = _sql("SELECT * FROM users").to_statement()
-
-        # Apply filters
-        for filter_obj in filters:
-            stmt = filter_obj.append_to_statement(stmt)
-
-        result = await db.execute(stmt)
-        return {"users": result.all(), "applied_filters": len(filters)}
+        filters: Annotated[
+            list[FilterTypes],
+            Depends(
+                db_ext.provide_filters({"pagination_type": "limit_offset", "sort_field": "name", "sort_order": "desc"})
+            ),
+        ],
+        db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))],
+    ) -> dict[str, Any]:
+        result = await db.select("SELECT * FROM users", *filters)
+        return {"users": result, "applied_filters": len(filters)}
 
     with TestClient(app) as client:
         # Setup database
@@ -362,28 +333,22 @@ def test_fastapi_filter_with_actual_query_execution() -> None:
 
 def test_fastapi_openapi_schema_includes_filter_params() -> None:
     """Test that OpenAPI schema includes filter query parameters."""
-    sql = SQLSpec()
+    sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "manual"}},
+        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
     )
-    sql.add_config(config)
+    sqlspec.add_config(config)
 
     app = FastAPI()
-    db_ext = SQLSpecPlugin(sql, app=app)
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
 
     @app.get("/users")
     async def list_users(
-        filters: Annotated[list[FilterTypes], Depends(
-            db_ext.provide_filters(
-                {
-                    "id_filter": UUID,
-                    "search": "name",
-                    "pagination_type": "limit_offset",
-                }
-            )
-        )],
-    ):
+        filters: Annotated[
+            list[FilterTypes],
+            Depends(db_ext.provide_filters({"id_filter": UUID, "search": "name", "pagination_type": "limit_offset"})),
+        ],
+    ) -> dict[str, Any]:
         return {"filters": len(filters)}
 
     # Get OpenAPI schema
@@ -402,20 +367,19 @@ def test_fastapi_openapi_schema_includes_filter_params() -> None:
 
 def test_fastapi_filter_validation_error() -> None:
     """Test that invalid filter values return proper validation errors."""
-    sql = SQLSpec()
+    sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "manual"}},
+        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
     )
-    sql.add_config(config)
+    sqlspec.add_config(config)
 
     app = FastAPI()
-    db_ext = SQLSpecPlugin(sql, app=app)
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
 
     @app.get("/users")
     async def list_users(
         filters: Annotated[list[FilterTypes], Depends(db_ext.provide_filters({"created_at": True}))],
-    ):
+    ) -> dict[str, Any]:
         return {"filters": len(filters)}
 
     with TestClient(app) as client:

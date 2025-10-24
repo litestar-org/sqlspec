@@ -7,11 +7,15 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from starlette.requests import Request
 
-    from sqlspec.extensions.starlette._state import _ConfigState
+    from sqlspec.extensions.starlette._state import SQLSpecConfigState
 
 __all__ = ("SQLSpecAutocommitMiddleware", "SQLSpecManualMiddleware")
 
 logger = get_logger("extensions.starlette.middleware")
+
+HTTP_200_OK = 200
+HTTP_300_MULTIPLE_CHOICES = 300
+HTTP_400_BAD_REQUEST = 400
 
 
 class SQLSpecManualMiddleware(BaseHTTPMiddleware):
@@ -21,7 +25,7 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
     No automatic commit or rollback - user code must handle transactions.
     """
 
-    def __init__(self, app: Any, config_state: "_ConfigState") -> None:
+    def __init__(self, app: Any, config_state: "SQLSpecConfigState") -> None:
         """Initialize middleware.
 
         Args:
@@ -46,7 +50,7 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
 
         if config.supports_connection_pooling:
             pool = getattr(request.app.state, self.config_state.pool_key)
-            async with config.provide_connection(pool) as connection:
+            async with config.provide_connection(pool) as connection:  # type: ignore[union-attr]
                 setattr(request.state, connection_key, connection)
                 try:
                     return await call_next(request)
@@ -67,7 +71,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
     Acquires connection, commits on success status codes, rollbacks on error status codes.
     """
 
-    def __init__(self, app: Any, config_state: "_ConfigState", include_redirect: bool = False) -> None:
+    def __init__(self, app: Any, config_state: "SQLSpecConfigState", include_redirect: bool = False) -> None:
         """Initialize middleware.
 
         Args:
@@ -94,7 +98,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
 
         if config.supports_connection_pooling:
             pool = getattr(request.app.state, self.config_state.pool_key)
-            async with config.provide_connection(pool) as connection:
+            async with config.provide_connection(pool) as connection:  # type: ignore[union-attr]
                 setattr(request.state, connection_key, connection)
                 try:
                     response = await call_next(request)
@@ -103,11 +107,11 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
                         await connection.commit()
                     else:
                         await connection.rollback()
-
-                    return response
                 except Exception:
                     await connection.rollback()
                     raise
+                else:
+                    return response
                 finally:
                     delattr(request.state, connection_key)
         else:
@@ -120,11 +124,11 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
                     await connection.commit()
                 else:
                     await connection.rollback()
-
-                return response
             except Exception:
                 await connection.rollback()
                 raise
+            else:
+                return response
             finally:
                 await connection.close()
 
@@ -145,6 +149,6 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
         if status_code in extra_rollback:
             return False
 
-        if 200 <= status_code < 300:
+        if HTTP_200_OK <= status_code < HTTP_300_MULTIPLE_CHOICES:
             return True
-        return bool(self.include_redirect and 300 <= status_code < 400)
+        return bool(self.include_redirect and HTTP_300_MULTIPLE_CHOICES <= status_code < HTTP_400_BAD_REQUEST)

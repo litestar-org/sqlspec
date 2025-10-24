@@ -1,9 +1,11 @@
 """Integration tests for FastAPI extension with real database."""
 
+from typing import Annotated, Any
+
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteConnection, AiosqliteDriver
 from sqlspec.base import SQLSpec
 from sqlspec.extensions.fastapi import SQLSpecPlugin
 
@@ -21,10 +23,9 @@ def test_fastapi_dependency_injection() -> None:
     db_ext = SQLSpecPlugin(sql, app=app)
 
     @app.get("/query")
-    async def query_endpoint(db=Depends(db_ext.session_dependency())):
-        result = await db.execute("SELECT 1 as value")
-        data = result.get_first()
-        return {"value": data["value"]}
+    async def query_endpoint(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))]) -> dict[str, Any]:
+        result = await db.select_value("SELECT 1 as value")
+        return {"value": result}
 
     with TestClient(app) as client:
         response = client.get("/query")
@@ -45,12 +46,14 @@ def test_fastapi_connection_dependency() -> None:
     db_ext = SQLSpecPlugin(sql, app=app)
 
     @app.get("/raw")
-    async def raw_endpoint(conn=Depends(db_ext.connection_dependency())):
+    async def raw_endpoint(
+        conn: Annotated[AiosqliteConnection, Depends(db_ext.provide_connection(config))],
+    ) -> dict[str, Any]:
         cursor = await conn.cursor()
         await cursor.execute("SELECT 42 as answer")
         row = await cursor.fetchone()
         await cursor.close()
-        return {"answer": row[0]}
+        return {"answer": row[0] if row else "No Data"}
 
     with TestClient(app) as client:
         response = client.get("/raw")
@@ -71,14 +74,17 @@ def test_fastapi_manual_commit() -> None:
     db_ext = SQLSpecPlugin(sql, app=app)
 
     @app.post("/create")
-    async def create_table(db=Depends(db_ext.session_dependency()), conn=Depends(db_ext.connection_dependency())):
+    async def create_table(
+        db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))],
+        conn: Annotated[AiosqliteConnection, Depends(db_ext.provide_connection(config))],
+    ) -> dict[str, Any]:
         await db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
         await db.execute("INSERT INTO test (name) VALUES (:name)", {"name": "FastAPI"})
         await conn.commit()
         return {"created": True}
 
     @app.get("/data")
-    async def get_data(db=Depends(db_ext.session_dependency())):
+    async def get_data(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))]) -> dict[str, Any]:
         result = await db.execute("SELECT * FROM test")
         rows = result.all()
         return {"count": len(rows), "rows": rows}
@@ -106,13 +112,13 @@ def test_fastapi_autocommit_mode() -> None:
     db_ext = SQLSpecPlugin(sql, app=app)
 
     @app.post("/create")
-    async def create_table(db=Depends(db_ext.session_dependency())):
+    async def create_table(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))]) -> dict[str, Any]:
         await db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
         await db.execute("INSERT INTO test (name) VALUES (:name)", {"name": "AutoCommit"})
         return {"created": True}
 
     @app.get("/data")
-    async def get_data(db=Depends(db_ext.session_dependency())):
+    async def get_data(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))]) -> dict[str, Any]:
         result = await db.execute("SELECT * FROM test")
         rows = result.all()
         return {"count": len(rows)}
@@ -139,7 +145,10 @@ def test_fastapi_session_caching_across_dependencies() -> None:
     db_ext = SQLSpecPlugin(sql, app=app)
 
     @app.get("/check")
-    async def check_caching(db1=Depends(db_ext.session_dependency()), db2=Depends(db_ext.session_dependency())):
+    async def check_caching(
+        db1: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))],
+        db2: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))],
+    ) -> dict[str, Any]:
         return {"same_session": db1 is db2}
 
     with TestClient(app) as client:
@@ -161,7 +170,10 @@ def test_fastapi_complex_route_with_multiple_queries() -> None:
     db_ext = SQLSpecPlugin(sql, app=app)
 
     @app.post("/setup")
-    async def setup(db=Depends(db_ext.session_dependency()), conn=Depends(db_ext.connection_dependency())):
+    async def setup(
+        db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))],
+        conn: Annotated[Any, Depends(db_ext.provide_connection(config))],
+    ) -> dict[str, Any]:
         await db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
         await db.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT)")
 
@@ -179,11 +191,11 @@ def test_fastapi_complex_route_with_multiple_queries() -> None:
         return {"setup": True}
 
     @app.get("/stats")
-    async def get_stats(db=Depends(db_ext.session_dependency())):
-        users = await db.execute("SELECT COUNT(*) as count FROM users")
-        posts = await db.execute("SELECT COUNT(*) as count FROM posts")
+    async def get_stats(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))]) -> dict[str, Any]:
+        users = await db.select_value("SELECT COUNT(*) as count FROM users")
+        posts = await db.select_value("SELECT COUNT(*) as count FROM posts")
 
-        user_posts = await db.execute(
+        user_posts = await db.select(
             """
             SELECT u.name, COUNT(p.id) as post_count
             FROM users u
@@ -192,11 +204,7 @@ def test_fastapi_complex_route_with_multiple_queries() -> None:
             """
         )
 
-        return {
-            "total_users": users.get_first()["count"],
-            "total_posts": posts.get_first()["count"],
-            "user_posts": user_posts.all(),
-        }
+        return {"total_users": users, "total_posts": posts, "user_posts": user_posts}
 
     with TestClient(app) as client:
         response = client.post("/setup")
@@ -223,9 +231,9 @@ def test_fastapi_inherits_starlette_behavior() -> None:
     db_ext = SQLSpecPlugin(sql, app=app)
 
     @app.get("/test")
-    async def test_endpoint(db=Depends(db_ext.session_dependency())):
-        result = await db.execute("SELECT 1 as value")
-        return {"value": result.get_first()["value"]}
+    async def test_endpoint(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))]) -> dict[str, Any]:
+        result = await db.select_one("SELECT 1 as value")
+        return {"value": result["value"]}
 
     with TestClient(app) as client:
         response = client.get("/test")

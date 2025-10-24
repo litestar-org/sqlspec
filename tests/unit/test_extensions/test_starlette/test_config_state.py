@@ -2,14 +2,14 @@
 
 from unittest.mock import MagicMock
 
-from sqlspec.extensions.starlette._state import _ConfigState
+from sqlspec.extensions.starlette._state import SQLSpecConfigState
 
 
 def test_config_state_creation() -> None:
     """Test _ConfigState dataclass creation."""
     mock_config = MagicMock()
 
-    state = _ConfigState(
+    state = SQLSpecConfigState(
         config=mock_config,
         connection_key="db_connection",
         pool_key="db_pool",
@@ -34,7 +34,7 @@ def test_config_state_with_extra_statuses() -> None:
     extra_commit = {201, 202}
     extra_rollback = {409, 418}
 
-    state = _ConfigState(
+    state = SQLSpecConfigState(
         config=mock_config,
         connection_key="conn",
         pool_key="pool",
@@ -53,7 +53,7 @@ def test_config_state_commit_modes() -> None:
     mock_config = MagicMock()
 
     for mode in ["manual", "autocommit", "autocommit_include_redirect"]:
-        state = _ConfigState(
+        state = SQLSpecConfigState(
             config=mock_config,
             connection_key="conn",
             pool_key="pool",

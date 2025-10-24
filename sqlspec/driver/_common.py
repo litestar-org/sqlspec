@@ -412,50 +412,86 @@ class CommonDriverAttributesMixin:
         Returns:
             Prepared SQL statement
         """
+        from sqlspec.utils.type_guards import is_statement_filter
+
         kwargs = kwargs or {}
+
+        filters: list[StatementFilter] = []
+        data_parameters: list[StatementParameters] = []
+
+        for param in parameters:
+            if is_statement_filter(param):
+                filters.append(param)
+            else:
+                data_parameters.append(param)
 
         if isinstance(statement, QueryBuilder):
             sql_statement = statement.to_statement(statement_config)
-            if parameters or kwargs:
+            if data_parameters or kwargs:
                 merged_parameters = (
-                    (*sql_statement.positional_parameters, *parameters)
-                    if parameters
+                    (*sql_statement.positional_parameters, *tuple(data_parameters))
+                    if data_parameters
                     else sql_statement.positional_parameters
                 )
-                return SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+                sql_statement = SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+
+            for filter_obj in filters:
+                sql_statement = filter_obj.append_to_statement(sql_statement)
+
             return sql_statement
+
         if isinstance(statement, SQL):
-            if parameters or kwargs:
+            sql_statement = statement
+
+            if data_parameters or kwargs:
                 merged_parameters = (
-                    (*statement.positional_parameters, *parameters) if parameters else statement.positional_parameters
+                    (*sql_statement.positional_parameters, *tuple(data_parameters))
+                    if data_parameters
+                    else sql_statement.positional_parameters
                 )
-                return SQL(statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
-            needs_rebuild = False
+                sql_statement = SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+            else:
+                needs_rebuild = False
 
-            if statement_config.dialect and (
-                not statement.statement_config.dialect or statement.statement_config.dialect != statement_config.dialect
-            ):
-                needs_rebuild = True
+                if statement_config.dialect and (
+                    not sql_statement.statement_config.dialect
+                    or sql_statement.statement_config.dialect != statement_config.dialect
+                ):
+                    needs_rebuild = True
 
-            if (
-                statement.statement_config.parameter_config.default_execution_parameter_style
-                != statement_config.parameter_config.default_execution_parameter_style
-            ):
-                needs_rebuild = True
+                if (
+                    sql_statement.statement_config.parameter_config.default_execution_parameter_style
+                    != statement_config.parameter_config.default_execution_parameter_style
+                ):
+                    needs_rebuild = True
 
-            if needs_rebuild:
-                sql_text = statement.raw_sql or statement.sql
+                if needs_rebuild:
+                    sql_text = sql_statement.raw_sql or sql_statement.sql
 
-                if statement.is_many and statement.parameters:
-                    new_sql = SQL(sql_text, statement.parameters, statement_config=statement_config, is_many=True)
-                elif statement.named_parameters:
-                    new_sql = SQL(sql_text, statement_config=statement_config, **statement.named_parameters)
-                else:
-                    new_sql = SQL(sql_text, *statement.positional_parameters, statement_config=statement_config)
+                    if sql_statement.is_many and sql_statement.parameters:
+                        sql_statement = SQL(
+                            sql_text, sql_statement.parameters, statement_config=statement_config, is_many=True
+                        )
+                    elif sql_statement.named_parameters:
+                        sql_statement = SQL(
+                            sql_text, statement_config=statement_config, **sql_statement.named_parameters
+                        )
+                    else:
+                        sql_statement = SQL(
+                            sql_text, *sql_statement.positional_parameters, statement_config=statement_config
+                        )
 
-                return new_sql
-            return statement
-        return SQL(statement, *parameters, statement_config=statement_config, **kwargs)
+            for filter_obj in filters:
+                sql_statement = filter_obj.append_to_statement(sql_statement)
+
+            return sql_statement
+
+        sql_statement = SQL(statement, *tuple(data_parameters), statement_config=statement_config, **kwargs)
+
+        for filter_obj in filters:
+            sql_statement = filter_obj.append_to_statement(sql_statement)
+
+        return sql_statement
 
     def split_script_statements(
         self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False

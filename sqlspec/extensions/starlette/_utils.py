@@ -3,12 +3,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from starlette.requests import Request
 
-    from sqlspec.extensions.starlette._state import _ConfigState
+    from sqlspec.extensions.starlette._state import SQLSpecConfigState
 
 __all__ = ("get_connection_from_request", "get_or_create_session")
 
 
-def get_connection_from_request(request: "Request", config_state: "_ConfigState") -> Any:
+def get_connection_from_request(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Get database connection from request state.
 
     Args:
@@ -17,14 +17,11 @@ def get_connection_from_request(request: "Request", config_state: "_ConfigState"
 
     Returns:
         Database connection object.
-
-    Raises:
-        AttributeError: If connection not found in request state.
     """
     return getattr(request.state, config_state.connection_key)
 
 
-def get_or_create_session(request: "Request", config_state: "_ConfigState") -> Any:
+def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Get or create database session for request.
 
     Sessions are cached per request to ensure the same session instance

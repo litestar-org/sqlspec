@@ -1,7 +1,8 @@
 """Integration tests for Starlette extension with real database."""
 
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
@@ -20,7 +21,7 @@ def test_starlette_basic_query() -> None:
     sql.add_config(config)
     db_ext = SQLSpecPlugin(sql)
 
-    async def homepage(request):
+    async def homepage(request: Request) -> Response:
         session = db_ext.get_session(request)
         result = await session.execute("SELECT 1 as value")
         data = result.get_first()
@@ -45,7 +46,7 @@ def test_starlette_manual_commit_mode() -> None:
     sql.add_config(config)
     db_ext = SQLSpecPlugin(sql)
 
-    async def create_table(request):
+    async def create_table(request: Request) -> Response:
         session = db_ext.get_session(request)
         await session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
         await session.execute("INSERT INTO test (name) VALUES (:name)", {"name": "Alice"})
@@ -53,7 +54,7 @@ def test_starlette_manual_commit_mode() -> None:
         await connection.commit()
         return JSONResponse({"created": True})
 
-    async def get_data(request):
+    async def get_data(request: Request) -> Response:
         session = db_ext.get_session(request)
         result = await session.execute("SELECT * FROM test")
         rows = result.all()
@@ -81,13 +82,13 @@ def test_starlette_autocommit_mode() -> None:
     sql.add_config(config)
     db_ext = SQLSpecPlugin(sql)
 
-    async def create_table(request):
+    async def create_table(request: Request) -> Response:
         session = db_ext.get_session(request)
         await session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
         await session.execute("INSERT INTO test (name) VALUES (:name)", {"name": "Bob"})
         return JSONResponse({"created": True})
 
-    async def get_data(request):
+    async def get_data(request: Request) -> Response:
         session = db_ext.get_session(request)
         result = await session.execute("SELECT * FROM test")
         rows = result.all()
@@ -115,13 +116,13 @@ def test_starlette_autocommit_rolls_back_on_error() -> None:
     sql.add_config(config)
     db_ext = SQLSpecPlugin(sql)
 
-    async def create_table(request):
+    async def create_table(request: Request) -> Response:
         session = db_ext.get_session(request)
         await session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
         await session.execute("INSERT INTO test (name) VALUES (:name)", {"name": "Charlie"})
         return JSONResponse({"error": "Failed"}, status_code=500)
 
-    async def get_data(request):
+    async def get_data(request: Request) -> Response:
         session = db_ext.get_session(request)
         try:
             result = await session.execute("SELECT * FROM test")
@@ -152,7 +153,7 @@ def test_starlette_session_caching() -> None:
     sql.add_config(config)
     db_ext = SQLSpecPlugin(sql)
 
-    async def check_session_caching(request):
+    async def check_session_caching(request: Request) -> Response:
         session1 = db_ext.get_session(request)
         session2 = db_ext.get_session(request)
         return JSONResponse({"same_session": session1 is session2})
@@ -176,7 +177,7 @@ def test_starlette_connection_pool_lifecycle() -> None:
     sql.add_config(config)
     db_ext = SQLSpecPlugin(sql)
 
-    async def test_query(request):
+    async def test_query(request: Request) -> Response:
         session = db_ext.get_session(request)
         result = await session.execute("SELECT 1 as value")
         return JSONResponse({"value": result.get_first()["value"]})

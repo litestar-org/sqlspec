@@ -14,14 +14,14 @@ from sqlspec.core.filters import (
 from sqlspec.extensions.fastapi.providers import DependencyDefaults, FieldNameType, FilterConfig, provide_filters
 
 
-def test_provide_filters_returns_callable():
+def test_provide_filters_returns_callable() -> None:
     """Test provide_filters returns a callable."""
     config: FilterConfig = {"id_filter": UUID}
     result = provide_filters(config)
     assert callable(result)
 
 
-def test_provide_filters_empty_config_returns_empty_list():
+def test_provide_filters_empty_config_returns_empty_list() -> None:
     """Test provide_filters with empty config returns function that returns empty list."""
     config: FilterConfig = {}
     provider = provide_filters(config)
@@ -29,7 +29,7 @@ def test_provide_filters_empty_config_returns_empty_list():
     assert filters == []
 
 
-def test_provide_filters_id_filter():
+def test_provide_filters_id_filter() -> None:
     """Test ID filter generation."""
     config: FilterConfig = {"id_filter": UUID}
     provider = provide_filters(config)
@@ -50,7 +50,7 @@ def test_provide_filters_id_filter():
     assert filters[0].values == test_ids
 
 
-def test_provide_filters_custom_id_field():
+def test_provide_filters_custom_id_field() -> None:
     """Test ID filter with custom field name."""
     config: FilterConfig = {"id_filter": int, "id_field": "user_id"}
     provider = provide_filters(config)
@@ -58,10 +58,10 @@ def test_provide_filters_custom_id_field():
     test_ids = [1, 2, 3]
     filters = provider(id_filter=InCollectionFilter(field_name="user_id", values=test_ids))
     assert len(filters) == 1
-    assert filters[0].field_name == "user_id"
+    assert filters[0].field_name == "user_id"  # type: ignore[union-attr]
 
 
-def test_provide_filters_created_at():
+def test_provide_filters_created_at() -> None:
     """Test created_at filter generation."""
     config: FilterConfig = {"created_at": True}
     provider = provide_filters(config)
@@ -82,16 +82,16 @@ def test_provide_filters_created_at():
     after_dt = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
     filters = provider(created_filter=BeforeAfterFilter(field_name="created_at", before=None, after=after_dt))
     assert len(filters) == 1
-    assert filters[0].after == after_dt
+    assert filters[0].after == after_dt  # type: ignore[union-attr]
 
     # Both dates
     filters = provider(created_filter=BeforeAfterFilter(field_name="created_at", before=before_dt, after=after_dt))
     assert len(filters) == 1
-    assert filters[0].before == before_dt
-    assert filters[0].after == after_dt
+    assert filters[0].before == before_dt  # type: ignore[union-attr]
+    assert filters[0].after == after_dt  # type: ignore[union-attr]
 
 
-def test_provide_filters_updated_at():
+def test_provide_filters_updated_at() -> None:
     """Test updated_at filter generation."""
     config: FilterConfig = {"updated_at": True}
     provider = provide_filters(config)
@@ -103,7 +103,7 @@ def test_provide_filters_updated_at():
     assert filters[0].field_name == "updated_at"
 
 
-def test_provide_filters_pagination():
+def test_provide_filters_pagination() -> None:
     """Test pagination filter generation."""
     config: FilterConfig = {"pagination_type": "limit_offset"}
     provider = provide_filters(config)
@@ -117,23 +117,23 @@ def test_provide_filters_pagination():
 
     # Page 2
     filters = provider(limit_offset_filter=LimitOffsetFilter(limit=20, offset=20))
-    assert filters[0].offset == 20
+    assert filters[0].offset == 20  # type: ignore[union-attr]
 
     # Custom page size
     filters = provider(limit_offset_filter=LimitOffsetFilter(limit=50, offset=0))
-    assert filters[0].limit == 50
+    assert filters[0].limit == 50  # type: ignore[union-attr]
 
 
-def test_provide_filters_custom_pagination_size():
+def test_provide_filters_custom_pagination_size() -> None:
     """Test pagination with custom default size."""
     config: FilterConfig = {"pagination_type": "limit_offset", "pagination_size": 50}
     provider = provide_filters(config)
 
     filters = provider(limit_offset_filter=LimitOffsetFilter(limit=50, offset=0))
-    assert filters[0].limit == 50
+    assert filters[0].limit == 50  # type: ignore[union-attr]
 
 
-def test_provide_filters_search_string():
+def test_provide_filters_search_string() -> None:
     """Test search filter generation with string fields."""
     config: FilterConfig = {"search": "name,email"}
     provider = provide_filters(config)
@@ -151,7 +151,7 @@ def test_provide_filters_search_string():
     assert filters[0].ignore_case is False
 
 
-def test_provide_filters_search_set():
+def test_provide_filters_search_set() -> None:
     """Test search filter generation with set of fields."""
     config: FilterConfig = {"search": {"name", "email", "username"}}
     provider = provide_filters(config)
@@ -160,20 +160,20 @@ def test_provide_filters_search_set():
         search_filter=SearchFilter(field_name={"name", "email", "username"}, value="john", ignore_case=False)
     )
     assert len(filters) == 1
-    assert filters[0].field_name == {"name", "email", "username"}
+    assert filters[0].field_name == {"name", "email", "username"}  # type: ignore[union-attr]
 
 
-def test_provide_filters_search_ignore_case():
+def test_provide_filters_search_ignore_case() -> None:
     """Test search filter with case insensitive flag."""
     config: FilterConfig = {"search": "name", "search_ignore_case": True}
     provider = provide_filters(config)
 
     filters = provider(search_filter=SearchFilter(field_name={"name"}, value="JOHN", ignore_case=True))
     assert len(filters) == 1
-    assert filters[0].ignore_case is True
+    assert filters[0].ignore_case is True  # type: ignore[union-attr]
 
 
-def test_provide_filters_order_by():
+def test_provide_filters_order_by() -> None:
     """Test order by filter generation."""
     config: FilterConfig = {"sort_field": "created_at"}
     provider = provide_filters(config)
@@ -187,19 +187,19 @@ def test_provide_filters_order_by():
 
     # Ascending order
     filters = provider(order_by_filter=OrderByFilter(field_name="created_at", sort_order="asc"))
-    assert filters[0].sort_order == "asc"
+    assert filters[0].sort_order == "asc"  # type: ignore[union-attr]
 
 
-def test_provide_filters_custom_sort_order():
+def test_provide_filters_custom_sort_order() -> None:
     """Test order by with custom default sort order."""
     config: FilterConfig = {"sort_field": "name", "sort_order": "asc"}
     provider = provide_filters(config)
 
     filters = provider(order_by_filter=OrderByFilter(field_name="name", sort_order="asc"))
-    assert filters[0].sort_order == "asc"
+    assert filters[0].sort_order == "asc"  # type: ignore[union-attr]
 
 
-def test_provide_filters_in_fields():
+def test_provide_filters_in_fields() -> None:
     """Test in-collection filter generation."""
     config: FilterConfig = {"in_fields": FieldNameType(name="status", type_hint=str)}
     provider = provide_filters(config)
@@ -216,7 +216,7 @@ def test_provide_filters_in_fields():
     assert filters[0].values == ["active", "pending"]
 
 
-def test_provide_filters_not_in_fields():
+def test_provide_filters_not_in_fields() -> None:
     """Test not-in-collection filter generation."""
     config: FilterConfig = {"not_in_fields": FieldNameType(name="status", type_hint=str)}
     provider = provide_filters(config)
@@ -228,7 +228,7 @@ def test_provide_filters_not_in_fields():
     assert filters[0].values == ["deleted", "archived"]
 
 
-def test_provide_filters_multiple_in_fields():
+def test_provide_filters_multiple_in_fields() -> None:
     """Test multiple in-collection filters."""
     config: FilterConfig = {
         "in_fields": {FieldNameType(name="status", type_hint=str), FieldNameType(name="role", type_hint=str)}
@@ -242,7 +242,7 @@ def test_provide_filters_multiple_in_fields():
     assert len(filters) == 2
 
 
-def test_provide_filters_combined():
+def test_provide_filters_combined() -> None:
     """Test combining multiple filter types."""
     config: FilterConfig = {
         "id_filter": UUID,
@@ -269,7 +269,7 @@ def test_provide_filters_combined():
     assert filter_types == {InCollectionFilter, SearchFilter, LimitOffsetFilter, OrderByFilter, BeforeAfterFilter}
 
 
-def test_provide_filters_caching():
+def test_provide_filters_caching() -> None:
     """Test that identical configs return cached dependencies."""
     config: FilterConfig = {"id_filter": UUID, "search": "name"}
 
@@ -280,7 +280,7 @@ def test_provide_filters_caching():
     assert provider1 is provider2
 
 
-def test_provide_filters_custom_defaults():
+def test_provide_filters_custom_defaults() -> None:
     """Test custom dependency defaults."""
     custom_defaults = DependencyDefaults()
     custom_defaults.DEFAULT_PAGINATION_SIZE = 100
@@ -293,17 +293,17 @@ def test_provide_filters_custom_defaults():
     assert callable(provider)
 
 
-def test_field_name_type_defaults():
+def test_field_name_type_defaults() -> None:
     """Test FieldNameType default type hint."""
     field = FieldNameType(name="test")
     assert field.name == "test"
-    assert field.type_hint == str
+    assert field.type_hint is str
 
     field_int = FieldNameType(name="count", type_hint=int)
-    assert field_int.type_hint == int
+    assert field_int.type_hint is int
 
 
-def test_provide_filters_filters_none_values():
+def test_provide_filters_filters_none_values() -> None:
     """Test that None filter values are excluded from results."""
     config: FilterConfig = {"id_filter": UUID, "search": "name", "created_at": True}
     provider = provide_filters(config)
@@ -318,17 +318,17 @@ def test_provide_filters_filters_none_values():
     assert isinstance(filters[0], InCollectionFilter)
 
 
-def test_provide_filters_search_without_value_excluded():
+def test_provide_filters_search_without_value_excluded() -> None:
     """Test that search filters without values are excluded."""
     config: FilterConfig = {"search": "name"}
     provider = provide_filters(config)
 
     # SearchFilter with None value should be excluded
-    filters = provider(search_filter=SearchFilter(field_name={"name"}, value=None, ignore_case=False))
+    filters = provider(search_filter=SearchFilter(field_name={"name"}, value=None, ignore_case=False))  # type: ignore[arg-type]
     assert filters == []
 
 
-def test_provide_filters_order_by_without_field_excluded():
+def test_provide_filters_order_by_without_field_excluded() -> None:
     """Test that order by filters without field names are excluded."""
     config: FilterConfig = {"sort_field": "created_at"}
     provider = provide_filters(config)

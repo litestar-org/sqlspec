@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sqlspec.extensions.starlette._state import _ConfigState
+from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import get_connection_from_request, get_or_create_session
 
 
@@ -14,7 +14,7 @@ def test_get_connection_from_request() -> None:
     mock_connection = MagicMock()
     mock_config = MagicMock()
 
-    config_state = _ConfigState(
+    config_state = SQLSpecConfigState(
         config=mock_config,
         connection_key="db_connection",
         pool_key="db_pool",
@@ -37,7 +37,7 @@ def test_get_connection_from_request_raises_when_missing() -> None:
     mock_config = MagicMock()
     mock_request.state = MagicMock(spec=[])
 
-    config_state = _ConfigState(
+    config_state = SQLSpecConfigState(
         config=mock_config,
         connection_key="db_connection",
         pool_key="db_pool",
@@ -62,7 +62,7 @@ def test_get_or_create_session_creates_new_session() -> None:
     mock_config.statement_config = {"test": "config"}
     mock_config.driver_features = {"feature": True}
 
-    config_state = _ConfigState(
+    config_state = SQLSpecConfigState(
         config=mock_config,
         connection_key="db_connection",
         pool_key="db_pool",
@@ -95,7 +95,7 @@ def test_get_or_create_session_returns_cached_session() -> None:
     mock_config.statement_config = {}
     mock_config.driver_features = {}
 
-    config_state = _ConfigState(
+    config_state = SQLSpecConfigState(
         config=mock_config,
         connection_key="db_connection",
         pool_key="db_pool",
@@ -125,7 +125,7 @@ def test_get_or_create_session_uses_unique_cache_key() -> None:
     mock_config.statement_config = {}
     mock_config.driver_features = {}
 
-    config_state = _ConfigState(
+    config_state = SQLSpecConfigState(
         config=mock_config,
         connection_key="db_connection",
         pool_key="db_pool",

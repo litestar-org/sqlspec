@@ -191,7 +191,7 @@ def provide_filters(
 
     has_filters = False
     for key in filter_keys:
-        value = config.get(key)  # type: ignore[misc]
+        value = config.get(key)
         if value is not None and value is not False and value != []:
             has_filters = True
             break
@@ -221,12 +221,12 @@ def _make_hashable(value: Any) -> HashableType:
     """
     if isinstance(value, dict):
         items = []
-        for k in sorted(value.keys()):  # type: ignore[attr-defined]
-            v = value[k]  # type: ignore[index]
+        for k in sorted(value.keys()):
+            v = value[k]
             items.append((str(k), _make_hashable(v)))
         return tuple(items)
     if isinstance(value, (list, set)):
-        hashable_items = [_make_hashable(item) for item in value]  # type: ignore[union-attr]
+        hashable_items = [_make_hashable(item) for item in value]
         filtered_items = [item for item in hashable_items if item is not None]
         return tuple(sorted(filtered_items, key=str))
     if isinstance(value, (str, int, float, bool, type(None))):
@@ -249,13 +249,10 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
     params: list[inspect.Parameter] = []
     annotations: dict[str, Any] = {}
 
-    if (id_filter := config.get("id_filter", False)) is not False:
+    if config.get("id_filter", False) is not False:
 
-        def provide_id_filter(  # type: ignore[misc]
-            ids: Annotated[  # type: ignore[misc]
-                list[id_filter] | None,  # type: ignore[valid-type,name-defined]
-                Query(alias="ids", description="IDs to filter by."),
-            ] = None,
+        def provide_id_filter(
+            ids: Annotated[list[Any] | None, Query(alias="ids", description="IDs to filter by.")] = None,
         ) -> InCollectionFilter[Any] | None:
             return InCollectionFilter(field_name=config.get("id_field", "id"), values=ids) if ids else None
 
@@ -263,11 +260,11 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
             inspect.Parameter(
                 name=dep_defaults.ID_FILTER_DEPENDENCY_KEY,
                 kind=inspect.Parameter.KEYWORD_ONLY,
-                annotation=Annotated["InCollectionFilter[Any] | None", Depends(provide_id_filter)],  # type: ignore[misc]
+                annotation=Annotated["InCollectionFilter[Any] | None", Depends(provide_id_filter)],
             )
         )
         annotations[dep_defaults.ID_FILTER_DEPENDENCY_KEY] = Annotated[
-            "InCollectionFilter[Any] | None", Depends(provide_id_filter)  # type: ignore[misc]
+            "InCollectionFilter[Any] | None", Depends(provide_id_filter)
         ]
 
     if config.get("created_at", False):
@@ -322,10 +319,10 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
             inspect.Parameter(
                 name=param_name,
                 kind=inspect.Parameter.KEYWORD_ONLY,
-                annotation=Annotated["BeforeAfterFilter | None", Depends(provide_created_at_filter)],  # type: ignore[misc]
+                annotation=Annotated["BeforeAfterFilter | None", Depends(provide_created_at_filter)],
             )
         )
-        annotations[param_name] = Annotated["BeforeAfterFilter | None", Depends(provide_created_at_filter)]  # type: ignore[misc]
+        annotations[param_name] = Annotated["BeforeAfterFilter | None", Depends(provide_created_at_filter)]
 
     if config.get("updated_at", False):
 
@@ -379,10 +376,10 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
             inspect.Parameter(
                 name=param_name,
                 kind=inspect.Parameter.KEYWORD_ONLY,
-                annotation=Annotated["BeforeAfterFilter | None", Depends(provide_updated_at_filter)],  # type: ignore[misc]
+                annotation=Annotated["BeforeAfterFilter | None", Depends(provide_updated_at_filter)],
             )
         )
-        annotations[param_name] = Annotated["BeforeAfterFilter | None", Depends(provide_updated_at_filter)]  # type: ignore[misc]
+        annotations[param_name] = Annotated["BeforeAfterFilter | None", Depends(provide_updated_at_filter)]
 
     if config.get("pagination_type") == "limit_offset":
 
@@ -401,10 +398,10 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
             inspect.Parameter(
                 name=param_name,
                 kind=inspect.Parameter.KEYWORD_ONLY,
-                annotation=Annotated[LimitOffsetFilter, Depends(provide_limit_offset_pagination)],  # type: ignore[misc]
+                annotation=Annotated[LimitOffsetFilter, Depends(provide_limit_offset_pagination)],
             )
         )
-        annotations[param_name] = Annotated[LimitOffsetFilter, Depends(provide_limit_offset_pagination)]  # type: ignore[misc]
+        annotations[param_name] = Annotated[LimitOffsetFilter, Depends(provide_limit_offset_pagination)]
 
     if search_fields := config.get("search"):
 
@@ -417,11 +414,7 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
             field_names = set(search_fields.split(",")) if isinstance(search_fields, str) else search_fields
 
             return (
-                SearchFilter(
-                    field_name=field_names,
-                    value=search_string,  # type: ignore[arg-type]
-                    ignore_case=ignore_case or False,
-                )
+                SearchFilter(field_name=field_names, value=search_string, ignore_case=ignore_case or False)
                 if search_string
                 else None
             )
@@ -431,18 +424,17 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
             inspect.Parameter(
                 name=param_name,
                 kind=inspect.Parameter.KEYWORD_ONLY,
-                annotation=Annotated["SearchFilter | None", Depends(provide_search_filter)],  # type: ignore[misc]
+                annotation=Annotated["SearchFilter | None", Depends(provide_search_filter)],
             )
         )
-        annotations[param_name] = Annotated["SearchFilter | None", Depends(provide_search_filter)]  # type: ignore[misc]
+        annotations[param_name] = Annotated["SearchFilter | None", Depends(provide_search_filter)]
 
     if sort_field := config.get("sort_field"):
         sort_order_default = config.get("sort_order", "desc")
+        default_field = sort_field if isinstance(sort_field, str) else next(iter(sort_field))
 
         def provide_order_by(
-            field_name: Annotated[str, Query(alias="orderBy", description="Field to order by.")] = sort_field
-            if isinstance(sort_field, str)
-            else next(iter(sort_field)),  # type: ignore[assignment,arg-type]
+            field_name: Annotated[str, Query(alias="orderBy", description="Field to order by.")] = default_field,
             sort_order: Annotated[
                 SortOrder | None, Query(alias="sortOrder", description="Sort order ('asc' or 'desc').")
             ] = sort_order_default,
@@ -454,21 +446,21 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
             inspect.Parameter(
                 name=param_name,
                 kind=inspect.Parameter.KEYWORD_ONLY,
-                annotation=Annotated[OrderByFilter, Depends(provide_order_by)],  # type: ignore[misc]
+                annotation=Annotated[OrderByFilter, Depends(provide_order_by)],
             )
         )
-        annotations[param_name] = Annotated[OrderByFilter, Depends(provide_order_by)]  # type: ignore[misc]
+        annotations[param_name] = Annotated[OrderByFilter, Depends(provide_order_by)]
 
     if not_in_fields := config.get("not_in_fields"):
         not_in_fields = {not_in_fields} if isinstance(not_in_fields, (str, FieldNameType)) else not_in_fields
         for field_def in not_in_fields:
 
-            def create_not_in_filter_provider(  # type: ignore[misc]
+            def create_not_in_filter_provider(
                 field_name: FieldNameType = field_def,
             ) -> "Callable[..., NotInCollectionFilter[Any] | None]":
-                def provide_not_in_filter(  # type: ignore[misc]
-                    values: Annotated[  # type: ignore[misc]
-                        "set[field_name.type_hint] | None",  # type: ignore[valid-type]
+                def provide_not_in_filter(
+                    values: Annotated[
+                        set[Any] | None,
                         Query(
                             alias=camelize(f"{field_name.name}_not_in"),
                             description=f"Filter {field_name.name} not in values",
@@ -477,29 +469,29 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
                 ) -> "NotInCollectionFilter[Any] | None":
                     return NotInCollectionFilter(field_name=field_name.name, values=values) if values else None
 
-                return provide_not_in_filter  # type: ignore[return-value]
+                return provide_not_in_filter
 
-            provider = create_not_in_filter_provider()
+            not_in_provider = create_not_in_filter_provider()
             param_name = f"{field_def.name}_not_in_filter"
             params.append(
                 inspect.Parameter(
                     name=param_name,
                     kind=inspect.Parameter.KEYWORD_ONLY,
-                    annotation=Annotated["NotInCollectionFilter[Any] | None", Depends(provider)],  # type: ignore[misc]
+                    annotation=Annotated["NotInCollectionFilter[Any] | None", Depends(not_in_provider)],
                 )
             )
-            annotations[param_name] = Annotated["NotInCollectionFilter[Any] | None", Depends(provider)]  # type: ignore[misc]
+            annotations[param_name] = Annotated["NotInCollectionFilter[Any] | None", Depends(not_in_provider)]
 
     if in_fields := config.get("in_fields"):
         in_fields = {in_fields} if isinstance(in_fields, (str, FieldNameType)) else in_fields
         for field_def in in_fields:
 
-            def create_in_filter_provider(  # type: ignore[misc]
+            def create_in_filter_provider(
                 field_name: FieldNameType = field_def,
             ) -> "Callable[..., InCollectionFilter[Any] | None]":
-                def provide_in_filter(  # type: ignore[misc]
-                    values: Annotated[  # type: ignore[misc]
-                        "set[field_name.type_hint] | None",  # type: ignore[valid-type]
+                def provide_in_filter(
+                    values: Annotated[
+                        set[Any] | None,
                         Query(
                             alias=camelize(f"{field_name.name}_in"), description=f"Filter {field_name.name} in values"
                         ),
@@ -507,22 +499,21 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
                 ) -> "InCollectionFilter[Any] | None":
                     return InCollectionFilter(field_name=field_name.name, values=values) if values else None
 
-                return provide_in_filter  # type: ignore[return-value]
+                return provide_in_filter
 
-            provider = create_in_filter_provider()
+            in_provider = create_in_filter_provider()
             param_name = f"{field_def.name}_in_filter"
             params.append(
                 inspect.Parameter(
                     name=param_name,
                     kind=inspect.Parameter.KEYWORD_ONLY,
-                    annotation=Annotated["InCollectionFilter[Any] | None", Depends(provider)],  # type: ignore[misc]
+                    annotation=Annotated["InCollectionFilter[Any] | None", Depends(in_provider)],
                 )
             )
-            annotations[param_name] = Annotated["InCollectionFilter[Any] | None", Depends(provider)]  # type: ignore[misc]
+            annotations[param_name] = Annotated["InCollectionFilter[Any] | None", Depends(in_provider)]
 
     _aggregate_filter_function.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
-        parameters=params,
-        return_annotation=Annotated["list[FilterTypes]", _aggregate_filter_function],  # type: ignore[misc]
+        parameters=params, return_annotation=Annotated["list[FilterTypes]", _aggregate_filter_function]
     )
 
     return _aggregate_filter_function
@@ -542,11 +533,11 @@ def _aggregate_filter_function(**kwargs: Any) -> "list[FilterTypes]":
         if filter_value is None:
             continue
         if isinstance(filter_value, list):
-            filters.extend(filter_value)  # type: ignore[arg-type]
+            filters.extend(filter_value)
         elif (isinstance(filter_value, SearchFilter) and filter_value.value is None) or (
             isinstance(filter_value, OrderByFilter) and filter_value.field_name is None
         ):
             continue
         else:
-            filters.append(filter_value)  # type: ignore[arg-type]
+            filters.append(filter_value)
     return filters
