@@ -201,6 +201,49 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 - **MANDATORY**: Use function-based pytest tests, NOT class-based tests
 - **PROHIBITED**: Class-based test organization (TestSomething classes)
 
+### Test Isolation Patterns for Pooled Connections
+
+When writing integration tests for framework extensions or pooled database connections, ensure proper test isolation to prevent parallel test execution failures.
+
+**Problem**: Using `:memory:` databases with connection pooling causes test failures when pytest-xdist runs tests in parallel. The shared in-memory database persists tables across tests, causing "table already exists" errors.
+
+**Root Cause**: AioSQLite config auto-converts `:memory:` to `file::memory:?cache=shared` for pooling support, which creates a single shared database instance across all connections in the pool.
+
+**Solution**: Use unique temporary database files per test instead of `:memory:`:
+
+```python
+import tempfile
+
+def test_starlette_autocommit_mode() -> None:
+    """Test autocommit mode automatically commits on success."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(
+            pool_config={"database": tmp.name},
+            extension_config={"starlette": {"commit_mode": "autocommit"}}
+        )
+        sql.add_config(config)
+        db_ext = SQLSpecPlugin(sql, app)
+
+        # Test logic here - each test gets isolated database
+```
+
+**Why this works**:
+- Each test creates a unique temporary file
+- No database state shared between tests
+- Tests can run in parallel safely with `pytest -n 2 --dist=loadgroup`
+- Files automatically deleted on test completion
+
+**When to use**:
+- Framework extension tests (Starlette, FastAPI, Flask, etc.)
+- Any test using connection pooling with SQLite
+- Integration tests that run in parallel
+
+**Alternatives NOT recommended**:
+- `CREATE TABLE IF NOT EXISTS` - Masks test isolation issues
+- Disabling pooling - Tests don't reflect production configuration
+- Running tests serially - Slows down CI significantly
+
 ### Performance Optimizations
 
 - **Mypyc Compilation**: Core modules can be compiled with mypyc for performance
@@ -1687,29 +1730,34 @@ mysql_db = db_ext.get_session(request, key="mysql_db")
 **Example integration test**:
 
 ```python
+import tempfile
+
 def test_starlette_autocommit_mode() -> None:
     """Test autocommit mode automatically commits on success."""
-    sql = SQLSpec()
-    config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "autocommit"}}
-    )
-    sql.add_config(config)
-    db_ext = SQLSpecPlugin(sql)
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(
+            pool_config={"database": tmp.name},
+            extension_config={"starlette": {"commit_mode": "autocommit"}}
+        )
+        sql.add_config(config)
+        db_ext = SQLSpecPlugin(sql)
 
-    async def create_table(request):
-        session = db_ext.get_session(request)
-        await session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
-        await session.execute("INSERT INTO test (name) VALUES (:name)", {"name": "Bob"})
-        return JSONResponse({"created": True})
+        async def create_table(request):
+            session = db_ext.get_session(request)
+            await session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
+            await session.execute("INSERT INTO test (name) VALUES (:name)", {"name": "Bob"})
+            return JSONResponse({"created": True})
 
-    app = Starlette(routes=[Route("/create", create_table)])
-    db_ext.init_app(app)
+        app = Starlette(routes=[Route("/create", create_table)])
+        db_ext.init_app(app)
 
-    with TestClient(app) as client:
-        response = client.get("/create")
-        assert response.status_code == 200
+        with TestClient(app) as client:
+            response = client.get("/create")
+            assert response.status_code == 200
 ```
+
+**Note**: Use `tempfile.NamedTemporaryFile` for test isolation when testing with connection pooling. See "Test Isolation Patterns for Pooled Connections" section for details.
 
 ### Documentation Requirements
 
