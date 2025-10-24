@@ -31,6 +31,7 @@ __all__ = (
     "MigrationConfig",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
+    "StarletteConfig",
     "SyncConfigT",
     "SyncDatabaseConfig",
 )
@@ -124,6 +125,61 @@ class LitestarConfig(TypedDict):
 
     extra_rollback_statuses: NotRequired[set[int]]
     """Additional HTTP status codes that trigger rollback. Default: set()"""
+
+
+class StarletteConfig(TypedDict):
+    """Configuration options for Starlette and FastAPI extensions.
+
+    All fields are optional with sensible defaults. Use in extension_config["starlette"]:
+
+    Example:
+        from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+        config = AsyncpgConfig(
+            pool_config={"dsn": "postgresql://localhost/mydb"},
+            extension_config={
+                "starlette": {
+                    "commit_mode": "autocommit",
+                    "session_key": "db"
+                }
+            }
+        )
+
+    Notes:
+        Both Starlette and FastAPI extensions use the "starlette" key.
+        This TypedDict provides type safety for extension config.
+    """
+
+    connection_key: NotRequired[str]
+    """Key for storing connection in request.state. Default: 'db_connection'"""
+
+    pool_key: NotRequired[str]
+    """Key for storing connection pool in app.state. Default: 'db_pool'"""
+
+    session_key: NotRequired[str]
+    """Key for storing session in request.state. Default: 'db_session'"""
+
+    commit_mode: NotRequired[Literal["manual", "autocommit", "autocommit_include_redirect"]]
+    """Transaction commit mode. Default: 'manual'
+
+    - manual: No automatic commit/rollback
+    - autocommit: Commit on 2xx, rollback otherwise
+    - autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise
+    """
+
+    extra_commit_statuses: NotRequired[set[int]]
+    """Additional HTTP status codes that trigger commit. Default: set()
+
+    Example:
+        extra_commit_statuses={201, 202}
+    """
+
+    extra_rollback_statuses: NotRequired[set[int]]
+    """Additional HTTP status codes that trigger rollback. Default: set()
+
+    Example:
+        extra_rollback_statuses={409}
+    """
 
 
 class ADKConfig(TypedDict):

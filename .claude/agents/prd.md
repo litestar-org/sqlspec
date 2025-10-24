@@ -1,5 +1,5 @@
 ---
-name: planner
+name: prd
 description: Multi-session planning agent for complex SQLSpec development spanning multiple files, adapters, and features
 tools: mcp__zen__planner, mcp__context7__resolve-library-id, mcp__context7__get-library-docs, WebSearch, mcp__zen__consensus, Read, Glob, Grep
 model: sonnet
