@@ -116,7 +116,7 @@ class PsqlpyAsyncDataDictionary(AsyncDataDictionaryBase):
     async def get_columns(
         self, driver: AsyncDriverAdapterBase, table: str, schema: "str | None" = None
     ) -> "list[dict[str, Any]]":
-        """Get column information for a table using information_schema.
+        """Get column information for a table using pg_catalog.
 
         Args:
             driver: Psqlpy async driver instance
@@ -129,25 +129,32 @@ class PsqlpyAsyncDataDictionary(AsyncDataDictionaryBase):
                 - data_type: PostgreSQL data type
                 - is_nullable: Whether column allows NULL (YES/NO)
                 - column_default: Default value if any
+
+        Notes:
+            Uses pg_catalog instead of information_schema to avoid psqlpy's
+            inability to handle the PostgreSQL 'name' type returned by information_schema.
         """
         psqlpy_driver = cast("PsqlpyDriver", driver)
 
-        if schema:
-            sql = f"""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = '{table}' AND table_schema = '{schema}'
-                ORDER BY ordinal_position
-            """
-        else:
-            sql = f"""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = '{table}' AND table_schema = 'public'
-                ORDER BY ordinal_position
-            """
+        schema_name = schema or "public"
+        sql = """
+            SELECT
+                a.attname::text AS column_name,
+                pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+                pg_catalog.pg_get_expr(d.adbin, d.adrelid)::text AS column_default
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
+            JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+            LEFT JOIN pg_catalog.pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+            WHERE c.relname = $1
+                AND n.nspname = $2
+                AND a.attnum > 0
+                AND NOT a.attisdropped
+            ORDER BY a.attnum
+        """
 
-        result = await psqlpy_driver.execute(sql)
+        result = await psqlpy_driver.execute(sql, (table, schema_name))
         return result.data or []
 
     def list_available_features(self) -> "list[str]":
