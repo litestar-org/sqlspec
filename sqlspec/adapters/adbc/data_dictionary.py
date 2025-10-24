@@ -300,22 +300,44 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 for row in result.data or []
             ]
 
-        if schema:
-            sql = f"""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = '{table}' AND table_schema = '{schema}'
-                ORDER BY ordinal_position
+        if dialect == "postgres":
+            schema_name = schema or "public"
+            sql = """
+                SELECT
+                    a.attname::text AS column_name,
+                    pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+                    CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+                    pg_catalog.pg_get_expr(d.adbin, d.adrelid)::text AS column_default
+                FROM pg_catalog.pg_attribute a
+                JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
+                JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+                LEFT JOIN pg_catalog.pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+                WHERE c.relname = ?
+                    AND n.nspname = ?
+                    AND a.attnum > 0
+                    AND NOT a.attisdropped
+                ORDER BY a.attnum
             """
-        else:
-            sql = f"""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = '{table}'
-                ORDER BY ordinal_position
-            """
+            result = adbc_driver.execute(sql, (table, schema_name))
+            return result.data or []
 
-        result = adbc_driver.execute(sql)
+        if schema:
+            sql = """
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = ? AND table_schema = ?
+                ORDER BY ordinal_position
+            """
+            result = adbc_driver.execute(sql, (table, schema))
+        else:
+            sql = """
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = ?
+                ORDER BY ordinal_position
+            """
+            result = adbc_driver.execute(sql, (table,))
+
         return result.data or []
 
     def list_available_features(self) -> "list[str]":

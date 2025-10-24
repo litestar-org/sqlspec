@@ -8,9 +8,9 @@ import decimal
 import re
 from typing import TYPE_CHECKING, Any, Final
 
-import psqlpy
 import psqlpy.exceptions
 
+from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLTypeConverter
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
@@ -269,17 +269,16 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         Returns:
             ExecutionResult with script execution metadata
+
+        Notes:
+            Uses execute() with empty parameters for each statement instead of execute_batch().
+            execute_batch() uses simple query protocol which can break subsequent queries
+            that rely on extended protocol (e.g., information_schema queries with name type).
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statement_config = statement.statement_config
-
-        if not prepared_parameters:
-            await cursor.execute_batch(sql)
-            statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
-            return self.create_execution_result(
-                cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
-            )
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+
         successful_count = 0
         last_result = None
 
@@ -421,7 +420,5 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             Data dictionary instance for metadata queries
         """
         if self._data_dictionary is None:
-            from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
-
             self._data_dictionary = PsqlpyAsyncDataDictionary()
         return self._data_dictionary

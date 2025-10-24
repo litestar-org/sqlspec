@@ -1,6 +1,6 @@
 """Psycopg ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from psycopg import errors
 from psycopg import sql as pg_sql
@@ -11,8 +11,6 @@ from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from datetime import datetime
-
-    from psycopg.abc import Query
 
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 

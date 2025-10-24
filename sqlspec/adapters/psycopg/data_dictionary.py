@@ -122,7 +122,7 @@ class PostgresSyncDataDictionary(SyncDataDictionaryBase):
     def get_columns(
         self, driver: SyncDriverAdapterBase, table: str, schema: "str | None" = None
     ) -> "list[dict[str, Any]]":
-        """Get column information for a table using information_schema.
+        """Get column information for a table using pg_catalog.
 
         Args:
             driver: Psycopg sync driver instance
@@ -135,25 +135,32 @@ class PostgresSyncDataDictionary(SyncDataDictionaryBase):
                 - data_type: PostgreSQL data type
                 - is_nullable: Whether column allows NULL (YES/NO)
                 - column_default: Default value if any
+
+        Notes:
+            Uses pg_catalog instead of information_schema to avoid potential
+            issues with PostgreSQL 'name' type in some drivers.
         """
         psycopg_driver = cast("PsycopgSyncDriver", driver)
 
-        if schema:
-            sql = f"""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = '{table}' AND table_schema = '{schema}'
-                ORDER BY ordinal_position
-            """
-        else:
-            sql = f"""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = '{table}' AND table_schema = 'public'
-                ORDER BY ordinal_position
-            """
+        schema_name = schema or "public"
+        sql = """
+            SELECT
+                a.attname::text AS column_name,
+                pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+                pg_catalog.pg_get_expr(d.adbin, d.adrelid)::text AS column_default
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
+            JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+            LEFT JOIN pg_catalog.pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+            WHERE c.relname = %s
+                AND n.nspname = %s
+                AND a.attnum > 0
+                AND NOT a.attisdropped
+            ORDER BY a.attnum
+        """
 
-        result = psycopg_driver.execute(sql)
+        result = psycopg_driver.execute(sql, (table, schema_name))
         return result.data or []
 
     def list_available_features(self) -> "list[str]":
@@ -275,7 +282,7 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
     async def get_columns(
         self, driver: AsyncDriverAdapterBase, table: str, schema: "str | None" = None
     ) -> "list[dict[str, Any]]":
-        """Get column information for a table using information_schema.
+        """Get column information for a table using pg_catalog.
 
         Args:
             driver: Psycopg async driver instance
@@ -288,25 +295,32 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
                 - data_type: PostgreSQL data type
                 - is_nullable: Whether column allows NULL (YES/NO)
                 - column_default: Default value if any
+
+        Notes:
+            Uses pg_catalog instead of information_schema to avoid potential
+            issues with PostgreSQL 'name' type in some drivers.
         """
         psycopg_driver = cast("PsycopgAsyncDriver", driver)
 
-        if schema:
-            sql = f"""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = '{table}' AND table_schema = '{schema}'
-                ORDER BY ordinal_position
-            """
-        else:
-            sql = f"""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = '{table}' AND table_schema = 'public'
-                ORDER BY ordinal_position
-            """
+        schema_name = schema or "public"
+        sql = """
+            SELECT
+                a.attname::text AS column_name,
+                pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+                pg_catalog.pg_get_expr(d.adbin, d.adrelid)::text AS column_default
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
+            JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+            LEFT JOIN pg_catalog.pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+            WHERE c.relname = %s
+                AND n.nspname = %s
+                AND a.attnum > 0
+                AND NOT a.attisdropped
+            ORDER BY a.attnum
+        """
 
-        result = await psycopg_driver.execute(sql)
+        result = await psycopg_driver.execute(sql, (table, schema_name))
         return result.data or []
 
     def list_available_features(self) -> "list[str]":
