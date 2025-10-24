@@ -8,7 +8,7 @@ from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.config import BigQueryConfig
@@ -102,7 +102,7 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
             return f"`{self._dataset_id}.{table_name}`"
         return f"`{table_name}`"
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         """Get BigQuery CREATE TABLE SQL for sessions.
 
         Returns:
@@ -136,7 +136,7 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         CLUSTER BY app_name, user_id
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         """Get BigQuery CREATE TABLE SQL for events.
 
         Returns:
@@ -193,9 +193,9 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
 
     def _create_tables(self) -> None:
         """Synchronous implementation of create_tables."""
-        with self._config.provide_connection() as conn:
-            conn.query(self._get_create_sessions_table_sql()).result()
-            conn.query(self._get_create_events_table_sql()).result()
+        with self._config.provide_session() as driver:
+            driver.execute_script(run_(self._get_create_sessions_table_sql)())
+            driver.execute_script(run_(self._get_create_events_table_sql)())
         logger.debug("Created BigQuery ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_tables(self) -> None:

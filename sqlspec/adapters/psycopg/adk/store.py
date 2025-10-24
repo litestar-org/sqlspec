@@ -1,6 +1,6 @@
 """Psycopg ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from psycopg import errors
 from psycopg import sql as pg_sql
@@ -11,8 +11,6 @@ from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from datetime import datetime
-
-    from psycopg.abc import Query
 
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
@@ -84,7 +82,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         """
         super().__init__(config)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.
 
         Returns:
@@ -125,7 +123,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             WHERE state != '{{}}'::jsonb;
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for events.
 
         Returns:
@@ -181,9 +179,9 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(cast("Query", self._get_create_sessions_table_sql()))
-            await cur.execute(cast("Query", self._get_create_events_table_sql()))
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(await self._get_create_sessions_table_sql())
+            await driver.execute_script(await self._get_create_events_table_sql())
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(
@@ -626,9 +624,9 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
 
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(cast("Query", self._get_create_sessions_table_sql()))
-            cur.execute(cast("Query", self._get_create_events_table_sql()))
+        with self._config.provide_session() as driver:
+            driver.execute_script(self._get_create_sessions_table_sql())
+            driver.execute_script(self._get_create_events_table_sql())
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     def create_session(

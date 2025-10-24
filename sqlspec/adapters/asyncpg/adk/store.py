@@ -84,7 +84,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
         super().__init__(config)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for sessions.
 
         Returns:
@@ -125,7 +125,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             WHERE state != '{{}}'::jsonb;
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for events.
 
         Returns:
@@ -181,9 +181,9 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
-        async with self.config.provide_connection() as conn:
-            await conn.execute(self._get_create_sessions_table_sql())
-            await conn.execute(self._get_create_events_table_sql())
+        async with self.config.provide_session() as driver:
+            await driver.execute_script(await self._get_create_sessions_table_sql())
+            await driver.execute_script(await self._get_create_events_table_sql())
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(

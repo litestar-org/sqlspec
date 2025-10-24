@@ -40,8 +40,7 @@ class LitestarConfig(TypedDict):
     in_memory: NotRequired[bool]
     """Enable in-memory table storage (Oracle-specific). Default: False.
 
-    When enabled, tables are created with the INMEMORY clause for Oracle Database,
-    which stores table data in columnar format in memory for faster query performance.
+    When enabled, tables are created with the in-memory attribute for databases that support it.
 
     This is an Oracle-specific feature that requires:
         - Oracle Database 12.1.0.2 or higher
@@ -62,8 +61,6 @@ class LitestarConfig(TypedDict):
             )
 
     Notes:
-        - Improves query performance for session lookups (10-100x faster)
-        - Tables created with INMEMORY clause
-        - Requires Oracle Database In-Memory option license
-        - Ignored by non-Oracle adapters
+        - Tables created with INMEMORY PRIORITY HIGH clause
+        - Ignored by unsupported adapters
     """

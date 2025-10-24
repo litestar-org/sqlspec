@@ -106,7 +106,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         return (col_def, fk_constraint)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for sessions.
 
         Returns:
@@ -145,7 +145,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for events.
 
         Returns:
@@ -199,9 +199,9 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(self._get_create_sessions_table_sql())
-            await cursor.execute(self._get_create_events_table_sql())
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(await self._get_create_sessions_table_sql())
+            await driver.execute_script(await self._get_create_events_table_sql())
         logger.debug("Created ADK tables: %s, %s", self._session_table, self._events_table)
 
     async def create_session(

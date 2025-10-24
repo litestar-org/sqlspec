@@ -116,16 +116,31 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             - session_table: Sessions table name (default: "adk_sessions")
             - events_table: Events table name (default: "adk_events")
             - owner_id_column: Optional owner FK column DDL (default: None)
-            - in_memory: Enable INMEMORY clause (default: False)
+            - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
         """
         super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
 
-        if hasattr(config, "extension_config") and config.extension_config:
-            adk_config = config.extension_config.get("adk", {})
-            self._in_memory: bool = bool(adk_config.get("in_memory", False))
-        else:
-            self._in_memory = False
+        adk_config = config.extension_config.get("adk", {})
+        self._in_memory: bool = bool(adk_config.get("in_memory", False))
+
+    async def _get_create_sessions_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for sessions table.
+
+        Auto-detects optimal JSON storage type based on Oracle version.
+        Result is cached to minimize database queries.
+        """
+        storage_type = await self._detect_json_storage_type()
+        return self._get_create_sessions_table_sql_for_type(storage_type)
+
+    async def _get_create_events_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for events table.
+
+        Auto-detects optimal JSON storage type based on Oracle version.
+        Result is cached to minimize database queries.
+        """
+        storage_type = await self._detect_json_storage_type()
+        return self._get_create_events_table_sql_for_type(storage_type)
 
     async def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
@@ -292,7 +307,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             state_column = "state BLOB NOT NULL"
 
         owner_id_column_sql = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        inmemory_clause = " INMEMORY" if self._in_memory else ""
+        inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
 
         return f"""
         BEGIN
@@ -363,7 +378,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 long_running_tool_ids_json BLOB
             """
 
-        inmemory_clause = " INMEMORY" if self._in_memory else ""
+        inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
 
         return f"""
         BEGIN
@@ -396,89 +411,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         BEGIN
             EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
                 ON {self._events_table}(session_id, timestamp ASC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
-
-    def _get_create_sessions_table_sql(self) -> str:
-        """Get Oracle CREATE TABLE SQL for sessions.
-
-        Returns:
-            SQL statement to create adk_sessions table with indexes.
-
-        Notes:
-            - VARCHAR2(128) for IDs and names
-            - CLOB with IS JSON constraint for state storage
-            - TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
-            - SYSTIMESTAMP for default current timestamp
-            - Composite index on (app_name, user_id) for listing
-            - Index on update_time DESC for recent session queries
-        """
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._session_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                state CLOB CHECK (state IS JSON),
-                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            )';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
-
-    def _get_create_events_table_sql(self) -> str:
-        """Get Oracle CREATE TABLE SQL for events (legacy method).
-
-        Returns:
-            SQL statement to create adk_events table with indexes.
-
-        Notes:
-            DEPRECATED: Use _get_create_events_table_sql_for_type() instead.
-            This method uses BLOB with IS JSON constraints (12c+ compatible).
-
-            - VARCHAR2 sizes: id(128), session_id(128), invocation_id(256), author(256),
-              branch(256), error_code(256), error_message(1024)
-            - BLOB for pickled actions
-            - BLOB with IS JSON for all JSON fields (content, grounding_metadata,
-              custom_metadata, long_running_tool_ids_json)
-            - NUMBER(1) for partial, turn_complete, interrupted
-            - Foreign key to sessions with CASCADE delete
-            - Index on (session_id, timestamp ASC) for ordered event retrieval
-        """
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                session_id VARCHAR2(128) NOT NULL,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                invocation_id VARCHAR2(256),
-                author VARCHAR2(256),
-                actions BLOB,
-                branch VARCHAR2(256),
-                timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                content BLOB CHECK (content IS JSON),
-                grounding_metadata BLOB CHECK (grounding_metadata IS JSON),
-                custom_metadata BLOB CHECK (custom_metadata IS JSON),
-                long_running_tool_ids_json BLOB CHECK (long_running_tool_ids_json IS JSON),
-                partial NUMBER(1),
-                turn_complete NUMBER(1),
-                interrupted NUMBER(1),
-                error_code VARCHAR2(256),
-                error_message VARCHAR2(1024),
-                CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
-                    REFERENCES {self._session_table}(id) ON DELETE CASCADE
-            )';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -561,8 +493,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         logger.info("Creating ADK tables with storage type: %s", storage_type)
 
         async with self._config.provide_session() as driver:
-            sessions_sql = SQL(self._get_create_sessions_table_sql_for_type(storage_type))
-            await driver.execute_script(sessions_sql)
+            await driver.execute_script(self._get_create_sessions_table_sql_for_type(storage_type))
 
             await driver.execute_script(self._get_create_events_table_sql_for_type(storage_type))
 
@@ -953,16 +884,31 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             - session_table: Sessions table name (default: "adk_sessions")
             - events_table: Events table name (default: "adk_events")
             - owner_id_column: Optional owner FK column DDL (default: None)
-            - in_memory: Enable INMEMORY clause (default: False)
+            - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
         """
         super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
 
-        if hasattr(config, "extension_config") and config.extension_config:
-            adk_config = config.extension_config.get("adk", {})
-            self._in_memory: bool = bool(adk_config.get("in_memory", False))
-        else:
-            self._in_memory = False
+        adk_config = config.extension_config.get("adk", {})
+        self._in_memory: bool = bool(adk_config.get("in_memory", False))
+
+    def _get_create_sessions_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for sessions table.
+
+        Auto-detects optimal JSON storage type based on Oracle version.
+        Result is cached to minimize database queries.
+        """
+        storage_type = self._detect_json_storage_type()
+        return self._get_create_sessions_table_sql_for_type(storage_type)
+
+    def _get_create_events_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for events table.
+
+        Auto-detects optimal JSON storage type based on Oracle version.
+        Result is cached to minimize database queries.
+        """
+        storage_type = self._detect_json_storage_type()
+        return self._get_create_events_table_sql_for_type(storage_type)
 
     def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
@@ -1129,7 +1075,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             state_column = "state BLOB NOT NULL"
 
         owner_id_column_sql = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        inmemory_clause = " INMEMORY" if self._in_memory else ""
+        inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
 
         return f"""
         BEGIN
@@ -1200,7 +1146,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 long_running_tool_ids_json BLOB
             """
 
-        inmemory_clause = " INMEMORY" if self._in_memory else ""
+        inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
 
         return f"""
         BEGIN
@@ -1233,89 +1179,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         BEGIN
             EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
                 ON {self._events_table}(session_id, timestamp ASC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
-
-    def _get_create_sessions_table_sql(self) -> str:
-        """Get Oracle CREATE TABLE SQL for sessions.
-
-        Returns:
-            SQL statement to create adk_sessions table with indexes.
-
-        Notes:
-            - VARCHAR2(128) for IDs and names
-            - CLOB with IS JSON constraint for state storage
-            - TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
-            - SYSTIMESTAMP for default current timestamp
-            - Composite index on (app_name, user_id) for listing
-            - Index on update_time DESC for recent session queries
-        """
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._session_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                state CLOB CHECK (state IS JSON),
-                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            )';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
-
-    def _get_create_events_table_sql(self) -> str:
-        """Get Oracle CREATE TABLE SQL for events (legacy method).
-
-        Returns:
-            SQL statement to create adk_events table with indexes.
-
-        Notes:
-            DEPRECATED: Use _get_create_events_table_sql_for_type() instead.
-            This method uses BLOB with IS JSON constraints (12c+ compatible).
-
-            - VARCHAR2 sizes: id(128), session_id(128), invocation_id(256), author(256),
-              branch(256), error_code(256), error_message(1024)
-            - BLOB for pickled actions
-            - BLOB with IS JSON for all JSON fields (content, grounding_metadata,
-              custom_metadata, long_running_tool_ids_json)
-            - NUMBER(1) for partial, turn_complete, interrupted
-            - Foreign key to sessions with CASCADE delete
-            - Index on (session_id, timestamp ASC) for ordered event retrieval
-        """
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                session_id VARCHAR2(128) NOT NULL,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                invocation_id VARCHAR2(256),
-                author VARCHAR2(256),
-                actions BLOB,
-                branch VARCHAR2(256),
-                timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                content BLOB CHECK (content IS JSON),
-                grounding_metadata BLOB CHECK (grounding_metadata IS JSON),
-                custom_metadata BLOB CHECK (custom_metadata IS JSON),
-                long_running_tool_ids_json BLOB CHECK (long_running_tool_ids_json IS JSON),
-                partial NUMBER(1),
-                turn_complete NUMBER(1),
-                interrupted NUMBER(1),
-                error_code VARCHAR2(256),
-                error_message VARCHAR2(1024),
-                CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
-                    REFERENCES {self._session_table}(id) ON DELETE CASCADE
-            )';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN

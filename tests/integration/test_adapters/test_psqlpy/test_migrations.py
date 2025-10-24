@@ -63,7 +63,7 @@ def down():
 
             async with config.provide_session() as driver:
                 result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+                    f"SELECT c.relname::text AS table_name FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid WHERE n.nspname = 'public' AND c.relname = '{users_table}' AND c.relkind = 'r'"
                 )
                 assert len(result.data) == 1
 
@@ -80,7 +80,7 @@ def down():
 
             async with config.provide_session() as driver:
                 result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+                    f"SELECT c.relname::text AS table_name FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid WHERE n.nspname = 'public' AND c.relname = '{users_table}' AND c.relkind = 'r'"
                 )
                 assert len(result.data) == 0
         finally:
@@ -157,10 +157,10 @@ def down():
 
             async with config.provide_session() as driver:
                 users_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+                    f"SELECT c.relname::text AS table_name FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid WHERE n.nspname = 'public' AND c.relname = '{users_table}' AND c.relkind = 'r'"
                 )
                 posts_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{posts_table}'"
+                    f"SELECT c.relname::text AS table_name FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid WHERE n.nspname = 'public' AND c.relname = '{posts_table}' AND c.relkind = 'r'"
                 )
                 assert len(users_result.data) == 1
                 assert len(posts_result.data) == 1
@@ -177,10 +177,10 @@ def down():
 
             async with config.provide_session() as driver:
                 users_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+                    f"SELECT c.relname::text AS table_name FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid WHERE n.nspname = 'public' AND c.relname = '{users_table}' AND c.relkind = 'r'"
                 )
                 posts_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{posts_table}'"
+                    f"SELECT c.relname::text AS table_name FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid WHERE n.nspname = 'public' AND c.relname = '{posts_table}' AND c.relkind = 'r'"
                 )
                 assert len(users_result.data) == 1
                 assert len(posts_result.data) == 0
@@ -189,7 +189,7 @@ def down():
 
             async with config.provide_session() as driver:
                 users_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('{users_table}', '{posts_table}')"
+                    f"SELECT c.relname::text AS table_name FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid WHERE n.nspname = 'public' AND c.relname IN ('{users_table}', '{posts_table}') AND c.relkind = 'r'"
                 )
                 assert len(users_result.data) == 0
         finally:

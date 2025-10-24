@@ -108,9 +108,14 @@ async def test_table_has_owner_id_column(psqlpy_store_with_fk: PsqlpyADKStore) -
     async with config.provide_connection() as conn:
         result = await conn.fetch(
             """
-            SELECT column_name, data_type, is_nullable
-            FROM information_schema.columns
-            WHERE table_name = $1 AND column_name = $2
+            SELECT
+                a.attname::text AS column_name,
+                pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
+            JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+            WHERE c.relname = $1 AND n.nspname = 'public' AND a.attname = $2 AND a.attnum > 0 AND NOT a.attisdropped
             """,
             ["test_sessions_fk", "tenant_id"],
         )

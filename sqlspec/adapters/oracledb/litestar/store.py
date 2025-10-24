@@ -50,12 +50,13 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
     Notes:
         Configuration is read from config.extension_config["litestar"]:
         - session_table: Session table name (default: "litestar_session")
-        - in_memory: Enable INMEMORY clause (default: False, Oracle-specific)
+        - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False, Oracle-specific)
 
-        When in_memory=True, the table is created with INMEMORY clause for
-        faster read operations. This requires Oracle Database 12.1.0.2+ with the
-        Database In-Memory option licensed. If In-Memory is not available, the
-        table creation will fail with ORA-00439 or ORA-62142.
+        When in_memory=True, the table is created with INMEMORY PRIORITY HIGH clause for
+        faster read operations. PRIORITY HIGH ensures the table is populated into the
+        In-Memory column store at database startup for immediate performance benefits.
+        This requires Oracle Database 12.1.0.2+ with the Database In-Memory option licensed.
+        If In-Memory is not available, the table creation will fail with ORA-00439 or ORA-62142.
     """
 
     __slots__ = ("_in_memory",)
@@ -73,11 +74,8 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """
         super().__init__(config)
 
-        if hasattr(config, "extension_config") and config.extension_config:
-            litestar_config = config.extension_config.get("litestar", {})
-            self._in_memory: bool = bool(litestar_config.get("in_memory", False))
-        else:
-            self._in_memory = False
+        litestar_config = config.extension_config.get("litestar", {})
+        self._in_memory = bool(litestar_config.get("in_memory", False))
 
     def _get_create_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema.
@@ -91,9 +89,10 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             - BLOB type for data storage (Oracle native binary type)
             - Audit columns (created_at, updated_at) help with debugging
             - Table name is internally controlled, not user input (S608 suppressed)
-            - INMEMORY clause added when in_memory=True for faster reads
+            - INMEMORY PRIORITY HIGH clause added when in_memory=True for faster reads
+            - HIGH priority ensures table population at database startup
         """
-        inmemory_clause = "INMEMORY" if self._in_memory else ""
+        inmemory_clause = "INMEMORY PRIORITY HIGH" if self._in_memory else ""
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
@@ -419,12 +418,13 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     Notes:
         Configuration is read from config.extension_config["litestar"]:
         - session_table: Session table name (default: "litestar_session")
-        - in_memory: Enable INMEMORY clause (default: False, Oracle-specific)
+        - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False, Oracle-specific)
 
-        When in_memory=True, the table is created with INMEMORY clause for
-        faster read operations. This requires Oracle Database 12.1.0.2+ with the
-        Database In-Memory option licensed. If In-Memory is not available, the
-        table creation will fail with ORA-00439 or ORA-62142.
+        When in_memory=True, the table is created with INMEMORY PRIORITY HIGH clause for
+        faster read operations. PRIORITY HIGH ensures the table is populated into the
+        In-Memory column store at database startup for immediate performance benefits.
+        This requires Oracle Database 12.1.0.2+ with the Database In-Memory option licensed.
+        If In-Memory is not available, the table creation will fail with ORA-00439 or ORA-62142.
     """
 
     __slots__ = ("_in_memory",)
@@ -442,11 +442,8 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """
         super().__init__(config)
 
-        if hasattr(config, "extension_config") and config.extension_config:
-            litestar_config = config.extension_config.get("litestar", {})
-            self._in_memory: bool = bool(litestar_config.get("in_memory", False))
-        else:
-            self._in_memory = False
+        litestar_config = config.extension_config.get("litestar", {})
+        self._in_memory = bool(litestar_config.get("in_memory", False))
 
     def _get_create_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema.
@@ -460,9 +457,10 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             - BLOB type for data storage (Oracle native binary type)
             - Audit columns (created_at, updated_at) help with debugging
             - Table name is internally controlled, not user input (S608 suppressed)
-            - INMEMORY clause added when in_memory=True for faster reads
+            - INMEMORY PRIORITY HIGH clause added when in_memory=True for faster reads
+            - HIGH priority ensures table population at database startup
         """
-        inmemory_clause = "INMEMORY" if self._in_memory else ""
+        inmemory_clause = "INMEMORY PRIORITY HIGH" if self._in_memory else ""
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
