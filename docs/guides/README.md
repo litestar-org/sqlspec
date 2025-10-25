@@ -4,7 +4,16 @@ orphan: true
 
 # SQLSpec Development Guides
 
-Comprehensive guides for developing with and contributing to SQLSpec.
+**Canonical guides for both human developers and AI coding assistants** (Claude, Gemini, Codex, etc.)
+
+These guides serve as the **single source of truth** for SQLSpec architecture, patterns, and best practices.
+
+## Purpose
+
+- For **developers**: Contributing to SQLSpec, implementing features, understanding architecture
+- For **AI agents**: Implementing features, fixing bugs, maintaining code quality
+
+See [AGENTS.md](../../AGENTS.md) for agent coordination workflows and code quality standards.
 
 ## Adapters
 

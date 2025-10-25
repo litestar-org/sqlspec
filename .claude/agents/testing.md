@@ -3,6 +3,9 @@ name: testing
 description: Comprehensive testing specialist for SQLSpec - creates unit tests, integration tests, fixtures, and validates test coverage across all database adapters
 tools: mcp__context7__resolve-library-id, mcp__context7__get-library-docs, Read, Write, Edit, Bash, Glob, Grep
 model: sonnet
+standards_uri: ../AGENTS.md#mandatory-code-quality-standards
+guides_root: ../docs/guides/
+workspace_root: ../specs/active/
 ---
 
 # Testing Agent

@@ -3,6 +3,9 @@ name: expert
 description: SQLSpec domain expert with comprehensive knowledge of database adapters, SQL parsing, type system, storage backends, and Litestar integration
 tools: mcp__context7__resolve-library-id, mcp__context7__get-library-docs, WebSearch, mcp__zen__analyze, mcp__zen__thinkdeep, mcp__zen__debug, Read, Edit, Bash, Glob, Grep, Task
 model: sonnet
+standards_uri: ../AGENTS.md#mandatory-code-quality-standards
+guides_root: ../docs/guides/
+workspace_root: ../specs/active/
 ---
 
 # Expert Agent
