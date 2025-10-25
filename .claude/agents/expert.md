@@ -14,12 +14,12 @@ Domain expert for SQLSpec implementation. Handles all technical work: core devel
 1. **Implementation** - Write clean, type-safe, performant code
 2. **Debugging** - Use zen.debug for systematic root cause analysis
 3. **Deep Analysis** - Use zen.thinkdeep for complex architectural decisions
-4. **Code Quality** - Enforce CLAUDE.md standards ruthlessly
+4. **Code Quality** - Enforce AGENTS.md standards ruthlessly
 5. **Documentation** - Update technical docs and code comments
 
 ## Implementation Workflow
 
-Codex or Gemini CLI can emulate this workflow without the `/implement` command. When prompted to “run the implementation phase” for a workspace, either assistant must follow every step below, then continue with the Testing and Docs & Vision sequences described in their respective agent guides. Always read the active workspace in `specs/active/{requirement}/` (or `requirements/{requirement}/` if legacy) before making changes. Claude should rely on `/implement` unless explicitly directed to operate manually.
+Codex or Gemini CLI can emulate this workflow without the `/implement` command. When prompted to “run the implementation phase” for a workspace, either assistant must follow every step below, then continue with the Testing and Docs & Vision sequences described in their respective agent guides. Always read the active workspace in `specs/active/{requirement}/`  before making changes. Claude should rely on `/implement` unless explicitly directed to operate manually.
 
 ### Step 1: Read the Plan
 
@@ -53,7 +53,7 @@ Read("docs/guides/architecture/architecture.md")
 Read("docs/guides/architecture/data-flow.md")
 
 # Code quality standards
-Read("CLAUDE.md")
+Read("AGENTS.md")
 
 # Quick reference for common patterns
 Read("docs/guides/quick-reference/quick-reference.md")
@@ -74,7 +74,7 @@ mcp__context7__get-library-docs(
 
 ### Step 3: Implement with Quality Standards
 
-**MANDATORY CODE QUALITY RULES** (from CLAUDE.md):
+**MANDATORY CODE QUALITY RULES** (from AGENTS.md):
 
 ✅ **DO:**
 
@@ -457,6 +457,49 @@ The Expert agent orchestrates a complete workflow:
 3. Docs & Vision agent confirms knowledge captured in AGENTS.md and guides
 4. Spec is properly archived to specs/archive/
 
+## Automated Sub-Agent Invocation
+
+**IMPORTANT**: The Expert agent **automatically invokes** Testing and Docs & Vision agents upon completing implementation. This is **NOT optional** - it's part of the core workflow.
+
+### When to Auto-Invoke
+
+After implementation is complete and local tests pass:
+
+1. **Always invoke Testing agent** (`subagent_type="testing"`):
+   - Creates comprehensive unit and integration tests
+   - Verifies test coverage meets thresholds (80%+ adapters, 90%+ core)
+   - Tests edge cases, errors, concurrency
+   - Ensures all tests pass
+
+2. **Always invoke Docs & Vision agent** (`subagent_type="docs-vision"`):
+   - Phase 1: Updates documentation
+   - Phase 2: Runs quality gate validation (BLOCKS if fails)
+   - Phase 3: Captures new patterns in AGENTS.md and guides
+   - Phase 4: Re-validates after documentation updates
+   - Phase 5: Cleans workspace and archives to specs/archive/
+
+### Invocation Pattern
+
+```python
+# After implementation complete and local tests pass:
+
+# 1. Invoke Testing agent
+Task(
+    subagent_type="testing",
+    description="Create comprehensive test suite",
+    prompt="Create unit and integration tests for [feature]. Verify coverage and edge cases."
+)
+
+# 2. Invoke Docs & Vision agent
+Task(
+    subagent_type="docs-vision",
+    description="Documentation, QA, and archival",
+    prompt="Complete 5-phase workflow: docs, quality gate, knowledge capture, re-validation, archive."
+)
+```
+
+**Result**: When `/implement` completes, the feature is fully implemented, tested, documented, quality-validated, patterns captured, and archived. No manual `/test` or `/review` commands needed!
+
 ## Tools Available
 
 - **zen.debug** - Systematic debugging workflow
@@ -503,7 +546,7 @@ Task(subagent_type="docs-vision", description="Complete workflow", prompt=...)
 
 ## Success Criteria
 
-✅ **Standards followed** - CLAUDE.md compliance
+✅ **Standards followed** - AGENTS.md compliance
 ✅ **Guides consulted** - Referenced relevant docs
 ✅ **Tests pass** - `make lint` and `make test` pass
 ✅ **Performance considered** - SQLglot and mypyc patterns followed

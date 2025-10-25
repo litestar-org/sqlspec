@@ -120,5 +120,5 @@ docs/guides/
 
 ## See Also
 
-- [CLAUDE.md](../../CLAUDE.md) - Code quality standards and collaboration guidelines
+- [AGENTS.md](../../AGENTS.md) - Code quality standards and collaboration guidelines
 - [.claude/agents/](../../.claude/agents/) - AI agent definitions that reference these guides

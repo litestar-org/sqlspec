@@ -87,7 +87,7 @@ def test_statement_parameter_replacement():
     assert "$1" in converted.sql
 ```
 
-**Testing standards (from CLAUDE.md):**
+**Testing standards (from AGENTS.md):**
 
 ✅ **DO:**
 

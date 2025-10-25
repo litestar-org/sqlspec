@@ -23,14 +23,13 @@ The expert should:
 - Use zen.analyze for code analysis
 - Update workspace progress continuously
 
-**This ONE command handles:**
-✅ Implementation
-✅ Testing (automatic via Testing agent)
-✅ Documentation (automatic via Docs & Vision)
-✅ Quality gate (automatic via Docs & Vision)
-✅ **Knowledge capture** (automatic via Docs & Vision)
-✅ **Re-validation** (automatic via Docs & Vision)
+**This ONE command automatically runs the entire workflow:**
+✅ Implementation (Expert agent)
+✅ `/test` - Testing (automatic via Testing agent invocation)
+✅ `/review` - Documentation, quality gate, knowledge capture (automatic via Docs & Vision agent invocation)
 ✅ Archival (automatic via Docs & Vision)
 
-**After implementation:**
-Feature is complete, tested, documented, patterns captured, and archived!
+**Equivalent to running:** `/implement` → auto-runs `/test` → auto-runs `/review` → auto-archives
+
+**After completion:**
+Feature is fully implemented, comprehensively tested, documented, quality-validated, patterns captured in AGENTS.md and guides, and archived to specs/archive/!

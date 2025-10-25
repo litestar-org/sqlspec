@@ -1365,6 +1365,8 @@ SQLSpec uses a coordinated multi-agent system where the Expert agent orchestrate
 ```
 User runs: /implement {feature-name}
 
+**IMPORTANT**: `/implement` automatically runs `/test` and `/review` - no manual steps needed!
+
 ┌─────────────────────────────────────────────────────────────┐
 │                      EXPERT AGENT                            │
 │                                                              │

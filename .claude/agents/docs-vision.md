@@ -203,7 +203,7 @@ Quality gate MUST pass before moving to Phase 3 (Cleanup).
 ### Step 1: Read Quality Standards
 
 ```python
-Read("CLAUDE.md")  # Code quality standards
+Read("AGENTS.md")  # Code quality standards
 Read("docs/guides/testing/testing.md")  # Testing standards
 ```
 
@@ -814,6 +814,6 @@ def test_asyncpg_connection_basic():
 ✅ **Phase 4 Complete** - Re-validation passed after updates
 ✅ **Phase 5 Complete** - Workspace cleaned and archived
 ✅ **All tests pass** - `make lint && make test` success
-✅ **Standards followed** - CLAUDE.md compliance
+✅ **Standards followed** - AGENTS.md compliance
 ✅ **Knowledge preserved** - Future implementations benefit
 ✅ **Clean handoff** - Ready for PR/commit

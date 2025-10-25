@@ -2,7 +2,7 @@
 """Tests for sqlspec.driver.mixins._result_tools module.
 
 Tests numpy array handling, msgspec deserialization, and type conversion functionality.
-Uses function-based pytest approach as per CLAUDE.md requirements.
+Uses function-based pytest approach as per AGENTS.md requirements.
 """
 
 from typing import Any
