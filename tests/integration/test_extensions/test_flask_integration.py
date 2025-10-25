@@ -1,5 +1,7 @@
 """Integration tests for Flask extension."""
 
+from typing import Any
+
 import pytest
 
 pytest.importorskip("flask")
@@ -23,7 +25,7 @@ def test_flask_manual_mode_sync_sqlite() -> None:
     plugin = SQLSpecPlugin(sqlspec, app)
 
     @app.route("/create")
-    def create_table():
+    def create_table() -> dict[str, bool]:
         db = plugin.get_session()
         db.execute("CREATE TABLE IF NOT EXISTS test (id INTEGER PRIMARY KEY, name TEXT)")
         db.execute("INSERT INTO test (name) VALUES (?)", ("Alice",))
@@ -32,7 +34,7 @@ def test_flask_manual_mode_sync_sqlite() -> None:
         return {"created": True}
 
     @app.route("/query")
-    def query_table():
+    def query_table() -> dict[str, Any]:
         db = plugin.get_session()
         result = db.execute("SELECT * FROM test")
         rows = result.all()
@@ -46,6 +48,7 @@ def test_flask_manual_mode_sync_sqlite() -> None:
         response = client.get("/query")
         assert response.status_code == 200
         data = response.json
+        assert data is not None
         assert data["count"] == 1
         assert data["rows"][0]["name"] == "Alice"
 
@@ -63,14 +66,14 @@ def test_flask_autocommit_mode_sync_sqlite() -> None:
     plugin = SQLSpecPlugin(sqlspec, app)
 
     @app.route("/create")
-    def create_table():
+    def create_table() -> tuple[dict[str, bool], int]:
         db = plugin.get_session()
         db.execute("CREATE TABLE IF NOT EXISTS test (id INTEGER PRIMARY KEY, name TEXT)")
         db.execute("INSERT INTO test (name) VALUES (?)", ("Bob",))
         return {"created": True}, 201
 
     @app.route("/query")
-    def query_table():
+    def query_table() -> dict[str, Any]:
         db = plugin.get_session()
         result = db.execute("SELECT * FROM test")
         rows = result.all()
@@ -83,6 +86,7 @@ def test_flask_autocommit_mode_sync_sqlite() -> None:
         response = client.get("/query")
         assert response.status_code == 200
         data = response.json
+        assert data is not None
         assert data["count"] == 1
         assert data["rows"][0]["name"] == "Bob"
 
@@ -100,19 +104,19 @@ def test_flask_autocommit_rollback_on_error() -> None:
     plugin = SQLSpecPlugin(sqlspec, app)
 
     @app.route("/setup")
-    def setup():
+    def setup() -> dict[str, bool]:
         db = plugin.get_session()
         db.execute("CREATE TABLE IF NOT EXISTS test (id INTEGER PRIMARY KEY, name TEXT)")
         return {"created": True}
 
     @app.route("/insert-error")
-    def insert_error():
+    def insert_error() -> tuple[dict[str, str], int]:
         db = plugin.get_session()
         db.execute("INSERT INTO test (name) VALUES (?)", ("Charlie",))
         return {"error": "something went wrong"}, 400
 
     @app.route("/query")
-    def query_table():
+    def query_table() -> dict[str, int]:
         db = plugin.get_session()
         result = db.execute("SELECT * FROM test")
         rows = result.all()
@@ -125,6 +129,7 @@ def test_flask_autocommit_rollback_on_error() -> None:
 
         response = client.get("/query")
         data = response.json
+        assert data is not None
         assert data["count"] == 0
 
 
@@ -141,7 +146,7 @@ def test_flask_autocommit_include_redirect() -> None:
     plugin = SQLSpecPlugin(sqlspec, app)
 
     @app.route("/create")
-    def create_table():
+    def create_table() -> Any:
         from flask import redirect
 
         db = plugin.get_session()
@@ -150,7 +155,7 @@ def test_flask_autocommit_include_redirect() -> None:
         return redirect("/query")
 
     @app.route("/query")
-    def query_table():
+    def query_table() -> dict[str, Any]:
         db = plugin.get_session()
         result = db.execute("SELECT * FROM test")
         rows = result.all()
@@ -162,6 +167,7 @@ def test_flask_autocommit_include_redirect() -> None:
 
         response = client.get("/query")
         data = response.json
+        assert data is not None
         assert data["count"] == 1
         assert data["rows"][0]["name"] == "Diana"
 
@@ -189,7 +195,7 @@ def test_flask_multi_database() -> None:
     plugin = SQLSpecPlugin(sqlspec, app)
 
     @app.route("/setup")
-    def setup():
+    def setup() -> dict[str, bool]:
         sqlite_db = plugin.get_session(key="sqlite_db")
         sqlite_db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)")
         sqlite_db.execute("INSERT INTO users (id, name) VALUES (?, ?)", (1, "Alice"))
@@ -201,7 +207,7 @@ def test_flask_multi_database() -> None:
         return {"setup": True}
 
     @app.route("/query")
-    def query():
+    def query() -> dict[str, Any]:
         sqlite_db = plugin.get_session(key="sqlite_db")
         users = sqlite_db.execute("SELECT COUNT(*) as count FROM users").scalar()
 
@@ -215,6 +221,7 @@ def test_flask_multi_database() -> None:
 
         response = client.get("/query")
         data = response.json
+        assert data is not None
         assert data["users"] == 1
         assert data["events"] == 1
 
@@ -231,7 +238,7 @@ def test_flask_session_caching() -> None:
     plugin = SQLSpecPlugin(sqlspec, app)
 
     @app.route("/test")
-    def test_caching():
+    def test_caching() -> dict[str, bool]:
         session1 = plugin.get_session()
         session2 = plugin.get_session()
         assert session1 is session2
@@ -262,14 +269,14 @@ def test_flask_async_adapter_via_portal() -> None:
     plugin = SQLSpecPlugin(sqlspec, app)
 
     @app.route("/create")
-    def create_table():
+    def create_table() -> dict[str, bool]:
         db = plugin.get_session()
         db.execute("CREATE TABLE IF NOT EXISTS test (id INTEGER PRIMARY KEY, name TEXT)")
         db.execute("INSERT INTO test (name) VALUES (?)", ("Eve",))
         return {"created": True}
 
     @app.route("/query")
-    def query_table():
+    def query_table() -> dict[str, Any]:
         db = plugin.get_session()
         result = db.execute("SELECT * FROM test")
         rows = result.all()
@@ -281,5 +288,6 @@ def test_flask_async_adapter_via_portal() -> None:
 
         response = client.get("/query")
         data = response.json
+        assert data is not None
         assert data["count"] == 1
         assert data["rows"][0]["name"] == "Eve"

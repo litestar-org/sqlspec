@@ -1,7 +1,5 @@
 """Tests for Flask configuration state."""
 
-import pytest
-
 from sqlspec.extensions.flask._state import FlaskConfigState
 
 

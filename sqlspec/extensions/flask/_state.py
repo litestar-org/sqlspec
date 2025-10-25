@@ -8,6 +8,10 @@ if TYPE_CHECKING:
 
 __all__ = ("FlaskConfigState",)
 
+HTTP_SUCCESS_MIN = 200
+HTTP_SUCCESS_MAX = 300
+HTTP_REDIRECT_MAX = 400
+
 
 @dataclass
 class FlaskConfigState:
@@ -43,10 +47,10 @@ class FlaskConfigState:
             return False
 
         if self.commit_mode == "autocommit":
-            return 200 <= status_code < 300
+            return HTTP_SUCCESS_MIN <= status_code < HTTP_SUCCESS_MAX
 
         if self.commit_mode == "autocommit_include_redirect":
-            return 200 <= status_code < 400
+            return HTTP_SUCCESS_MIN <= status_code < HTTP_REDIRECT_MAX
 
         return False
 

@@ -5,10 +5,10 @@ from typing import TYPE_CHECKING, Any, Literal
 from sqlspec.base import SQLSpec
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.flask._portal import PortalProvider
 from sqlspec.extensions.flask._state import FlaskConfigState
 from sqlspec.extensions.flask._utils import get_or_create_session
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.portal import PortalProvider
 
 if TYPE_CHECKING:
     from flask import Flask, Response
@@ -133,7 +133,7 @@ class SQLSpecPlugin:
         for config_state in self._config_states:
             if config_state.config.supports_connection_pooling:
                 if config_state.is_async:
-                    pool = self._portal.portal.call(config_state.config.create_pool)  # type: ignore[union-attr]
+                    pool = self._portal.portal.call(config_state.config.create_pool)  # type: ignore[union-attr,arg-type]
                 else:
                     pool = config_state.config.create_pool()
                 pools[config_state.session_key] = pool
@@ -180,11 +180,11 @@ class SQLSpecPlugin:
                 if config_state.is_async:
                     connection = self._portal.portal.call(conn_ctx.__aenter__)  # type: ignore[union-attr]
                 else:
-                    connection = conn_ctx.__enter__()
+                    connection = conn_ctx.__enter__()  # type: ignore[union-attr]
 
                 setattr(g, f"{config_state.connection_key}_ctx", conn_ctx)
             elif config_state.is_async:
-                connection = self._portal.portal.call(config_state.config.create_connection)  # type: ignore[union-attr]
+                connection = self._portal.portal.call(config_state.config.create_connection)  # type: ignore[union-attr,arg-type]
             else:
                 connection = config_state.config.create_connection()
 
@@ -218,7 +218,7 @@ class SQLSpecPlugin:
 
         return response
 
-    def _teardown_appcontext_handler(self, _exc: "Exception | None" = None) -> None:
+    def _teardown_appcontext_handler(self, _exc: "BaseException | None" = None) -> None:
         """Clean up connections when request context ends.
 
         Closes all connections and cleans up g object.
@@ -244,8 +244,8 @@ class SQLSpecPlugin:
                         self._portal.portal.call(connection.close)  # type: ignore[union-attr]
                     else:
                         connection.close()
-                except Exception as close_exc:
-                    logger.exception("Error closing connection: %s", close_exc)
+                except Exception:
+                    logger.exception("Error closing connection")
 
                 if hasattr(g, config_state.connection_key):
                     delattr(g, config_state.connection_key)
@@ -266,14 +266,8 @@ class SQLSpecPlugin:
 
         Returns:
             Database session (driver instance).
-
-        Raises:
-            ImproperConfigurationError: If key not found.
         """
-        if key is None:
-            config_state = self._config_states[0]
-        else:
-            config_state = self._get_config_state_by_key(key)
+        config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
 
         return get_or_create_session(config_state, self._portal.portal if self._portal else None)
 
@@ -285,16 +279,10 @@ class SQLSpecPlugin:
 
         Returns:
             Raw database connection.
-
-        Raises:
-            ImproperConfigurationError: If key not found.
         """
         from flask import g
 
-        if key is None:
-            config_state = self._config_states[0]
-        else:
-            config_state = self._get_config_state_by_key(key)
+        config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
 
         return getattr(g, config_state.connection_key)
 

@@ -3,18 +3,13 @@
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from flask import Flask
-
-    from sqlspec.extensions.flask._portal import Portal
     from sqlspec.extensions.flask._state import FlaskConfigState
+    from sqlspec.utils.portal import Portal
 
 __all__ = ("get_or_create_session",)
 
 
-def get_or_create_session(
-    config_state: "FlaskConfigState",
-    portal: "Portal | None",
-) -> Any:
+def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | None") -> Any:
     """Get or create database session for current request.
 
     Sessions are cached per request in Flask g object to ensure
@@ -38,8 +33,7 @@ def get_or_create_session(
     connection = getattr(g, config_state.connection_key)
 
     session = config_state.config.driver_type(
-        connection=connection,
-        statement_config=config_state.config.statement_config,
+        connection=connection, statement_config=config_state.config.statement_config
     )
 
     setattr(g, cache_key, session)
