@@ -4,16 +4,7 @@ orphan: true
 
 # Starlette Integration Guide
 
-Outlines patterns for running SQLSpec inside Starlette applications using lifespan management, request dependencies, and middleware-driven transaction control.
-
-## Quick Facts
-
-- Install with `pip install "sqlspec[asyncpg]" starlette` (swap the adapter extra for your database).
-- Use Starlette’s lifespan context to initialize `SQLSpec` and close pools on shutdown.
-- Store configurations on `app.state` so routes and middleware can access them without globals.
-- Inject sessions through lightweight dependency callables that wrap `spec.provide_session(config)`.
-- Wrap database operations in `BaseHTTPMiddleware` when you need automatic commit/rollback.
-- Reuse the same dependency helpers in background tasks and WebSocket endpoints.
+SQLSpec provides a `SQLSpecPlugin` for Starlette that handles connection pooling, request-scoped sessions, and automatic transaction management through middleware.
 
 ## Installation
 
@@ -23,23 +14,436 @@ pip install "sqlspec[asyncpg]" starlette
 uv pip install "sqlspec[asyncpg]" starlette
 ```
 
-Starlette does not require a dedicated SQLSpec extra. Install the framework alongside the database adapter you intend to use.
+Replace `asyncpg` with your preferred database adapter (`psycopg`, `asyncmy`, `aiosqlite`, etc.).
 
-## Application Setup
+## Quick Start
 
 ```python
-from contextlib import asynccontextmanager
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
-from sqlspec.driver import AsyncDriverAdapterBase
+from sqlspec.extensions.starlette import SQLSpecPlugin
 
-spec = SQLSpec()
-config = spec.add_config(
-    AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/app"}),
+sqlspec = SQLSpec()
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/mydb"},
+    extension_config={
+        "starlette": {
+            "commit_mode": "autocommit",
+            "session_key": "db"
+        }
+    }
 )
+sqlspec.add_config(config, name="default")
+
+app = Starlette()
+db_ext = SQLSpecPlugin(sqlspec, app)
+
+
+@app.route("/users")
+async def list_users(request):
+    db = db_ext.get_session(request)
+    result = await db.execute("SELECT id, email FROM users ORDER BY id")
+    return JSONResponse({"users": result.all()})
+```
+
+The plugin automatically:
+- Creates and manages connection pools during app lifespan
+- Provides request-scoped database sessions
+- Handles transaction commit/rollback based on response status
+- Caches sessions per request for consistency
+
+## Configuration
+
+Configure the plugin via `extension_config["starlette"]` in your database config:
+
+```python
+from sqlspec.config import StarletteConfig
+
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/mydb"},
+    extension_config={
+        "starlette": StarletteConfig(
+            commit_mode="autocommit",
+            session_key="db",
+            connection_key="db_connection",
+            pool_key="db_pool",
+            extra_commit_statuses={201, 202},
+            extra_rollback_statuses={409}
+        )
+    }
+)
+```
+
+### Configuration Options
+
+- **commit_mode**: Transaction handling mode (default: `"manual"`)
+  - `"manual"`: No automatic transactions
+  - `"autocommit"`: Commit on 2xx status, rollback otherwise
+  - `"autocommit_include_redirect"`: Commit on 2xx-3xx status, rollback otherwise
+- **session_key**: Key for storing session in `request.state` (default: `"db_session"`)
+- **connection_key**: Key for storing connection in `request.state` (default: `"db_connection"`)
+- **pool_key**: Key for storing pool in `app.state` (default: `"db_pool"`)
+- **extra_commit_statuses**: Additional HTTP statuses that trigger commit (default: empty set)
+- **extra_rollback_statuses**: Additional HTTP statuses that trigger rollback (default: empty set)
+
+## Commit Modes
+
+### Manual Mode
+
+Requires explicit transaction management:
+
+```python
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/mydb"},
+    extension_config={"starlette": {"commit_mode": "manual"}}
+)
+
+sqlspec.add_config(config)
+db_ext = SQLSpecPlugin(sqlspec, app)
+
+
+@app.route("/users", methods=["POST"])
+async def create_user(request):
+    db = db_ext.get_session(request)
+    data = await request.json()
+
+    await db.execute(
+        "INSERT INTO users (email) VALUES ($1)",
+        data["email"]
+    )
+
+    conn = db_ext.get_connection(request)
+    await conn.commit()
+
+    return JSONResponse({"created": True}, status_code=201)
+```
+
+Use manual mode when you need fine-grained control over transaction boundaries.
+
+### Autocommit Mode
+
+Automatically commits on 2xx status codes, rolls back otherwise:
+
+```python
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/mydb"},
+    extension_config={"starlette": {"commit_mode": "autocommit"}}
+)
+
+sqlspec.add_config(config)
+db_ext = SQLSpecPlugin(sqlspec, app)
+
+
+@app.route("/users", methods=["POST"])
+async def create_user(request):
+    db = db_ext.get_session(request)
+    data = await request.json()
+
+    await db.execute(
+        "INSERT INTO users (email) VALUES ($1)",
+        data["email"]
+    )
+
+    return JSONResponse({"created": True}, status_code=201)
+```
+
+Automatically commits because status is 201 (2xx range).
+
+### Autocommit with Redirects
+
+Commits on 2xx and 3xx status codes:
+
+```python
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/mydb"},
+    extension_config={"starlette": {"commit_mode": "autocommit_include_redirect"}}
+)
+
+sqlspec.add_config(config)
+db_ext = SQLSpecPlugin(sqlspec, app)
+
+
+@app.route("/users", methods=["POST"])
+async def create_user(request):
+    db = db_ext.get_session(request)
+    data = await request.json()
+
+    await db.execute(
+        "INSERT INTO users (email) VALUES ($1)",
+        data["email"]
+    )
+
+    return RedirectResponse(url="/users", status_code=303)
+```
+
+Automatically commits because status is 303 (3xx range).
+
+## Multi-Database Configuration
+
+Configure multiple databases and access them by key:
+
+```python
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.adapters.asyncmy import AsyncmyConfig
+from sqlspec.extensions.starlette import SQLSpecPlugin
+
+sqlspec = SQLSpec()
+
+pg_config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/main"},
+    extension_config={
+        "starlette": {
+            "commit_mode": "autocommit",
+            "session_key": "pg_db"
+        }
+    }
+)
+
+mysql_config = AsyncmyConfig(
+    pool_config={"dsn": "mysql://localhost/analytics"},
+    extension_config={
+        "starlette": {
+            "commit_mode": "autocommit",
+            "session_key": "mysql_db"
+        }
+    }
+)
+
+sqlspec.add_config(pg_config, name="postgres")
+sqlspec.add_config(mysql_config, name="mysql")
+
+app = Starlette()
+db_ext = SQLSpecPlugin(sqlspec, app)
+
+
+@app.route("/dashboard")
+async def dashboard(request):
+    pg_db = db_ext.get_session(request, key="pg_db")
+    mysql_db = db_ext.get_session(request, key="mysql_db")
+
+    users = await pg_db.execute("SELECT COUNT(*) FROM users")
+    events = await mysql_db.execute("SELECT COUNT(*) FROM events")
+
+    return JSONResponse({
+        "users": users.scalar(),
+        "events": events.scalar()
+    })
+```
+
+Each database maintains its own pool, session cache, and transaction handling.
+
+## Session Caching
+
+Sessions are cached per request to ensure consistency:
+
+```python
+@app.route("/example")
+async def example(request):
+    db1 = db_ext.get_session(request)
+    db2 = db_ext.get_session(request)
+
+    assert db1 is db2
+
+    await db1.execute("INSERT INTO users (email) VALUES ($1)", "test@example.com")
+
+    result = await db2.execute("SELECT * FROM users WHERE email = $1", "test@example.com")
+
+    return JSONResponse({"user": result.get_first()})
+```
+
+Both `db1` and `db2` reference the same session object, ensuring transactional consistency.
+
+## Connection Access
+
+Access raw database connections when needed:
+
+```python
+@app.route("/raw")
+async def raw_query(request):
+    conn = db_ext.get_connection(request)
+
+    cursor = await conn.cursor()
+    await cursor.execute("SELECT 1")
+    result = await cursor.fetchone()
+
+    return JSONResponse({"result": result})
+```
+
+Use `get_connection()` for driver-specific operations not exposed by the SQLSpec session API.
+
+## Lifecycle Management
+
+The plugin automatically manages pool lifecycle when initialized with the app:
+
+```python
+app = Starlette()
+db_ext = SQLSpecPlugin(sqlspec, app)
+```
+
+If you need manual control over lifecycle:
+
+```python
+from contextlib import asynccontextmanager
+
+
+db_ext = SQLSpecPlugin(sqlspec)
+
+
+@asynccontextmanager
+async def lifespan(app: Starlette):
+    async with db_ext.lifespan(app):
+        yield
+
+
+app = Starlette(lifespan=lifespan)
+db_ext.init_app(app)
+```
+
+The plugin integrates seamlessly with existing lifespan handlers.
+
+## Testing
+
+Use `TestClient` with in-memory databases for testing:
+
+```python
+from starlette.testclient import TestClient
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+
+def test_users_endpoint():
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        pool_config={"database": ":memory:"},
+        extension_config={"starlette": {"commit_mode": "autocommit"}}
+    )
+    sqlspec.add_config(config)
+
+    app = Starlette()
+    db_ext = SQLSpecPlugin(sqlspec, app)
+
+    @app.route("/users")
+    async def list_users(request):
+        db = db_ext.get_session(request)
+        await db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)")
+        await db.execute("INSERT INTO users (email) VALUES (?)", ("test@example.com",))
+        result = await db.execute("SELECT * FROM users")
+        return JSONResponse({"users": result.all()})
+
+    db_ext.init_app(app)
+
+    with TestClient(app) as client:
+        response = client.get("/users")
+        assert response.status_code == 200
+        assert len(response.json()["users"]) == 1
+```
+
+## Background Tasks
+
+Sessions are request-scoped and should not be passed to background tasks. Create new sessions within background tasks:
+
+```python
+from starlette.background import BackgroundTask
+
+
+async def send_email(email: str, config, sqlspec):
+    async with sqlspec.provide_session(config) as db:
+        await db.execute(
+            "INSERT INTO email_log (email, sent_at) VALUES ($1, NOW())",
+            email
+        )
+
+
+@app.route("/signup", methods=["POST"])
+async def signup(request):
+    data = await request.json()
+    db = db_ext.get_session(request)
+
+    await db.execute(
+        "INSERT INTO users (email) VALUES ($1)",
+        data["email"]
+    )
+
+    task = BackgroundTask(
+        send_email,
+        email=data["email"],
+        config=config,
+        sqlspec=sqlspec
+    )
+
+    return JSONResponse({"created": True}, status_code=201, background=task)
+```
+
+Background tasks use `sqlspec.provide_session()` to create independent sessions.
+
+## WebSocket Support
+
+WebSocket connections create their own sessions:
+
+```python
+from starlette.websockets import WebSocket
+
+
+@app.websocket_route("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+
+    async with sqlspec.provide_session(config) as db:
+        while True:
+            data = await websocket.receive_text()
+            result = await db.execute(
+                "SELECT * FROM messages WHERE content LIKE $1",
+                f"%{data}%"
+            )
+            await websocket.send_json({"messages": result.all()})
+```
+
+WebSocket handlers use `provide_session()` directly since they don't have HTTP request/response cycles.
+
+## Error Handling
+
+The plugin automatically rolls back transactions on exceptions in autocommit mode:
+
+```python
+@app.route("/users", methods=["POST"])
+async def create_user(request):
+    db = db_ext.get_session(request)
+    data = await request.json()
+
+    await db.execute(
+        "INSERT INTO users (email) VALUES ($1)",
+        data["email"]
+    )
+
+    if not data.get("verified"):
+        raise ValueError("Email must be verified")
+
+    return JSONResponse({"created": True}, status_code=201)
+```
+
+If the `ValueError` is raised, the middleware automatically rolls back the INSERT.
+
+## Best Practices
+
+1. **Use autocommit mode for simple APIs**: Reduces boilerplate and ensures consistency
+2. **Use manual mode for complex transactions**: Provides fine-grained control when needed
+3. **Cache sessions per request**: Always use `get_session()` instead of creating new sessions
+4. **Separate background task sessions**: Don't pass request sessions to background tasks
+5. **Configure unique keys for multiple databases**: Prevents state key collisions
+6. **Test with in-memory databases**: Faster tests with SQLite `:memory:` databases
+
+## Migration to Plugin
+
+If you're using the old manual pattern, migration is straightforward:
+
+**Before (manual pattern)**:
+
+```python
+spec = SQLSpec()
+config = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}))
 
 
 @asynccontextmanager
@@ -52,112 +456,37 @@ async def lifespan(app: Starlette):
 
 async def list_users(request) -> JSONResponse:
     async with request.app.state.sqlspec.provide_session(request.app.state.db_config) as session:
-        result = await session.execute("SELECT id, email FROM users ORDER BY id")
+        result = await session.execute("SELECT * FROM users")
         return JSONResponse({"users": result.all()})
 
 
 app = Starlette(routes=[Route("/users", list_users)], lifespan=lifespan)
 ```
 
-The lifespan handler opens access to the `SQLSpec` instance and ensures pools shut down cleanly during application exit or reload.
-
-## Dependency Helpers
-
-Factor out a reusable dependency that yields a session per request:
+**After (plugin pattern)**:
 
 ```python
-from contextlib import asynccontextmanager
-from starlette.requests import Request
+sqlspec = SQLSpec()
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://..."},
+    extension_config={"starlette": {"commit_mode": "autocommit"}}
+)
+sqlspec.add_config(config)
+
+app = Starlette()
+db_ext = SQLSpecPlugin(sqlspec, app)
 
 
-@asynccontextmanager
-async def session_scope(request: Request):
-    session_cm = request.app.state.sqlspec.provide_session(request.app.state.db_config)
-    session = await session_cm.__aenter__()
-    try:
-        yield session
-    finally:
-        await session_cm.__aexit__(None, None, None)
+@app.route("/users")
+async def list_users(request):
+    db = db_ext.get_session(request)
+    result = await db.execute("SELECT * FROM users")
+    return JSONResponse({"users": result.all()})
 ```
 
-Use the dependency inside route callables:
-
-```python
-async def create_user(request: Request) -> JSONResponse:
-    data = await request.json()
-    async with session_scope(request) as session:
-        await session.begin()
-        try:
-            result = await session.execute(
-                "INSERT INTO users (email) VALUES ($1) RETURNING id",
-                data["email"],
-            )
-        except Exception:
-            await session.rollback()
-            raise
-        else:
-            await session.commit()
-            return JSONResponse({"id": result.scalar()}, status_code=201)
-```
-
-The explicit `async for` keeps the dependency self-contained without relying on FastAPI-style dependency injection.
-
-## Automatic Transaction Middleware
-
-Autocommit behavior similar to the Litestar plugin can be reproduced with middleware:
-
-```python
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
-from starlette.responses import Response
-
-
-class TransactionMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        async with request.app.state.sqlspec.provide_session(request.app.state.db_config) as session:
-            request.state.db_session = session
-            await session.begin()
-            try:
-                response = await call_next(request)
-            except Exception:
-                await session.rollback()
-                raise
-            else:
-                if 200 <= response.status_code < 300:
-                    await session.commit()
-                else:
-                    await session.rollback()
-                return response
-            finally:
-                request.state.db_session = None
-```
-
-Attach the middleware and reuse the stored session:
-
-```python
-app.add_middleware(TransactionMiddleware)
-
-
-async def delete_user(request: Request) -> Response:
-    session: AsyncDriverAdapterBase = request.state.db_session
-    await session.execute("DELETE FROM users WHERE id = $1", int(request.path_params["user_id"]))
-    return Response(status_code=204)
-```
-
-## WebSockets and Background Tasks
-
-- **WebSockets** – Acquire sessions inside the handler using `provide_connection` or `provide_session` and close them in `finally` blocks.
-- **Background tasks** – Pass the session or the SQLSpec config into the task and call `spec.provide_session(config)` inside the task to maintain isolation from request-scoped connections.
-
-## Testing Patterns
-
-- Use `TestClient` with the same lifespan context; override the DSN to point at a test database.
-- For async tests, instantiate `spec` with an in-memory adapter (e.g., `AiosqliteConfig(database=":memory:")`) and wrap tests with `pytest.mark.asyncio`.
-- Seed data using `async with spec.provide_session(config)` within fixtures so cleanup runs automatically.
-
-## Operational Tips
-
-- Centralize SQLSpec configuration definitions to avoid duplicating connection URLs across middleware and dependencies.
-- Log request IDs alongside database queries by adding logging middleware before the transaction middleware.
-- Gracefully handle driver exceptions in middleware to ensure rollbacks fire even when `call_next` raises.
-- Periodically run database migrations outside the Starlette process; SQLSpec maintains compatibility with Alembic-style workflows through its migration helpers.
+Benefits:
+- Automatic pool lifecycle management
+- Automatic transaction handling
+- Session caching built-in
+- Multi-database support
+- Less boilerplate code

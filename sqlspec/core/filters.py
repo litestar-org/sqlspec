@@ -576,10 +576,13 @@ class LimitOffsetFilter(PaginationFilter):
         limit_placeholder = exp.Placeholder(this=limit_param_name)
         offset_placeholder = exp.Placeholder(this=offset_param_name)
 
-        try:
-            current_statement = sqlglot.parse_one(statement.raw_sql, dialect=statement.dialect)
-        except Exception:
-            current_statement = exp.Select().from_(f"({statement.raw_sql})")
+        if statement.statement_expression is not None:
+            current_statement = statement.statement_expression
+        else:
+            try:
+                current_statement = sqlglot.parse_one(statement.raw_sql, dialect=statement.dialect)
+            except Exception:
+                current_statement = exp.Select().from_(f"({statement.raw_sql})")
 
         if isinstance(current_statement, exp.Select):
             new_statement = current_statement.limit(limit_placeholder).offset(offset_placeholder)
@@ -587,7 +590,6 @@ class LimitOffsetFilter(PaginationFilter):
             new_statement = exp.Select().from_(current_statement).limit(limit_placeholder).offset(offset_placeholder)
 
         result = statement.copy(statement=new_statement)
-
         result = result.add_named_parameter(limit_param_name, self.limit)
         return result.add_named_parameter(offset_param_name, self.offset)
 
@@ -628,12 +630,18 @@ class OrderByFilter(StatementFilter):
         col_expr = exp.column(self.field_name)
         order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
 
-        if statement.statement_expression is None:
-            new_statement = exp.Select().order_by(order_expr)
-        elif isinstance(statement.statement_expression, exp.Select):
-            new_statement = statement.statement_expression.order_by(order_expr)
+        if statement.statement_expression is not None:
+            current_statement = statement.statement_expression
         else:
-            new_statement = exp.Select().from_(statement.statement_expression).order_by(order_expr)
+            try:
+                current_statement = sqlglot.parse_one(statement.raw_sql, dialect=statement.dialect)
+            except Exception:
+                current_statement = exp.Select().from_(f"({statement.raw_sql})")
+
+        if isinstance(current_statement, exp.Select):
+            new_statement = current_statement.order_by(order_expr)
+        else:
+            new_statement = exp.Select().from_(current_statement).order_by(order_expr)
 
         return statement.copy(statement=new_statement)
 
