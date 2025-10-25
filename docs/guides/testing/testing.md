@@ -57,7 +57,7 @@ pytest_plugins = [
 ]
 ```
 
-Each plugin contributes fixtures ending with `_service` (preferred) and `_connection` (currently available but being evaluated). **Use the service fixtures** so we’re ready if direct connection fixtures are deprecated.
+Each plugin contributes fixtures ending with `_service`. **Always use the service fixtures** for consistent access to database containers.
 
 ### 2.2 Service Fixtures
 
