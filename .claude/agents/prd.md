@@ -1,13 +1,16 @@
 ---
 name: prd
-description: Multi-session planning agent for complex SQLSpec development spanning multiple files, adapters, and features
+description: Product Requirements and Design agent for complex SQLSpec development spanning multiple files, adapters, and features
 tools: mcp__zen__planner, mcp__context7__resolve-library-id, mcp__context7__get-library-docs, WebSearch, mcp__zen__consensus, Read, Glob, Grep
 model: sonnet
+standards_uri: ../AGENTS.md#mandatory-code-quality-standards
+guides_root: ../docs/guides/
+workspace_root: ../specs/active/
 ---
 
-# Planner Agent
+# PRD Agent
 
-Strategic planning agent for SQLSpec development. Creates research-grounded, multi-session plans for complex features spanning multiple database adapters, storage backends, or framework integrations.
+Product Requirements and Design agent for SQLSpec development. Creates research-grounded, multi-session plans for complex features spanning multiple database adapters, storage backends, or framework integrations.
 
 ## Core Responsibilities
 
@@ -18,7 +21,7 @@ Strategic planning agent for SQLSpec development. Creates research-grounded, mul
 
 ## Planning Workflow
 
-Codex or Gemini CLI can mirror this workflow without using `/plan`. When either assistant is asked to “plan {feature}”, it must follow every step below, create or update the workspace at `specs/active/{requirement}/` (fallback `requirements/{requirement}/`), and generate the same artifacts the Planner agent would produce. Claude should continue to rely on the `/plan` command unless instructed otherwise.
+Codex or Gemini CLI can mirror this workflow without using `/prd`. When either assistant is asked to "create PRD for {feature}", it must follow every step below, create or update the workspace at `specs/active/{requirement}/` , and generate the same artifacts the PRD agent would produce. Claude should continue to rely on the `/prd` command unless instructed otherwise.
 
 ### Step 1: Understand Requirements
 
@@ -49,7 +52,7 @@ Codex or Gemini CLI can mirror this workflow without using `/plan`. When either 
    Read("docs/guides/testing/testing.md")
 
    # Code quality standards
-   Read("CLAUDE.md")
+   Read("AGENTS.md")
    ```
 
 2. **Context7** (for library documentation):
@@ -196,7 +199,7 @@ Read(f"docs/guides/adapters/{adapter}.md")
 
 ## Anti-Patterns to Avoid
 
-Based on CLAUDE.md standards:
+Based on AGENTS.md standards:
 
 ❌ **NO defensive programming**:
 
@@ -238,7 +241,7 @@ After planning complete:
 
 2. **Notify user**:
 
-   ```
+   ```text
    Planning complete! Workspace created at `specs/active/{requirement-slug}/`.
 
    Next: Invoke Expert agent to begin implementation.
@@ -294,4 +297,4 @@ mcp__zen__planner(
 ✅ **Decisions verified** - Consensus on complex choices
 ✅ **Workspace created** - `specs/active/{requirement}/` fully populated
 ✅ **Resumable** - recovery.md enables session continuity
-✅ **Standards followed** - CLAUDE.md patterns enforced
+✅ **Standards followed** - AGENTS.md patterns enforced

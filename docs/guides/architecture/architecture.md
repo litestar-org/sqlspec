@@ -47,7 +47,7 @@ graph TD
 
 ## Data Flow
 
-For a detailed breakdown of the data flow, please see the [SQLSpec Data Flow Guide](./sqlspec-data-flow-guide.md).
+For a detailed breakdown of the data flow, please see the [SQLSpec Data Flow Guide](./data-flow.md).
 
 ---
 

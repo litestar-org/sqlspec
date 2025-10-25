@@ -31,18 +31,18 @@ specs/
 
 ## Workflow
 
-### 1. Planning (`/plan`)
+### 1. Planning (`/prd`)
 
-Planner agent creates spec folder:
+PRD agent creates spec folder:
 
 ```bash
 specs/active/vector-search/
-├── prd.md          # Created by Planner
-├── tasks.md        # Created by Planner
-├── recovery.md     # Created by Planner
-├── research/       # Created by Planner
+├── prd.md          # Created by PRD agent
+├── tasks.md        # Created by PRD agent
+├── recovery.md     # Created by PRD agent
+├── research/       # Created by PRD agent
 │   └── plan.md
-└── tmp/            # Created by Planner
+└── tmp/            # Created by PRD agent
 ```
 
 ### 2. Implementation (`/implement`)
@@ -129,8 +129,8 @@ Read("specs/active/{spec}/research/plan.md")
 ## Example Usage
 
 ```bash
-# 1. Plan a new feature
-/plan Add connection pooling for DuckDB
+# 1. Create PRD for a new feature
+/prd Add connection pooling for DuckDB
 
 # 2. Implement (handles EVERYTHING automatically)
 /implement duckdb-connection-pooling
@@ -165,7 +165,7 @@ Completed specs in `specs/archive/` are:
 
 All agents (Claude, Gemini, Codex) use this workspace:
 
-- **Planner** creates the structure
+- **PRD** creates the structure
 - **Expert** implements and orchestrates workflow
 - **Testing** adds comprehensive tests (auto-invoked)
 - **Docs & Vision** handles docs, QA, knowledge capture, and cleanup (auto-invoked)
