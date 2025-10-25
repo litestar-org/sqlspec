@@ -1356,6 +1356,246 @@ class AdapterDriverFeatures(TypedDict):
 - **Optional Dependency Handling**: See `sqlspec.typing` for detection constants
 - **Testing Standards**: See Testing Strategy section for general testing requirements
 
+## Flask Extension Pattern (Hook-Based)
+
+### Overview
+
+The Flask extension uses a **hook-based lifecycle** pattern instead of middleware, since Flask doesn't have native ASGI middleware like Starlette/FastAPI.
+
+### Hook-Based Lifecycle Pattern
+
+Flask uses three hooks for request lifecycle management:
+
+```python
+def init_app(self, app: "Flask") -> None:
+    """Initialize Flask application with SQLSpec."""
+    # Register hooks for request lifecycle
+    app.before_request(self._before_request_handler)
+    app.after_request(self._after_request_handler)
+    app.teardown_appcontext(self._teardown_appcontext_handler)
+
+def _before_request_handler(self) -> None:
+    """Acquire connection before request. Store in Flask g object."""
+    from flask import current_app, g
+
+    for config_state in self._config_states:
+        if config_state.config.supports_connection_pooling:
+            pool = current_app.extensions["sqlspec"]["pools"][config_state.session_key]
+            conn_ctx = config_state.config.provide_connection(pool)
+            # Acquire connection (via portal if async)
+            setattr(g, config_state.connection_key, connection)
+
+def _after_request_handler(self, response: "Response") -> "Response":
+    """Handle transaction after request based on response status."""
+    from flask import g
+
+    for config_state in self._config_states:
+        if config_state.commit_mode == "manual":
+            continue
+        # Commit or rollback based on status code
+
+    return response  # MUST return response unchanged
+
+def _teardown_appcontext_handler(self, _exc: "Exception | None" = None) -> None:
+    """Clean up connections when request context ends."""
+    from flask import g
+    # Close connections and cleanup g object
+```
+
+**Key differences from Starlette/FastAPI**:
+- **No middleware**: Use `before_request`, `after_request`, `teardown_appcontext` hooks
+- **Flask g object**: Store connections/sessions on `g` (request-scoped global)
+- **Must return response**: `after_request` hook must return the response unchanged
+- **Nested imports required**: Import `flask.g` and `flask.current_app` inside hooks to access request context
+
+### Portal Pattern for Sync Frameworks
+
+Enable async adapters (asyncpg, asyncmy, aiosqlite) in sync WSGI frameworks:
+
+```python
+class PortalProvider:
+    """Manages background thread with event loop for async operations."""
+
+    def __init__(self) -> None:
+        self._request_queue: queue.Queue = queue.Queue()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._ready_event: threading.Event = threading.Event()
+
+    def start(self) -> None:
+        """Start daemon thread with event loop."""
+        self._thread = threading.Thread(target=self._run_event_loop, daemon=True)
+        self._thread.start()
+        self._ready_event.wait()  # Block until loop ready
+
+    def call(self, func, *args, **kwargs):
+        """Execute async function from sync context."""
+        future = asyncio.run_coroutine_threadsafe(
+            self._async_caller(func, args, kwargs),
+            self._loop
+        )
+        result, exception = local_result_queue.get()  # Block until done
+        if exception:
+            raise exception
+        return result
+```
+
+**Portal usage in extension**:
+
+```python
+# Auto-detect async configs and create portal
+if self._has_async_configs:
+    self._portal = PortalProvider()
+    self._portal.start()
+
+# Use portal for async operations
+if config_state.is_async:
+    pool = self._portal.portal.call(config_state.config.create_pool)
+else:
+    pool = config_state.config.create_pool()  # Direct sync call
+```
+
+**Performance**: ~1-2ms overhead per operation. **Recommended**: Use sync adapters for Flask.
+
+### HTTP Status Code Constants
+
+Avoid magic values by defining module-level constants:
+
+```python
+# In _state.py
+HTTP_SUCCESS_MIN = 200
+HTTP_SUCCESS_MAX = 300
+HTTP_REDIRECT_MAX = 400
+
+@dataclass
+class FlaskConfigState:
+    def should_commit(self, status_code: int) -> bool:
+        if self.commit_mode == "autocommit":
+            return HTTP_SUCCESS_MIN <= status_code < HTTP_SUCCESS_MAX
+```
+
+**Why**: Satisfies Ruff PLR2004, self-documenting, easy to update.
+
+### Flask g Object Storage
+
+Store connection state on Flask's `g` object for request-scoped access:
+
+```python
+# Store with dynamic keys
+setattr(g, config_state.connection_key, connection)
+setattr(g, f"{config_state.connection_key}_ctx", conn_ctx)
+
+# Retrieve
+connection = getattr(g, config_state.connection_key)
+
+# Clean up - always check hasattr first
+if hasattr(g, config_state.connection_key):
+    delattr(g, config_state.connection_key)
+```
+
+### Portal in Utils (Implemented)
+
+**Location**: `sqlspec/utils/portal.py` (moved from Flask extension for broader reusability)
+
+Portal now available for any sync framework or utility needing async-to-sync bridging:
+
+```python
+from sqlspec.utils.portal import Portal, PortalProvider, PortalManager, get_global_portal
+
+# Option 1: Create dedicated portal (Flask extension pattern)
+portal_provider = PortalProvider()
+portal_provider.start()
+result = portal_provider.portal.call(some_async_function, arg1, arg2)
+
+# Option 2: Use global singleton portal (sync_tools pattern)
+portal = get_global_portal()
+result = portal.call(some_async_function, arg1, arg2)
+
+# Option 3: Direct PortalManager access
+manager = PortalManager()
+portal = manager.get_or_create_portal()
+result = portal.call(some_async_function, arg1, arg2)
+```
+
+**Benefits**:
+- Available to Django, Bottle, or any sync framework
+- Single import location for all portal functionality
+- Thread-safe singleton for automatic portal management
+
+### Portal + sync_tools Integration (Implemented)
+
+The `await_()` function now automatically uses the global portal when no event loop exists:
+
+```python
+from sqlspec.utils.sync_tools import await_
+
+async def async_add(a: int, b: int) -> int:
+    await asyncio.sleep(0.01)
+    return a + b
+
+# Automatically uses portal if no loop exists (default behavior)
+sync_add = await_(async_add)
+result = sync_add(5, 3)  # Returns 8, using portal internally
+
+# To disable portal and raise errors instead, use raise_sync_error=True
+sync_add_strict = await_(async_add, raise_sync_error=True)
+```
+
+**How it works**:
+
+```python
+def await_(async_function, raise_sync_error=False):  # Portal enabled by default
+    @functools.wraps(async_function)
+    def wrapper(*args, **kwargs):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            if raise_sync_error:
+                raise RuntimeError("Cannot run async function")
+            # Automatically use global portal (default behavior)
+            from sqlspec.utils.portal import get_global_portal
+            portal = get_global_portal()
+            return portal.call(async_function, *args, **kwargs)
+        # ... rest of implementation
+```
+
+**Benefits**:
+- **Transparent async support by default** - no parameter needed
+- No manual portal management required
+- Global portal automatically created and reused
+- Works across all sync frameworks (Flask, Django, Bottle, etc.)
+- Opt-in to strict error mode with `raise_sync_error=True` if needed
+
+**PortalManager Implementation**:
+
+```python
+class PortalManager(metaclass=SingletonMeta):
+    """Singleton manager for global portal instance."""
+
+    def __init__(self) -> None:
+        self._provider: PortalProvider | None = None
+        self._lock = threading.Lock()
+
+    def get_or_create_portal(self) -> Portal:
+        """Get or create the global portal instance.
+
+        Lazily creates and starts the portal provider on first access.
+        Thread-safe via locking.
+        """
+        if self._provider is None:
+            with self._lock:
+                if self._provider is None:
+                    self._provider = PortalProvider()
+                    self._provider.start()
+        return self._provider.portal
+```
+
+**Key Features**:
+- Uses `SingletonMeta` for thread-safe singleton pattern
+- Double-checked locking for performance
+- Lazy initialization - portal only created when needed
+- Global portal shared across all `await_()` calls
+
 ## Agent Workflow Coordination
 
 ### Automated Multi-Agent Workflow

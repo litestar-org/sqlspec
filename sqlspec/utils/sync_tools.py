@@ -132,14 +132,18 @@ def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -
 
 
 def await_(
-    async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]", raise_sync_error: bool = True
+    async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]", raise_sync_error: bool = False
 ) -> "Callable[ParamSpecT, ReturnT]":
     """Convert an async function to a blocking one, running in the main async loop.
 
+    When no event loop exists, automatically creates and uses a global portal for
+    async-to-sync bridging via background thread. Set raise_sync_error=True to
+    disable this behavior and raise errors instead.
+
     Args:
         async_function: The async function to convert.
-        raise_sync_error: If False, runs in a new event loop if no loop is present.
-                         If True (default), raises RuntimeError if no loop is running.
+        raise_sync_error: If True, raises RuntimeError when no loop exists.
+                         If False (default), uses portal pattern for automatic bridging.
 
     Returns:
         A blocking function that runs the async function.
@@ -154,7 +158,10 @@ def await_(
             if raise_sync_error:
                 msg = "Cannot run async function"
                 raise RuntimeError(msg) from None
-            return asyncio.run(partial_f())
+            from sqlspec.utils.portal import get_global_portal
+
+            portal = get_global_portal()
+            return portal.call(async_function, *args, **kwargs)
         else:
             if loop.is_running():
                 try:
@@ -170,7 +177,10 @@ def await_(
             if raise_sync_error:
                 msg = "Cannot run async function"
                 raise RuntimeError(msg)
-            return asyncio.run(partial_f())
+            from sqlspec.utils.portal import get_global_portal
+
+            portal = get_global_portal()
+            return portal.call(async_function, *args, **kwargs)
 
     return wrapper
 

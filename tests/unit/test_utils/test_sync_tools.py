@@ -129,18 +129,18 @@ def test_run_exception_propagation_detailed() -> None:
 
 
 def test_await_basic() -> None:
-    """Test await_ decorator basic functionality."""
+    """Test await_ decorator basic functionality with automatic portal."""
 
     async def async_function(x: int) -> int:
         return x * 3
 
-    sync_version = await_(async_function, raise_sync_error=False)
+    sync_version = await_(async_function)
     result = sync_version(4)
     assert result == 12
 
 
 def test_await_sync_error() -> None:
-    """Test await_ decorator raises error when no loop and raise_sync_error=True."""
+    """Test await_ decorator raises error when opt-in with raise_sync_error=True."""
 
     async def async_function() -> int:
         return 42
@@ -164,8 +164,8 @@ def test_await_raise_sync_error_configurations() -> None:
         await asyncio.sleep(0.001)
         return x * 2
 
-    sync_func_safe = await_(simple_async_func, raise_sync_error=False)
-    result = sync_func_safe(21)
+    sync_func_default = await_(simple_async_func)
+    result = sync_func_default(21)
     assert result == 42
 
     sync_func_strict = await_(simple_async_func, raise_sync_error=True)
@@ -374,3 +374,80 @@ async def test_async_tools_integration() -> None:
 
     expected = [i**2 for i in range(5)]
     assert results == expected
+
+
+def test_await_portal_integration() -> None:
+    """Test await_ uses portal automatically with default settings."""
+
+    async def async_add(x: int, y: int) -> int:
+        await asyncio.sleep(0.01)
+        return x + y
+
+    sync_add = await_(async_add)
+    result = sync_add(5, 3)
+
+    assert result == 8
+
+
+def test_await_portal_integration_multiple_calls() -> None:
+    """Test await_ portal integration with multiple calls reuses same portal."""
+
+    async def async_multiply(x: int) -> int:
+        await asyncio.sleep(0.01)
+        return x * 2
+
+    sync_multiply = await_(async_multiply)
+
+    result1 = sync_multiply(5)
+    result2 = sync_multiply(10)
+    result3 = sync_multiply(20)
+
+    assert result1 == 10
+    assert result2 == 20
+    assert result3 == 40
+
+
+def test_await_portal_exception_propagation() -> None:
+    """Test await_ portal integration propagates exceptions correctly."""
+
+    async def async_error() -> int:
+        await asyncio.sleep(0.01)
+        raise ValueError("Portal error test")
+
+    sync_error = await_(async_error)
+
+    with pytest.raises(ValueError, match="Portal error test"):
+        sync_error()
+
+
+def test_await_portal_with_complex_types() -> None:
+    """Test await_ portal integration with complex return types."""
+
+    async def fetch_data(user_id: int) -> dict[str, Any]:
+        await asyncio.sleep(0.01)
+        return {"user_id": user_id, "status": "active", "data": [1, 2, 3]}
+
+    sync_fetch = await_(fetch_data)
+    result = sync_fetch(42)
+
+    assert result == {"user_id": 42, "status": "active", "data": [1, 2, 3]}
+
+
+def test_await_portal_cleanup() -> None:
+    """Test await_ portal integration - verify portal is running and can be stopped."""
+    from sqlspec.utils.portal import PortalManager
+
+    async def async_func() -> int:
+        await asyncio.sleep(0.01)
+        return 100
+
+    sync_func = await_(async_func)
+    result = sync_func()
+
+    assert result == 100
+
+    manager = PortalManager()
+    assert manager.is_running
+
+    manager.stop()
+    assert not manager.is_running
