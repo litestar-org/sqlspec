@@ -1,6 +1,6 @@
-Create a comprehensive, research-grounded plan for: {{prompt}}
+Create a comprehensive Product Requirements Document and design plan for: {{prompt}}
 
-Invoke the Planner agent to:
+Invoke the PRD agent to:
 
 1. **Research** - Consult docs/guides/, Context7, and WebSearch
 2. **Plan** - Use zen.planner for structured planning
@@ -12,7 +12,7 @@ Invoke the Planner agent to:
    - recovery.md (Session resume instructions)
    - tmp/ (temporary files directory)
 
-The planner should reference:
+The PRD agent should reference:
 
 - docs/guides/adapters/ for database-specific patterns
 - docs/guides/performance/ for optimization strategies

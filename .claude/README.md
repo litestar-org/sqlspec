@@ -7,8 +7,8 @@ Enhanced agent system for AI-assisted SQLSpec development, compatible with Claud
 ## Quick Start
 
 ```bash
-# 1. Plan a feature
-/plan implement vector search for Oracle
+# 1. Create PRD for a feature
+/prd implement vector search for Oracle
 
 # 2. Implement it
 /implement
@@ -22,18 +22,18 @@ Enhanced agent system for AI-assisted SQLSpec development, compatible with Claud
 
 ## Core Agents (Enhanced System)
 
-### 1. **Planner** - Strategic Planning
+### 1. **PRD** - Product Requirements and Design
 
 - Research-grounded planning (guides + Context7 + WebSearch)
 - Structured multi-step plans via zen.planner
 - Multi-model consensus via zen.consensus
-- Creates workspace in `requirements/{requirement}/`
+- Creates workspace in `specs/active/{requirement}/`
 
-**Invoke:** `/plan {feature description}`
+**Invoke:** `/prd {feature description}`
 
 ### 2. **Expert** - Implementation
 
-- Implements features following CLAUDE.md standards
+- Implements features following AGENTS.md standards
 - Uses zen.debug for systematic debugging
 - Uses zen.thinkdeep for complex decisions
 - Uses zen.analyze for code analysis
@@ -63,7 +63,7 @@ Three sequential phases:
 ## Workspace Structure
 
 ```
-requirements/
+specs/active/
 ├── {requirement-slug}/      # Active requirement
 │   ├── prd.md               # Product Requirements Document
 │   ├── tasks.md             # Implementation checklist
@@ -94,10 +94,10 @@ These guides are the **canonical source of truth** for SQLSpec patterns.
 
 ### Full Feature Development
 
-1. **Plan:** Research → Structured planning → Create workspace
+1. **PRD:** Research → Structured planning → Create workspace
 
    ```bash
-   /plan add connection pooling for asyncpg
+   /prd add connection pooling for asyncpg
    ```
 
 2. **Implement:** Read plan → Implement → Test → Update workspace
@@ -120,7 +120,7 @@ These guides are the **canonical source of truth** for SQLSpec patterns.
 
 ### Bug Fix
 
-1. **Plan (optional):** Quick plan for complex bugs
+1. **PRD (optional):** Quick PRD for complex bugs
 2. **Implement:** Use zen.debug for systematic investigation
 3. **Test:** Add regression test
 4. **Review:** Quality gate + cleanup
@@ -131,14 +131,14 @@ Resume work across sessions/context resets:
 
 ```python
 # Find active work
-Read("requirements/{requirement}/recovery.md")  # Shows status, next steps
-Read("requirements/{requirement}/tasks.md")      # Shows what's done
-Read("requirements/{requirement}/prd.md")        # Full context
+Read("specs/active/{requirement}/recovery.md")  # Shows status, next steps
+Read("specs/active/{requirement}/tasks.md")      # Shows what's done
+Read("specs/active/{requirement}/prd.md")        # Full context
 ```
 
 ## Code Quality Standards
 
-All agents enforce [CLAUDE.md](../CLAUDE.md) standards:
+All agents enforce [AGENTS.md](../AGENTS.md) standards:
 
 ### ✅ ALWAYS
 
@@ -160,13 +160,13 @@ All agents enforce [CLAUDE.md](../CLAUDE.md) standards:
 
 Structured multi-step planning workflow
 
-**Used by:** Planner
+**Used by:** PRD
 
 ### zen.consensus
 
 Multi-model decision verification (gemini-2.5-pro, gpt-5)
 
-**Used by:** Planner, Expert
+**Used by:** PRD, Expert
 
 ### zen.debug
 
@@ -217,7 +217,7 @@ Current best practices (2025+)
 **MANDATORY after every `/review`:**
 
 1. Remove all `tmp/` directories
-2. Archive completed requirement to `requirements/archive/`
+2. Archive completed requirement to `specs/active/archive/`
 3. Keep only last 3 active requirements
 4. Archive planning reports to `.claude/reports/archive/`
 
@@ -227,8 +227,8 @@ Current best practices (2025+)
 
 - **[AGENTS.md](AGENTS.md)** - Comprehensive agent coordination guide
 - **[../docs/guides/README.md](../docs/guides/README.md)** - Index of all development guides
-- **[../requirements/README.md](../requirements/README.md)** - Workspace structure and usage
-- **[../CLAUDE.md](../CLAUDE.md)** - Code quality standards (mandatory reading)
+- **[../specs/active/README.md](../specs/active/README.md)** - Workspace structure and usage
+- **[../AGENTS.md](../AGENTS.md)** - Code quality standards (mandatory reading)
 
 ## Archive
 
@@ -249,15 +249,15 @@ Run enhancement bootstrap again when:
 
 - **2025-10-09:** Major enhancement
     - Consolidated guides to `docs/guides/`
-    - Created 4 core agents (Planner, Expert, Testing, Docs & Vision)
-    - Added `requirements/` workspace system
+    - Created 4 core agents (PRD, Expert, Testing, Docs & Vision)
+    - Added `specs/active/` workspace system
     - Added mandatory cleanup protocols
-    - Created workflow commands (`/plan`, `/implement`, `/test`, `/review`)
+    - Created workflow commands (`/prd`, `/implement`, `/test`, `/review`)
     - Archived old agents and guides
 
 ## See Also
 
 - [Agent Coordination Guide](AGENTS.md) - Detailed agent workflows
-- [Code Quality Standards](../CLAUDE.md) - MANDATORY coding standards
+- [Code Quality Standards](../AGENTS.md) - MANDATORY coding standards
 - [Development Guides](../docs/guides/) - Canonical pattern reference
-- [Workspace Guide](../requirements/README.md) - Workspace management
+- [Workspace Guide](../specs/active/README.md) - Workspace management

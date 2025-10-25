@@ -20,7 +20,7 @@ This workspace contains the planning, implementation, testing, and documentation
 
 This spec follows the automated SQLSpec workflow:
 
-1. **Plan** (`/plan`) - Planner agent creates this workspace
+1. **PRD** (`/prd`) - PRD agent creates this workspace
 2. **Implement** (`/implement`) - Expert agent:
    - Implements feature following AGENTS.md standards
    - Auto-invokes Testing agent (creates comprehensive tests)
