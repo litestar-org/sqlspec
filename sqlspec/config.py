@@ -412,8 +412,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         migration_config = self.migration_config or {}
         script_location = migration_config.get("script_location", "migrations")
 
-        from pathlib import Path
-
         migration_path = Path(script_location)
         if migration_path.exists() and not self._migration_loader.list_files():
             self._migration_loader.load_sql(migration_path)

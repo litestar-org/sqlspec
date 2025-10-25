@@ -13,6 +13,7 @@ from sqlspec.core.cache import CachedStatement, get_cache, get_cache_config
 from sqlspec.core.splitter import split_sql_script
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import is_statement_filter
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -412,8 +413,6 @@ class CommonDriverAttributesMixin:
         Returns:
             Prepared SQL statement
         """
-        from sqlspec.utils.type_guards import is_statement_filter
-
         kwargs = kwargs or {}
 
         filters: list[StatementFilter] = []

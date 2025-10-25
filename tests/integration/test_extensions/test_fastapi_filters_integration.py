@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.base import SQLSpec
-from sqlspec.core.filters import BeforeAfterFilter, FilterTypes, LimitOffsetFilter
+from sqlspec.core.filters import BeforeAfterFilter, FilterTypes, LimitOffsetFilter, OrderByFilter
 from sqlspec.extensions.fastapi import SQLSpecPlugin
 from sqlspec.extensions.fastapi.providers import dep_cache
 
@@ -153,8 +153,6 @@ def test_fastapi_order_by_filter_dependency() -> None:
     async def list_users(
         filters: Annotated[list[FilterTypes], Depends(db_ext.provide_filters({"sort_field": "created_at"}))],
     ) -> dict[str, Any]:
-        from sqlspec.core.filters import OrderByFilter
-
         order_by = next((f for f in filters if isinstance(f, OrderByFilter)), None)
         if order_by:
             return {"field": order_by.field_name, "order": order_by.sort_order}
