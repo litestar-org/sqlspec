@@ -665,5 +665,5 @@ See Also
 - :doc:`schema` - Complete schema reference
 - :doc:`adapters` - Database-specific DDL
 - :doc:`/reference/migrations` - SQLSpec migrations reference
-- :doc:`/examples/adk_basic_asyncpg` - PostgreSQL example with table creation
-- :doc:`/examples/adk_basic_sqlite` - SQLite example with table creation
+- :doc:`/examples/extensions/adk/basic_aiosqlite` - Example with table creation
+- :doc:`/examples/extensions/adk/litestar_aiosqlite` - Litestar example showing runtime initialization

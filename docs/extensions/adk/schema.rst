@@ -749,6 +749,6 @@ See Also
 - :doc:`adapters` - Database-specific implementations
 - :doc:`migrations` - Schema migration guide
 - :doc:`api` - API reference
-- :doc:`/examples/adk_basic_asyncpg` - PostgreSQL usage example
-- :doc:`/examples/adk_basic_sqlite` - SQLite usage example
-- :doc:`/examples/adk_multi_tenant` - Multi-tenant schema example
+- :doc:`/examples/adapters/asyncpg/connect_pool` - PostgreSQL connection example
+- :doc:`/examples/extensions/adk/basic_aiosqlite` - SQLite usage example
+- :doc:`/examples/patterns/multi_tenant/router` - Multi-tenant schema example

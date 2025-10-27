@@ -129,13 +129,13 @@ Database Support Status
 Quick Example
 =============
 
-Here's a simple example of creating and managing ADK sessions with PostgreSQL:
+Here's a simple example of creating and managing ADK sessions with AioSQLite:
 
-.. literalinclude:: ../../examples/adk_basic_asyncpg.py
+.. literalinclude:: ../../examples/extensions/adk/basic_aiosqlite.py
    :language: python
-   :lines: 27-42
-   :caption: Create and use an ADK session with AsyncPG
-   :emphasize-lines: 2-3, 11-12
+   :lines: 1-40
+   :caption: Create and use an ADK session with AioSQLite
+   :emphasize-lines: 1-5, 18-23
 
 Architecture Overview
 =====================
@@ -174,40 +174,10 @@ The extension follows a layered architecture:
 Examples
 ========
 
-See the following runnable examples in the ``docs/examples/`` directory:
+New curated examples live in the :doc:`examples catalog </examples/index>`:
 
-.. grid:: 2
-   :gutter: 3
-
-   .. grid-item-card:: 📘 Basic AsyncPG Example
-      :link: /examples/adk_basic_asyncpg
-      :link-type: doc
-
-      Basic session management with PostgreSQL using AsyncPG driver - the recommended production setup.
-
-   .. grid-item-card:: 📗 Basic SQLite Example
-      :link: /examples/adk_basic_aiosqlite
-      :link-type: doc
-
-      SQLite example for local development and testing with minimal setup.
-
-   .. grid-item-card:: 🌐 Litestar Web Integration
-      :link: /examples/adk_litestar_asyncpg
-      :link-type: doc
-
-      Complete web API example integrating ADK sessions with Litestar framework.
-
-   .. grid-item-card:: 🏢 Multi-Tenant Example
-      :link: /examples/adk_multi_tenant
-      :link-type: doc
-
-      Managing multiple applications and users with proper session isolation.
-
-   .. grid-item-card:: 🔗 Owner ID Column Example
-      :link: /examples/adk_duckdb_user_fk
-      :link-type: doc
-
-      Link sessions to user tables with foreign keys and cascade deletes.
+* :doc:`/examples/extensions/adk/basic_aiosqlite` – create a session, append two events, and read the transcript using AioSQLite storage.
+* :doc:`/examples/extensions/adk/litestar_aiosqlite` – initialize ``SQLSpecSessionService`` inside a Litestar app and expose a ``/sessions`` route.
 
 Use Cases
 =========

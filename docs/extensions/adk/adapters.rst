@@ -38,7 +38,7 @@ AsyncPG (Recommended)
 
 .. seealso::
 
-   :doc:`/examples/adk_basic_asyncpg`
+   :doc:`/examples/adapters/asyncpg/connect_pool`
       Complete runnable example using AsyncPG with PostgreSQL
 
 **Features:**
@@ -178,7 +178,7 @@ AsyncMy
 
 .. seealso::
 
-   :doc:`/examples/adk_basic_aiosqlite`
+   :doc:`/examples/extensions/adk/basic_aiosqlite`
       Complete runnable example using AsyncMy with MySQL/MariaDB
 
 **Features:**
@@ -254,7 +254,7 @@ SQLite (Sync)
 
 .. seealso::
 
-   :doc:`/examples/adk_basic_aiosqlite`
+   :doc:`/examples/extensions/adk/basic_aiosqlite`
       Complete runnable example using SQLite for local development
 
 **Features:**
@@ -835,7 +835,7 @@ See Also
 - :doc:`/reference/adapters` - SQLSpec adapters reference
 - :doc:`backends/adbc` - ADBC backend guide
 - :doc:`backends/bigquery` - BigQuery backend guide
-- :doc:`/examples/adk_basic_asyncpg` - PostgreSQL example
-- :doc:`/examples/adk_basic_aiosqlite` - SQLite example
-- :doc:`/examples/adk_litestar_asyncpg` - Litestar integration example
-- :doc:`/examples/adk_multi_tenant` - Multi-tenant deployment example
+- :doc:`/examples/adapters/asyncpg/connect_pool` - PostgreSQL example
+- :doc:`/examples/extensions/adk/basic_aiosqlite` - SQLite example
+- :doc:`/examples/extensions/adk/litestar_aiosqlite` - Litestar integration example
+- :doc:`/examples/patterns/multi_tenant/router` - Multi-tenant deployment example

@@ -243,8 +243,9 @@ When to Use BigQuery
 Example: Full Application
 ==========================
 
-.. literalinclude:: ../../examples/adk_basic_bigquery.py
-   :language: python
+Follow the same control flow as :doc:`/examples/extensions/adk/basic_aiosqlite` but swap in
+``BigQueryConfig`` and ``BigQueryADKStore``. The store API is identical across adapters, so session
+creation, event append, and session replay code stays unchanged.
 
 Migration from Other Databases
 ===============================

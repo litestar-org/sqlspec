@@ -152,5 +152,5 @@ config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."},
 ## Additional Resources
 
 - API reference: `docs/extensions/adk/`
-- Example projects: `docs/examples/adk_basic_aiosqlite.py`, `docs/examples/adk_litestar_asyncpg.py`
+- Example projects: {doc}`AioSQLite session service </examples/extensions/adk/basic_aiosqlite>`, {doc}`Litestar endpoint </examples/extensions/adk/litestar_aiosqlite>`
 - Google ADK documentation: <https://ai.google.dev/guides/adk>
