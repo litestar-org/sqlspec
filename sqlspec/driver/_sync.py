@@ -4,6 +4,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
 from sqlspec.core import SQL
+from sqlspec.core.result import create_arrow_result
 from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
     DataDictionaryMixin,
@@ -12,7 +13,10 @@ from sqlspec.driver._common import (
     handle_single_row_error,
 )
 from sqlspec.driver.mixins import SQLTranslatorMixin
+from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -340,6 +344,97 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
         """Execute a select statement and return all rows."""
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         return result.get_data(schema_type=schema_type)
+
+    def select_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        return_format: str = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "Any":
+        """Execute query and return results as Apache Arrow format.
+
+        This base implementation uses the conversion path: execute() → dict → Arrow.
+        Adapters with native Arrow support (ADBC, DuckDB, BigQuery) override this
+        method to use zero-copy native paths for 5-10x performance improvement.
+
+        Args:
+            statement: SQL query string, Statement, or QueryBuilder
+            *parameters: Query parameters (same format as execute()/select())
+            statement_config: Optional statement configuration override
+            return_format: "table" for pyarrow.Table (default), "reader" for RecordBatchReader,
+                         "batches" for iterator of RecordBatches
+            native_only: If True, raise error if native Arrow unavailable (default: False)
+            batch_size: Rows per batch for "batches" format (default: None = all rows)
+            arrow_schema: Optional pyarrow.Schema for type casting
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            ArrowResult containing pyarrow.Table, RecordBatchReader, or RecordBatches
+
+        Raises:
+            MissingDependencyError: If pyarrow not installed
+            ImproperConfigurationError: If native_only=True and adapter doesn't support native Arrow
+            SQLExecutionError: If query execution fails
+
+        Examples:
+            >>> result = driver.select_to_arrow(
+            ...     "SELECT * FROM users WHERE age > ?", 18
+            ... )
+            >>> df = result.to_pandas()
+            >>> print(df.head())
+
+            >>> # Force native Arrow path (raises error if unavailable)
+            >>> result = driver.select_to_arrow(
+            ...     "SELECT * FROM users", native_only=True
+            ... )
+        """
+        # Check pyarrow is available
+        ensure_pyarrow()
+
+        # Check if native_only requested but not supported
+        if native_only:
+            msg = (
+                f"Adapter '{self.__class__.__name__}' does not support native Arrow results. "
+                f"Use native_only=False to allow conversion path, or switch to an adapter "
+                f"with native Arrow support (ADBC, DuckDB, BigQuery)."
+            )
+            raise ImproperConfigurationError(msg)
+
+        # Execute query using standard path
+        result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
+
+        # Convert dict results to Arrow
+        arrow_data = convert_dict_to_arrow(
+            result.data,
+            return_format=return_format,  # type: ignore[arg-type]
+            batch_size=batch_size,
+        )
+
+        # Apply schema casting if requested
+        if arrow_schema is not None:
+            import pyarrow as pa
+
+            if not isinstance(arrow_schema, pa.Schema):
+                msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
+                raise TypeError(msg)
+
+            arrow_data = arrow_data.cast(arrow_schema)
+
+        # Create ArrowResult
+        return create_arrow_result(
+            statement=result.statement,
+            data=arrow_data,
+            rows_affected=result.rows_affected,
+            last_inserted_id=result.last_inserted_id,
+            execution_time=result.execution_time,
+            metadata=result.metadata,
+        )
 
     def select_value(
         self,
