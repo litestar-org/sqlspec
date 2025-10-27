@@ -227,9 +227,7 @@ code is available at :doc:`/examples/extensions/adk/basic_aiosqlite`.
 
 .. literalinclude:: ../../examples/extensions/adk/basic_aiosqlite.py
    :language: python
-   :lines: 27-109
    :caption: Complete ADK session management example (basic_aiosqlite.py)
-   :emphasize-lines: 1-5, 11-12, 17-18, 33-34
 
 Running the Example
 ===================

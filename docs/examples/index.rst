@@ -138,3 +138,4 @@ Shared Utilities
    frameworks/starlette/aiosqlite_app
    frameworks/flask/sqlite_app
    patterns/configs/multi_adapter_registry
+   README
