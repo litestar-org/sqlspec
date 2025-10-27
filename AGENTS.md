@@ -201,6 +201,49 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 - **MANDATORY**: Use function-based pytest tests, NOT class-based tests
 - **PROHIBITED**: Class-based test organization (TestSomething classes)
 
+### Test Isolation Patterns for Pooled Connections
+
+When writing integration tests for framework extensions or pooled database connections, ensure proper test isolation to prevent parallel test execution failures.
+
+**Problem**: Using `:memory:` databases with connection pooling causes test failures when pytest-xdist runs tests in parallel. The shared in-memory database persists tables across tests, causing "table already exists" errors.
+
+**Root Cause**: AioSQLite config auto-converts `:memory:` to `file::memory:?cache=shared` for pooling support, which creates a single shared database instance across all connections in the pool.
+
+**Solution**: Use unique temporary database files per test instead of `:memory:`:
+
+```python
+import tempfile
+
+def test_starlette_autocommit_mode() -> None:
+    """Test autocommit mode automatically commits on success."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(
+            pool_config={"database": tmp.name},
+            extension_config={"starlette": {"commit_mode": "autocommit"}}
+        )
+        sql.add_config(config)
+        db_ext = SQLSpecPlugin(sql, app)
+
+        # Test logic here - each test gets isolated database
+```
+
+**Why this works**:
+- Each test creates a unique temporary file
+- No database state shared between tests
+- Tests can run in parallel safely with `pytest -n 2 --dist=loadgroup`
+- Files automatically deleted on test completion
+
+**When to use**:
+- Framework extension tests (Starlette, FastAPI, Flask, etc.)
+- Any test using connection pooling with SQLite
+- Integration tests that run in parallel
+
+**Alternatives NOT recommended**:
+- `CREATE TABLE IF NOT EXISTS` - Masks test isolation issues
+- Disabling pooling - Tests don't reflect production configuration
+- Running tests serially - Slows down CI significantly
+
 ### Performance Optimizations
 
 - **Mypyc Compilation**: Core modules can be compiled with mypyc for performance
@@ -1355,6 +1398,417 @@ class AdapterDriverFeatures(TypedDict):
 - **Type Handler Pattern** (above): Implementation details for type handlers used with `driver_features`
 - **Optional Dependency Handling**: See `sqlspec.typing` for detection constants
 - **Testing Standards**: See Testing Strategy section for general testing requirements
+
+## Framework Extension Pattern (Middleware-Based)
+
+### Overview
+
+SQLSpec provides framework extensions for Litestar, Starlette, and FastAPI that handle connection pooling, request-scoped sessions, and automatic transaction management through middleware.
+
+### When to Use Framework Extensions
+
+Use framework extensions when:
+
+- Building web applications that need database integration
+- Need automatic transaction handling based on HTTP response status
+- Want request-scoped session management
+- Require connection pooling with lifecycle management
+- Support multiple databases in a single application
+
+**Key benefits**:
+
+- **Automatic lifecycle management**: Pools created on startup, closed on shutdown
+- **Request-scoped sessions**: Sessions cached per request for consistency
+- **Transaction automation**: Commit/rollback based on response status
+- **Multi-database support**: Multiple configs with unique state keys
+- **Minimal boilerplate**: Plugin pattern vs manual context managers
+
+### Implementation Pattern
+
+**Core Components**:
+
+1. **Plugin/Extension Class**: Main integration point (`SQLSpecPlugin` for Starlette/FastAPI, `SQLSpecPlugin` for Litestar)
+2. **Middleware**: Transaction handling (Manual, Autocommit, AutocommitIncludeRedirect)
+3. **Configuration State**: Dataclass holding config, keys, and commit settings
+4. **Session Helpers**: Utilities for session retrieval and caching
+
+**Structure for New Framework Extensions**:
+
+```python
+# sqlspec/extensions/<framework>/
+├── __init__.py           # Public API exports
+├── extension.py          # Main plugin class
+├── middleware.py         # Transaction middleware classes
+├── _state.py            # Configuration state dataclass
+└── _utils.py            # Session management helpers
+```
+
+### Example Implementation (Starlette/FastAPI Pattern)
+
+**Step 1: Configuration State Dataclass**
+
+```python
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass
+class _ConfigState:
+    """Internal state for framework configuration.
+
+    Holds database config, state keys, and transaction settings.
+    """
+
+    config: Any
+    connection_key: str
+    pool_key: str
+    session_key: str
+    commit_mode: str
+    extra_commit_statuses: "set[int] | None"
+    extra_rollback_statuses: "set[int] | None"
+```
+
+**Step 2: Middleware Classes**
+
+```python
+class SQLSpecManualMiddleware(BaseHTTPMiddleware):
+    """Manual mode - no automatic transactions."""
+
+    def __init__(self, app: Any, config_state: "_ConfigState") -> None:
+        super().__init__(app)
+        self.config_state = config_state
+
+    async def dispatch(self, request: "Request", call_next: Any) -> Any:
+        config = self.config_state.config
+        connection_key = self.config_state.connection_key
+
+        if config.supports_connection_pooling:
+            pool = getattr(request.app.state, self.config_state.pool_key)
+            async with config.provide_connection(pool) as connection:
+                setattr(request.state, connection_key, connection)
+                try:
+                    return await call_next(request)
+                finally:
+                    delattr(request.state, connection_key)
+        else:
+            connection = await config.create_connection()
+            setattr(request.state, connection_key, connection)
+            try:
+                return await call_next(request)
+            finally:
+                await connection.close()
+
+
+class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
+    """Autocommit mode - commit on 2xx, rollback otherwise."""
+
+    async def dispatch(self, request: "Request", call_next: Any) -> Any:
+        # Acquire connection
+        # Call handler
+        # Commit on success status, rollback on error status
+        # Release connection
+        pass
+```
+
+**Step 3: Session Management Helpers**
+
+```python
+def get_or_create_session(request: "Request", config_state: "_ConfigState") -> Any:
+    """Get or create cached session for request.
+
+    Sessions are cached per request using a unique cache key to ensure
+    the same session is reused throughout the request lifecycle.
+    """
+    cache_key = f"_sqlspec_session_{config_state.session_key}"
+
+    cached_session = getattr(request.state, cache_key, None)
+    if cached_session is not None:
+        return cached_session
+
+    connection = getattr(request.state, config_state.connection_key)
+    session = config_state.config.driver_type(
+        connection=connection,
+        statement_config=config_state.config.statement_config,
+    )
+
+    setattr(request.state, cache_key, session)
+    return session
+```
+
+**Step 4: Main Plugin Class**
+
+```python
+class SQLSpecPlugin:
+    """Framework extension for database integration."""
+
+    def __init__(self, sqlspec: SQLSpec, app: "App | None" = None) -> None:
+        self._sqlspec = sqlspec
+        self._config_states: "list[_ConfigState]" = []
+
+        for cfg in self._sqlspec.configs.values():
+            settings = self._extract_framework_settings(cfg)
+            state = self._create_config_state(cfg, settings)
+            self._config_states.append(state)
+
+        if app is not None:
+            self.init_app(app)
+
+    def init_app(self, app: "App") -> None:
+        """Initialize application with SQLSpec.
+
+        Validates configuration, wraps lifespan, and adds middleware.
+        """
+        self._validate_unique_keys()
+
+        # Wrap existing lifespan
+        original_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def combined_lifespan(app: "App") -> "AsyncGenerator[None, None]":
+            async with self.lifespan(app):
+                async with original_lifespan(app):
+                    yield
+
+        app.router.lifespan_context = combined_lifespan
+
+        # Add middleware for each config
+        for config_state in self._config_states:
+            self._add_middleware(app, config_state)
+
+    @asynccontextmanager
+    async def lifespan(self, app: "App") -> "AsyncGenerator[None, None]":
+        """Manage connection pool lifecycle."""
+        for config_state in self._config_states:
+            if config_state.config.supports_connection_pooling:
+                pool = await config_state.config.create_pool()
+                setattr(app.state, config_state.pool_key, pool)
+
+        try:
+            yield
+        finally:
+            for config_state in self._config_states:
+                if config_state.config.supports_connection_pooling:
+                    close_result = config_state.config.close_pool()
+                    if close_result is not None:
+                        await close_result
+
+    def get_session(self, request: "Request", key: "str | None" = None) -> Any:
+        """Get or create database session for request."""
+        if key is None:
+            config_state = self._config_states[0]
+        else:
+            config_state = self._get_config_state_by_key(key)
+
+        return get_or_create_session(request, config_state)
+```
+
+### Inheritance Pattern for Related Frameworks
+
+**FastAPI extends Starlette** - Reuse base functionality, add framework-specific helpers:
+
+```python
+from sqlspec.extensions.starlette.extension import SQLSpecPlugin as _StarlettePlugin
+
+
+class SQLSpecPlugin(_StarlettePlugin):
+    """FastAPI extension - inherits Starlette + adds dependency injection."""
+
+    def session_dependency(self, key: "str | None" = None) -> "Callable[[Request], Any]":
+        """Create dependency factory for session injection.
+
+        Returns callable for use with FastAPI's Depends().
+        """
+
+        def dependency(request: Request) -> Any:
+            return self.get_session(request, key)
+
+        return dependency
+
+    def connection_dependency(self, key: "str | None" = None) -> "Callable[[Request], Any]":
+        """Create dependency factory for connection injection."""
+
+        def dependency(request: Request) -> Any:
+            return self.get_connection(request, key)
+
+        return dependency
+```
+
+**Key inheritance principles**:
+
+- Base framework provides core middleware and lifecycle management
+- Child framework adds framework-specific helpers (dependency injection, etc.)
+- Both use same configuration key (`"starlette"` for both Starlette and FastAPI)
+- Shared configuration via TypedDict in `sqlspec/config.py`
+
+### Configuration via TypedDict
+
+**Define configuration in `sqlspec/config.py`**:
+
+```python
+class StarletteConfig(TypedDict):
+    """Configuration options for Starlette and FastAPI extensions.
+
+    All fields are optional with sensible defaults. Use in extension_config["starlette"]:
+
+    Example:
+        config = AsyncpgConfig(
+            pool_config={"dsn": "postgresql://localhost/mydb"},
+            extension_config={
+                "starlette": {
+                    "commit_mode": "autocommit",
+                    "session_key": "db"
+                }
+            }
+        )
+    """
+
+    connection_key: NotRequired[str]
+    pool_key: NotRequired[str]
+    session_key: NotRequired[str]
+    commit_mode: NotRequired[Literal["manual", "autocommit", "autocommit_include_redirect"]]
+    extra_commit_statuses: NotRequired[set[int]]
+    extra_rollback_statuses: NotRequired[set[int]]
+```
+
+### Multi-Database Support
+
+**Key validation ensures unique state keys**:
+
+```python
+def _validate_unique_keys(self) -> None:
+    """Validate that all state keys are unique across configs."""
+    all_keys: "set[str]" = set()
+
+    for state in self._config_states:
+        keys = {state.connection_key, state.pool_key, state.session_key}
+        duplicates = all_keys & keys
+
+        if duplicates:
+            msg = f"Duplicate state keys found: {duplicates}"
+            raise ImproperConfigurationError(msg)
+
+        all_keys.update(keys)
+```
+
+**Access multiple databases by key**:
+
+```python
+# Configuration
+pg_config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/main"},
+    extension_config={"starlette": {"session_key": "pg_db"}}
+)
+mysql_config = AsyncmyConfig(
+    pool_config={"dsn": "mysql://localhost/analytics"},
+    extension_config={"starlette": {"session_key": "mysql_db"}}
+)
+
+# Usage
+pg_db = db_ext.get_session(request, key="pg_db")
+mysql_db = db_ext.get_session(request, key="mysql_db")
+```
+
+### Testing Requirements
+
+**Unit Tests** - Test components in isolation:
+
+- Configuration state creation
+- Unique key validation
+- Session caching logic
+- Middleware transaction logic
+
+**Integration Tests** - Test with real framework apps:
+
+- Basic query execution
+- Manual commit mode
+- Autocommit mode
+- Autocommit with redirects
+- Multi-database scenarios
+- Session caching per request
+- Pool lifecycle management
+
+**Example integration test**:
+
+```python
+import tempfile
+
+def test_starlette_autocommit_mode() -> None:
+    """Test autocommit mode automatically commits on success."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(
+            pool_config={"database": tmp.name},
+            extension_config={"starlette": {"commit_mode": "autocommit"}}
+        )
+        sql.add_config(config)
+        db_ext = SQLSpecPlugin(sql)
+
+        async def create_table(request):
+            session = db_ext.get_session(request)
+            await session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
+            await session.execute("INSERT INTO test (name) VALUES (:name)", {"name": "Bob"})
+            return JSONResponse({"created": True})
+
+        app = Starlette(routes=[Route("/create", create_table)])
+        db_ext.init_app(app)
+
+        with TestClient(app) as client:
+            response = client.get("/create")
+            assert response.status_code == 200
+```
+
+**Note**: Use `tempfile.NamedTemporaryFile` for test isolation when testing with connection pooling. See "Test Isolation Patterns for Pooled Connections" section for details.
+
+### Documentation Requirements
+
+When implementing framework extensions:
+
+1. **User Guide** - Create `docs/guides/extensions/<framework>.md`:
+   - Installation instructions
+   - Quick start example
+   - Configuration options
+   - Commit modes
+   - Multi-database setup
+   - Testing patterns
+   - Best practices
+
+2. **API Reference** - Document plugin class and methods
+
+3. **Examples** - Provide working code examples
+
+4. **Migration Guide** - Show before/after for manual pattern → plugin pattern
+
+### Examples from Existing Extensions
+
+**Litestar Plugin** (`sqlspec/extensions/litestar/plugin.py`):
+
+- Comprehensive plugin with handlers for connection, session, pool
+- Correlation middleware for request tracking
+- Store integration for serialization
+- Signature namespace for type handling
+
+**Starlette Plugin** (`sqlspec/extensions/starlette/extension.py`):
+
+- Middleware-based transaction handling
+- Lifespan context manager for pool lifecycle
+- Session caching per request
+- Multi-database support with unique keys
+
+**FastAPI Plugin** (`sqlspec/extensions/fastapi/extension.py`):
+
+- Inherits from Starlette plugin
+- Adds `session_dependency()` and `connection_dependency()` for FastAPI `Depends()`
+- Reuses all Starlette middleware and lifecycle logic
+
+### Key Patterns
+
+1. **Middleware for transactions**: Use framework's middleware system for automatic commit/rollback
+2. **Lifespan for pools**: Manage pool creation/destruction in framework lifecycle
+3. **Request state for connections**: Store connections in request-scoped state
+4. **Session caching**: Cache sessions per request using unique cache keys
+5. **Configuration via extension_config**: Use `extension_config["framework"]` pattern
+6. **TypedDict for type safety**: Define config schemas in `sqlspec/config.py`
+7. **Inheritance for related frameworks**: Child framework extends parent, adds specific helpers
 
 ## Agent Workflow Coordination
 

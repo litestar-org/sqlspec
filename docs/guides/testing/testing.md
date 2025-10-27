@@ -156,6 +156,57 @@ We run with `-n auto` by default. Keep in mind:
 - If you need worker-specific isolation, inspect `request.node` or `xdist_worker_id` in your fixture and adjust resource names accordingly (e.g., create per-worker schemas).
 - Ensure DDL scripts are idempotent (`CREATE TABLE IF NOT EXISTS…`) when using session-scoped fixtures.
 
+### 6.1 Test Isolation for Pooled SQLite Connections
+
+When testing framework extensions or code that uses connection pooling with SQLite, avoid using `:memory:` databases as they cause test failures in parallel execution.
+
+**The Problem**:
+
+SQLite's `:memory:` databases with connection pooling share a single database instance across all connections in the pool. When pytest-xdist runs tests in parallel, multiple tests reuse the same connection from the pool, causing "table already exists" errors.
+
+**Why it happens**:
+
+AioSQLite's config automatically converts `:memory:` to `file::memory:?cache=shared` for pooling support, creating a single shared database instance.
+
+**The Solution**:
+
+Use unique temporary database files per test instead of `:memory:`:
+
+```python
+import tempfile
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.extensions.starlette import SQLSpecPlugin
+
+def test_starlette_integration() -> None:
+    """Test with isolated temporary database."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        config = AiosqliteConfig(
+            pool_config={"database": tmp.name},
+            extension_config={"starlette": {"commit_mode": "autocommit"}}
+        )
+        # Each test gets its own isolated database file
+        # No state shared between parallel tests
+```
+
+**Benefits**:
+
+- Complete test isolation
+- Safe parallel execution with `pytest -n auto`
+- Files automatically cleaned up on test completion
+- Reflects production pooling behavior
+
+**When to use**:
+
+- Framework extension tests (Starlette, FastAPI, Flask, etc.)
+- Any test using connection pooling with SQLite
+- Integration tests that must run in parallel
+
+**Alternatives to avoid**:
+
+- ❌ `CREATE TABLE IF NOT EXISTS` - Masks isolation issues
+- ❌ Disabling pooling - Doesn't test production config
+- ❌ Running serially - Slows down CI significantly
+
 ---
 
 ## 7. Markers & CI Filtering

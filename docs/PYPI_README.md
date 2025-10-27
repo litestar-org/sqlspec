@@ -14,7 +14,7 @@ SQLSpec is an experimental Python library designed to streamline and modernize y
 - **Emphasis on RAW SQL and Minimal Abstractions**: SQLSpec is a library for working with SQL in Python. Its goals are to offer minimal abstractions between the user and the database. It does not aim to be an ORM library.
 - **Type-Safe Queries**: Quickly map SQL queries to typed objects using libraries such as Pydantic, Msgspec, Attrs, etc.
 - **Extensible Design**: Easily add support for new database dialects or extend existing functionality to meet your specific needs. Easily add support for async and sync database drivers.
-- **Minimal Dependencies**: SQLSpec is designed to be lightweight and can run on its own or with other libraries such as `litestar`, `fastapi`, `flask` and more. (Contributions welcome!)
+- **Framework Extensions**: First-class integrations for Litestar, Starlette, and FastAPI with automatic transaction handling and lifecycle management
 - **Support for Async and Sync Database Drivers**: SQLSpec supports both async and sync database drivers, allowing you to choose the style that best fits your application.
 
 ### Experimental Features (API will change rapidly)
