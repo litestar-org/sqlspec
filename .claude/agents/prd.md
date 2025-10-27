@@ -1,7 +1,7 @@
 ---
 name: prd
 description: Product Requirements and Design agent for complex SQLSpec development spanning multiple files, adapters, and features
-tools: mcp__zen__planner, mcp__context7__resolve-library-id, mcp__context7__get-library-docs, WebSearch, mcp__zen__consensus, Read, Glob, Grep
+tools: mcp__zen__planner, mcp__context7__resolve-library-id, mcp__context7__get-library-docs, WebSearch, mcp__zen__consensus, Read, Write, Edit, Glob, Grep, Bash, Find, Task
 model: sonnet
 standards_uri: ../AGENTS.md#mandatory-code-quality-standards
 guides_root: ../docs/guides/
