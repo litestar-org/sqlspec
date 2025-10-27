@@ -36,8 +36,7 @@ def test_respects_custom_session_key() -> None:
     custom_key = "custom_db"
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"session_key": custom_key}},
+        pool_config={"database": ":memory:"}, extension_config={"starlette": {"session_key": custom_key}}
     )
     sqlspec.add_config(config)
 
@@ -51,8 +50,7 @@ def test_get_session_works_in_route() -> None:
     """Test that get_session() works correctly in Starlette routes."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        pool_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "autocommit"}},
+        pool_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "autocommit"}}
     )
     sqlspec.add_config(config)
 
@@ -69,5 +67,3 @@ def test_get_session_works_in_route() -> None:
         response = client.get("/test")
         assert response.status_code == 200
         assert response.json() == {"value": 1}
-
-
