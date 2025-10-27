@@ -229,17 +229,20 @@ def test_starlette_autocommit_mode() -> None:
 ```
 
 **Why this works**:
+
 - Each test creates a unique temporary file
 - No database state shared between tests
 - Tests can run in parallel safely with `pytest -n 2 --dist=loadgroup`
 - Files automatically deleted on test completion
 
 **When to use**:
+
 - Framework extension tests (Starlette, FastAPI, Flask, etc.)
 - Any test using connection pooling with SQLite
 - Integration tests that run in parallel
 
 **Alternatives NOT recommended**:
+
 - `CREATE TABLE IF NOT EXISTS` - Masks test isolation issues
 - Disabling pooling - Tests don't reflect production configuration
 - Running tests serially - Slows down CI significantly
@@ -1446,10 +1449,57 @@ def _teardown_appcontext_handler(self, _exc: "Exception | None" = None) -> None:
 ```
 
 **Key differences from Starlette/FastAPI**:
+
 - **No middleware**: Use `before_request`, `after_request`, `teardown_appcontext` hooks
 - **Flask g object**: Store connections/sessions on `g` (request-scoped global)
 - **Must return response**: `after_request` hook must return the response unchanged
 - **Nested imports required**: Import `flask.g` and `flask.current_app` inside hooks to access request context
+
+### DEFAULT_SESSION_KEY Standardization
+
+All framework extensions MUST use the same default session key for consistency:
+
+```python
+# MANDATORY: All framework extensions use "db_session"
+DEFAULT_SESSION_KEY = "db_session"
+```
+
+**Why "db_session"**:
+
+- Used by Litestar as dependency injection key name
+- Changing would break Litestar's DI system
+- Consistency across frameworks reduces cognitive overhead
+- More descriptive than alternatives like "default"
+
+**Where it's used**:
+
+- `sqlspec/extensions/flask/extension.py:22`
+- `sqlspec/extensions/starlette/extension.py:24`
+- `sqlspec/extensions/litestar/plugin.py:50`
+
+**Pattern for multi-database setups**:
+
+```python
+# Primary database uses default key
+primary_config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/main"},
+    extension_config={
+        "starlette": {"session_key": "db_session", "commit_mode": "autocommit"}
+    }
+)
+
+# Secondary database uses custom key
+analytics_config = SqliteConfig(
+    pool_config={"database": "analytics.db"},
+    extension_config={
+        "starlette": {"session_key": "analytics", "commit_mode": "manual"}
+    }
+)
+
+# Access by key
+db = plugin.get_session()              # Uses "db_session" (default)
+analytics = plugin.get_session("analytics")  # Uses custom key
+```
 
 ### Portal Pattern for Sync Frameworks
 
@@ -1499,6 +1549,98 @@ else:
 ```
 
 **Performance**: ~1-2ms overhead per operation. **Recommended**: Use sync adapters for Flask.
+
+### Flask Pool and Portal Cleanup Pattern
+
+Flask requires explicit resource cleanup using Python's `atexit` module:
+
+```python
+import atexit
+
+class SQLSpecPlugin:
+    def init_app(self, app: "Flask") -> None:
+        """Initialize Flask application with SQLSpec."""
+        # Create pools
+        pools: dict[str, Any] = {}
+        for config_state in self._config_states:
+            if config_state.config.supports_connection_pooling:
+                if config_state.is_async:
+                    pool = self._portal.portal.call(config_state.config.create_pool)
+                else:
+                    pool = config_state.config.create_pool()
+                pools[config_state.session_key] = pool
+
+        # Register cleanup hook
+        self._register_shutdown_hook()
+
+    def _register_shutdown_hook(self) -> None:
+        """Register shutdown hook for pool and portal cleanup."""
+        if self._cleanup_registered:
+            return
+
+        atexit.register(self.shutdown)
+        self._cleanup_registered = True
+
+    def shutdown(self) -> None:
+        """Dispose connection pools and stop async portal."""
+        if self._shutdown_complete:
+            return
+
+        self._shutdown_complete = True
+
+        # Close all pools
+        for config_state in self._config_states:
+            if config_state.config.supports_connection_pooling:
+                try:
+                    if config_state.is_async:
+                        self._portal.portal.call(config_state.config.close_pool)
+                    else:
+                        config_state.config.close_pool()
+                except Exception:
+                    logger.exception("Error closing pool during shutdown")
+
+        # Stop portal
+        if self._portal is not None:
+            try:
+                self._portal.stop()
+            except Exception:
+                logger.exception("Error stopping portal during shutdown")
+            finally:
+                self._portal = None
+```
+
+**Key requirements**:
+
+- **Idempotent**: Use `_shutdown_complete` flag to prevent double cleanup
+- **Single registration**: Use `_cleanup_registered` flag to avoid multiple atexit hooks
+- **Error handling**: Log exceptions but don't fail on cleanup errors
+- **Portal cleanup**: Always stop portal for async configs to prevent thread leaks
+- **Sync and async**: Handle both sync pool cleanup and async pool cleanup via portal
+
+**Why atexit**:
+
+- Flask (WSGI) lacks native lifecycle context managers
+- atexit ensures cleanup on interpreter shutdown
+- Works with development servers, production servers, and tests
+- Standard pattern for library resource cleanup
+
+**Testing pattern**:
+
+```python
+def test_flask_pool_cleanup():
+    """Verify pools are cleaned up on shutdown."""
+    plugin = SQLSpecPlugin(sqlspec, app)
+
+    # Verify atexit hook registered
+    assert plugin._cleanup_registered
+
+    # Trigger shutdown
+    plugin.shutdown()
+
+    # Verify cleanup complete
+    assert plugin._shutdown_complete
+    assert plugin._portal is None
+```
 
 ### HTTP Status Code Constants
 
@@ -1561,6 +1703,7 @@ result = portal.call(some_async_function, arg1, arg2)
 ```
 
 **Benefits**:
+
 - Available to Django, Bottle, or any sync framework
 - Single import location for all portal functionality
 - Thread-safe singleton for automatic portal management
@@ -1603,6 +1746,7 @@ def await_(async_function, raise_sync_error=False):  # Portal enabled by default
 ```
 
 **Benefits**:
+
 - **Transparent async support by default** - no parameter needed
 - No manual portal management required
 - Global portal automatically created and reused
@@ -1634,10 +1778,12 @@ class PortalManager(metaclass=SingletonMeta):
 ```
 
 **Key Features**:
+
 - Uses `SingletonMeta` for thread-safe singleton pattern
 - Double-checked locking for performance
 - Lazy initialization - portal only created when needed
 - Global portal shared across all `await_()` calls
+
 ## Framework Extension Pattern (Middleware-Based)
 
 ### Overview

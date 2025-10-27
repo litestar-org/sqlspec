@@ -255,3 +255,27 @@ def test_fastapi_inherits_starlette_behavior() -> None:
             assert response.json() == {"value": 1}
 
             assert hasattr(app.state, "db_pool")
+
+
+def test_fastapi_default_session_key() -> None:
+    """Test FastAPI defaults to the shared 'db_session' key."""
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(pool_config={"database": tmp.name}, extension_config={"starlette": {}})
+        sql.add_config(config)
+
+        app = FastAPI()
+        db_ext = SQLSpecPlugin(sql, app=app)
+
+        @app.get("/default-key")
+        async def default_key(
+            default_db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session())],
+            named_db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session("db_session"))],
+        ) -> dict[str, bool]:
+            return {"same_session": default_db is named_db}
+
+        with TestClient(app) as client:
+            response = client.get("/default-key")
+            assert response.status_code == 200
+            assert response.json() == {"same_session": True}
