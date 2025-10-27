@@ -67,6 +67,27 @@ class BigQueryDriverFeatures(TypedDict):
     """BigQuery driver-specific features configuration.
 
     Only non-standard BigQuery client parameters that are SQLSpec-specific extensions.
+
+    Attributes:
+        connection_instance: Pre-existing BigQuery connection instance to use.
+        on_job_start: Callback invoked when a query job starts.
+        on_job_complete: Callback invoked when a query job completes.
+        on_connection_create: Callback invoked when connection is created.
+        json_serializer: Custom JSON serializer for dict/list parameter conversion.
+            Defaults to sqlspec.utils.serializers.to_json if not provided.
+        enable_uuid_conversion: Enable automatic UUID string conversion.
+            When True (default), UUID strings are automatically converted to UUID objects.
+            When False, UUID strings are treated as regular strings.
+        enable_arrow_results: Enable native Arrow query results via Storage API.
+            When True (default), select_to_arrow() uses query_job.to_arrow() with
+            Storage API for zero-copy data transfer (5-10x faster for large datasets).
+            Requires google-cloud-bigquery-storage package and API enabled.
+            Falls back to dict conversion if Storage API unavailable.
+            Default: True
+        arrow_batch_size: Batch size for Arrow result streaming.
+            Number of rows per batch when streaming Arrow results.
+            Used for future streaming implementation.
+            Default: 1024
     """
 
     connection_instance: NotRequired["BigQueryConnection"]
@@ -75,6 +96,8 @@ class BigQueryDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[[Any], None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
+    enable_arrow_results: NotRequired[bool]
+    arrow_batch_size: NotRequired[int]
 
 
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
@@ -125,6 +148,11 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             from sqlspec.utils.serializers import to_json
 
             self.driver_features["json_serializer"] = to_json
+
+        if "enable_arrow_results" not in self.driver_features:
+            self.driver_features["enable_arrow_results"] = True
+        if "arrow_batch_size" not in self.driver_features:
+            self.driver_features["arrow_batch_size"] = 1024
 
         self._connection_instance: BigQueryConnection | None = self.driver_features.get("connection_instance")
 

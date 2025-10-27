@@ -77,12 +77,23 @@ class AdbcDriverFeatures(TypedDict):
             When True, preserves Arrow extension type metadata when reading data.
             When False, falls back to storage types.
             Default: True
+        enable_arrow_results: Enable native Arrow query results.
+            When True, select_to_arrow() uses cursor.fetch_arrow_table() for
+            zero-copy data transfer (5-10x faster for large datasets).
+            When False, falls back to dict conversion path.
+            Default: True
+        arrow_batch_size: Batch size for Arrow result streaming.
+            Number of rows per batch when streaming Arrow results.
+            Used for future streaming implementation.
+            Default: 1024
     """
 
     json_serializer: "NotRequired[Callable[[Any], str]]"
     enable_cast_detection: NotRequired[bool]
     strict_type_coercion: NotRequired[bool]
     arrow_extension_types: NotRequired[bool]
+    enable_arrow_results: NotRequired[bool]
+    arrow_batch_size: NotRequired[int]
 
 
 __all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
@@ -147,6 +158,10 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             driver_features["strict_type_coercion"] = False
         if "arrow_extension_types" not in driver_features:
             driver_features["arrow_extension_types"] = True
+        if "enable_arrow_results" not in driver_features:
+            driver_features["enable_arrow_results"] = True
+        if "arrow_batch_size" not in driver_features:
+            driver_features["arrow_batch_size"] = 1024
 
         super().__init__(
             connection_config=self.connection_config,

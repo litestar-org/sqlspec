@@ -33,8 +33,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
 
-    from sqlspec.core import SQL, SQLResult
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import SQL, SQLResult, Statement, StatementFilter
+    from sqlspec.core.result import ArrowResult
     from sqlspec.driver import SyncDataDictionaryBase
+    from sqlspec.typing import StatementParameters
 
 logger = logging.getLogger(__name__)
 
@@ -758,3 +761,137 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
             self._data_dictionary = BigQuerySyncDataDictionary()
         return self._data_dictionary
+
+    def _storage_api_available(self) -> bool:
+        """Check if BigQuery Storage API is available.
+
+        Returns:
+            True if Storage API is available and working, False otherwise
+        """
+        try:
+            from google.cloud import bigquery_storage_v1  # type: ignore[attr-defined]
+
+            # Try to create client (will fail if API not enabled or credentials missing)
+            _ = bigquery_storage_v1.BigQueryReadClient()
+        except ImportError:
+            # Package not installed
+            return False
+        except Exception:
+            # API not enabled or permissions issue
+            return False
+        else:
+            return True
+
+    def select_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        return_format: str = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Execute query and return results as Apache Arrow (BigQuery native with Storage API).
+
+        BigQuery provides native Arrow via Storage API (query_job.to_arrow()).
+        Requires google-cloud-bigquery-storage package and API enabled.
+        Falls back to dict conversion if Storage API not available.
+
+        Args:
+            statement: SQL statement, string, or QueryBuilder
+            *parameters: Query parameters or filters
+            statement_config: Optional statement configuration override
+            return_format: "table" for pyarrow.Table (default), "batch" for RecordBatch
+            native_only: If True, raise error if Storage API unavailable (default: False)
+            batch_size: Batch size hint (for future streaming implementation)
+            arrow_schema: Optional pyarrow.Schema for type casting
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            ArrowResult with native Arrow data (if Storage API available) or converted data
+
+        Raises:
+            MissingDependencyError: If pyarrow not installed, or if Storage API not available and native_only=True
+            SQLExecutionError: If query execution fails
+
+        Example:
+            >>> # Will use native Arrow if Storage API available, otherwise converts
+            >>> result = driver.select_to_arrow(
+            ...     "SELECT * FROM dataset.users WHERE age > @age",
+            ...     {"age": 18},
+            ... )
+            >>> df = result.to_pandas()
+
+            >>> # Force native Arrow (raises if Storage API unavailable)
+            >>> result = driver.select_to_arrow(
+            ...     "SELECT * FROM dataset.users", native_only=True
+            ... )
+        """
+        from sqlspec.utils.module_loader import ensure_pyarrow
+
+        ensure_pyarrow()
+
+        # Check Storage API availability
+        if not self._storage_api_available():
+            if native_only:
+                from sqlspec.exceptions import MissingDependencyError
+
+                msg = (
+                    "BigQuery native Arrow requires Storage API.\n"
+                    "1. Install: pip install google-cloud-bigquery-storage\n"
+                    "2. Enable API: https://console.cloud.google.com/apis/library/bigquerystorage.googleapis.com\n"
+                    "3. Grant permissions: roles/bigquery.dataViewer"
+                )
+                raise MissingDependencyError(
+                    package="google-cloud-bigquery-storage", install_package="google-cloud-bigquery-storage"
+                ) from RuntimeError(msg)
+
+            # Fallback to conversion path
+            result: ArrowResult = super().select_to_arrow(
+                statement,
+                *parameters,
+                statement_config=statement_config,
+                return_format=return_format,
+                native_only=native_only,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
+                **kwargs,
+            )
+            return result
+
+        # Use native path with Storage API
+        import pyarrow as pa
+
+        from sqlspec.core.result import create_arrow_result
+
+        # Prepare statement
+        config = statement_config or self.statement_config
+        prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+
+        # Get compiled SQL and parameters
+        sql, driver_params = self._get_compiled_sql(prepared_statement, config)
+
+        # Execute query using existing _run_query_job method
+        with self.handle_database_exceptions():
+            query_job = self._run_query_job(sql, driver_params)
+            query_job.result()  # Wait for completion
+
+            # Native Arrow via Storage API
+            arrow_table = query_job.to_arrow()
+
+            # Apply schema casting if requested
+            if arrow_schema is not None:
+                arrow_table = arrow_table.cast(arrow_schema)
+
+            # Convert to batch if requested
+            if return_format == "batch":
+                batches = arrow_table.to_batches()
+                arrow_data: Any = batches[0] if batches else pa.RecordBatch.from_pydict({})
+            else:
+                arrow_data = arrow_table
+
+        # Create ArrowResult
+        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_data.num_rows)
