@@ -223,12 +223,12 @@ Complete Example
 ================
 
 Here's a complete working example that demonstrates all key operations. The full runnable
-code is available at :doc:`/examples/adk_basic_asyncpg`.
+code is available at :doc:`/examples/extensions/adk/basic_aiosqlite`.
 
-.. literalinclude:: ../../examples/adk_basic_asyncpg.py
+.. literalinclude:: ../../examples/extensions/adk/basic_aiosqlite.py
    :language: python
    :lines: 27-109
-   :caption: Complete ADK session management example (adk_basic_asyncpg.py)
+   :caption: Complete ADK session management example (basic_aiosqlite.py)
    :emphasize-lines: 1-5, 11-12, 17-18, 33-34
 
 Running the Example
@@ -238,7 +238,7 @@ Run the example directly:
 
 .. code-block:: bash
 
-   python docs/examples/adk_basic_asyncpg.py
+   python docs/examples/extensions/adk/basic_aiosqlite.py
 
 You should see output similar to:
 
@@ -489,7 +489,7 @@ Complete example linking sessions to tenants:
 
 .. seealso::
 
-   :doc:`/examples/adk_duckdb_user_fk`
+   :doc:`/examples/patterns/multi_tenant/router`
       Complete runnable multi-tenant example with owner ID column
 
 Cascade Delete Behavior
@@ -623,8 +623,8 @@ To learn more:
 
 - :doc:`api` - Explore the complete API reference
 - :doc:`adapters` - Learn about database-specific features
-- :doc:`/examples/adk_litestar_asyncpg` - See Litestar web framework integration
-- :doc:`/examples/adk_multi_tenant` - Learn multi-tenant patterns
+- :doc:`/examples/extensions/adk/litestar_aiosqlite` - Litestar web framework integration
+- :doc:`/examples/patterns/multi_tenant/router` - Learn multi-tenant routing basics
 - :doc:`schema` - Understand the database schema
 
 Common Patterns
@@ -672,5 +672,5 @@ See Also
 - :doc:`installation` - Installation instructions
 - :doc:`api` - API reference
 - :doc:`adapters` - Database adapter details
-- :doc:`/examples/adk_litestar_asyncpg` - Litestar framework integration
-- :doc:`/examples/adk_basic_sqlite` - SQLite for local development
+- :doc:`/examples/extensions/adk/litestar_aiosqlite` - Litestar framework integration
+- :doc:`/examples/extensions/adk/basic_aiosqlite` - SQLite for local development

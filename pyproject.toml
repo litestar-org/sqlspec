@@ -387,8 +387,6 @@ reportPrivateUsage = true
 reportTypedDictNotRequiredAccess = false
 reportUnknownArgumentType = false
 reportUnnecessaryCast = false
-reportUnnecessaryTypeIgnoreComments = false
-root = "."
 venv = ".venv"
 
 [tool.slotscheck]

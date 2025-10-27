@@ -803,19 +803,9 @@ Comparison: AsyncMy vs Other Adapters
 Example: Full Application
 ==========================
 
-See the complete runnable example:
-
-.. literalinclude:: ../../examples/adk_basic_mysql.py
-   :language: python
-
-This example demonstrates:
-
-- Connection pool configuration
-- Session and event management
-- Multi-turn conversation handling
-- State management with JSON
-- Session listing and cleanup
-- Proper async/await patterns
+The AsyncMy flow mirrors :doc:`/examples/extensions/adk/basic_aiosqlite`. Replace the registry
+configuration with ``AsyncmyConfig`` and use the AsyncMy ADK store to keep the rest of the code
+identical (``create_session``, ``append_event``, ``list_sessions``).
 
 API Reference
 =============
@@ -832,7 +822,7 @@ See Also
 - :doc:`../quickstart` - Quick start guide
 - :doc:`../adapters` - Adapter comparison
 - :doc:`../schema` - Database schema details
-- :doc:`/examples/adk_basic_mysql` - Complete example
+- :doc:`/examples/adapters/psycopg/connect_sync` - Connection pattern reference (swap ``PsycopgConfig`` for ``AsyncmyConfig`` when targeting MySQL)
 - `AsyncMy Documentation <https://github.com/long2ice/asyncmy>`_ - Official AsyncMy documentation
 - `MySQL JSON Functions <https://dev.mysql.com/doc/refman/8.0/en/json-functions.html>`_ - MySQL JSON reference
 - `MariaDB JSON Functions <https://mariadb.com/kb/en/json-functions/>`_ - MariaDB JSON reference

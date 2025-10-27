@@ -1,299 +1,140 @@
-================
-Examples Gallery
-================
+=======================
+SQLSpec Example Library
+=======================
+
+The example catalog now mirrors the way teams explore SQLSpec. Each snippet focuses on a single idea, keeps inline commentary to a minimum, and favors lightweight backends (SQLite, AioSQLite, DuckDB) so the code can run anywhere.
+
+Quick Start
+===========
+
+Run a smoke sweep that exercises the SQLite/AioSQLite/DuckDB demos:
+
+.. code-block:: console
+
+   make examples-smoke
+
+Each file exposes a ``main()`` helper so you can execute it directly:
+
+.. code-block:: console
+
+   uv run python docs/examples/frameworks/litestar/aiosqlite_app.py
+
+Folder Guide
+============
+
+Frameworks
+----------
+
+.. list-table:: Litestar demos
+   :header-rows: 1
+
+   * - File
+     - Description
+   * - ``frameworks/litestar/aiosqlite_app.py``
+     - Async Litestar app backed by SQLSpec and AioSQLite with automatic seeding.
+   * - ``frameworks/litestar/duckdb_app.py``
+     - Sync Litestar handlers using DuckDB for quick analytics dashboards.
+   * - ``frameworks/litestar/sqlite_app.py``
+      - Litestar routes backed by the synchronous SQLite adapter.
+
+.. list-table:: FastAPI / Starlette / Flask demos
+   :header-rows: 1
+
+   * - File
+     - Description
+   * - ``frameworks/fastapi/aiosqlite_app.py``
+     - FastAPI app using the AioSQLite adapter with dependency-injected sessions.
+   * - ``frameworks/fastapi/sqlite_app.py``
+     - Synchronous FastAPI handlers powered by the SQLite adapter.
+   * - ``frameworks/starlette/aiosqlite_app.py``
+     - Starlette routes that read from an AioSQLite-backed dataset.
+   * - ``frameworks/flask/sqlite_app.py``
+     - Flask blueprint that serves data via the synchronous SQLite adapter.
+
+Adapters
+--------
+
+.. list-table:: Connection-focused snippets
+   :header-rows: 1
+
+   * - File
+     - Adapter
+     - Highlights
+   * - ``adapters/asyncpg/connect_pool.py``
+     - AsyncPG
+     - Minimal pool configuration plus a version probe.
+   * - ``adapters/psycopg/connect_sync.py``
+     - Psycopg (sync)
+     - Blocking workflow familiar to scripts and management commands.
+   * - ``adapters/oracledb/connect_async.py``
+     - oracledb (async)
+     - Async driver setup with timestamp sampling.
+
+Patterns
+--------
+
+.. list-table:: Common tasks
+   :header-rows: 1
+
+   * - File
+     - Scenario
+   * - ``patterns/builder/select_and_insert.py``
+     - Fluent SQL builder usage with a tiny articles dataset.
+   * - ``patterns/migrations/runner_basic.py``
+     - Sync migration commands pointed at bundled demo migrations.
+   * - ``patterns/migrations/files/0001_create_articles.py``
+     - Python migration file consumed by the runner example.
+   * - ``patterns/multi_tenant/router.py``
+     - Routing requests to dedicated SQLite configs per tenant slug.
+   * - ``patterns/configs/multi_adapter_registry.py``
+     - Register multiple adapters on a single SQLSpec registry.
+
+Loaders
+-------
+
+.. list-table:: SQL file loading
+   :header-rows: 1
+
+   * - File
+     - Description
+   * - ``loaders/sql_files.py``
+     - Shows how ``SQLFileLoader`` binds named queries in ``queries/users.sql`` and executes them with SQLite.
 
-Welcome to the SQLSpec examples gallery! This collection demonstrates real-world usage patterns, database-specific implementations, framework integrations, and advanced features.
+Extensions
+----------
 
-.. tip::
-   All examples are fully functional and can be run directly. Many include inline dependencies using PEP 723 (``/// script`` blocks) for easy execution with tools like ``uv run``.
+.. list-table:: Adapter Development Kit
+   :header-rows: 1
 
-Getting Started Examples
-========================
+   * - File
+     - Description
+   * - ``extensions/adk/basic_aiosqlite.py``
+     - Create an ADK session, append events, and fetch the transcript using SQLSpec’s AioSQLite store.
+   * - ``extensions/adk/litestar_aiosqlite.py``
+     - Wire ``SQLSpecSessionService`` into Litestar and expose a simple ``/sessions`` endpoint.
 
-Basic Usage
------------
-
-.. card:: Standalone Demo - Interactive SQL Builder
-   :link: standalone_demo.py
-
-   **Comprehensive demonstration** of SQLSpec's capabilities using DuckDB:
-
-   - Advanced SQL query construction patterns
-   - Filter composition and pipeline processing
-   - Statement analysis and validation
-   - Performance instrumentation
-   - Interactive CLI mode with rich terminal output
-
-   Perfect for learning SQLSpec's core features interactively.
-
-.. card:: SQL File Loader Demo
-   :link: sql_file_loader_demo.py
-
-   Learn how to organize SQL queries in files using **aiosql-style named queries**:
-
-   - Loading SQL from files and URIs
-   - Caching behavior and performance
-   - Database integration patterns
-   - Mixing file-loaded and runtime queries
-   - Storage backend usage
-
-   Ideal for projects that prefer SQL files over builder patterns.
-
-Database-Specific Examples
-===========================
-
-PostgreSQL Adapters
--------------------
-
-.. grid:: 2
-
-   .. grid-item-card:: AsyncPG (Async)
-      :link: asyncpg_example.py
-
-      Fast async PostgreSQL with native connection pooling:
-
-      - Connection pool configuration
-      - Query mixins (select, select_one, select_value)
-      - Query builder integration
-      - Transaction handling
-      - Pagination patterns
-
-   .. grid-item-card:: Psycopg (Async)
-      :link: psycopg_async_example.py
-
-      Modern async PostgreSQL driver:
-
-      - Async connection management
-      - Parameter binding ($1, $2 style)
-      - CRUD operations
-      - Error handling
-
-   .. grid-item-card:: Psycopg (Sync)
-      :link: psycopg_sync_example.py
-
-      Synchronous PostgreSQL operations:
-
-      - Blocking connection patterns
-      - Traditional sync workflow
-      - Simple setup for scripts
-
-   .. grid-item-card:: psqlpy (High Performance)
-      :link: psqlpy_example.py
-
-      Rust-based PostgreSQL driver for maximum performance:
-
-      - Zero-copy result handling
-      - Connection pooling
-      - Advanced query patterns
-
-SQLite Adapters
----------------
-
-.. grid:: 2
-
-   .. grid-item-card:: SQLite (Sync)
-      :link: sqlite_example.py
-
-      Standard synchronous SQLite:
-
-      - File and in-memory databases
-      - Simple setup
-      - Local development
-
-   .. grid-item-card:: aiosqlite (Async)
-      :link: aiosqlite_example.py
-
-      Async SQLite adapter:
-
-      - Non-blocking operations
-      - Async/await patterns
-      - Integration with async apps
-
-DuckDB
-------
-
-.. card:: DuckDB Adapter
-   :link: duckdb_example.py
-
-   Embedded analytical database:
-
-   - In-memory analytics
-   - Parquet/CSV import
-   - OLAP query patterns
-   - Fast aggregations
-
-.. card:: Standalone DuckDB Demo
-   :link: standalone_duckdb.py
-
-   Advanced DuckDB usage with SQLSpec's SQL builder and filter system.
-
-Other Databases
----------------
-
-.. grid:: 3
-
-   .. grid-item-card:: MySQL (asyncmy)
-      :link: asyncmy_example.py
-
-      Async MySQL operations
-
-   .. grid-item-card:: Oracle (Sync)
-      :link: oracledb_sync_example.py
-
-      Synchronous Oracle database
-
-   .. grid-item-card:: Oracle (Async)
-      :link: oracledb_async_example.py
-
-      Async Oracle operations
-
-   .. grid-item-card:: BigQuery
-      :link: bigquery_example.py
-
-      Google Cloud BigQuery integration
-
-   .. grid-item-card:: ADBC
-      :link: adbc_example.py
-
-      Arrow Database Connectivity
-
-Framework Integration Examples
-===============================
-
-Litestar Web Framework
-----------------------
-
-.. grid:: 2
-
-   .. grid-item-card:: Single Database Setup
-      :link: litestar_single_db.py
-
-      Simple Litestar app with one database:
-
-      - SQLSpec plugin configuration
-      - Dependency injection
-      - Route handler patterns
-      - Health check endpoints
-
-   .. grid-item-card:: Multi-Database Setup
-      :link: litestar_multi_db.py
-
-      Managing multiple databases:
-
-      - Multiple adapter configurations
-      - Database-specific route handlers
-      - Connection management
-      - Cross-database operations
-
-   .. grid-item-card:: AsyncPG Integration
-      :link: litestar_asyncpg.py
-
-      Production-ready PostgreSQL setup:
-
-      - Connection pooling
-      - Async request handlers
-      - Error handling
-      - Database introspection
-
-   .. grid-item-card:: Psycopg Integration
-      :link: litestar_psycopg.py
-
-      Alternative PostgreSQL setup with psycopg driver
-
-   .. grid-item-card:: DuckLLM Example
-      :link: litestar_duckllm.py
-
-      Advanced example combining DuckDB with LLM features
-
-Example Categories
-==================
-
-By Use Case
------------
-
-**Learning SQLSpec Basics:**
-
-1. ``standalone_demo.py`` - Interactive exploration
-2. ``asyncpg_example.py`` - Core query patterns
-3. ``sqlite_example.py`` - Simple local setup
-
-**Production Applications:**
-
-1. ``litestar_asyncpg.py`` - Web app with PostgreSQL
-2. ``sql_file_loader_demo.py`` - Query organization
-3. ``litestar_multi_db.py`` - Complex applications
-
-**Performance Critical:**
-
-1. ``psqlpy_example.py`` - Rust-based driver
-2. ``duckdb_example.py`` - In-memory analytics
-3. ``adbc_example.py`` - Arrow integration
-
-By Database Type
+Shared Utilities
 ----------------
 
-**Relational (OLTP):**
+``shared/configs.py`` and ``shared/data.py`` provide registry builders and seed data so the individual examples can stay short and consistent.
 
-- PostgreSQL: asyncpg, psycopg, psqlpy
-- MySQL: asyncmy
-- SQLite: sqlite, aiosqlite
-- Oracle: oracledb (sync/async)
+.. toctree::
+   :hidden:
 
-**Analytical (OLAP):**
-
-- DuckDB (embedded analytics)
-- BigQuery (cloud data warehouse)
-
-**Modern Standards:**
-
-- ADBC (Arrow Database Connectivity)
-
-Running Examples
-================
-
-Most examples can be run directly with Python:
-
-.. code-block:: bash
-
-   # Run interactive demo
-   python docs/examples/standalone_demo.py
-
-   # Run with uv (automatically installs dependencies from script block)
-   uv run docs/examples/litestar_asyncpg.py
-
-   # Run with specific adapter
-   python docs/examples/asyncpg_example.py
-
-Some examples require running databases. Use the development infrastructure:
-
-.. code-block:: bash
-
-   # Start all databases
-   make infra-up
-
-   # Start specific database
-   make infra-postgres   # PostgreSQL on port 5433
-   make infra-mysql      # MySQL on port 3306
-   make infra-oracle     # Oracle on port 1521
-
-   # Stop infrastructure
-   make infra-down
-
-Example File Structure
-======================
-
-Each example typically includes:
-
-1. **Docstring** - Explains what the example demonstrates
-2. **Dependencies** - PEP 723 script block (where applicable)
-3. **Imports** - Required SQLSpec and adapter imports
-4. **Configuration** - Database connection setup
-5. **Demonstration Code** - Practical usage patterns
-6. **Main Function** - Entry point with error handling
-
-Contributing Examples
-=====================
-
-Have a useful SQLSpec pattern to share? Contributions are welcome!
-
-See :doc:`/contributing/index` for guidelines on adding new examples.
+   frameworks/litestar/aiosqlite_app
+   frameworks/litestar/duckdb_app
+   frameworks/litestar/sqlite_app
+   adapters/asyncpg/connect_pool
+   adapters/psycopg/connect_sync
+   adapters/oracledb/connect_async
+   patterns/builder/select_and_insert
+   patterns/migrations/runner_basic
+   patterns/multi_tenant/router
+   loaders/sql_files
+   extensions/adk/basic_aiosqlite
+   extensions/adk/litestar_aiosqlite
+   frameworks/fastapi/aiosqlite_app
+   frameworks/fastapi/sqlite_app
+   frameworks/starlette/aiosqlite_app
+   frameworks/flask/sqlite_app
+   patterns/configs/multi_adapter_registry

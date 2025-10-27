@@ -1,0 +1,1 @@
+"""Adapter Development Kit examples."""

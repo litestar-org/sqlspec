@@ -50,10 +50,10 @@ SQLSpecSessionService
 
    .. seealso::
 
-      :doc:`/examples/adk_basic_asyncpg`
+      :doc:`/examples/extensions/adk/basic_aiosqlite`
          Complete runnable example with session creation and event management
 
-      :doc:`/examples/adk_litestar_asyncpg`
+      :doc:`/examples/extensions/adk/litestar_aiosqlite`
          Web framework integration using Litestar
 
 Base Store Classes
@@ -125,7 +125,7 @@ BaseAsyncADKStore
 
    .. seealso::
 
-      :doc:`/examples/adk_multi_tenant`
+      :doc:`/examples/patterns/multi_tenant/router`
          Multi-tenant example showing custom table names for tenant isolation
 
 BaseSyncADKStore
@@ -492,7 +492,7 @@ See Also
 
 - :doc:`adapters` - Database-specific implementations
 - :doc:`schema` - Database schema reference
-- :doc:`/examples/adk_basic_asyncpg` - Basic usage example
-- :doc:`/examples/adk_litestar_asyncpg` - Litestar web framework integration
-- :doc:`/examples/adk_multi_tenant` - Multi-tenant deployment patterns
+- :doc:`/examples/extensions/adk/basic_aiosqlite` - Basic usage example
+- :doc:`/examples/extensions/adk/litestar_aiosqlite` - Litestar web framework integration
+- :doc:`/examples/patterns/multi_tenant/router` - Multi-tenant deployment patterns
 - `Google ADK Documentation <https://github.com/google/genai>`_

@@ -473,7 +473,7 @@ Example: Full Application
 
 See the complete runnable example:
 
-.. literalinclude:: ../../examples/adk_basic_aiosqlite.py
+.. literalinclude:: ../../examples/extensions/adk/basic_aiosqlite.py
    :language: python
 
 This example demonstrates:

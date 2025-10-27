@@ -394,18 +394,9 @@ Comparison: DuckDB vs PostgreSQL
 Example: Full Application
 ==========================
 
-See the complete runnable example:
-
-.. literalinclude:: ../../examples/adk_basic_duckdb.py
-   :language: python
-
-This example demonstrates:
-
-- Zero-configuration setup
-- Session and event management
-- Multi-session handling
-- Analytical query patterns
-- Proper cleanup
+Follow the same script as :doc:`/examples/extensions/adk/basic_aiosqlite` and swap in
+``DuckDBConfig`` plus the DuckDB ADK store. Because DuckDB runs in-process, you can drop the
+connection pooling configuration entirely while keeping the session service logic identical.
 
 Troubleshooting
 ===============
@@ -482,6 +473,6 @@ See Also
 - :doc:`../quickstart` - Quick start guide
 - :doc:`../adapters` - Adapter comparison
 - :doc:`../schema` - Database schema details
-- :doc:`/examples/adk_basic_duckdb` - Complete example
+- :doc:`/examples/extensions/adk/basic_aiosqlite` - Reference implementation (swap in DuckDB config)
 - `DuckDB Documentation <https://duckdb.org/docs/>`_ - Official DuckDB documentation
 - `DuckDB SQL Reference <https://duckdb.org/docs/sql/introduction>`_ - SQL syntax and functions

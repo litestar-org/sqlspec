@@ -1,0 +1,1 @@
+"""Common SQLSpec usage patterns."""
