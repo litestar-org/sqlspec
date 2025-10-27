@@ -53,8 +53,8 @@ def test_uses_starlette_default_session_key() -> None:
 
     plugin = SQLSpecPlugin(sqlspec)
 
-    assert len(plugin._config_states) == 1
-    assert plugin._config_states[0].session_key == DEFAULT_SESSION_KEY
+    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].session_key == DEFAULT_SESSION_KEY  # pyright: ignore[reportPrivateUsage]
     assert DEFAULT_SESSION_KEY == "db_session"
 
 
@@ -69,8 +69,8 @@ def test_respects_custom_session_key() -> None:
 
     plugin = SQLSpecPlugin(sqlspec)
 
-    assert len(plugin._config_states) == 1
-    assert plugin._config_states[0].session_key == custom_key
+    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].session_key == custom_key  # pyright: ignore[reportPrivateUsage]
 
 
 def test_provide_session_works_in_route() -> None:

@@ -65,7 +65,7 @@ def test_shutdown_closes_async_pools_and_stops_portal(monkeypatch: pytest.Monkey
         plugin.shutdown()
 
         assert close_calls == 1
-        assert plugin._portal is None
+        assert plugin._portal is None  # pyright: ignore[reportPrivateUsage]
 
 
 def test_default_session_key_is_db_session() -> None:
@@ -81,8 +81,8 @@ def test_uses_default_session_key_when_not_configured() -> None:
 
     plugin = SQLSpecPlugin(sqlspec)
 
-    assert len(plugin._config_states) == 1
-    assert plugin._config_states[0].session_key == DEFAULT_SESSION_KEY
+    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].session_key == DEFAULT_SESSION_KEY  # pyright: ignore[reportPrivateUsage]
 
 
 def test_respects_custom_session_key() -> None:
@@ -94,5 +94,5 @@ def test_respects_custom_session_key() -> None:
 
     plugin = SQLSpecPlugin(sqlspec)
 
-    assert len(plugin._config_states) == 1
-    assert plugin._config_states[0].session_key == custom_key
+    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].session_key == custom_key  # pyright: ignore[reportPrivateUsage]

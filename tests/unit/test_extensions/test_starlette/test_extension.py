@@ -27,8 +27,8 @@ def test_uses_default_session_key_when_not_configured() -> None:
 
     plugin = SQLSpecPlugin(sqlspec)
 
-    assert len(plugin._config_states) == 1
-    assert plugin._config_states[0].session_key == DEFAULT_SESSION_KEY
+    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].session_key == DEFAULT_SESSION_KEY  # pyright: ignore[reportPrivateUsage]
 
 
 def test_respects_custom_session_key() -> None:
@@ -42,8 +42,8 @@ def test_respects_custom_session_key() -> None:
 
     plugin = SQLSpecPlugin(sqlspec)
 
-    assert len(plugin._config_states) == 1
-    assert plugin._config_states[0].session_key == custom_key
+    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].session_key == custom_key  # pyright: ignore[reportPrivateUsage]
 
 
 def test_get_session_works_in_route() -> None:
