@@ -26,6 +26,7 @@ __all__ = (
     "ConfigT",
     "DatabaseConfigProtocol",
     "DriverT",
+    "FlaskConfig",
     "LifecycleConfig",
     "LitestarConfig",
     "MigrationConfig",
@@ -97,6 +98,49 @@ class MigrationConfig(TypedDict):
 
     transactional: NotRequired[bool]
     """Wrap migrations in transactions when supported. When enabled (default for adapters that support it), each migration runs in a transaction that is committed on success or rolled back on failure. This prevents partial migrations from leaving the database in an inconsistent state. Requires adapter support for transactional DDL. Defaults to True for PostgreSQL, SQLite, and DuckDB; False for MySQL, Oracle, and BigQuery. Individual migrations can override this with a '-- transactional: false' comment."""
+
+
+class FlaskConfig(TypedDict):
+    """Configuration options for Flask SQLSpec extension.
+
+    All fields are optional with sensible defaults. Use in extension_config["flask"]:
+
+    Example:
+        from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+        config = AsyncpgConfig(
+            pool_config={"dsn": "postgresql://localhost/mydb"},
+            extension_config={
+                "flask": {
+                    "commit_mode": "autocommit",
+                    "session_key": "db"
+                }
+            }
+        )
+
+    Notes:
+        This TypedDict provides type safety for extension config.
+        Flask extension uses g object for request-scoped storage.
+    """
+
+    connection_key: NotRequired[str]
+    """Key for storing connection in Flask g object. Default: auto-generated from session_key."""
+
+    session_key: NotRequired[str]
+    """Key for accessing session via plugin.get_session(). Default: 'default'."""
+
+    commit_mode: NotRequired[Literal["manual", "autocommit", "autocommit_include_redirect"]]
+    """Transaction commit mode. Default: 'manual'.
+    - manual: No automatic commits, user handles explicitly
+    - autocommit: Commits on 2xx status, rollback otherwise
+    - autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise
+    """
+
+    extra_commit_statuses: NotRequired[set[int]]
+    """Additional HTTP status codes that trigger commit. Default: None."""
+
+    extra_rollback_statuses: NotRequired[set[int]]
+    """Additional HTTP status codes that trigger rollback. Default: None."""
 
 
 class LitestarConfig(TypedDict):
