@@ -15,6 +15,7 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     IntegrityError,
@@ -32,9 +33,12 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from sqlspec.adapters.duckdb._types import DuckDBConnection
-    from sqlspec.core.result import SQLResult
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import Statement, StatementFilter
+    from sqlspec.core.result import ArrowResult, SQLResult
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
+    from sqlspec.typing import StatementParameters
 
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "duckdb_statement_config")
 
@@ -447,3 +451,85 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = DuckDBSyncDataDictionary()
         return self._data_dictionary
+
+    def select_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        return_format: str = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Execute query and return results as Apache Arrow (DuckDB native path).
+
+        DuckDB provides native Arrow support via cursor.arrow().
+        This is the fastest path due to DuckDB's columnar architecture.
+
+        Args:
+            statement: SQL statement, string, or QueryBuilder
+            *parameters: Query parameters or filters
+            statement_config: Optional statement configuration override
+            return_format: "table" for pyarrow.Table (default), "batch" for RecordBatch
+            native_only: Ignored for DuckDB (always uses native path)
+            batch_size: Batch size hint (for future streaming implementation)
+            arrow_schema: Optional pyarrow.Schema for type casting
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            ArrowResult with native Arrow data
+
+        Raises:
+            MissingDependencyError: If pyarrow not installed
+            SQLExecutionError: If query execution fails
+
+        Example:
+            >>> result = driver.select_to_arrow(
+            ...     "SELECT * FROM users WHERE age > ?", 18
+            ... )
+            >>> df = result.to_pandas()  # Fast zero-copy conversion
+        """
+        from sqlspec.utils.module_loader import ensure_pyarrow
+
+        ensure_pyarrow()
+
+        import pyarrow as pa
+
+        from sqlspec.core.result import create_arrow_result
+
+        # Prepare statement
+        config = statement_config or self.statement_config
+        prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+
+        # Execute query and get native Arrow
+        with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            if cursor is None:
+                msg = "Failed to create cursor"
+                raise DatabaseConnectionError(msg)
+
+            # Get compiled SQL and parameters
+            sql, driver_params = self._get_compiled_sql(prepared_statement, config)
+
+            # Execute query
+            cursor.execute(sql, driver_params or ())
+
+            # DuckDB native Arrow (zero-copy!)
+            arrow_reader = cursor.arrow()
+            arrow_table = arrow_reader.read_all()
+
+            # Apply schema casting if requested
+            if arrow_schema is not None:
+                arrow_table = arrow_table.cast(arrow_schema)
+
+            # Convert to batch if requested
+            if return_format == "batch":
+                batches = arrow_table.to_batches()
+                arrow_data: Any = batches[0] if batches else pa.RecordBatch.from_pydict({})
+            else:
+                arrow_data = arrow_table
+
+        # Create ArrowResult
+        return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_data.num_rows)
