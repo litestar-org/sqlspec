@@ -20,6 +20,7 @@ Replace `asyncpg` with your preferred database adapter (`psycopg`, `asyncmy`, `a
 
 ```python
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from sqlspec import SQLSpec
@@ -88,6 +89,79 @@ config = AsyncpgConfig(
 - **pool_key**: Key for storing pool in `app.state` (default: `"db_pool"`)
 - **extra_commit_statuses**: Additional HTTP statuses that trigger commit (default: empty set)
 - **extra_rollback_statuses**: Additional HTTP statuses that trigger rollback (default: empty set)
+
+## Multi-Database Configuration
+
+Starlette supports running multiple adapters side by side. Give each configuration its own
+`session_key`, `connection_key`, and `pool_key`, then resolve the appropriate session inside each request.
+`db_ext.get_session(request)` without a key uses the default `"db_session"` entry.
+
+```python
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.extensions.starlette import SQLSpecPlugin
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+sqlspec = SQLSpec()
+sqlspec.add_config(
+    AsyncpgConfig(
+        pool_config={"dsn": "postgresql://localhost/main"},
+        extension_config={
+            "starlette": {
+                "session_key": "primary",
+                "connection_key": "primary_connection",
+                "pool_key": "primary_pool",
+                "commit_mode": "autocommit",
+            }
+        },
+    )
+)
+
+sqlspec.add_config(
+    AiosqliteConfig(
+        pool_config={"database": "analytics.db"},
+        extension_config={
+            "starlette": {
+                "session_key": "analytics",
+                "connection_key": "analytics_connection",
+                "pool_key": "analytics_pool",
+                "commit_mode": "manual",
+            }
+        },
+    )
+)
+
+db_ext = SQLSpecPlugin(sqlspec)
+
+async def report(request: Request) -> JSONResponse:
+    core = db_ext.get_session(request, "primary")
+    analytics = db_ext.get_session(request, "analytics")
+    total_users = await core.select_value("SELECT COUNT(*) FROM users")
+    await analytics.execute("INSERT INTO page_views(path) VALUES (:path)", {"path": request.url.path})
+    analytics_conn = db_ext.get_connection(request, "analytics")
+    await analytics_conn.commit()
+    return JSONResponse({"users": total_users})
+
+app = Starlette(routes=[Route("/reports", report)])
+db_ext.init_app(app)
+```
+
+### Key Requirements
+
+- `session_key`, `connection_key`, and `pool_key` must be unique per configuration so the middleware can cache
+  values without collisions.
+- The first registered configuration becomes the implicit default for `db_ext.get_session(request)`.
+- Keep `connection_key` and `pool_key` readable—deriving them from `session_key` (e.g., `f"{session_key}_connection"`) helps avoid typos.
+
+### Troubleshooting
+
+- **"Duplicate state keys found"** → One of the keys overlaps between configs. Ensure all three keys are unique.
+- **"No configuration found for key"** → The requested `session_key` is missing or misspelled.
+- **Pool not closing** → The plugin closes pools inside the application lifespan. Ensure your ASGI server triggers
+  startup/shutdown (e.g., use `with TestClient(app)` during tests).
 
 ## Commit Modes
 

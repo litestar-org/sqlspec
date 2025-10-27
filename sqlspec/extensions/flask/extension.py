@@ -1,5 +1,6 @@
 """Flask extension for SQLSpec database integration."""
 
+import atexit
 from typing import TYPE_CHECKING, Any, Literal
 
 from sqlspec.base import SQLSpec
@@ -18,7 +19,7 @@ __all__ = ("SQLSpecPlugin",)
 logger = get_logger("extensions.flask")
 
 DEFAULT_COMMIT_MODE: Literal["manual"] = "manual"
-DEFAULT_SESSION_KEY = "default"
+DEFAULT_SESSION_KEY = "db_session"
 
 
 class SQLSpecPlugin:
@@ -66,6 +67,8 @@ class SQLSpecPlugin:
         self._config_states: list[FlaskConfigState] = []
         self._portal: PortalProvider | None = None
         self._has_async_configs = False
+        self._cleanup_registered = False
+        self._shutdown_complete = False
 
         for cfg in self._sqlspec.configs.values():
             state = self._create_config_state(cfg)
@@ -143,6 +146,7 @@ class SQLSpecPlugin:
         app.before_request(self._before_request_handler)
         app.after_request(self._after_request_handler)
         app.teardown_appcontext(self._teardown_appcontext_handler)
+        self._register_shutdown_hook()
 
         logger.debug("SQLSpec Flask extension initialized")
 
@@ -163,6 +167,15 @@ class SQLSpecPlugin:
                 raise ImproperConfigurationError(msg)
 
             all_keys.update(keys)
+
+    def _register_shutdown_hook(self) -> None:
+        """Register shutdown hook for pool and portal cleanup."""
+
+        if self._cleanup_registered:
+            return
+
+        atexit.register(self.shutdown)
+        self._cleanup_registered = True
 
     def _before_request_handler(self) -> None:
         """Acquire connection before request.
@@ -304,6 +317,42 @@ class SQLSpecPlugin:
 
         msg = f"No configuration found for key: {key}"
         raise ImproperConfigurationError(msg)
+
+    def shutdown(self) -> None:
+        """Dispose connection pools and stop async portal."""
+
+        if self._shutdown_complete:
+            return
+
+        self._shutdown_complete = True
+
+        for config_state in self._config_states:
+            if config_state.config.supports_connection_pooling:
+                self._close_pool_state(config_state)
+
+        if self._portal is not None:
+            try:
+                self._portal.stop()
+            except Exception:
+                logger.exception("Error stopping portal during shutdown")
+            finally:
+                self._portal = None
+
+    def _close_pool_state(self, config_state: FlaskConfigState) -> None:
+        """Close pool associated with configuration state."""
+
+        try:
+            if config_state.is_async:
+                if self._portal is None:
+                    logger.debug(
+                        "Portal not initialized - skipping async pool shutdown for %s", config_state.session_key
+                    )
+                    return
+                _ = self._portal.portal.call(config_state.config.close_pool)  # type: ignore[arg-type]
+            else:
+                config_state.config.close_pool()
+        except Exception:
+            logger.exception("Error closing pool during shutdown for key %s", config_state.session_key)
 
     def _execute_commit(self, session: Any, config_state: FlaskConfigState) -> None:
         """Execute commit on session.

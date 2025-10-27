@@ -197,3 +197,26 @@ def test_starlette_connection_pool_lifecycle() -> None:
             response = client.get("/")
             assert response.status_code == 200
             assert hasattr(app.state, "db_pool")
+
+
+def test_starlette_default_session_key() -> None:
+    """Test default session key matches explicit 'db_session'."""
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(pool_config={"database": tmp.name}, extension_config={"starlette": {}})
+        sql.add_config(config)
+        db_ext = SQLSpecPlugin(sql)
+
+        async def check_default(request: Request) -> Response:
+            session_default = db_ext.get_session(request)
+            session_named = db_ext.get_session(request, "db_session")
+            return JSONResponse({"same_session": session_default is session_named})
+
+        app = Starlette(routes=[Route("/", check_default)])
+        db_ext.init_app(app)
+
+        with TestClient(app) as client:
+            response = client.get("/")
+            assert response.status_code == 200
+            assert response.json() == {"same_session": True}

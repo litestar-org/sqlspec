@@ -81,13 +81,68 @@ config = SqliteConfig(
 ### Configuration Fields
 
 - **`connection_key`** (str, optional): Key for storing connection in Flask `g`. Default: auto-generated from `session_key`.
-- **`session_key`** (str, optional): Key for accessing session via `plugin.get_session(key)`. Default: `"default"`.
+- **`session_key`** (str, optional): Key for accessing sessions via `plugin.get_session(key)`. Default: `"db_session"`.
 - **`commit_mode`** (str, optional): Transaction handling mode. Default: `"manual"`.
-  - `"manual"`: No automatic transactions, user handles commits explicitly
-  - `"autocommit"`: Commits on 2xx status codes, rollback otherwise
-  - `"autocommit_include_redirect"`: Commits on 2xx-3xx status codes, rollback otherwise
+    - `"manual"`: No automatic transactions, user handles commits explicitly
+    - `"autocommit"`: Commits on 2xx status codes, rollback otherwise
+    - `"autocommit_include_redirect"`: Commits on 2xx-3xx status codes, rollback otherwise
 - **`extra_commit_statuses`** (set[int], optional): Additional HTTP status codes that trigger commit.
 - **`extra_rollback_statuses`** (set[int], optional): Additional HTTP status codes that trigger rollback.
+
+## Multi-Database Configuration
+
+Run as many database configs as you need by giving each one a unique `session_key`. The default key is
+`"db_session"`, so `plugin.get_session()` and `plugin.get_session("db_session")` return the same session out of the box.
+
+```python
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.adapters.sqlite import SqliteConfig
+
+sqlspec = SQLSpec()
+
+sqlspec.add_config(
+    AsyncpgConfig(
+        pool_config={"dsn": "postgresql://localhost/main"},
+        extension_config={"flask": {"session_key": "primary", "commit_mode": "autocommit"}},
+    )
+)
+
+sqlspec.add_config(
+    SqliteConfig(
+        pool_config={"database": "analytics.db"},
+        extension_config={"flask": {"session_key": "analytics", "commit_mode": "manual"}},
+    )
+)
+
+app = Flask(__name__)
+plugin = SQLSpecPlugin(sqlspec, app)
+
+@app.route("/reports")
+def reports() -> dict[str, int]:
+    primary = plugin.get_session("primary")
+    analytics = plugin.get_session("analytics")
+    total_users = primary.select_value("SELECT COUNT(*) AS c FROM users")
+    analytics.execute("INSERT INTO page_views (path) VALUES (?)", ("/reports",))
+    analytics.commit()
+    return {"users": total_users}
+```
+
+### Key Requirements
+
+- Every configuration must have a unique `session_key`. Flask automatically derives `connection_key` as
+  `sqlspec_connection_{session_key}` to avoid collisions.
+- Always call `plugin.get_session(key)` or `plugin.get_connection(key)` with the same string configured in
+  `extension_config`.
+- The first registered config becomes the implicit target for `plugin.get_session()` with no arguments.
+
+### Troubleshooting
+
+- **"Duplicate state keys found"** → Provide distinct `session_key` values for each config.
+- **"No configuration found for key"** → The key passed to `get_session()` does not match any configured
+  `session_key`.
+- **Portal cleanup** → If you create async configs, call `plugin.shutdown()` during teardown so connection pools
+  and the portal thread are disposed promptly (Flask does this automatically at interpreter exit).
 
 ## Commit Modes
 
@@ -278,6 +333,7 @@ def dashboard():
 ```
 
 **Key requirements**:
+
 - Each config must have a unique `session_key`
 - Access sessions via `plugin.get_session(key="your_key")`
 - Each database has independent transaction handling
@@ -357,6 +413,7 @@ def test_session_caching():
 ```
 
 This ensures:
+
 - Single database session per request
 - Consistent transaction boundaries
 - No accidental nested transactions
@@ -389,6 +446,7 @@ def list_users():
 ```
 
 **Portal behavior**:
+
 - Automatically created when any async config is registered
 - Zero overhead for sync-only configurations
 - Thread-safe with queue-based communication
@@ -397,6 +455,7 @@ def list_users():
 **Performance**: Portal adds ~1-2ms per async operation. For best performance, use sync adapters (`SqliteConfig`, `PsycopgConfig` sync mode, `DuckDBConfig`).
 
 **When to use async adapters**:
+
 - Need asyncpg's excellent connection pooling
 - Already using async elsewhere in your stack
 - Need async-specific driver features
@@ -497,11 +556,13 @@ def handle_exception(e):
 ### Sync vs Async Adapters
 
 **Sync adapters** (recommended for Flask):
+
 - Zero overhead
 - Direct database calls
 - Examples: `SqliteConfig`, `PsycopgConfig` sync mode, `DuckDBConfig`
 
 **Async adapters** (via portal):
+
 - ~1-2ms overhead per operation
 - Background thread with event loop
 - Examples: `AsyncpgConfig`, `AiosqliteConfig`, `AsyncmyConfig`
@@ -573,6 +634,7 @@ def list_users():
 ```
 
 **Benefits**:
+
 - Less boilerplate code
 - Automatic lifecycle management
 - Built-in transaction handling
@@ -619,6 +681,7 @@ config2 = SqliteConfig(
 **Cause**: Route returns non-2xx status code.
 
 **Solution**:
+
 1. Check your route returns 200-299 status code
 2. Or use `extra_commit_statuses` to commit on other status codes
 3. Or use `manual` mode and commit explicitly
@@ -628,6 +691,7 @@ config2 = SqliteConfig(
 **Cause**: Async operation took longer than 30 seconds.
 
 **Solution**:
+
 1. Optimize slow queries
 2. Consider using sync adapters for better performance
 3. Portal has hardcoded 30-second timeout - use async frameworks (Quart, FastAPI) for true async support

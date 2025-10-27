@@ -127,7 +127,7 @@ class FlaskConfig(TypedDict):
     """Key for storing connection in Flask g object. Default: auto-generated from session_key."""
 
     session_key: NotRequired[str]
-    """Key for accessing session via plugin.get_session(). Default: 'default'."""
+    """Key for accessing session via plugin.get_session(). Default: 'db_session'."""
 
     commit_mode: NotRequired[Literal["manual", "autocommit", "autocommit_include_redirect"]]
     """Transaction commit mode. Default: 'manual'.
