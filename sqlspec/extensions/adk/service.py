@@ -119,12 +119,12 @@ class SQLSpecSessionService(BaseSessionService):
 
         return record_to_session(record, events)
 
-    async def list_sessions(self, *, app_name: str, user_id: str) -> "ListSessionsResponse":
-        """List all sessions for an app and user.
+    async def list_sessions(self, *, app_name: str, user_id: str | None = None) -> "ListSessionsResponse":
+        """List all sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Name of the application.
-            user_id: ID of the user.
+            user_id: ID of the user. If None, all sessions for the app are listed.
 
         Returns:
             Response containing list of sessions (without events).

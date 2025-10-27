@@ -219,12 +219,12 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
-        """List all sessions for an app and user.
+    async def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+        """List all sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Name of the application.
-            user_id: ID of the user.
+            user_id: ID of the user. If None, returns all sessions for the app.
 
         Returns:
             List of session records.
@@ -440,12 +440,12 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
-        """List all sessions for an app and user.
+    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+        """List all sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Name of the application.
-            user_id: ID of the user.
+            user_id: ID of the user. If None, returns all sessions for the app.
 
         Returns:
             List of session records.

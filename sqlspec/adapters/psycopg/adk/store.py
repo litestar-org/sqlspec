@@ -298,29 +298,39 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(query, (session_id,))
 
-    async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
-        """List all sessions for a user in an app.
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Application name.
-            user_id: User identifier.
+            user_id: User identifier. If None, lists all sessions for the app.
 
         Returns:
             List of session records ordered by update_time DESC.
 
         Notes:
-            Uses composite index on (app_name, user_id).
+            Uses composite index on (app_name, user_id) when user_id is provided.
         """
-        query = pg_sql.SQL("""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {table}
-        WHERE app_name = %s AND user_id = %s
-        ORDER BY update_time DESC
-        """).format(table=pg_sql.Identifier(self._session_table))
+        if user_id is None:
+            query = pg_sql.SQL("""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {table}
+            WHERE app_name = %s
+            ORDER BY update_time DESC
+            """).format(table=pg_sql.Identifier(self._session_table))
+            params: tuple[str, ...] = (app_name,)
+        else:
+            query = pg_sql.SQL("""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {table}
+            WHERE app_name = %s AND user_id = %s
+            ORDER BY update_time DESC
+            """).format(table=pg_sql.Identifier(self._session_table))
+            params = (app_name, user_id)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor() as cur:
-                await cur.execute(query, (app_name, user_id))
+                await cur.execute(query, params)
                 rows = await cur.fetchall()
 
                 return [
@@ -743,29 +753,39 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(query, (session_id,))
 
-    def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
-        """List all sessions for a user in an app.
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Application name.
-            user_id: User identifier.
+            user_id: User identifier. If None, lists all sessions for the app.
 
         Returns:
             List of session records ordered by update_time DESC.
 
         Notes:
-            Uses composite index on (app_name, user_id).
+            Uses composite index on (app_name, user_id) when user_id is provided.
         """
-        query = pg_sql.SQL("""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {table}
-        WHERE app_name = %s AND user_id = %s
-        ORDER BY update_time DESC
-        """).format(table=pg_sql.Identifier(self._session_table))
+        if user_id is None:
+            query = pg_sql.SQL("""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {table}
+            WHERE app_name = %s
+            ORDER BY update_time DESC
+            """).format(table=pg_sql.Identifier(self._session_table))
+            params: tuple[str, ...] = (app_name,)
+        else:
+            query = pg_sql.SQL("""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {table}
+            WHERE app_name = %s AND user_id = %s
+            ORDER BY update_time DESC
+            """).format(table=pg_sql.Identifier(self._session_table))
+            params = (app_name, user_id)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(query, (app_name, user_id))
+                cur.execute(query, params)
                 rows = cur.fetchall()
 
                 return [

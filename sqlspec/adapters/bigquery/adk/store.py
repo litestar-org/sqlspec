@@ -351,20 +351,29 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
         """
         await async_(self._update_session_state)(session_id, state)
 
-    def _list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
+    def _list_sessions(self, app_name: str, user_id: "str | None") -> "list[SessionRecord]":
         """Synchronous implementation of list_sessions."""
         table_name = self._get_full_table_name(self._session_table)
-        sql = f"""
-        SELECT id, app_name, user_id, JSON_VALUE(state) as state, create_time, update_time
-        FROM {table_name}
-        WHERE app_name = @app_name AND user_id = @user_id
-        ORDER BY update_time DESC
-        """
 
-        params = [
-            ScalarQueryParameter("app_name", "STRING", app_name),
-            ScalarQueryParameter("user_id", "STRING", user_id),
-        ]
+        if user_id is None:
+            sql = f"""
+            SELECT id, app_name, user_id, JSON_VALUE(state) as state, create_time, update_time
+            FROM {table_name}
+            WHERE app_name = @app_name
+            ORDER BY update_time DESC
+            """
+            params = [ScalarQueryParameter("app_name", "STRING", app_name)]
+        else:
+            sql = f"""
+            SELECT id, app_name, user_id, JSON_VALUE(state) as state, create_time, update_time
+            FROM {table_name}
+            WHERE app_name = @app_name AND user_id = @user_id
+            ORDER BY update_time DESC
+            """
+            params = [
+                ScalarQueryParameter("app_name", "STRING", app_name),
+                ScalarQueryParameter("user_id", "STRING", user_id),
+            ]
 
         with self._config.provide_connection() as conn:
             job_config = QueryJobConfig(query_parameters=params)
@@ -383,18 +392,18 @@ class BigQueryADKStore(BaseAsyncADKStore["BigQueryConfig"]):
                 for row in results
             ]
 
-    async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
-        """List all sessions for a user in an app.
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Application name.
-            user_id: User identifier.
+            user_id: User identifier. If None, lists all sessions for the app.
 
         Returns:
             List of session records ordered by update_time DESC.
 
         Notes:
-            Uses clustering on (app_name, user_id) for efficiency.
+            Uses clustering on (app_name, user_id) when user_id is provided for efficiency.
         """
         return await async_(self._list_sessions)(app_name, user_id)
 
