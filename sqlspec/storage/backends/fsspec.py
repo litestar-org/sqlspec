@@ -5,9 +5,8 @@ from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import MissingDependencyError
-from sqlspec.storage._utils import ensure_pyarrow, resolve_storage_path
-from sqlspec.typing import FSSPEC_INSTALLED
+from sqlspec.storage._utils import resolve_storage_path
+from sqlspec.utils.module_loader import ensure_fsspec, ensure_pyarrow
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -105,8 +104,7 @@ class FSSpecBackend:
     __slots__ = ("_fs_uri", "backend_type", "base_path", "fs", "protocol")
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
-        if not FSSPEC_INSTALLED:
-            raise MissingDependencyError(package="fsspec", install_package="fsspec")
+        ensure_fsspec()
 
         base_path = kwargs.pop("base_path", "")
 

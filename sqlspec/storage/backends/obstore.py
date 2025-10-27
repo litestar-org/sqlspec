@@ -8,19 +8,17 @@ import fnmatch
 import io
 import logging
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Final, cast
+from pathlib import Path
+from typing import Any, Final, cast
 from urllib.parse import urlparse
-
-from sqlspec.utils.sync_tools import async_
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
-from sqlspec.storage._utils import ensure_pyarrow, resolve_storage_path
-from sqlspec.typing import OBSTORE_INSTALLED, ArrowRecordBatch, ArrowTable
+from sqlspec.exceptions import StorageOperationFailedError
+from sqlspec.storage._utils import resolve_storage_path
+from sqlspec.typing import ArrowRecordBatch, ArrowTable
+from sqlspec.utils.module_loader import ensure_obstore, ensure_pyarrow
+from sqlspec.utils.sync_tools import async_
 
 __all__ = ("ObStoreBackend",)
 
@@ -119,11 +117,8 @@ class ObStoreBackend:
             uri: Storage URI (e.g., 's3://bucket', 'file:///path', 'gs://bucket')
             **kwargs: Additional options including base_path and obstore configuration
 
-        Raises:
-            MissingDependencyError: If obstore is not installed.
         """
-        if not OBSTORE_INSTALLED:
-            raise MissingDependencyError(package="obstore", install_package="obstore")
+        ensure_obstore()
 
         try:
             # Extract base_path from kwargs
@@ -144,8 +139,6 @@ class ObStoreBackend:
 
                 self.store = MemoryStore()
             elif uri.startswith("file://"):
-                from pathlib import Path as PathlibPath
-
                 from obstore.store import LocalStore
 
                 # Parse URI to extract path
@@ -155,7 +148,7 @@ class ObStoreBackend:
                 # Append fragment if present (handles paths with '#' character)
                 if parsed.fragment:
                     path_str = f"{path_str}#{parsed.fragment}"
-                path_obj = PathlibPath(path_str)
+                path_obj = Path(path_str)
 
                 # If path points to a file, use its parent as the base directory
                 if path_obj.is_file():
@@ -194,9 +187,8 @@ class ObStoreBackend:
 
     def _resolve_path_for_local_store(self, path: "str | Path") -> str:
         """Resolve path for LocalStore which expects relative paths from its root."""
-        from pathlib import Path as PathlibPath
 
-        path_obj = PathlibPath(str(path))
+        path_obj = Path(str(path))
 
         # If absolute path, try to make it relative to LocalStore root
         if path_obj.is_absolute() and self._local_store_root:

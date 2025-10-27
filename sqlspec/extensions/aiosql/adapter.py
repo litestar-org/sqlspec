@@ -13,14 +13,8 @@ from typing import Any, ClassVar, Generic, TypeVar
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.exceptions import MissingDependencyError
-from sqlspec.typing import (
-    AIOSQL_INSTALLED,
-    AiosqlAsyncProtocol,
-    AiosqlParamType,
-    AiosqlSQLOperationType,
-    AiosqlSyncProtocol,
-)
+from sqlspec.typing import AiosqlAsyncProtocol, AiosqlParamType, AiosqlSQLOperationType, AiosqlSyncProtocol
+from sqlspec.utils.module_loader import ensure_aiosql
 
 logger = logging.getLogger("sqlspec.extensions.aiosql")
 
@@ -56,12 +50,6 @@ class CursorLike:
     def fetchone(self) -> Any | None:
         rows = self.fetchall()
         return rows[0] if rows else None
-
-
-def _check_aiosql_available() -> None:
-    if not AIOSQL_INSTALLED:
-        msg = "aiosql"
-        raise MissingDependencyError(msg, "aiosql")
 
 
 def _normalize_dialect(dialect: "str | Any | None") -> str:
@@ -105,7 +93,7 @@ class _AiosqlAdapterBase(Generic[DriverT]):
         Args:
             driver: SQLSpec driver to use for execution.
         """
-        _check_aiosql_available()
+        ensure_aiosql()
         self.driver: DriverT = driver
 
     def process_sql(self, query_name: str, op_type: "AiosqlSQLOperationType", sql: str) -> str:
