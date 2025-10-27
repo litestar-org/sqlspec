@@ -304,30 +304,40 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
             await conn.execute(sql, [session_id])
 
-    async def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
-        """List all sessions for a user in an app.
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Application name.
-            user_id: User identifier.
+            user_id: User identifier. If None, lists all sessions for the app.
 
         Returns:
             List of session records ordered by update_time DESC.
 
         Notes:
-            Uses composite index on (app_name, user_id).
+            Uses composite index on (app_name, user_id) when user_id is provided.
             Returns empty list if table doesn't exist.
         """
-        sql = f"""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE app_name = $1 AND user_id = $2
-        ORDER BY update_time DESC
-        """
+        if user_id is None:
+            sql = f"""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = $1
+            ORDER BY update_time DESC
+            """
+            params = [app_name]
+        else:
+            sql = f"""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = $1 AND user_id = $2
+            ORDER BY update_time DESC
+            """
+            params = [app_name, user_id]
 
         try:
             async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-                result = await conn.fetch(sql, [app_name, user_id])
+                result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
 
                 return [

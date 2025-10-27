@@ -639,31 +639,41 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def list_sessions(self, app_name: str, user_id: str) -> "list[SessionRecord]":
-        """List all sessions for a user in an app.
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Application name.
-            user_id: User identifier.
+            user_id: User identifier. If None, lists all sessions for the app.
 
         Returns:
             List of session records ordered by update_time DESC.
 
         Notes:
-            Uses composite index on (app_name, user_id).
+            Uses composite index on (app_name, user_id) when user_id is provided.
         """
-        sql = f"""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE app_name = ? AND user_id = ?
-        ORDER BY update_time DESC
-        """
+        if user_id is None:
+            sql = f"""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = ?
+            ORDER BY update_time DESC
+            """
+            params: tuple[str, ...] = (app_name,)
+        else:
+            sql = f"""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = ? AND user_id = ?
+            ORDER BY update_time DESC
+            """
+            params = (app_name, user_id)
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(sql, (app_name, user_id))
+                    cursor.execute(sql, params)
                     rows = cursor.fetchall()
 
                     return [
