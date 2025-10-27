@@ -41,7 +41,7 @@ db_ext = SQLSpecPlugin(sqlspec, app)
 
 
 @app.get("/users")
-async def list_users(db=Depends(db_ext.session_dependency())):
+async def list_users(db=Depends(db_ext.provide_session())):
     result = await db.execute("SELECT id, email FROM users ORDER BY id")
     return {"users": result.all()}
 ```
@@ -88,6 +88,82 @@ Note: Both Starlette and FastAPI extensions use the `"starlette"` key in `extens
 - **extra_commit_statuses**: Additional HTTP statuses that trigger commit (default: empty set)
 - **extra_rollback_statuses**: Additional HTTP statuses that trigger rollback (default: empty set)
 
+## Multi-Database Configuration
+
+FastAPI inherits the Starlette configuration model, so you can register multiple adapters by giving each one
+unique `session_key`, `connection_key`, and `pool_key` values. The plugin exposes dependency factories for each
+key, while `db_ext.provide_session()` with no arguments resolves the default `"db_session"` entry.
+
+```python
+from typing import Annotated, Any
+
+from fastapi import Depends, FastAPI
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.extensions.fastapi import SQLSpecPlugin
+
+sqlspec = SQLSpec()
+sqlspec.add_config(
+    AsyncpgConfig(
+        pool_config={"dsn": "postgresql://localhost/main"},
+        extension_config={
+            "starlette": {
+                "session_key": "primary",
+                "connection_key": "primary_connection",
+                "pool_key": "primary_pool",
+                "commit_mode": "autocommit",
+            }
+        },
+    )
+)
+
+sqlspec.add_config(
+    AiosqliteConfig(
+        pool_config={"database": "analytics.db"},
+        extension_config={
+            "starlette": {
+                "session_key": "analytics",
+                "connection_key": "analytics_connection",
+                "pool_key": "analytics_pool",
+                "commit_mode": "manual",
+            }
+        },
+    )
+)
+
+app = FastAPI()
+db_ext = SQLSpecPlugin(sqlspec, app=app)
+
+@app.get("/reports")
+async def reports(
+    primary: Annotated[Any, Depends(db_ext.provide_session("primary"))],
+    analytics: Annotated[Any, Depends(db_ext.provide_session("analytics"))],
+    analytics_conn: Annotated[Any, Depends(db_ext.provide_connection("analytics"))],
+) -> dict[str, int]:
+    total_users = await primary.select_value("SELECT COUNT(*) FROM users")
+    await analytics.execute("INSERT INTO page_views(path) VALUES (:path)", {"path": "/reports"})
+    await analytics_conn.commit()
+    return {"users": total_users}
+```
+
+### Key Requirements
+
+- Each configuration must define unique `session_key`, `connection_key`, and `pool_key` entries under the
+  `"starlette"` extension config.
+- Use the same string when wiring dependencies via `db_ext.provide_session("key")` or
+  `db_ext.provide_connection("key")`.
+- The default dependency `db_ext.provide_session()` resolves the implicit `"db_session"` configuration if you only
+  register one database.
+
+### Troubleshooting
+
+- **"Duplicate state keys found"** → Duplicate `session_key`, `connection_key`, or `pool_key`. Assign unique values.
+- **"No configuration found for key"** → The dependency references a key that has not been configured.
+- **Unexpected connection state** → Remember to await commits/rollbacks on the connection dependency when using
+  manual commit mode.
+
+
 ## Dependency Injection
 
 The FastAPI plugin provides two dependency factories:
@@ -100,7 +176,7 @@ Inject database sessions (SQLSpec drivers) into route handlers:
 @app.get("/users/{user_id}")
 async def get_user(
     user_id: int,
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ):
     result = await db.execute(
         "SELECT id, email FROM users WHERE id = $1",
@@ -117,7 +193,7 @@ Inject raw database connections for driver-specific operations:
 
 ```python
 @app.get("/raw")
-async def raw_query(conn=Depends(db_ext.connection_dependency())):
+async def raw_query(conn=Depends(db_ext.provide_connection())):
     cursor = await conn.cursor()
     await cursor.execute("SELECT 1")
     result = await cursor.fetchone()
@@ -145,8 +221,8 @@ db_ext = SQLSpecPlugin(sqlspec, app)
 @app.post("/users", status_code=201)
 async def create_user(
     email: str,
-    db=Depends(db_ext.session_dependency()),
-    conn=Depends(db_ext.connection_dependency())
+    db=Depends(db_ext.provide_session()),
+    conn=Depends(db_ext.provide_connection())
 ):
     await db.execute(
         "INSERT INTO users (email) VALUES ($1)",
@@ -177,7 +253,7 @@ db_ext = SQLSpecPlugin(sqlspec, app)
 @app.post("/users", status_code=201)
 async def create_user(
     email: str,
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ):
     await db.execute(
         "INSERT INTO users (email) VALUES ($1)",
@@ -208,7 +284,7 @@ db_ext = SQLSpecPlugin(sqlspec, app)
 @app.post("/users")
 async def create_user(
     email: str,
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ):
     await db.execute(
         "INSERT INTO users (email) VALUES ($1)",
@@ -261,8 +337,8 @@ db_ext = SQLSpecPlugin(sqlspec, app)
 
 @app.get("/dashboard")
 async def dashboard(
-    pg_db=Depends(db_ext.session_dependency("pg_db")),
-    mysql_db=Depends(db_ext.session_dependency("mysql_db"))
+    pg_db=Depends(db_ext.provide_session("pg_db")),
+    mysql_db=Depends(db_ext.provide_session("mysql_db"))
 ):
     users = await pg_db.execute("SELECT COUNT(*) FROM users")
     events = await mysql_db.execute("SELECT COUNT(*) FROM events")
@@ -295,7 +371,7 @@ class User(BaseModel):
 @app.post("/users", response_model=User, status_code=201)
 async def create_user(
     user: UserCreate,
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ):
     result = await db.execute(
         "INSERT INTO users (email) VALUES ($1) RETURNING id, email",
@@ -308,7 +384,7 @@ async def create_user(
 @app.get("/users/{user_id}", response_model=User)
 async def get_user(
     user_id: int,
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ):
     result = await db.execute(
         "SELECT id, email FROM users WHERE id = $1",
@@ -335,7 +411,7 @@ class User(msgspec.Struct):
 
 
 @app.get("/users")
-async def list_users(db=Depends(db_ext.session_dependency())) -> list[User]:
+async def list_users(db=Depends(db_ext.provide_session())) -> list[User]:
     result = await db.execute("SELECT id, email FROM users ORDER BY id")
     return result.all(schema_type=User)
 
@@ -343,7 +419,7 @@ async def list_users(db=Depends(db_ext.session_dependency())) -> list[User]:
 @app.get("/users/{user_id}")
 async def get_user(
     user_id: int,
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ) -> User:
     result = await db.execute(
         "SELECT id, email FROM users WHERE id = $1",
@@ -361,8 +437,8 @@ Sessions are cached per request to ensure consistency:
 ```python
 @app.get("/example")
 async def example(
-    db1=Depends(db_ext.session_dependency()),
-    db2=Depends(db_ext.session_dependency())
+    db1=Depends(db_ext.provide_session()),
+    db2=Depends(db_ext.provide_session())
 ):
     assert db1 is db2
 
@@ -434,14 +510,14 @@ def test_users_endpoint():
     @app.post("/users", status_code=201)
     async def create_user(
         email: str,
-        db=Depends(db_ext.session_dependency())
+        db=Depends(db_ext.provide_session())
     ):
         await db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT)")
         await db.execute("INSERT INTO users (email) VALUES (?)", (email,))
         return {"created": True}
 
     @app.get("/users")
-    async def list_users(db=Depends(db_ext.session_dependency())):
+    async def list_users(db=Depends(db_ext.provide_session())):
         result = await db.execute("SELECT * FROM users")
         return {"users": result.all()}
 
@@ -476,7 +552,7 @@ async def send_email(email: str, config, sqlspec):
 async def signup(
     email: str,
     background_tasks: BackgroundTasks,
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ):
     await db.execute(
         "INSERT INTO users (email) VALUES ($1)",
@@ -525,7 +601,7 @@ from fastapi import HTTPException
 @app.post("/users", status_code=201)
 async def create_user(
     email: str,
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ):
     await db.execute(
         "INSERT INTO users (email) VALUES ($1)",
@@ -550,7 +626,7 @@ from fastapi import Header
 
 async def get_current_user(
     authorization: str = Header(...),
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ):
     token = authorization.replace("Bearer ", "")
     result = await db.execute(
@@ -569,7 +645,7 @@ async def get_profile(user=Depends(get_current_user)):
 async def create_post(
     content: str,
     user=Depends(get_current_user),
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ):
     await db.execute(
         "INSERT INTO posts (user_id, content) VALUES ($1, $2)",
@@ -651,7 +727,7 @@ db_ext = SQLSpecPlugin(sqlspec, app)
 @app.post("/users", status_code=201)
 async def create_user(
     payload: UserIn,
-    db=Depends(db_ext.session_dependency())
+    db=Depends(db_ext.provide_session())
 ):
     result = await db.execute(
         "INSERT INTO users (email) VALUES ($1) RETURNING id",

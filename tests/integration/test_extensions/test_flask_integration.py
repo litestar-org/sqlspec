@@ -249,6 +249,28 @@ def test_flask_session_caching() -> None:
         assert response.json == {"cached": True}
 
 
+def test_flask_default_session_key() -> None:
+    """Test default session key resolves to 'db_session'."""
+
+    sqlspec = SQLSpec()
+    config = SqliteConfig(pool_config={"database": ":memory:"})
+    sqlspec.add_config(config)
+
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(sqlspec, app)
+
+    @app.route("/default-key")
+    def default_key() -> dict[str, bool]:
+        session_default = plugin.get_session()
+        session_named = plugin.get_session("db_session")
+        return {"same_session": session_default is session_named}
+
+    with app.test_client() as client:
+        response = client.get("/default-key")
+        assert response.status_code == 200
+        assert response.json == {"same_session": True}
+
+
 @pytest.mark.skip(
     reason="Async adapters in sync Flask routes require wrapping every driver call - experimental feature"
 )
