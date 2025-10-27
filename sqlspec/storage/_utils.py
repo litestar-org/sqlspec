@@ -2,23 +2,10 @@
 
 from typing import TYPE_CHECKING
 
-from sqlspec.exceptions import MissingDependencyError
-from sqlspec.typing import PYARROW_INSTALLED
-
 if TYPE_CHECKING:
     from pathlib import Path
 
-__all__ = ("ensure_pyarrow", "resolve_storage_path")
-
-
-def ensure_pyarrow() -> None:
-    """Ensure PyArrow is available for Arrow operations.
-
-    Raises:
-        MissingDependencyError: If pyarrow is not installed.
-    """
-    if not PYARROW_INSTALLED:
-        raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
+__all__ = ("resolve_storage_path",)
 
 
 def resolve_storage_path(

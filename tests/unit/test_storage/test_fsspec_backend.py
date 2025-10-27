@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -218,7 +219,7 @@ def test_write_and_read_arrow() -> None:
         store = FSSpecBackend("file", base_path=temp_dir)
 
         # Create test Arrow table
-        data = {"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"], "score": [95.5, 87.0, 92.3]}
+        data: dict[str, Any] = {"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"], "score": [95.5, 87.0, 92.3]}
         table = pa.table(data)
 
         store.write_arrow("test_data.parquet", table)
@@ -238,7 +239,7 @@ def test_stream_arrow() -> None:
         store = FSSpecBackend("file", base_path=temp_dir)
 
         # Create test Arrow table
-        data = {"id": [1, 2, 3, 4, 5], "value": ["a", "b", "c", "d", "e"]}
+        data: dict[str, Any] = {"id": [1, 2, 3, 4, 5], "value": ["a", "b", "c", "d", "e"]}
         table = pa.table(data)
 
         store.write_arrow("stream_test.parquet", table)
@@ -420,7 +421,11 @@ async def test_async_write_and_read_arrow() -> None:
         store = FSSpecBackend("file", base_path=temp_dir)
 
         # Create test Arrow table
-        data = {"id": [1, 2, 3, 4], "name": ["Alice", "Bob", "Charlie", "David"], "score": [95.5, 87.0, 92.3, 89.7]}
+        data: dict[str, Any] = {
+            "id": [1, 2, 3, 4],
+            "name": ["Alice", "Bob", "Charlie", "David"],
+            "score": [95.5, 87.0, 92.3, 89.7],
+        }
         table = pa.table(data)
 
         await store.write_arrow_async("async_test_data.parquet", table)
@@ -440,7 +445,7 @@ async def test_async_stream_arrow() -> None:
         store = FSSpecBackend("file", base_path=temp_dir)
 
         # Create test Arrow table
-        data = {"id": [1, 2, 3, 4, 5, 6], "value": ["a", "b", "c", "d", "e", "f"]}
+        data: dict[str, Any] = {"id": [1, 2, 3, 4, 5, 6], "value": ["a", "b", "c", "d", "e", "f"]}
         table = pa.table(data)
 
         await store.write_arrow_async("async_stream_test.parquet", table)

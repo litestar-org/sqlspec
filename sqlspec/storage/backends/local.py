@@ -12,7 +12,7 @@ from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.storage._utils import ensure_pyarrow
+from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:

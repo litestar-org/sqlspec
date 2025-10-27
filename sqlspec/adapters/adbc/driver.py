@@ -23,7 +23,6 @@ from sqlspec.exceptions import (
     DataError,
     ForeignKeyViolationError,
     IntegrityError,
-    MissingDependencyError,
     NotNullViolationError,
     SQLParsingError,
     SQLSpecError,
@@ -506,18 +505,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self.dialect = statement_config.dialect
         self._data_dictionary: SyncDataDictionaryBase | None = None
-
-    @staticmethod
-    def _ensure_pyarrow_installed() -> None:
-        """Ensure PyArrow is installed.
-
-        Raises:
-            MissingDependencyError: If PyArrow is not installed
-        """
-        from sqlspec.typing import PYARROW_INSTALLED
-
-        if not PYARROW_INSTALLED:
-            raise MissingDependencyError(package="pyarrow", install_package="arrow")
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:

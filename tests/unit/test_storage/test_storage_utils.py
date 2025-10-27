@@ -3,8 +3,9 @@
 import pytest
 
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.storage._utils import ensure_pyarrow, resolve_storage_path
+from sqlspec.storage._utils import resolve_storage_path
 from sqlspec.typing import PYARROW_INSTALLED
+from sqlspec.utils.module_loader import ensure_pyarrow
 
 
 def test_ensure_pyarrow_succeeds_when_installed() -> None:

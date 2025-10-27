@@ -39,6 +39,7 @@ __all__ = (
     "ParameterValueProtocol",
     "SQLBuilderProtocol",
     "SelectBuilderProtocol",
+    "SupportsArrowResults",
     "WithMethodProtocol",
 )
 
@@ -439,4 +440,43 @@ class SelectBuilderProtocol(SQLBuilderProtocol, Protocol):
 
     def select(self, *columns: "str | exp.Expression") -> Self:
         """Add SELECT columns to the query."""
+        ...
+
+
+@runtime_checkable
+class SupportsArrowResults(Protocol):
+    """Protocol for adapters that support Arrow result format.
+
+    Adapters implementing this protocol can return query results in Apache Arrow
+    format via the select_to_arrow() method, enabling zero-copy data transfer and
+    efficient integration with data science tools.
+    """
+
+    def select_to_arrow(
+        self,
+        statement: Any,
+        /,
+        *parameters: Any,
+        statement_config: Any | None = None,
+        return_format: str = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any | None = None,
+        **kwargs: Any,
+    ) -> "ArrowTable | ArrowRecordBatch":
+        """Execute query and return results as Apache Arrow Table or RecordBatch.
+
+        Args:
+            statement: SQL statement to execute.
+            *parameters: Query parameters and filters.
+            statement_config: Optional statement configuration override.
+            return_format: Output format - "table", "reader", or "batches".
+            native_only: If True, raise error when native Arrow path unavailable.
+            batch_size: Chunk size for streaming modes.
+            arrow_schema: Optional target Arrow schema for type casting.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            ArrowResult containing Arrow data.
+        """
         ...

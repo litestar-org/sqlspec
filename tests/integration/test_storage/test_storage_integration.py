@@ -5,7 +5,7 @@ Follows Advanced Alchemy patterns for comprehensive storage testing.
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from minio import Minio
@@ -709,7 +709,7 @@ def test_local_arrow_operations(tmp_path: Path) -> None:
     # Create test Arrow data
     import pyarrow as pa
 
-    data = {"col1": [1, 2, 3, 4], "col2": ["a", "b", "c", "d"], "col3": [1.1, 2.2, 3.3, 4.4]}
+    data: dict[str, Any] = {"col1": [1, 2, 3, 4], "col2": ["a", "b", "c", "d"], "col3": [1.1, 2.2, 3.3, 4.4]}
     table = pa.table(data)
 
     # Test write/read Arrow table
@@ -745,7 +745,7 @@ def test_fsspec_s3_arrow_operations(minio_service: "MinioService", minio_default
     import pyarrow as pa
 
     # Create test data with different types
-    data = {
+    data: dict[str, Any] = {
         "integers": [1, 2, 3, 4, 5],
         "strings": ["hello", "world", "storage", "test", "arrow"],
         "floats": [1.1, 2.2, 3.3, 4.4, 5.5],

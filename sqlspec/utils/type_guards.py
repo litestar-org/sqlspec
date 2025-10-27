@@ -48,6 +48,7 @@ if TYPE_CHECKING:
         ObjectStoreItemProtocol,
         ParameterValueProtocol,
         SQLBuilderProtocol,
+        SupportsArrowResults,
         WithMethodProtocol,
     )
     from sqlspec.typing import SupportedSchemaModel
@@ -124,6 +125,7 @@ __all__ = (
     "is_typed_parameter",
     "schema_dump",
     "supports_arrow_native",
+    "supports_arrow_results",
     "supports_limit",
     "supports_offset",
     "supports_order_by",
@@ -1333,3 +1335,26 @@ def supports_arrow_native(backend: Any) -> bool:
         return callable(getattr(store, "read_arrow", None))
     except AttributeError:
         return False
+
+
+def supports_arrow_results(obj: Any) -> "TypeGuard[SupportsArrowResults]":
+    """Check if object supports Arrow result format.
+
+    Use this type guard to check if a driver or adapter supports returning
+    query results in Apache Arrow format via select_to_arrow() method.
+
+    Args:
+        obj: Object to check for Arrow results support.
+
+    Returns:
+        True if object implements SupportsArrowResults protocol.
+
+    Examples:
+        >>> from sqlspec.adapters.duckdb import DuckDBDriver
+        >>> driver = DuckDBDriver(...)
+        >>> supports_arrow_results(driver)
+        True
+    """
+    from sqlspec.protocols import SupportsArrowResults
+
+    return isinstance(obj, SupportsArrowResults)

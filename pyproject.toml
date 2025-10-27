@@ -104,6 +104,7 @@ lint = [
   "types-protobuf",
   "asyncpg-stubs",
   "pyarrow-stubs",
+  "pandas-stubs",
 
 ]
 test = [

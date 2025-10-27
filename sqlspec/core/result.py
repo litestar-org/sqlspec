@@ -16,13 +16,14 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 from sqlspec.core.compiler import OperationType
+from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
 from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from sqlspec.core.statement import SQL
-    from sqlspec.typing import SchemaT
+    from sqlspec.typing import ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
 
 
 __all__ = ("ArrowResult", "SQLResult", "StatementResult")
@@ -618,7 +619,7 @@ class ArrowResult(StatementResult):
         """
         return self.data is not None
 
-    def get_data(self) -> Any:
+    def get_data(self) -> "ArrowTable":
         """Get the Apache Arrow Table from the result.
 
         Returns:
@@ -626,10 +627,19 @@ class ArrowResult(StatementResult):
 
         Raises:
             ValueError: If no Arrow table is available.
+            TypeError: If data is not an Arrow Table.
         """
         if self.data is None:
             msg = "No Arrow table available for this result"
             raise ValueError(msg)
+
+        ensure_pyarrow()
+
+        import pyarrow as pa
+
+        if not isinstance(self.data, pa.Table):
+            msg = f"Expected an Arrow Table, but got {type(self.data).__name__}"
+            raise TypeError(msg)
         return self.data
 
     @property
@@ -679,6 +689,127 @@ class ArrowResult(StatementResult):
             raise ValueError(msg)
 
         return cast("int", self.data.num_columns)
+
+    def to_pandas(self) -> "PandasDataFrame":
+        """Convert Arrow data to pandas DataFrame.
+
+        Returns:
+            pandas DataFrame containing the result data.
+
+        Raises:
+            ValueError: If no Arrow table is available.
+
+        Examples:
+            >>> result = session.select_to_arrow("SELECT * FROM users")
+            >>> df = result.to_pandas()
+            >>> print(df.head())
+        """
+        if self.data is None:
+            msg = "No Arrow table available"
+            raise ValueError(msg)
+
+        ensure_pandas()
+
+        import pandas as pd
+
+        result = self.data.to_pandas()
+        if not isinstance(result, pd.DataFrame):
+            msg = f"Expected a pandas DataFrame, but got {type(result).__name__}"
+            raise TypeError(msg)
+        return result
+
+    def to_polars(self) -> "PolarsDataFrame":
+        """Convert Arrow data to Polars DataFrame.
+
+        Returns:
+            Polars DataFrame containing the result data.
+
+        Raises:
+            ValueError: If no Arrow table is available.
+
+        Examples:
+            >>> result = session.select_to_arrow("SELECT * FROM users")
+            >>> df = result.to_polars()
+            >>> print(df.head())
+        """
+        if self.data is None:
+            msg = "No Arrow table available"
+            raise ValueError(msg)
+
+        ensure_polars()
+
+        import polars as pl
+
+        result = pl.from_arrow(self.data)
+        if not isinstance(result, pl.DataFrame):
+            msg = f"Expected a Polars DataFrame, but got {type(result).__name__}"
+            raise TypeError(msg)
+        return result
+
+    def to_dict(self) -> "list[dict[str, Any]]":
+        """Convert Arrow data to list of dictionaries.
+
+        Returns:
+            List of dictionaries, one per row.
+
+        Raises:
+            ValueError: If no Arrow table is available.
+
+        Examples:
+            >>> result = session.select_to_arrow(
+            ...     "SELECT id, name FROM users"
+            ... )
+            >>> rows = result.to_dict()
+            >>> print(rows[0])
+            {'id': 1, 'name': 'Alice'}
+        """
+        if self.data is None:
+            msg = "No Arrow table available"
+            raise ValueError(msg)
+
+        return cast("list[dict[str, Any]]", self.data.to_pylist())
+
+    def __len__(self) -> int:
+        """Return number of rows in the Arrow table.
+
+        Returns:
+            Number of rows.
+
+        Raises:
+            ValueError: If no Arrow table is available.
+
+        Examples:
+            >>> result = session.select_to_arrow("SELECT * FROM users")
+            >>> print(len(result))
+            100
+        """
+        if self.data is None:
+            msg = "No Arrow table available"
+            raise ValueError(msg)
+
+        return cast("int", self.data.num_rows)
+
+    def __iter__(self) -> "Iterator[dict[str, Any]]":
+        """Iterate over rows as dictionaries.
+
+        Yields:
+            Dictionary for each row.
+
+        Raises:
+            ValueError: If no Arrow table is available.
+
+        Examples:
+            >>> result = session.select_to_arrow(
+            ...     "SELECT id, name FROM users"
+            ... )
+            >>> for row in result:
+            ...     print(row["name"])
+        """
+        if self.data is None:
+            msg = "No Arrow table available"
+            raise ValueError(msg)
+
+        yield from self.data.to_pylist()
 
 
 def create_sql_result(

@@ -1009,3 +1009,55 @@ def test_get_msgspec_rename_config_performance() -> None:
     for _ in range(100):
         result = get_msgspec_rename_config(schema_type)
         assert result == "camel"
+
+
+def test_supports_arrow_results_with_protocol_implementation() -> None:
+    """Test supports_arrow_results with object implementing SupportsArrowResults."""
+    from sqlspec.utils.type_guards import supports_arrow_results
+
+    class MockDriverWithArrow:
+        def select_to_arrow(
+            self,
+            statement,
+            /,
+            *parameters,
+            statement_config=None,
+            return_format="table",
+            native_only=False,
+            batch_size=None,
+            arrow_schema=None,
+            **kwargs,
+        ):
+            pass
+
+    driver = MockDriverWithArrow()
+    assert supports_arrow_results(driver) is True
+
+
+def test_supports_arrow_results_without_protocol_implementation() -> None:
+    """Test supports_arrow_results with object not implementing protocol."""
+    from sqlspec.utils.type_guards import supports_arrow_results
+
+    class MockDriverWithoutArrow:
+        def execute(self, sql):
+            pass
+
+    driver = MockDriverWithoutArrow()
+    assert supports_arrow_results(driver) is False
+
+
+def test_supports_arrow_results_with_none() -> None:
+    """Test supports_arrow_results with None."""
+    from sqlspec.utils.type_guards import supports_arrow_results
+
+    assert supports_arrow_results(None) is False
+
+
+def test_supports_arrow_results_with_primitive_types() -> None:
+    """Test supports_arrow_results with primitive types."""
+    from sqlspec.utils.type_guards import supports_arrow_results
+
+    assert supports_arrow_results("string") is False
+    assert supports_arrow_results(42) is False
+    assert supports_arrow_results([1, 2, 3]) is False
+    assert supports_arrow_results({"key": "value"}) is False

@@ -377,16 +377,99 @@ class ArrowRecordBatchResult(Protocol):
         return None
 
 
+@runtime_checkable
+class ArrowSchemaProtocol(Protocol):
+    """Typed shim for pyarrow.Schema."""
+
+    def field(self, i: int) -> Any:
+        """Get field by index."""
+        ...
+
+    @property
+    def names(self) -> "list[str]":
+        """Get list of field names."""
+        ...
+
+    def __len__(self) -> int:
+        """Get number of fields."""
+        return 0
+
+
+@runtime_checkable
+class ArrowRecordBatchReaderProtocol(Protocol):
+    """Typed shim for pyarrow.RecordBatchReader."""
+
+    def read_all(self) -> Any:
+        """Read all batches into a table."""
+        ...
+
+    def read_next_batch(self) -> Any:
+        """Read next batch."""
+        ...
+
+    def __iter__(self) -> "Iterable[Any]":
+        """Iterate over batches."""
+        ...
+
+
 try:
     from pyarrow import RecordBatch as ArrowRecordBatch
+    from pyarrow import RecordBatchReader as ArrowRecordBatchReader
+    from pyarrow import Schema as ArrowSchema
     from pyarrow import Table as ArrowTable
 
     PYARROW_INSTALLED = True
 except ImportError:
     ArrowTable = ArrowTableResult  # type: ignore[assignment,misc]
     ArrowRecordBatch = ArrowRecordBatchResult  # type: ignore[assignment,misc]
+    ArrowSchema = ArrowSchemaProtocol  # type: ignore[assignment,misc]
+    ArrowRecordBatchReader = ArrowRecordBatchReaderProtocol  # type: ignore[assignment,misc]
 
     PYARROW_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
+
+
+@runtime_checkable
+class PandasDataFrameProtocol(Protocol):
+    """Typed shim for pandas.DataFrame."""
+
+    def __len__(self) -> int:
+        """Get number of rows."""
+        ...
+
+    def __getitem__(self, key: Any) -> Any:
+        """Get column or row."""
+        ...
+
+
+@runtime_checkable
+class PolarsDataFrameProtocol(Protocol):
+    """Typed shim for polars.DataFrame."""
+
+    def __len__(self) -> int:
+        """Get number of rows."""
+        ...
+
+    def __getitem__(self, key: Any) -> Any:
+        """Get column or row."""
+        ...
+
+
+try:
+    from pandas import DataFrame as PandasDataFrame
+
+    PANDAS_INSTALLED = True
+except ImportError:
+    PandasDataFrame = PandasDataFrameProtocol  # type: ignore[assignment,misc]
+    PANDAS_INSTALLED = False
+
+
+try:
+    from polars import DataFrame as PolarsDataFrame
+
+    POLARS_INSTALLED = True
+except ImportError:
+    PolarsDataFrame = PolarsDataFrameProtocol  # type: ignore[assignment,misc]
+    POLARS_INSTALLED = False
 
 
 @runtime_checkable
@@ -639,7 +722,9 @@ __all__ = (
     "OBSTORE_INSTALLED",
     "OPENTELEMETRY_INSTALLED",
     "ORJSON_INSTALLED",
+    "PANDAS_INSTALLED",
     "PGVECTOR_INSTALLED",
+    "POLARS_INSTALLED",
     "PROMETHEUS_INSTALLED",
     "PYARROW_INSTALLED",
     "PYDANTIC_INSTALLED",
@@ -650,7 +735,9 @@ __all__ = (
     "AiosqlSQLOperationType",
     "AiosqlSyncProtocol",
     "ArrowRecordBatch",
+    "ArrowRecordBatchReader",
     "ArrowRecordBatchResult",
+    "ArrowSchema",
     "ArrowTable",
     "ArrowTableResult",
     "AttrsInstance",
@@ -670,6 +757,10 @@ __all__ = (
     "Histogram",
     "NumpyArray",
     "NumpyArrayStub",
+    "PandasDataFrame",
+    "PandasDataFrameProtocol",
+    "PolarsDataFrame",
+    "PolarsDataFrameProtocol",
     "Span",
     "Status",
     "StatusCode",
