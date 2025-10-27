@@ -151,9 +151,7 @@ def test_select_to_arrow_large_dataset(duckdb_config: DuckDBConfig) -> None:
         with duckdb_config.provide_session() as session:
             # Create table with 10K rows
             session.execute("CREATE TABLE test (id INTEGER, value DOUBLE)")
-            session.execute(
-                "INSERT INTO test SELECT range AS id, random() AS value FROM range(10000)"
-            )
+            session.execute("INSERT INTO test SELECT range AS id, random() AS value FROM range(10000)")
 
             result = session.select_to_arrow("SELECT * FROM test")
 

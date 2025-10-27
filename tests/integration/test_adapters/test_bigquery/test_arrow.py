@@ -24,7 +24,7 @@ pytestmark = [
     pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed"),
     pytest.mark.skipif(
         not os.getenv("BIGQUERY_PROJECT_ID") and not os.getenv("GOOGLE_CLOUD_PROJECT"),
-        reason="BigQuery credentials not configured"
+        reason="BigQuery credentials not configured",
     ),
 ]
 
@@ -35,18 +35,14 @@ def bigquery_config() -> BigQueryConfig:
     project_id = os.getenv("BIGQUERY_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
     os.getenv("BIGQUERY_DATASET_ID", "sqlspec_test")
 
-    return BigQueryConfig(
-        connection_config={
-            "project": project_id,
-            "location": "US",
-        }
-    )
+    return BigQueryConfig(connection_config={"project": project_id, "location": "US"})
 
 
 @pytest.fixture
 def test_table_name() -> str:
     """Generate a unique test table name."""
     import uuid
+
     return f"test_arrow_{uuid.uuid4().hex[:8]}"
 
 
@@ -151,10 +147,7 @@ def test_select_to_arrow_with_parameters(bigquery_config: BigQueryConfig, test_t
             """)
 
             # Query with named parameter (BigQuery style)
-            result = session.select_to_arrow(
-                f"SELECT * FROM `{full_table}` WHERE age > @min_age",
-                {"min_age": 25}
-            )
+            result = session.select_to_arrow(f"SELECT * FROM `{full_table}` WHERE age > @min_age", {"min_age": 25})
 
             df = result.to_pandas()
             assert len(df) == 2
@@ -207,8 +200,7 @@ def test_select_to_arrow_null_handling(bigquery_config: BigQueryConfig, test_tab
 
 
 @pytest.mark.skipif(
-    "google.cloud.bigquery_storage_v1" not in __import__("sys").modules,
-    reason="BigQuery Storage API not available"
+    "google.cloud.bigquery_storage_v1" not in __import__("sys").modules, reason="BigQuery Storage API not available"
 )
 def test_storage_api_detection(bigquery_config: BigQueryConfig) -> None:
     """Test that Storage API availability is correctly detected."""
@@ -239,7 +231,7 @@ def test_fallback_to_conversion_path(bigquery_config: BigQueryConfig, test_table
             # (will use conversion path)
             result = session.select_to_arrow(
                 f"SELECT * FROM `{full_table}`",
-                native_only=False  # Explicit
+                native_only=False,  # Explicit
             )
 
             assert result.rows_affected == 1
