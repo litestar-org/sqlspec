@@ -80,56 +80,28 @@ One of SQLSpec's strengths is the consistent API across databases. Here's the sa
 
     Each database has its own parameter style (``?`` for SQLite, ``$1`` for PostgreSQL, ``%s`` for MySQL, etc.). SQLSpec handles this automatically - you just need to use the correct style for your database.
 
+    `PEP249`_ is worth a read on that
+
+    .. _PEP249: https://peps.python.org/pep-0249/#paramstyle
+
 Multiple Databases
 ------------------
 
 Need to work with multiple databases? Register multiple configs:
 
-.. code-block:: python
+.. literalinclude:: /examples/quickstart/quickstart_6.py
+   :language: python
+   :caption: ``multiple databases``
 
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.adapters.duckdb import DuckDBConfig
-
-    db_manager = SQLSpec()
-
-    # Register multiple databases
-    sqlite_db = db_manager.add_config(SqliteConfig(pool_config={"database": "app.db"}))
-    duckdb_db = db_manager.add_config(DuckDBConfig(pool_config={"database": "analytics.duckdb"}))
-
-    # Use different databases
-    with db_manager.provide_session(sqlite_db) as sqlite_session:
-        users = sqlite_session.select("SELECT * FROM users")
-
-    with db_manager.provide_session(duckdb_db) as duckdb_session:
-        analytics = duckdb_session.select("SELECT * FROM events")
 
 Transaction Support
 -------------------
 
 SQLSpec automatically manages transactions. By default, each session is a transaction:
 
-.. code-block:: python
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_manager = SQLSpec()
-    db = db_manager.add_config(SqliteConfig(pool_config={"database": "mydb.db"}))
-
-    # Transaction committed on successful exit
-    with db_manager.provide_session(db) as session:
-        session.execute("INSERT INTO users (name) VALUES (?)", "Alice")
-        session.execute("INSERT INTO orders (user_name) VALUES (?)", "Alice")
-        # Both committed together
-
-    # Transaction rolled back on exception
-    try:
-        with db_manager.provide_session(db) as session:
-            session.execute("INSERT INTO users (name) VALUES (?)", "Bob")
-            raise ValueError("Something went wrong!")
-    except ValueError:
-        pass  # Transaction was rolled back automatically
+.. literalinclude:: /examples/quickstart/quickstart_7.py
+   :language: python
+   :caption: ``transaction support``
 
 .. note::
 
@@ -140,36 +112,9 @@ Query Builder (Experimental)
 
 For those who prefer programmatic query construction, SQLSpec includes an experimental query builder:
 
-.. code-block:: python
-
-    from sqlspec import sql
-    from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec import SQLSpec
-
-    # Build a query programmatically
-    query = (
-        sql.select("id", "name", "email")
-        .from_("users")
-        .where("age > ?")
-        .order_by("name")
-    )
-
-    db_manager = SQLSpec()
-    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
-
-    with db_manager.provide_session(db) as session:
-        # Setup
-        session.execute("""
-            CREATE TABLE users (id INTEGER, name TEXT, email TEXT, age INTEGER)
-        """)
-        session.execute(
-            "INSERT INTO users VALUES (?, ?, ?, ?)",
-            1, "Alice", "alice@example.com", 30
-        )
-
-        # Execute built query
-        results = session.select(query, 25)
-        print(results)
+.. literalinclude:: /examples/quickstart/quickstart_8.py
+   :language: python
+   :caption: ``query builder``
 
 .. warning::
 
