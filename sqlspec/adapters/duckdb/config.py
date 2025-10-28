@@ -121,15 +121,6 @@ class DuckDBDriverFeatures(TypedDict):
         enable_uuid_conversion: Enable automatic UUID string conversion.
             When True (default), UUID strings are automatically converted to UUID objects.
             When False, UUID strings are treated as regular strings.
-        enable_arrow_results: Enable native Arrow query results.
-            When True (default), select_to_arrow() uses cursor.arrow() for
-            zero-copy data transfer. DuckDB has the fastest Arrow path due to
-            its columnar architecture.
-            Default: True
-        arrow_batch_size: Batch size for Arrow result streaming.
-            Number of rows per batch when streaming Arrow results.
-            Used for future streaming implementation.
-            Default: 1024
     """
 
     extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
@@ -137,8 +128,6 @@ class DuckDBDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[[DuckDBConnection], DuckDBConnection | None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
-    enable_arrow_results: NotRequired[bool]
-    arrow_batch_size: NotRequired[int]
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
@@ -223,10 +212,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         processed_features = dict(driver_features) if driver_features else {}
         if "enable_uuid_conversion" not in processed_features:
             processed_features["enable_uuid_conversion"] = True
-        if "enable_arrow_results" not in processed_features:
-            processed_features["enable_arrow_results"] = True
-        if "arrow_batch_size" not in processed_features:
-            processed_features["arrow_batch_size"] = 1024
 
         super().__init__(
             bind_key=bind_key,
