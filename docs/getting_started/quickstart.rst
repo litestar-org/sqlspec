@@ -9,19 +9,9 @@ Your First Query
 
 Let's start with the simplest possible example - executing a query and getting results:
 
-.. code-block:: python
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    # Create SQLSpec instance and configure database
-    db_manager = SQLSpec()
-    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
-
-    # Execute a query
-    with db_manager.provide_session(db) as session:
-        result = session.execute("SELECT 'Hello, SQLSpec!' as message")
-        print(result.get_first())  # {'message': 'Hello, SQLSpec!'}
+.. literalinclude:: /examples/quickstart/quickstart_1.py
+   :language: python
+   :caption: ``first sqlspec query``
 
 What's happening here?
 
@@ -35,50 +25,9 @@ Working with Real Data
 
 Let's create a table, insert some data, and query it:
 
-.. code-block:: python
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_manager = SQLSpec()
-    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
-
-    with db_manager.provide_session(db) as session:
-        # Create a table
-        session.execute("""
-            CREATE TABLE users (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                email TEXT UNIQUE NOT NULL
-            )
-        """)
-
-        # Insert data
-        session.execute(
-            "INSERT INTO users (name, email) VALUES (?, ?)",
-            "Alice", "alice@example.com"
-        )
-
-        # Insert multiple rows
-        session.execute_many(
-            "INSERT INTO users (name, email) VALUES (?, ?)",
-            [
-                ("Bob", "bob@example.com"),
-                ("Charlie", "charlie@example.com"),
-            ]
-        )
-
-        # Query all users
-        users = session.select("SELECT * FROM users")
-        print(f"All users: {users}")
-
-        # Query single user
-        alice = session.select_one("SELECT * FROM users WHERE name = ?", "Alice")
-        print(f"Alice: {alice}")
-
-        # Query scalar value
-        count = session.select_value("SELECT COUNT(*) FROM users")
-        print(f"Total users: {count}")
+.. literalinclude:: /examples/quickstart/quickstart_2.py
+   :language: python
+   :caption: ``working with real data``
 
 Session Methods Cheat Sheet
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -98,47 +47,9 @@ Type-Safe Results
 
 The real power of SQLSpec comes from type-safe result mapping. Define your data models and SQLSpec automatically maps query results to them:
 
-.. code-block:: python
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-    from pydantic import BaseModel
-
-    class User(BaseModel):
-        id: int
-        name: str
-        email: str
-
-    db_manager = SQLSpec()
-    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
-
-    with db_manager.provide_session(db) as session:
-        # Setup
-        session.execute("""
-            CREATE TABLE users (id INTEGER, name TEXT, email TEXT)
-        """)
-        session.execute(
-            "INSERT INTO users VALUES (?, ?, ?)",
-            1, "Alice", "alice@example.com"
-        )
-
-        # Type-safe query - returns User instance
-        user = session.select_one(
-            "SELECT * FROM users WHERE id = ?",
-            1,
-            schema_type=User
-        )
-
-        # Now you have type hints and autocomplete!
-        print(f"User: {user.name} ({user.email})")  # IDE knows these fields exist
-
-        # Multiple results
-        all_users = session.select(
-            "SELECT * FROM users",
-            schema_type=User
-        )
-        for u in all_users:
-            print(f"User: {u.name}")  # Each item is a typed User
+.. literalinclude:: /examples/quickstart/quickstart_3.py
+   :language: python
+   :caption: ``type-safe results``
 
 .. note::
 
@@ -149,44 +60,9 @@ Async Support
 
 SQLSpec supports async/await for non-blocking database operations. Here's the same example with async:
 
-.. code-block:: python
-
-    import asyncio
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from pydantic import BaseModel
-
-    class User(BaseModel):
-        id: int
-        name: str
-        email: str
-
-    async def main() -> None:
-        db_manager = SQLSpec()
-        db = db_manager.add_config(AiosqliteConfig(pool_config={"database": ":memory:"}))
-
-        async with db_manager.provide_session(db) as session:
-            # Create table
-            await session.execute("""
-                CREATE TABLE users (id INTEGER, name TEXT, email TEXT)
-            """)
-
-            # Insert data
-            await session.execute(
-                "INSERT INTO users VALUES (?, ?, ?)",
-                1, "Alice", "alice@example.com"
-            )
-
-            # Type-safe async query
-            user = await session.select_one(
-                "SELECT * FROM users WHERE id = ?",
-                1,
-                schema_type=User
-            )
-
-            print(f"User: {user.name}")
-
-    asyncio.run(main())
+.. literalinclude:: /examples/quickstart/quickstart_4.py
+   :language: python
+   :caption: ``async support``
 
 The API is identical - just add ``await`` and use async config/drivers!
 
@@ -195,41 +71,10 @@ Switching Databases
 
 One of SQLSpec's strengths is the consistent API across databases. Here's the same code using PostgreSQL:
 
-.. code-block:: python
+.. literalinclude:: /examples/quickstart/quickstart_5.py
+   :language: python
+   :caption: ``switching databases``
 
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.asyncpg import AsyncpgConfig
-    from pydantic import BaseModel
-
-    class User(BaseModel):
-        id: int
-        name: str
-        email: str
-
-    async def main() -> None:
-        db_manager = SQLSpec()
-        db = db_manager.add_config(
-            AsyncpgConfig(
-                pool_config={
-                    "host": "localhost",
-                    "port": 5432,
-                    "user": "postgres",
-                    "password": "postgres",
-                    "database": "mydb",
-                }
-            )
-        )
-
-        async with db_manager.provide_session(db) as session:
-            # PostgreSQL uses $1, $2 for parameters instead of ?
-            user = await session.select_one(
-                "SELECT * FROM users WHERE id = $1",
-                1,
-                schema_type=User
-            )
-            print(f"User: {user.name}")
-
-    asyncio.run(main())
 
 .. tip::
 

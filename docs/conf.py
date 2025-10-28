@@ -147,7 +147,7 @@ copybutton_prompt_text = "$ "
 html_theme = "shibuya"
 html_title = "SQLSpec"
 html_short_title = "SQLSpec"
-pygments_style = "dracula"
+# pygments_style = "dracula"
 todo_include_todos = True
 
 html_static_path = ["_static"]
