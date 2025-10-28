@@ -5,11 +5,14 @@ from pydantic import BaseModel
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
+__all__ = ("User", "main", )
+
 
 class User(BaseModel):
     id: int
     name: str
     email: str
+
 
 async def main() -> None:
     db_manager = SQLSpec()
@@ -22,18 +25,12 @@ async def main() -> None:
         """)
 
         # Insert data
-        _ = await session.execute(
-            "INSERT INTO users VALUES (?, ?, ?)",
-            1, "Alice", "alice@example.com"
-        )
+        _ = await session.execute("INSERT INTO users VALUES (?, ?, ?)", 1, "Alice", "alice@example.com")
 
         # Type-safe async query
-        user = await session.select_one(
-            "SELECT * FROM users WHERE id = ?",
-            1,
-            schema_type=User
-        )
+        user = await session.select_one("SELECT * FROM users WHERE id = ?", 1, schema_type=User)
 
         print(f"User: {user.name}")
+
 
 asyncio.run(main())

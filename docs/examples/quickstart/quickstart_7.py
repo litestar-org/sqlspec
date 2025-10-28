@@ -14,8 +14,7 @@ with db_manager.provide_session(db) as session:
 try:
     with db_manager.provide_session(db) as session:
         session.execute("INSERT INTO users (name) VALUES (?)", "Bob")
-        raise ValueError("Something went wrong!")
+        msg = "Something went wrong!"
+        raise ValueError(msg)
 except ValueError:
     pass  # Transaction was rolled back automatically
-
-

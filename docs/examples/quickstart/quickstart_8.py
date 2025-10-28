@@ -2,12 +2,7 @@ from sqlspec import SQLSpec, sql
 from sqlspec.adapters.sqlite import SqliteConfig
 
 # Build a query programmatically
-query = (
-    sql.select("id", "name", "email")
-    .from_("users")
-    .where("age > ?")
-    .order_by("name")
-)
+query = sql.select("id", "name", "email").from_("users").where("age > ?").order_by("name")
 
 db_manager = SQLSpec()
 db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
@@ -17,10 +12,7 @@ with db_manager.provide_session(db) as session:
     session.execute("""
         CREATE TABLE users (id INTEGER, name TEXT, email TEXT, age INTEGER)
     """)
-    session.execute(
-        "INSERT INTO users VALUES (?, ?, ?, ?)",
-        1, "Alice", "alice@example.com", 30
-    )
+    session.execute("INSERT INTO users VALUES (?, ?, ?, ?)", 1, "Alice", "alice@example.com", 30)
 
     # Execute built query
     results = session.select(query, 25)

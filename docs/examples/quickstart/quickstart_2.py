@@ -15,18 +15,12 @@ with db_manager.provide_session(db) as session:
     """)
 
     # Insert data
-    _ = session.execute(
-        "INSERT INTO users (name, email) VALUES (?, ?)",
-        "Alice", "alice@example.com"
-    )
+    _ = session.execute("INSERT INTO users (name, email) VALUES (?, ?)", "Alice", "alice@example.com")
 
     # Insert multiple rows
     _ = session.execute_many(
         "INSERT INTO users (name, email) VALUES (?, ?)",
-        [
-            ("Bob", "bob@example.com"),
-            ("Charlie", "charlie@example.com"),
-        ]
+        [("Bob", "bob@example.com"), ("Charlie", "charlie@example.com")],
     )
 
     # Query all users
@@ -40,5 +34,3 @@ with db_manager.provide_session(db) as session:
     # Query scalar value
     count = session.select_value("SELECT COUNT(*) FROM users")
     print(f"Total users: {count}")
-
-
