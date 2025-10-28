@@ -15,6 +15,6 @@ try:
     with db_manager.provide_session(db) as session:
         session.execute("INSERT INTO users (name) VALUES (?)", "Bob")
         msg = "Something went wrong!"
-        raise ValueError(msg)
+        raise ValueError(msg)  # noqa: TRY301
 except ValueError:
     pass  # Transaction was rolled back automatically

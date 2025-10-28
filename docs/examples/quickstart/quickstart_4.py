@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
-__all__ = ("User", "main", )
+__all__ = ("User", "main")
 
 
 class User(BaseModel):

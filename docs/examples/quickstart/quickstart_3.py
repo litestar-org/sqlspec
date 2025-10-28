@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
-__all__ = ("User", )
+__all__ = ("User",)
 
 
 class User(BaseModel):
