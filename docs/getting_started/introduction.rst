@@ -24,7 +24,7 @@ Core Features
 -------------
 
 -   **First-Class SQL with Validation**: Write the SQL you want. SQLSpec's processing pipeline parses, transforms, and validates your queries for security and performance before they ever hit the database.
--   **Type-Safe Results**: Automatically map query results to typed data objects like Pydantic models, ``msgspec`` Structs, or dataclasses. This eliminates guesswork and runtime errors.
+-   **Type-Safe Results**: Automatically map query results to typed data objects like Pydantic Basemodel, msgspec Struct, or dataclasses. This eliminates guesswork and runtime errors.
 -   **Unified Connectivity**: A single, consistent API for database operations across more than 10 supported database backends, both synchronous and asynchronous.
 -   **Comprehensive Query Builder**: An optional, fluent API for programmatically constructing everything from simple ``SELECT`` statements to complex DDL and DML queries.
 -   **Built-in Instrumentation**: Observability is a first-class citizen with configurable support for OpenTelemetry and Prometheus.
