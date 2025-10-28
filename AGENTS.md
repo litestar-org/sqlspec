@@ -986,6 +986,282 @@ BLOB columns remain as bytes:
 - When to use pagination
 ```
 
+## Apache Arrow Integration Pattern
+
+### Overview
+
+SQLSpec implements Apache Arrow support through a dual-path architecture: native Arrow for high-performance adapters (ADBC, DuckDB, BigQuery) and conversion-based Arrow for all other adapters. This pattern enables universal Arrow compatibility while optimizing for zero-copy performance where available.
+
+### When to Implement Arrow Support
+
+**Implement select_to_arrow() when**:
+- Adapter supports high-throughput analytical queries
+- Users need integration with pandas, Polars, or data science tools
+- Data interchange with Arrow ecosystem (Parquet, Spark, etc.) is common
+- Large result sets are typical for the adapter's use cases
+
+**Use native Arrow path when**:
+- Database driver provides direct Arrow output (e.g., ADBC `fetch_arrow_table()`)
+- Zero-copy data transfer available
+- Performance is critical for large datasets
+
+**Use conversion path when**:
+- Database driver returns dict/row results
+- Native Arrow support not available
+- Conversion overhead acceptable for use case
+
+### Implementation Pattern
+
+#### Native Arrow Path (Preferred)
+
+Override `select_to_arrow()` in adapter's driver class:
+
+```python
+from sqlspec.core.result import create_arrow_result
+from sqlspec.utils.module_loader import ensure_pyarrow
+
+class NativeArrowDriver(AsyncDriverAdapterBase):
+    """Driver with native Arrow support."""
+
+    async def select_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        return_format: str = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "Any":
+        """Execute query using native Arrow support."""
+        ensure_pyarrow()  # Validate PyArrow installed
+        import pyarrow as pa
+
+        sql_statement = self._prepare_statement(statement, parameters, statement_config)
+
+        async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            await cursor.execute(str(sql_statement), sql_statement.parameters or ())
+
+            # Native Arrow fetch - zero-copy!
+            arrow_table = await cursor.fetch_arrow_table()
+
+            if return_format == "batch":
+                batches = arrow_table.to_batches()
+                arrow_data = batches[0] if batches else pa.RecordBatch.from_pydict({})
+            else:
+                arrow_data = arrow_table
+
+            return create_arrow_result(arrow_data, rows_affected=arrow_table.num_rows)
+```
+
+**Key principles**:
+- Use `ensure_pyarrow()` for dependency validation
+- Validate `native_only` flag if adapter doesn't support native path
+- Preserve Arrow schema metadata from database
+- Support both "table" and "batch" return formats
+- Return `ArrowResult` via `create_arrow_result()` helper
+
+#### Conversion Arrow Path (Fallback)
+
+Base driver classes provide default implementation via dict conversion:
+
+```python
+# Implemented in _async.py and _sync.py
+async def select_to_arrow(self, statement, /, *parameters, **kwargs):
+    """Base implementation using dict → Arrow conversion."""
+    ensure_pyarrow()
+
+    # Execute using standard path
+    result = await self.execute(statement, *parameters, **kwargs)
+
+    # Convert to Arrow
+    from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
+    arrow_data = convert_dict_to_arrow(
+        result.data,
+        return_format=kwargs.get("return_format", "table")
+    )
+
+    return create_arrow_result(arrow_data, rows_affected=len(result.data))
+```
+
+**When to use**:
+- Adapter has no native Arrow support
+- Conversion overhead acceptable (&lt;20% for most cases)
+- Provides Arrow compatibility for all adapters
+
+### Type Mapping Best Practices
+
+**Standard type mappings**:
+
+```python
+# PostgreSQL → Arrow
+BIGINT → int64
+DOUBLE PRECISION → float64
+TEXT → utf8
+BYTEA → binary
+BOOLEAN → bool
+TIMESTAMP → timestamp[us]
+ARRAY → list<T>
+JSONB → utf8 (JSON as text)
+UUID → utf8 (converted to string)
+```
+
+**Complex type handling**:
+- Arrays: Preserve as Arrow list types when possible
+- JSON: Convert to utf8 (text) for portability
+- UUIDs: Convert to strings for cross-platform compatibility
+- Decimals: Use decimal128 for precision preservation
+- Binary: Use binary or large_binary for LOBs
+
+### ArrowResult Helper Pattern
+
+Use `create_arrow_result()` for consistent result wrapping:
+
+```python
+from sqlspec.core.result import create_arrow_result
+
+# Create ArrowResult from Arrow Table
+result = create_arrow_result(arrow_table, rows_affected=arrow_table.num_rows)
+
+# Create ArrowResult from RecordBatch
+result = create_arrow_result(record_batch, rows_affected=record_batch.num_rows)
+```
+
+**Benefits**:
+- Consistent API across all adapters
+- Automatic to_pandas(), to_polars(), to_dict() support
+- Iteration and length operations
+- Metadata handling
+
+### Testing Requirements
+
+**Unit tests** for Arrow helpers:
+- Test `convert_dict_to_arrow()` with various data types
+- Test empty result handling
+- Test NULL value preservation
+- Test schema inference
+
+**Integration tests** per adapter:
+- Test native Arrow path (if supported)
+- Test table and batch return formats
+- Test pandas/Polars conversion
+- Test large datasets (>10K rows)
+- Test adapter-specific types
+- Test parameter binding
+- Test empty results
+
+**Performance benchmarks** (for native paths):
+- Measure native vs conversion speedup
+- Validate zero-copy behavior
+- Benchmark memory usage
+
+### Example Implementations
+
+**ADBC** (native, zero-copy):
+
+```python
+def select_to_arrow(self, statement, /, *parameters, **kwargs):
+    """ADBC native Arrow - gold standard."""
+    ensure_pyarrow()
+
+    sql_statement = self._prepare_statement(statement, parameters)
+
+    with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+        cursor.execute(str(sql_statement), sql_statement.parameters or ())
+        arrow_table = cursor.fetch_arrow_table()  # Native fetch!
+
+        if kwargs.get("return_format") == "batch":
+            batches = arrow_table.to_batches()
+            return create_arrow_result(batches[0] if batches else empty_batch)
+
+        return create_arrow_result(arrow_table)
+```
+
+**DuckDB** (native, columnar):
+
+```python
+def select_to_arrow(self, statement, /, *parameters, **kwargs):
+    """DuckDB native columnar Arrow."""
+    ensure_pyarrow()
+
+    sql_statement = self._prepare_statement(statement, parameters)
+
+    with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+        cursor.execute(str(sql_statement), sql_statement.parameters or ())
+        arrow_table = cursor.arrow()  # DuckDB's native method
+
+        if kwargs.get("return_format") == "batch":
+            batches = arrow_table.to_batches()
+            return create_arrow_result(batches[0] if batches else empty_batch)
+
+        return create_arrow_result(arrow_table)
+```
+
+**PostgreSQL adapters** (conversion, arrays preserved):
+
+```python
+# Base implementation in _async.py handles conversion
+# PostgreSQL arrays automatically convert to Arrow list types
+# No override needed unless optimizing specific types
+```
+
+### Documentation Requirements
+
+When implementing Arrow support:
+
+1. **Adapter guide** (`docs/guides/adapters/{adapter}.md`):
+   - Add "Arrow Support" section
+   - Specify native vs conversion path
+   - Document type mapping table
+   - Provide usage examples with pandas/Polars
+   - Note performance characteristics
+
+2. **Architecture guide** (`docs/guides/architecture/arrow-integration.md`):
+   - Document overall Arrow strategy
+   - Explain dual-path architecture
+   - Provide performance benchmarks
+   - List all supported adapters
+
+3. **Examples** (`docs/examples/`):
+   - Basic Arrow usage example
+   - pandas integration example
+   - Polars integration example
+   - Export to Parquet example
+
+### Common Pitfalls
+
+**Avoid**:
+- Returning raw Arrow objects instead of ArrowResult
+- Missing `ensure_pyarrow()` dependency check
+- Not supporting both "table" and "batch" return formats
+- Ignoring `native_only` flag when adapter has no native support
+- Breaking existing `execute()` behavior
+
+**Do**:
+- Use `create_arrow_result()` for consistent wrapping
+- Support all standard type mappings
+- Test with large datasets
+- Document performance characteristics
+- Preserve metadata when possible
+
+### Performance Guidelines
+
+**Native path targets**:
+- Overhead &lt;5% vs direct driver Arrow fetch
+- Zero-copy data transfer
+- 5-10x faster than dict conversion for datasets >10K rows
+
+**Conversion path targets**:
+- Overhead &lt;20% vs standard `execute()` for datasets &lt;1K rows
+- Overhead &lt;15% for datasets 1K-100K rows
+- Overhead &lt;10% for datasets >100K rows (columnar efficiency)
+
+**Memory targets**:
+- Peak memory &lt;2x dict representation
+- Arrow columnar format more efficient for large datasets
+
 ## driver_features Pattern
 
 ### Overview
