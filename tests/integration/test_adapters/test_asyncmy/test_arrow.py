@@ -83,7 +83,9 @@ async def test_select_to_arrow_batch_format(asyncmy_arrow_config: AsyncmyConfig)
             await session.execute("CREATE TABLE arrow_batch_test (id INT, value VARCHAR(100))")
             await session.execute("INSERT INTO arrow_batch_test VALUES (1, 'a'), (2, 'b')")
 
-            result = await session.select_to_arrow("SELECT * FROM arrow_batch_test ORDER BY id", return_format="batches")
+            result = await session.select_to_arrow(
+                "SELECT * FROM arrow_batch_test ORDER BY id", return_format="batches"
+            )
 
             assert isinstance(result.data, pa.RecordBatch)
             assert result.rows_affected == 2
@@ -100,7 +102,9 @@ async def test_select_to_arrow_with_parameters(asyncmy_arrow_config: AsyncmyConf
             await session.execute("INSERT INTO arrow_params_test VALUES (1, 100), (2, 200), (3, 300)")
 
             # Test with parameterized query - MySQL uses %s style
-            result = await session.select_to_arrow("SELECT * FROM arrow_params_test WHERE value > %s ORDER BY id", (150,))
+            result = await session.select_to_arrow(
+                "SELECT * FROM arrow_params_test WHERE value > %s ORDER BY id", (150,)
+            )
 
             assert result.rows_affected == 2
             df = result.to_pandas()
