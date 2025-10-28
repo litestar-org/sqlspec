@@ -10,7 +10,16 @@ Requirements:
 import asyncio
 from pathlib import Path
 
-__all__ = ("example_adbc_native", "example_native_only_mode", "example_pandas_integration", "example_parquet_export", "example_polars_integration", "example_postgres_conversion", "example_return_formats", "main", )
+__all__ = (
+    "example_adbc_native",
+    "example_native_only_mode",
+    "example_pandas_integration",
+    "example_parquet_export",
+    "example_polars_integration",
+    "example_postgres_conversion",
+    "example_return_formats",
+    "main",
+)
 
 
 # Example 1: Basic Arrow Query (ADBC - Native Path)
