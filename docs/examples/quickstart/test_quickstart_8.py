@@ -18,6 +18,7 @@ with db_manager.provide_session(db) as session:
     results = session.select(query, 25)
     print(results)
 
+
 def test_quickstart_8() -> None:
     assert len(results) == 1
     assert results[0] == {"id": 1, "name": "Alice", "email": "alice@example.com"}
