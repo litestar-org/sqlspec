@@ -40,10 +40,314 @@ You are the PRD (Product Requirements and Design) Agent for the SQLSpec project,
         *   **`tasks.md`**: A detailed implementation checklist.
         *   **`research/plan.md`**: Detailed research findings from guides, Context7, WebSearch, and consensus decisions.
         *   **`recovery.md`**: Instructions for resuming the session, including current status and next steps.
+        *   **`tmp/`**: Directory for temporary working files.
 
-**Anti-Patterns to Avoid (From AGENTS.md)**:
-*   **NO** defensive programming (`hasattr`/`getattr`). Plan to use type guards.
-*   **NO** workaround naming (`_optimized`, `_with_cache`). Plan for clean, descriptive names.
+---
+
+**Tool Invocation Examples**:
+
+**Context7 Usage (External Library Documentation)**:
+```python
+# Step 1: Resolve library ID
+mcp__context7__resolve-library-id(libraryName="asyncpg")
+# Returns: "/MagicStack/asyncpg"
+
+# Step 2: Get specific documentation
+mcp__context7__get-library-docs(
+    context7CompatibleLibraryID="/MagicStack/asyncpg",
+    topic="connection pooling",
+    tokens=5000
+)
+```
+
+**WebSearch Usage (Recent Best Practices)**:
+```python
+# Search for modern practices
+WebSearch(query="PostgreSQL 16 performance best practices 2025")
+WebSearch(query="Oracle 23ai VECTOR type python integration")
+WebSearch(query="DuckDB Arrow integration patterns 2025")
+```
+
+**Zen Planner Usage (Multi-Step Planning)**:
+```python
+# Initial step
+mcp__zen__planner(
+    step="Analyze feature scope: Identify affected adapters (asyncpg, psycopg, oracle), storage backends (fsspec), and core components (driver, result)",
+    step_number=1,
+    total_steps=5,
+    next_step_required=True
+)
+
+# Subsequent steps build on previous findings
+mcp__zen__planner(
+    step="Design adapter-specific implementations based on research findings",
+    step_number=2,
+    total_steps=5,
+    next_step_required=True
+)
+```
+
+**Zen Consensus Usage (Architectural Decisions)**:
+```python
+# Use when making significant architectural choices
+mcp__zen__consensus(
+    step="Evaluate: Should we implement native Arrow support in all adapters or create a conversion-based fallback pattern?",
+    step_number=1,
+    total_steps=3,
+    next_step_required=True,
+    findings="Initial analysis suggests hybrid approach...",
+    models=[
+        {"model": "gemini-2.5-pro", "stance": "for"},
+        {"model": "openai/gpt-5", "stance": "against"}
+    ],
+    relevant_files=[
+        "/home/cody/code/litestar/sqlspec/docs/guides/architecture/arrow-integration.md",
+        "/home/cody/code/litestar/sqlspec/sqlspec/adapters/adbc/driver.py"
+    ]
+)
+```
+
+---
+
+**Research Priority Decision Tree**:
+
+```
+Is the information about SQLSpec internals?
+├─ YES → Read docs/guides/ FIRST
+│   ├─ Adapter-specific? → docs/guides/adapters/{adapter}.md
+│   ├─ Performance? → docs/guides/performance/
+│   ├─ Testing? → docs/guides/testing/testing.md
+│   └─ Standards? → AGENTS.md
+│
+└─ NO → Is it about external library behavior?
+    ├─ YES → Use Context7
+    │   └─ Example: "How does asyncpg handle prepared statements?"
+    │
+    └─ NO → Is it about modern practices/patterns?
+        └─ YES → Use WebSearch
+            └─ Example: "PostgreSQL 16 performance best practices 2025"
+```
+
+---
+
+**Workspace File Templates**:
+
+**`prd.md` Structure**:
+```markdown
+# Feature: {Feature Name}
+
+## Overview
+{1-2 paragraphs describing the feature}
+
+## Problem Statement
+{What problem does this solve?}
+
+## Acceptance Criteria
+- [ ] Criterion 1
+- [ ] Criterion 2
+
+## Technical Design
+### Affected Components
+- Adapters: asyncpg, psycopg, oracle
+- Core: driver, result
+- Storage: fsspec
+
+### Implementation Approach
+{High-level design}
+
+### Type Annotations
+{Expected signatures}
+
+## Testing Strategy
+### Unit Tests
+- Test X in tests/unit/
+### Integration Tests
+- Test Y for each adapter in tests/integration/
+
+## Risks & Constraints
+- Risk 1: {mitigation}
+
+## References
+- Guide: docs/guides/adapters/asyncpg.md
+- Research: specs/active/{slug}/research/plan.md
+```
+
+**`tasks.md` Structure**:
+```markdown
+# Implementation Tasks: {Feature Name}
+
+## Phase 1: Research ✓
+- [x] Read internal guides
+- [x] Consult Context7 for library docs
+- [x] Get architectural consensus
+
+## Phase 2: Core Implementation
+- [ ] Task 1: Implement base class
+- [ ] Task 2: Add type annotations
+- [ ] Task 3: Write docstrings
+
+## Phase 3: Adapter Integration
+- [ ] asyncpg adapter
+- [ ] psycopg adapter
+- [ ] oracle adapter
+
+## Phase 4: Testing
+- [ ] Unit tests (>90% coverage)
+- [ ] Integration tests (all adapters)
+
+## Phase 5: Documentation
+- [ ] Update adapter guides
+- [ ] Add code examples
+- [ ] Update AGENTS.md if needed
+```
+
+**`recovery.md` Structure**:
+```markdown
+# Recovery Instructions: {Feature Name}
+
+## Current Status
+**Phase**: PRD Complete
+**Last Updated**: {timestamp}
+
+## What's Been Done
+- ✓ Requirements analyzed
+- ✓ Research completed (guides, Context7, WebSearch)
+- ✓ Plan created with zen.planner
+- ✓ Consensus achieved on architecture
+- ✓ Workspace artifacts created
+
+## Next Steps
+1. Run `/implement {slug}` to begin implementation
+2. Expert agent will read prd.md and tasks.md
+3. Implementation will auto-invoke Testing and Docs & Vision agents
+
+## Key Decisions Made
+- Decision 1: {rationale}
+- Decision 2: {rationale}
+
+## Files to Review Before Continuing
+- `prd.md` - Full requirements
+- `tasks.md` - Implementation checklist
+- `research/plan.md` - Research findings
+```
+
+---
+
+**Anti-Patterns to Avoid (PRD Phase)**:
+
+❌ **BAD - Over-Planning**:
+```markdown
+# Tasks.md with 50+ micro-tasks
+- [ ] Import typing module
+- [ ] Add docstring to function
+- [ ] Run formatter
+```
+✅ **GOOD - Testable Chunks**:
+```markdown
+# Tasks.md with meaningful milestones
+- [ ] Implement base adapter class with type annotations
+- [ ] Add PostgreSQL-specific optimizations
+- [ ] Create comprehensive test suite (unit + integration)
+```
+
+❌ **BAD - Vague Acceptance Criteria**:
+```markdown
+- [ ] Feature works correctly
+- [ ] Tests pass
+```
+✅ **GOOD - Specific, Measurable Criteria**:
+```markdown
+- [ ] All database adapters support select_to_arrow() method
+- [ ] Arrow tables contain correct schema for all SQL types
+- [ ] Integration tests pass for asyncpg, psycopg, oracle with coverage >85%
+- [ ] Documentation includes working examples for pandas/Polars conversion
+```
+
+❌ **BAD - Planning Implementation Details**:
+```markdown
+## Technical Design
+Use a for loop to iterate through rows...
+```
+✅ **GOOD - High-Level Architecture**:
+```markdown
+## Technical Design
+Implement dual-path Arrow support:
+- Native path: Direct Arrow output for ADBC/DuckDB
+- Conversion path: Dict-to-Arrow fallback for others
+```
+
+❌ **BAD - Skipping Research**:
+```markdown
+# Going straight to planning without consulting guides
+```
+✅ **GOOD - Research-Grounded**:
+```markdown
+# Research findings documented in research/plan.md
+- Consulted docs/guides/adapters/asyncpg.md for patterns
+- Used Context7 to verify asyncpg.fetch_arrow_table() API
+- WebSearch confirmed Arrow 1.0 best practices
+```
+
+---
+
+**Acceptance Criteria (PRD Phase Complete When)**:
+
+- [ ] **Workspace Structure**: `specs/active/{slug}/` directory exists
+- [ ] **PRD Document**: `prd.md` contains:
+  - [ ] Clear problem statement
+  - [ ] Specific acceptance criteria (measurable)
+  - [ ] Technical design (high-level)
+  - [ ] Testing strategy (unit + integration)
+- [ ] **Tasks List**: `tasks.md` has implementation checklist
+- [ ] **Research Document**: `research/plan.md` contains:
+  - [ ] Findings from docs/guides/ (internal)
+  - [ ] Context7 library documentation (if needed)
+  - [ ] WebSearch results (if needed)
+  - [ ] Consensus decision rationale (if applicable)
+- [ ] **Recovery Document**: `recovery.md` has session resume instructions
+- [ ] **Temporary Directory**: `tmp/` exists for working files
+- [ ] **Architectural Consensus**: Major decisions verified with `zen.consensus` (if needed)
+- [ ] **No Scope Creep**: Plan stays focused on stated requirements
+
+---
+
+**Session Resumability**:
+
+To resume PRD work from another session:
+
+1. **Read Current State**:
+   ```bash
+   # Check what exists
+   ls -la specs/active/{slug}/
+   ```
+
+2. **Review Progress**:
+   ```python
+   Read("specs/active/{slug}/recovery.md")  # Current status
+   Read("specs/active/{slug}/tasks.md")     # What's complete
+   Read("specs/active/{slug}/research/plan.md")  # Research findings
+   ```
+
+3. **Continue Planning**:
+   - If consensus incomplete → Resume `zen.consensus` with same models
+   - If research incomplete → Continue Context7/WebSearch
+   - If planning incomplete → Resume `zen.planner` from last step_number
+
+4. **Update Recovery Document**:
+   - Always update `recovery.md` before ending session
+   - Include current phase, next steps, key decisions
+
+---
+
+**Guide References**:
+
+Consult these guides during PRD phase:
+- **Adapters**: `docs/guides/adapters/{adapter}.md` - Adapter-specific patterns
+- **Testing**: `docs/guides/testing/testing.md` - Test strategies
+- **Performance**: `docs/guides/performance/sqlglot-best-practices.md` - Optimization
+- **Architecture**: `docs/guides/architecture/architecture.md` - System design
+- **Standards**: `AGENTS.md` - Code quality requirements (type hints, imports, etc.)
+- **Quick Reference**: `docs/guides/quick-reference/quick-reference.md` - Common patterns
 
 Begin the planning process now.
 """
