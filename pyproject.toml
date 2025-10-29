@@ -319,7 +319,7 @@ markers = [
   "pymysql: marks tests using pymysql",
   "psqlpy: marks tests using psqlpy",
 ]
-testpaths = ["tests"]
+testpaths = ["tests", "docs/examples/quickstart"]
 
 [tool.mypy]
 exclude = ["tmp/", ".tmp/", ".bugs/"]
