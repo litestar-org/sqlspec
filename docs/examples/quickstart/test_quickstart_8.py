@@ -9,11 +9,15 @@ db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
 with db_manager.provide_session(db) as session:
     # Setup
-    session.execute("""
+    _ = session.execute("""
         CREATE TABLE users (id INTEGER, name TEXT, email TEXT, age INTEGER)
     """)
-    session.execute("INSERT INTO users VALUES (?, ?, ?, ?)", 1, "Alice", "alice@example.com", 30)
+    _ = session.execute("INSERT INTO users VALUES (?, ?, ?, ?)", 1, "Alice", "alice@example.com", 30)
 
     # Execute built query
     results = session.select(query, 25)
     print(results)
+
+def test_quickstart_8() -> None:
+    assert len(results) == 1
+    assert results[0] == {"id": 1, "name": "Alice", "email": "alice@example.com"}

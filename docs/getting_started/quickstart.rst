@@ -121,9 +121,10 @@ Query Builder (Experimental)
 
 For those who prefer programmatic query construction, SQLSpec includes an experimental query builder:
 
-.. literalinclude:: /examples/quickstart/quickstart_8.py
+.. literalinclude:: /examples/quickstart/test_quickstart_8.py
    :language: python
    :caption: ``query builder``
+   :lines: 1-19
 
 .. warning::
 
