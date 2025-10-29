@@ -96,9 +96,10 @@ Multiple Databases
 
 Need to work with multiple databases? Register multiple configs:
 
-.. literalinclude:: /examples/quickstart/quickstart_6.py
+.. literalinclude:: /examples/quickstart/test_quickstart_6.py
    :language: python
    :caption: ``multiple databases``
+   :lines: 1-16
 
 
 Transaction Support
