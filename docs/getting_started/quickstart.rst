@@ -76,9 +76,11 @@ Switching Databases
 
 One of SQLSpec's strengths is the consistent API across databases. Here's the same code using PostgreSQL:
 
-.. literalinclude:: /examples/quickstart/quickstart_5.py
+.. literalinclude:: /examples/quickstart/test_quickstart_5.py
    :language: python
    :caption: ``switching databases``
+   :lines: 14-30
+   :dedent: 2
 
 
 .. tip::

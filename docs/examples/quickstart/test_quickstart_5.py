@@ -1,11 +1,7 @@
-import asyncio
-
 from pydantic import BaseModel
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-__all__ = ("User", "main")
 
 
 class User(BaseModel):
@@ -14,7 +10,7 @@ class User(BaseModel):
     email: str
 
 
-async def main() -> None:
+async def test_quickstart_5() -> None:
     db_manager = SQLSpec()
     db = db_manager.add_config(
         AsyncpgConfig(
@@ -33,5 +29,3 @@ async def main() -> None:
         user = await session.select_one("SELECT * FROM users WHERE id = $1", 1, schema_type=User)
         print(f"User: {user.name}")
 
-
-asyncio.run(main())
