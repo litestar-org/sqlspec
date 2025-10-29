@@ -379,11 +379,156 @@ def _raise_data_required(self):
 - Abstract raise statements to inner functions in try blocks
 - Remove unnecessary try/catch blocks that will be caught higher in the execution
 
+#### Two-Tier Error Handling Pattern
+
+When processing user input that may be incomplete or malformed, use a two-tier approach:
+
+**Tier 1: Graceful Skip (Expected Incomplete Input)**
+
+- Condition: Input lacks required markers but is otherwise valid
+- Action: Return empty result (empty dict, None, etc.)
+- Log level: DEBUG
+- Example: SQL file without `-- name:` markers
+
+**Tier 2: Hard Error (Malformed Input)**
+
+- Condition: Input has required markers but is malformed
+- Action: Raise specific exception with clear message
+- Log level: ERROR (via exception handler)
+- Example: Duplicate statement names, empty names
+
+**Implementation Pattern:**
+
+```python
+def parse_user_input(content: str, source: str) -> "dict[str, Result]":
+    """Parse user input with two-tier error handling.
+
+    Files without required markers are gracefully skipped by returning
+    an empty dictionary. The caller is responsible for handling empty results.
+
+    Args:
+        content: Raw input content to parse.
+        source: Source identifier for error reporting.
+
+    Returns:
+        Dictionary of parsed results. Empty dict if no required markers found.
+
+    Raises:
+        ParseError: If required markers are present but malformed.
+    """
+    # Check for required markers
+    markers = list(MARKER_PATTERN.finditer(content))
+    if not markers:
+        return {}  # Tier 1: Graceful skip
+
+    results = {}
+    for marker in markers:
+        # Parse marker
+        if malformed_marker(marker):
+            raise ParseError(source, "Malformed marker")  # Tier 2: Hard error
+
+        # Process and add result
+        results[marker.name] = process(marker)
+
+    return results
+
+
+def caller_function(file_path: str) -> None:
+    """Caller handles empty results from graceful skip."""
+    results = parse_user_input(content, str(file_path))
+
+    if not results:
+        logger.debug(
+            "Skipping file without required markers: %s",
+            str(file_path),
+            extra={"file_path": str(file_path), "correlation_id": get_correlation_id()},
+        )
+        return  # Early return - don't process empty results
+
+    # Process non-empty results
+    for name, result in results.items():
+        store_result(name, result)
+```
+
+**Key Benefits:**
+
+1. **Clear Intent**: Distinguishes "no markers" from "bad markers"
+2. **User-Friendly**: Doesn't break batch processing for missing markers
+3. **Debuggable**: DEBUG logs show what was skipped
+4. **Fail-Fast**: Malformed input still raises clear errors
+
+**When to Use:**
+
+- File/directory loading with optional markers
+- Batch processing where some inputs may lack required data
+- Migration systems processing mixed file types
+- Configuration loading with optional sections
+
+**When NOT to Use:**
+
+- Required input validation (use strict validation)
+- Single-file processing where empty result is an error
+- API endpoints expecting specific data format
+
+**Real-World Example:**
+
+See `sqlspec/loader.py:_parse_sql_content()` for the reference implementation in SQL file loading.
+
 ### Logging Standards
 
 - Use `logging` module, NEVER `print()`
 - NO f-strings in log messages - use lazy formatting
 - Provide meaningful context in all log messages
+
+#### DEBUG Level for Expected Skip Behavior
+
+Use DEBUG level (not INFO or WARNING) when gracefully skipping expected conditions:
+
+```python
+# GOOD - DEBUG for expected skip
+if not statements:
+    logger.debug(
+        "Skipping SQL file without named statements: %s",
+        path_str,
+        extra={
+            "file_path": path_str,
+            "correlation_id": CorrelationContext.get(),
+        },
+    )
+    return
+
+# BAD - INFO suggests important information
+logger.info("Skipping file %s", path_str)  # Too high level
+
+# BAD - WARNING suggests potential problem
+logger.warning("No statements found in %s", path_str)  # Misleading
+```
+
+**DEBUG vs INFO vs WARNING Guidelines:**
+
+- **DEBUG**: Expected behavior that aids troubleshooting
+    - Files gracefully skipped during batch processing
+    - Optional features not enabled (dependencies missing)
+    - Cache hits/misses
+    - Internal state transitions
+
+- **INFO**: Significant events during normal operation
+    - Connection pool created
+    - Migration applied successfully
+    - Background task started
+
+- **WARNING**: Unexpected but recoverable conditions
+    - Retrying after transient failure
+    - Falling back to alternative implementation
+    - Configuration using deprecated options
+
+**Context Requirements:**
+
+Always include `extra` dict with:
+
+- Primary identifier (file_path, query_name, etc.)
+- Correlation ID via `CorrelationContext.get()`
+- Additional relevant context (size, duration, etc.)
 
 ### Documentation Standards
 
@@ -394,6 +539,43 @@ def _raise_data_required(self):
 - Don't document return if `None`
 - Sphinx-compatible format
 - Focus on WHY not WHAT
+
+**Documenting Graceful Degradation:**
+
+When functions implement graceful skip behavior, document it clearly in the docstring:
+
+```python
+def parse_content(content: str, source: str) -> "dict[str, Result]":
+    """Parse content and extract structured data.
+
+    Files without required markers are gracefully skipped by returning
+    an empty dictionary. The caller is responsible for handling empty results
+    appropriately.
+
+    Args:
+        content: Raw content to parse.
+        source: Source identifier for error reporting.
+
+    Returns:
+        Dictionary mapping names to results.
+        Empty dict if no required markers found in the content.
+
+    Raises:
+        ParseError: If required markers are present but malformed
+                   (duplicate names, empty names, invalid content).
+    """
+```
+
+**Key elements:**
+
+1. **First paragraph after summary**: Explain graceful skip behavior
+2. **Caller responsibility**: Note that caller must handle empty results
+3. **Returns section**: Explicitly document empty dict case
+4. **Raises section**: Only document hard errors, not graceful skips
+
+**Example from codebase:**
+
+See `sqlspec/loader.py:_parse_sql_content()` for reference implementation.
 
 **Project Documentation**:
 
@@ -995,17 +1177,20 @@ SQLSpec implements Apache Arrow support through a dual-path architecture: native
 ### When to Implement Arrow Support
 
 **Implement select_to_arrow() when**:
+
 - Adapter supports high-throughput analytical queries
 - Users need integration with pandas, Polars, or data science tools
 - Data interchange with Arrow ecosystem (Parquet, Spark, etc.) is common
 - Large result sets are typical for the adapter's use cases
 
 **Use native Arrow path when**:
+
 - Database driver provides direct Arrow output (e.g., ADBC `fetch_arrow_table()`)
 - Zero-copy data transfer available
 - Performance is critical for large datasets
 
 **Use conversion path when**:
+
 - Database driver returns dict/row results
 - Native Arrow support not available
 - Conversion overhead acceptable for use case
@@ -1057,6 +1242,7 @@ class NativeArrowDriver(AsyncDriverAdapterBase):
 ```
 
 **Key principles**:
+
 - Use `ensure_pyarrow()` for dependency validation
 - Validate `native_only` flag if adapter doesn't support native path
 - Preserve Arrow schema metadata from database
@@ -1087,6 +1273,7 @@ async def select_to_arrow(self, statement, /, *parameters, **kwargs):
 ```
 
 **When to use**:
+
 - Adapter has no native Arrow support
 - Conversion overhead acceptable (&lt;20% for most cases)
 - Provides Arrow compatibility for all adapters
@@ -1109,6 +1296,7 @@ UUID → utf8 (converted to string)
 ```
 
 **Complex type handling**:
+
 - Arrays: Preserve as Arrow list types when possible
 - JSON: Convert to utf8 (text) for portability
 - UUIDs: Convert to strings for cross-platform compatibility
@@ -1130,6 +1318,7 @@ result = create_arrow_result(record_batch, rows_affected=record_batch.num_rows)
 ```
 
 **Benefits**:
+
 - Consistent API across all adapters
 - Automatic to_pandas(), to_polars(), to_dict() support
 - Iteration and length operations
@@ -1138,12 +1327,14 @@ result = create_arrow_result(record_batch, rows_affected=record_batch.num_rows)
 ### Testing Requirements
 
 **Unit tests** for Arrow helpers:
+
 - Test `convert_dict_to_arrow()` with various data types
 - Test empty result handling
 - Test NULL value preservation
 - Test schema inference
 
 **Integration tests** per adapter:
+
 - Test native Arrow path (if supported)
 - Test table and batch return formats
 - Test pandas/Polars conversion
@@ -1153,6 +1344,7 @@ result = create_arrow_result(record_batch, rows_affected=record_batch.num_rows)
 - Test empty results
 
 **Performance benchmarks** (for native paths):
+
 - Measure native vs conversion speedup
 - Validate zero-copy behavior
 - Benchmark memory usage
@@ -1233,6 +1425,7 @@ When implementing Arrow support:
 ### Common Pitfalls
 
 **Avoid**:
+
 - Returning raw Arrow objects instead of ArrowResult
 - Missing `ensure_pyarrow()` dependency check
 - Not supporting both "table" and "batch" return formats
@@ -1240,6 +1433,7 @@ When implementing Arrow support:
 - Breaking existing `execute()` behavior
 
 **Do**:
+
 - Use `create_arrow_result()` for consistent wrapping
 - Support all standard type mappings
 - Test with large datasets
@@ -1249,16 +1443,19 @@ When implementing Arrow support:
 ### Performance Guidelines
 
 **Native path targets**:
+
 - Overhead &lt;5% vs direct driver Arrow fetch
 - Zero-copy data transfer
 - 5-10x faster than dict conversion for datasets >10K rows
 
 **Conversion path targets**:
+
 - Overhead &lt;20% vs standard `execute()` for datasets &lt;1K rows
 - Overhead &lt;15% for datasets 1K-100K rows
 - Overhead &lt;10% for datasets >100K rows (columnar efficiency)
 
 **Memory targets**:
+
 - Peak memory &lt;2x dict representation
 - Arrow columnar format more efficient for large datasets
 

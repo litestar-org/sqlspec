@@ -284,24 +284,27 @@ class SQLFileLoader:
     def _parse_sql_content(content: str, file_path: str) -> "dict[str, NamedStatement]":
         """Parse SQL content and extract named statements with dialect specifications.
 
+        Files without any named statement markers are gracefully skipped by returning
+        an empty dictionary. The caller is responsible for handling empty results
+        appropriately.
+
         Args:
             content: Raw SQL file content to parse.
             file_path: File path for error reporting.
 
         Returns:
             Dictionary mapping normalized statement names to NamedStatement objects.
+            Empty dict if no named statement markers found in the content.
 
         Raises:
-            SQLFileParseError: If no named statements found, duplicate names exist,
-                              or invalid dialect names are specified.
+            SQLFileParseError: If named statements are malformed (duplicate names or
+                              invalid content after parsing).
         """
         statements: dict[str, NamedStatement] = {}
 
         name_matches = list(QUERY_NAME_PATTERN.finditer(content))
         if not name_matches:
-            raise SQLFileParseError(
-                file_path, file_path, ValueError("No named SQL statements found (-- name: statement_name)")
-            )
+            return {}
 
         for i, match in enumerate(name_matches):
             raw_statement_name = match.group(1).strip()
@@ -467,10 +470,19 @@ class SQLFileLoader:
         path_str = str(file_path)
 
         content = self._read_file_content(file_path)
+        statements = self._parse_sql_content(content, path_str)
+
+        if not statements:
+            logger.debug(
+                "Skipping SQL file without named statements: %s",
+                path_str,
+                extra={"file_path": path_str, "correlation_id": CorrelationContext.get()},
+            )
+            return
+
         sql_file = SQLFile(content=content, path=path_str)
         self._files[path_str] = sql_file
 
-        statements = self._parse_sql_content(content, path_str)
         for name, statement in statements.items():
             namespaced_name = f"{namespace}.{name}" if namespace else name
             if namespaced_name in self._queries:
