@@ -9,9 +9,10 @@ Your First Query
 
 Let's start with the simplest possible example - executing a query and getting results:
 
-.. literalinclude:: /examples/quickstart/quickstart_1.py
+.. literalinclude:: /examples/quickstart/test_quickstart_1.py
    :language: python
    :caption: ``first sqlspec query``
+   :lines: 1-11
 
 What's happening here?
 
