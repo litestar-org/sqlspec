@@ -10,6 +10,52 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+SQL Loader Graceful Error Handling
+-----------------------------------
+
+**Breaking Change**: Files without named statements (``-- name:``) are now gracefully skipped instead of raising ``SQLFileParseError``.
+
+This allows loading directories containing both aiosql-style named queries and raw DDL/DML scripts without errors.
+
+**What Changed:**
+
+- Files without ``-- name:`` markers return empty dict instead of raising exception
+- Directory loading continues when encountering such files
+- Skipped files are logged at DEBUG level
+- Malformed named statements (duplicate names, etc.) still raise exceptions
+
+**Migration Guide:**
+
+Code explicitly catching ``SQLFileParseError`` for files without named statements will need updating:
+
+.. code-block:: python
+
+   # OLD (breaks):
+   try:
+       loader.load_sql("directory/")
+   except SQLFileParseError as e:
+       if "No named SQL statements found" in str(e):
+           pass
+
+   # NEW (recommended):
+   loader.load_sql("directory/")  # Just works - DDL files skipped
+   if not loader.list_queries():
+       # No queries loaded
+       pass
+
+**Example Use Case:**
+
+.. code-block:: python
+
+   # Directory structure:
+   # migrations/
+   # ├── schema.sql              # Raw DDL (no -- name:) → SKIP
+   # ├── queries.sql             # Named queries → LOAD
+   # └── seed-data.sql          # Raw DML (no -- name:) → SKIP
+
+   loader = SQLFileLoader()
+   loader.load_sql("migrations/")  # Loads only named queries, skips DDL
+
 Hybrid Versioning with Fix Command
 -----------------------------------
 
