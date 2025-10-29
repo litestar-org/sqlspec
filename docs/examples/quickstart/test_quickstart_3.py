@@ -32,3 +32,9 @@ with db_manager.provide_session(db) as session:
     all_users = session.select("SELECT * FROM users", schema_type=User)
     for u in all_users:
         print(f"User: {u.name}")  # Each item is a typed User
+
+
+def test_quickstart_3() -> None:
+    assert user == User(id=1, name="Alice", email="alice@example.com")
+    assert len(all_users) == 1
+    assert isinstance(all_users[0], User)

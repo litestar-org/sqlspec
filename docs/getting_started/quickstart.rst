@@ -49,9 +49,10 @@ Type-Safe Results
 
 The real power of SQLSpec comes from type-safe result mapping. Define your data models and SQLSpec automatically maps query results to them:
 
-.. literalinclude:: /examples/quickstart/quickstart_3.py
+.. literalinclude:: /examples/quickstart/test_quickstart_3.py
    :language: python
    :caption: ``type-safe results``
+   :lines: 1-35
 
 .. note::
 
