@@ -107,9 +107,10 @@ Transaction Support
 
 SQLSpec automatically manages transactions. By default, each session is a transaction:
 
-.. literalinclude:: /examples/quickstart/quickstart_7.py
+.. literalinclude:: /examples/quickstart/test_quickstart_7.py
    :language: python
    :caption: ``transaction support``
+   :lines: 1-32
 
 .. note::
 
