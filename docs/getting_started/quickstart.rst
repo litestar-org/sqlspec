@@ -26,9 +26,10 @@ Working with Real Data
 
 Let's create a table, insert some data, and query it:
 
-.. literalinclude:: /examples/quickstart/quickstart_2.py
+.. literalinclude:: /examples/quickstart/test_quickstart_2.py
    :language: python
    :caption: ``working with real data``
+   :lines: 1-36
 
 Session Methods Cheat Sheet
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
