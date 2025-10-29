@@ -152,63 +152,64 @@ class MyDriver(SyncDriverAdapterBase):
     def with_cursor(self, connection: Any) -> Any:
         # ...
 
-    def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
         # ...
 
-    def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
-        # ... (CURRENT SIGNATURE)
+    def begin(self) -> None:
+        # ...
 
-    def _get_row_count(self, cursor: Any) -> int:
-        # ... (CURRENT SIGNATURE)
+    def commit(self) -> None:
+        # ...
 
-    # begin(), commit(), rollback() are also required
+    def rollback(self) -> None:
+        # ...
+
+    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+        # ...
+
+    def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        # ...
+
+    def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        # ...
+
+    def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        # ...
 ```
 
 ### Implementation Pattern (CURRENT)
 
-The `_dispatch_execution` method in the base class handles the overall flow using a template method pattern. Modern drivers implement specific execution methods rather than a single `_perform_execute`:
+The `dispatch_statement_execution` method in the base class handles the overall flow using a template method pattern. Modern drivers implement specific execution methods:
 
 ```python
 # Current template method pattern
-def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[int], Any]:
-    """Enhanced execution with special handling and routing."""
+def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
+    """Central execution dispatcher using the Template Method Pattern."""
+    with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
+        special_result = self._try_special_handling(cursor, statement)
+        if special_result is not None:
+            return special_result
 
-    # 1. Try special handling first
-    special_result = self._try_special_handling(cursor, statement)
-    if special_result is not None:
-        return special_result
-
-    # 2. Get compiled SQL with driver's parameter style
-    sql, parameters = self._get_compiled_sql(statement, self.statement_config)
-
-    # 3. Route to appropriate execution method
-    if statement.is_script:
-        if self.statement_config.parameter_config.needs_static_script_compilation:
-            static_sql = self._prepare_script_sql(statement)
-            result = self._execute_script(cursor, static_sql, None, self.statement_config)
+        if statement.is_script:
+            execution_result = self._execute_script(cursor, statement)
+        elif statement.is_many:
+            execution_result = self._execute_many(cursor, statement)
         else:
-            prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
-            result = self._execute_script(cursor, sql, prepared_parameters, self.statement_config)
-    elif statement.is_many:
-        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=True)
-        result = self._execute_many(cursor, sql, prepared_parameters)
-    else:
-        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
-        result = self._execute_statement(cursor, sql, prepared_parameters)
+            execution_result = self._execute_statement(cursor, statement)
 
-    return create_execution_result(result)
+        return self.build_statement_result(statement, execution_result)
 
 # Drivers implement these specific methods:
-def _try_special_handling(self, cursor: Any, statement: SQL) -> Optional[tuple]:
+def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
     """Hook for database-specific operations (COPY, bulk ops, etc.)"""
 
-def _execute_statement(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
+def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
     """Execute single statement"""
 
-def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
+def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
     """Execute with parameter batches"""
 
-def _execute_script(self, cursor: Any, sql: str, prepared_parameters: Any, statement_config: StatementConfig) -> Any:
+def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
     """Execute multi-statement script"""
 ```
 

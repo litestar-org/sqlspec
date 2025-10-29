@@ -2,9 +2,9 @@
 orphan: true
 ---
 
-# asyncmy Adapter Guide
+# MySQL/MariaDB Adapters Guide
 
-This guide provides specific instructions for the `asyncmy` adapter for MySQL/MariaDB.
+This guide covers `asyncmy`.
 
 ## Key Information
 
@@ -13,10 +13,10 @@ This guide provides specific instructions for the `asyncmy` adapter for MySQL/Ma
 
 ## Best Practices
 
--   **Async Only:** This is an asynchronous driver. Use it in `asyncio` applications.
--   **Connection Pooling:** `asyncmy` has a built-in connection pool. Configure it via the `sqlspec` config to manage connections efficiently.
--   **Character Set:** As with other MySQL drivers, ensure `utf8mb4` is used for full Unicode support.
+-   **Character Set:** Always ensure the connection character set is `utf8mb4` to support a full range of Unicode characters, including emojis.
+-   **`sql_mode`:** Be aware of the server's `sql_mode`. It can affect how MySQL handles invalid data, dates, and other constraints.
 
 ## Common Issues
 
--   **Event Loop Conflicts:** In some frameworks, you might encounter event loop issues if the connection pool is not managed correctly within the application's lifecycle. Ensure the pool is created and closed at the appropriate times.
+-   **`PyMySQL.err.OperationalError: (1366, ...)`**: Incorrect string value for a column. This is often due to character set issues. Ensure your connection and tables are using `utf8mb4`.
+-   **Authentication Errors:** MySQL 8.0 and later use a different default authentication plugin (`caching_sha2_password`). If you have trouble connecting, you may need to configure the user account to use the older `mysql_native_password` plugin, though this is less secure.
