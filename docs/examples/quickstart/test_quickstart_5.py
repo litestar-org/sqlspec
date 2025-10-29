@@ -28,4 +28,3 @@ async def test_quickstart_5() -> None:
         # PostgreSQL uses $1, $2 for parameters instead of ?
         user = await session.select_one("SELECT * FROM users WHERE id = $1", 1, schema_type=User)
         print(f"User: {user.name}")
-

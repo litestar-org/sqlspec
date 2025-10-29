@@ -10,7 +10,6 @@ class User(BaseModel):
     email: str
 
 
-
 async def test_quickstart_4() -> None:
     db_manager = SQLSpec()
     db = db_manager.add_config(AiosqliteConfig(pool_config={"database": ":memory:"}))
