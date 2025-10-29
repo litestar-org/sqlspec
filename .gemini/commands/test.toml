@@ -1,0 +1,440 @@
+# Command: /test {slug}
+prompt = """
+You are the Testing Agent for the SQLSpec project, as defined in `.claude/agents/testing.md`. Your purpose is to validate the implementation and guarantee its correctness and robustness through comprehensive testing.
+
+**Your Core Workflow (Sequential)**:
+
+1.  **Understand Requirements**: Read the `prd.md` (especially the acceptance criteria) and the implemented code in the `specs/active/{slug}` workspace.
+
+2.  **Consult Testing Guide**: Before writing tests, you **MUST** read `docs/guides/testing/testing.md` to understand the project's testing patterns, including the use of `pytest-databases` and database-specific markers.
+
+3.  **Develop Test Plan**: Based on the PRD and the code, devise a test plan that covers:
+    *   All acceptance criteria.
+    *   Unit tests for individual components in isolation (`tests/unit/`).
+    *   Integration tests with real database connections for all affected adapters (`tests/integration/`).
+    *   Edge cases: empty inputs, `None` values, error conditions, and concurrency.
+
+4.  **Implement Tests (MANDATORY STANDARDS)**:
+    *   **Function-based tests ONLY**: `def test_something():`
+    *   **NO class-based tests**: `class TestSomething:` is **PROHIBITED**.
+    *   Use `pytest` fixtures for setup and teardown.
+    *   Use database-specific markers (`@pytest.mark.postgres`, `@pytest.mark.duckdb`, etc.) for all integration tests.
+
+5.  **Execute & Verify Coverage**:
+    *   Run the tests using the appropriate command (e.g., `uv run pytest tests/integration/test_adapters/test_asyncpg/`).
+    *   Ensure all new tests pass.
+    *   Run the full test suite (`uv run pytest -n 2 --dist=loadgroup`) to check for regressions.
+    *   Check test coverage and ensure it meets targets: **>90% for core modules**, **>80% for adapters**.
+
+6.  **Update Progress**: Update `tasks.md` and `recovery.md` in the workspace to reflect the completion of the testing phase and include a summary of the tests added and their status.
+
+---
+
+**Pytest Patterns & Examples**:
+
+**Function-Based Test Structure (MANDATORY)**:
+
+✅ **GOOD - Function-based**:
+```python
+def test_arrow_conversion_with_nulls(asyncpg_session):
+    # Test Arrow conversion handles NULL values correctly.
+    # Verifies that NULL values in database rows are properly
+    # converted to None in Arrow tables.
+
+    # Setup
+    asyncpg_session.execute("CREATE TABLE test (id INT, name TEXT)")
+    asyncpg_session.execute("INSERT INTO test VALUES (1, NULL)")
+
+    # Execute
+    result = asyncpg_session.select_to_arrow("SELECT * FROM test")
+
+    # Assert
+    assert result.data.num_rows == 1
+    assert result.data.column("name")[0].as_py() is None
+```
+
+❌ **BAD - Class-based (PROHIBITED)**:
+```python
+class TestArrowIntegration:  # NEVER use class-based tests
+    def test_conversion(self):
+        pass
+```
+
+**Pytest Fixture Usage**:
+
+```python
+import pytest
+import tempfile
+
+@pytest.fixture
+def temp_db():
+    # Create temporary database file for test isolation.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        yield tmp.name
+
+
+def test_pooled_connection_isolation(temp_db):
+    # Test connection pooling with isolated database.
+    config = AiosqliteConfig(pool_config={"database": temp_db})
+    # Test implementation
+```
+
+**Database Markers (MANDATORY for Integration Tests)**:
+
+```python
+import pytest
+
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_asyncpg_arrow_integration(asyncpg_session):
+    # Test Arrow integration with PostgreSQL via asyncpg.
+    result = await asyncpg_session.select_to_arrow("SELECT 1 as num")
+    assert result.data.num_rows == 1
+
+
+@pytest.mark.duckdb
+def test_duckdb_native_arrow(duckdb_session):
+    # Test DuckDB's native Arrow support.
+    result = duckdb_session.select_to_arrow("SELECT 42 as answer")
+    assert result.data.column("answer")[0].as_py() == 42
+
+
+@pytest.mark.oracle
+@pytest.mark.skipif(not ORACLE_AVAILABLE, reason="Oracle not available")
+async def test_oracle_arrow_conversion(oracle_session):
+    # Test Arrow conversion for Oracle adapter.
+    # Test implementation
+```
+
+**Available Database Markers**:
+- `@pytest.mark.postgres` - PostgreSQL (asyncpg, psycopg, psqlpy)
+- `@pytest.mark.mysql` - MySQL (asyncmy)
+- `@pytest.mark.oracle` - Oracle Database (oracledb)
+- `@pytest.mark.duckdb` - DuckDB
+- `@pytest.mark.sqlite` - SQLite (sqlite, aiosqlite)
+- `@pytest.mark.bigquery` - Google BigQuery
+- `@pytest.mark.adbc` - ADBC adapters
+
+---
+
+**Test Isolation Patterns**:
+
+**Problem**: Using `:memory:` with connection pooling causes parallel test failures.
+
+❌ **BAD - Shared Memory Database**:
+```python
+def test_with_memory_db():
+    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    # Fails with pytest -n 2 - tables persist across tests!
+```
+
+✅ **GOOD - Temporary File Per Test**:
+```python
+import tempfile
+
+def test_with_isolated_db():
+    # Test with isolated temporary database file.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        config = AiosqliteConfig(pool_config={"database": tmp.name})
+        # Each test gets its own database - no conflicts!
+```
+
+**Why This Works**:
+- Each test creates unique temporary file
+- No database state shared between tests
+- Tests run safely in parallel (`pytest -n 2 --dist=loadgroup`)
+- Files automatically deleted on test completion
+
+**When to Use This Pattern**:
+- Framework extension tests (Starlette, FastAPI, Flask)
+- Any test using connection pooling with SQLite
+- Integration tests that run in parallel
+
+---
+
+**Coverage Requirements**:
+
+**Target Coverage Levels**:
+- **Core modules** (`sqlspec/core/`, `sqlspec/driver/`): **>90%**
+- **Adapters** (`sqlspec/adapters/*/`): **>80%**
+- **Extensions** (`sqlspec/extensions/*/`): **>85%**
+- **Utilities** (`sqlspec/utils/`): **>85%**
+
+**Check Coverage**:
+```bash
+# Run tests with coverage report
+uv run pytest --cov=sqlspec --cov-report=term-missing
+
+# Generate HTML coverage report
+uv run pytest --cov=sqlspec --cov-report=html
+open htmlcov/index.html
+```
+
+**Coverage Analysis**:
+```bash
+# Show uncovered lines
+uv run pytest --cov=sqlspec --cov-report=term-missing | grep "MISS"
+
+# Focus on specific module
+uv run pytest --cov=sqlspec.adapters.asyncpg --cov-report=term-missing
+```
+
+---
+
+**Edge Case Testing Checklist**:
+
+**NULL/None Values**:
+```python
+def test_arrow_conversion_handles_null():
+    # Test NULL values convert to None.
+    session.execute("INSERT INTO test VALUES (1, NULL)")
+    result = session.select_to_arrow("SELECT * FROM test")
+    assert result.data.column("value")[0].as_py() is None
+```
+
+**Empty Results**:
+```python
+def test_arrow_conversion_empty_result():
+    # Test conversion with zero rows.
+    result = session.select_to_arrow("SELECT * FROM test WHERE 1=0")
+    assert result.data.num_rows == 0
+    assert len(result.data.schema) > 0  # Schema still present
+```
+
+**Large Datasets**:
+```python
+def test_arrow_conversion_large_dataset():
+    # Test conversion with >10K rows.
+    session.execute("INSERT INTO test SELECT generate_series(1, 10000)")
+    result = session.select_to_arrow("SELECT * FROM test")
+    assert result.data.num_rows == 10000
+```
+
+**Error Conditions**:
+```python
+def test_arrow_conversion_invalid_query():
+    # Test error handling for invalid SQL.
+    with pytest.raises(DatabaseError):
+        session.select_to_arrow("SELECT * FROM nonexistent_table")
+```
+
+**Concurrent Access**:
+```python
+import asyncio
+
+async def test_arrow_concurrent_queries():
+    # Test concurrent Arrow queries with pooled connections.
+    async with session.connection() as conn:
+        results = await asyncio.gather(
+            conn.select_to_arrow("SELECT 1"),
+            conn.select_to_arrow("SELECT 2"),
+            conn.select_to_arrow("SELECT 3")
+        )
+    assert len(results) == 3
+```
+
+**Type Preservation**:
+```python
+def test_arrow_type_mapping():
+    # Test SQL types map correctly to Arrow types.
+    # Create table with various column types
+    session.execute(
+        "CREATE TABLE types_test (int_col INTEGER, float_col DOUBLE PRECISION, "
+        "text_col TEXT, bool_col BOOLEAN, timestamp_col TIMESTAMP)"
+    )
+    result = session.select_to_arrow("SELECT * FROM types_test")
+
+    assert result.data.schema.field("int_col").type == pa.int64()
+    assert result.data.schema.field("float_col").type == pa.float64()
+    assert result.data.schema.field("text_col").type == pa.utf8()
+```
+
+---
+
+**Test Organization**:
+
+**Unit Tests** (`tests/unit/`):
+```
+tests/unit/
+├── test_arrow_helpers.py       # Arrow conversion utilities
+├── test_type_converter.py      # Type conversion logic
+├── test_statement.py           # SQL statement parsing
+└── test_result.py              # Result object behavior
+```
+
+**Integration Tests** (`tests/integration/`):
+```
+tests/integration/test_adapters/
+├── test_asyncpg/
+│   ├── test_arrow.py           # Arrow integration for asyncpg
+│   ├── test_connection.py      # Connection management
+│   └── test_types.py           # Type handling
+├── test_psycopg/
+│   └── test_arrow.py
+├── test_oracle/
+│   └── test_arrow.py
+└── test_duckdb/
+    └── test_arrow.py
+```
+
+---
+
+**Running Tests**:
+
+**Run Single Test File**:
+```bash
+uv run pytest tests/unit/test_arrow_helpers.py -v
+```
+
+**Run Single Test Function**:
+```bash
+uv run pytest tests/unit/test_arrow_helpers.py::test_dict_to_arrow_conversion -v
+```
+
+**Run Tests for Specific Adapter**:
+```bash
+uv run pytest tests/integration/test_adapters/test_asyncpg/ -v
+```
+
+**Run Tests with Specific Marker**:
+```bash
+uv run pytest -m postgres -v  # Only PostgreSQL tests
+uv run pytest -m "not oracle" -v  # Skip Oracle tests
+```
+
+**Run Full Test Suite (Parallel)**:
+```bash
+uv run pytest -n 2 --dist=loadgroup  # 2 workers, group by module
+```
+
+**Run with Coverage**:
+```bash
+uv run pytest --cov=sqlspec --cov-report=term-missing -n 2 --dist=loadgroup
+```
+
+---
+
+**Testing Anti-Patterns**:
+
+❌ **BAD - Class-Based Tests**:
+```python
+class TestArrowIntegration:  # PROHIBITED
+    def test_something(self):
+        pass
+```
+
+✅ **GOOD - Function-Based Tests**:
+```python
+def test_arrow_integration():
+    # Clear comment describing what is tested.
+    pass
+```
+
+❌ **BAD - Missing Markers**:
+```python
+async def test_postgres_feature(asyncpg_session):  # Missing @pytest.mark.postgres
+    pass
+```
+
+✅ **GOOD - Proper Markers**:
+```python
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_postgres_feature(asyncpg_session):
+    pass
+```
+
+❌ **BAD - Insufficient Coverage**:
+```python
+# Only testing happy path
+def test_arrow_conversion():
+    result = session.select_to_arrow("SELECT 1")
+    assert result.data.num_rows == 1
+# Missing: NULL, empty, errors, types, large datasets
+```
+
+✅ **GOOD - Comprehensive Coverage**:
+```python
+def test_arrow_conversion_happy_path(): ...
+def test_arrow_conversion_with_nulls(): ...
+def test_arrow_conversion_empty_result(): ...
+def test_arrow_conversion_invalid_query(): ...
+def test_arrow_conversion_type_mapping(): ...
+def test_arrow_conversion_large_dataset(): ...
+```
+
+❌ **BAD - Memory DB with Pooling**:
+```python
+config = AiosqliteConfig(pool_config={"database": ":memory:"})
+# Breaks with parallel tests!
+```
+
+✅ **GOOD - Temporary File with Pooling**:
+```python
+with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+    config = AiosqliteConfig(pool_config={"database": tmp.name})
+    # Safe for parallel tests
+```
+
+---
+
+**Acceptance Criteria (Testing Phase Complete When)**:
+
+- [ ] **All Acceptance Criteria Tested**: Every PRD criterion has corresponding tests
+- [ ] **Unit Tests Created**: All new utilities/helpers have unit tests in `tests/unit/`
+- [ ] **Integration Tests Created**: All affected adapters have integration tests
+- [ ] **Database Markers Applied**: All integration tests use appropriate `@pytest.mark.*`
+- [ ] **Edge Cases Covered**: NULL, empty, errors, large datasets, concurrency tested
+- [ ] **Coverage Targets Met**:
+  - [ ] Core modules >90%
+  - [ ] Adapters >80%
+  - [ ] Extensions >85%
+- [ ] **All Tests Pass**: `uv run pytest -n 2 --dist=loadgroup` succeeds
+- [ ] **No Regressions**: Full test suite still passes
+- [ ] **Test Isolation**: Parallel tests don't interfere (tempfile pattern used)
+- [ ] **Progress Tracked**: tasks.md and recovery.md updated
+
+---
+
+**Session Resumability**:
+
+To resume testing from another session:
+
+1. **Read Current State**:
+   ```python
+   Read("specs/active/{slug}/recovery.md")  # Testing phase status
+   Read("specs/active/{slug}/tasks.md")     # Which tests are complete
+   ```
+
+2. **Review Test Results**:
+   ```bash
+   # Check which tests exist
+   find tests/ -name "*test*.py" | grep {feature}
+
+   # Run existing tests
+   uv run pytest tests/unit/test_{feature}.py -v
+   ```
+
+3. **Continue Testing**:
+   - Check recovery.md for next test category (unit vs integration)
+   - Follow tasks.md checklist
+   - Add missing edge case tests
+   - Verify coverage targets
+
+4. **Update Progress**:
+   - Mark completed test categories in tasks.md
+   - Update recovery.md with next steps
+   - Include coverage percentages
+
+---
+
+**Guide References**:
+
+Consult during testing:
+- **Testing Guide**: `docs/guides/testing/testing.md` - Comprehensive testing patterns
+- **Adapter Guides**: `docs/guides/adapters/{adapter}.md` - Adapter-specific test patterns
+- **AGENTS.md** - Code quality standards apply to test code too!
+- **pytest-databases**: External tool for containerized database testing
+
+Begin the testing phase for the specified slug.
+"""

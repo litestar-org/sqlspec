@@ -22,11 +22,11 @@ Database adapter-specific guides covering patterns, best practices, and implemen
 - [**ADBC**](adapters/adbc.md) - Arrow Database Connectivity
 - [**AioSQLite**](adapters/aiosqlite.md) - Async SQLite
 - [**AsyncMy**](adapters/asyncmy.md) - Async MySQL/MariaDB
+- [**AsyncPG**](adapters/asyncpg.md) - Async PostgreSQL
 - [**BigQuery**](adapters/bigquery.md) - Google Cloud BigQuery
 - [**DuckDB**](adapters/duckdb.md) - OLAP analytical database
-- [**MySQL**](adapters/mysql.md) - MySQL patterns
-- [**Oracle**](adapters/oracle.md) - Oracle Database (comprehensive guide)
-- [**PostgreSQL**](adapters/postgres.md) - PostgreSQL patterns (asyncpg, psycopg)
+- [**OracleDB**](adapters/oracledb.md) - Oracle Database (comprehensive guide)
+- [**Psycopg**](adapters/psycopg.md) - Sync/Async PostgreSQL
 - [**Psqlpy**](adapters/psqlpy.md) - Rust-based async PostgreSQL
 - [**SQLite**](adapters/sqlite.md) - Embedded SQLite
 
@@ -60,7 +60,7 @@ Core architecture and design patterns:
 
 - [**aiosql Extension**](extensions/aiosql.md) - Bridge existing aiosql SQL files into SQLSpec
 - [**Litestar Extension**](extensions/litestar.md) - Plugin usage, dependency injection, sessions, CLI commands
-- [**Google ADK Extension**](extensions/google-adk.md) - Persist Google ADK sessions/events with SQLSpec stores
+- [**Google ADK Extension**](extensions/adk.md) - Persist Google ADK sessions/events with SQLSpec stores
 - [**Starlette Integration**](extensions/starlette.md) - Lifespan management and middleware patterns
 - [**FastAPI Integration**](extensions/fastapi.md) - Dependency injection and transaction handling
 - [**Flask Integration**](extensions/flask.md) - Request-scoped sessions for synchronous drivers
