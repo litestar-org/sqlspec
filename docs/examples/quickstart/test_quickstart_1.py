@@ -11,5 +11,5 @@ with db_manager.provide_session(db) as session:
     print(result.get_first())  # {'message': 'Hello, SQLSpec!'}
 
 
-def test_quickstart_1():
+def test_quickstart_1() -> None:
     assert result.get_first() == {"message": "Hello, SQLSpec!"}
