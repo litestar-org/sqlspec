@@ -70,7 +70,7 @@ Look for established patterns in the code:
 
 ```python
 # Type annotation pattern
-Grep(pattern=r'def \w+\(.*: "', path="sqlspec/", output_mode="content", -n=True)
+Grep(pattern=r'def \\w+\\(.*: "', path="sqlspec/", output_mode="content", -n=True)
 # Result: All functions use stringified type hints
 
 # Import pattern
@@ -125,7 +125,7 @@ Read("sqlspec/adapters/asyncpg/config.py")
 
 ```python
 # Guide shows:
-"def execute(config: SQLConfig) -> Optional[Result]:"
+# "def execute(config: SQLConfig) -> Optional[Result]:"
 
 # Code reality:
 Read("sqlspec/driver/_async.py")
@@ -155,8 +155,8 @@ Grep(pattern=r'def select_to_arrow', path="sqlspec/", output_mode="files_with_ma
 
 ```python
 # Guide shows:
-"from typing import Optional"
-"config: Optional[Config] = None"
+# "from typing import Optional"
+# "config: Optional[Config] = None"
 
 # Code reality:
 # All code uses T | None syntax, not Optional
@@ -300,15 +300,11 @@ Grep(pattern=r'def execute_batch', path="sqlspec/adapters/asyncpg/")
 
 ✅ **RUTHLESS FIX** - DELETE entire section:
 ```python
+# Use Edit() to remove the entire "Using execute_batch()" section
+# Set new_string to empty string to delete
 Edit(
     file_path="docs/guides/adapters/asyncpg.md",
-    old_string="""### Using execute_batch()
-
-The execute_batch() method allows efficient batch execution:
-
-```python
-results = await session.execute_batch([query1, query2, query3])
-```""",
+    old_string="### Using execute_batch()\n\n[entire section text]",
     new_string=""  # DELETED - no longer exists
 )
 ```
@@ -349,19 +345,12 @@ def process(config: Optional[Config] = None):
 
 ✅ **RUTHLESS FIX** - REWRITE to current style:
 ```python
+# Replace Optional import pattern with TYPE_CHECKING pattern
+# Change Optional[Config] to "Config | None" syntax
 Edit(
     file_path="docs/guides/architecture/type-system.md",
-    old_string="""from typing import Optional
-
-def process(config: Optional[Config] = None):
-    pass""",
-    new_string="""from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from sqlspec.config import Config
-
-def process(config: "Config | None" = None):
-    pass"""
+    old_string="from typing import Optional\n\ndef process(config: Optional[Config] = None):\n    pass",
+    new_string="from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from sqlspec.config import Config\n\ndef process(config: \"Config | None\" = None):\n    pass"
 )
 ```
 

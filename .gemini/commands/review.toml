@@ -61,20 +61,12 @@ You are the Docs & Vision Agent for the SQLSpec project, as defined in `.claude/
 
 3. **Update Documentation Files**:
    ```python
-   # Example: Adding Arrow support docs
+   # Example: Adding Arrow support docs to adapter guide
+   # Use Edit() to insert new section before "Query Execution"
    Edit(
        file_path="docs/guides/adapters/asyncpg.md",
        old_string="## Query Execution",
-       new_string="""## Arrow Support
-
-PostgreSQL adapters support zero-copy Arrow export:
-
-```python
-result = await session.select_to_arrow("SELECT * FROM large_table")
-df = result.to_pandas()  # Convert to pandas DataFrame
-```
-
-## Query Execution"""
+       new_string="## Arrow Support\n\n[Add Arrow documentation here]\n\n## Query Execution"
    )
    ```
 
@@ -125,7 +117,7 @@ Scan code for prohibited patterns from AGENTS.md:
 
 ```python
 # Scan for hasattr (defensive programming)
-Grep(pattern=r'hasattr\(', path='sqlspec/', output_mode='files_with_matches')
+Grep(pattern=r'hasattr\\(', path='sqlspec/', output_mode='files_with_matches')
 # Expected: No matches
 
 # Scan for class-based tests
@@ -141,7 +133,7 @@ Grep(pattern=r'_optimized|_with_cache|_fallback', path='sqlspec/', output_mode='
 # Expected: No matches (unless legitimate use case)
 
 # Scan for Optional syntax (should use T | None)
-Grep(pattern=r'Optional\[', path='sqlspec/', output_mode='files_with_matches')
+Grep(pattern=r'Optional\\[', path='sqlspec/', output_mode='files_with_matches')
 # Expected: No matches
 ```
 
@@ -212,63 +204,32 @@ If **ANY** of these fail, **STOP** and report:
 
 3. **Update AGENTS.md**:
 
-   Add new patterns to appropriate sections:
+   Add new patterns to appropriate sections. When adding a new pattern:
+   - Insert it BEFORE an existing section header
+   - Include pattern name, description, and code examples
+   - Use Edit() to locate insertion point by existing section header
 
    ```python
+   # Example: Insert new Arrow Conversion Strategy pattern
+   # Find existing "Type Handler Pattern" section and add new section before it
    Edit(
        file_path="AGENTS.md",
        old_string="## Type Handler Pattern",
-       new_string="""## New Pattern: Arrow Conversion Strategy
-
-When implementing Arrow support:
-
-**Native Path (Preferred)**:
-```python
-def select_to_arrow(self, statement, **kwargs):
-    ensure_pyarrow()
-    arrow_table = cursor.fetch_arrow_table()  # Zero-copy
-    return create_arrow_result(arrow_table)
-```
-
-**Conversion Path (Fallback)**:
-```python
-def select_to_arrow(self, statement, **kwargs):
-    ensure_pyarrow()
-    result = self.execute(statement)  # Dict results
-    arrow_data = convert_dict_to_arrow(result.data)
-    return create_arrow_result(arrow_data)
-```
-
-## Type Handler Pattern"""
+       new_string="## New Pattern: Arrow Conversion Strategy\n\n[Document pattern with examples]\n\n## Type Handler Pattern"
    )
    ```
 
 4. **Update Relevant Guides**:
 
-   Add patterns to specific guides with working examples:
+   Add patterns to specific guides with working examples. Similar to AGENTS.md updates:
 
    ```python
+   # Example: Add Arrow Conversion Pattern to architecture guide
+   # Insert new section before existing "Implementation Patterns" section
    Edit(
        file_path="docs/guides/architecture/arrow-integration.md",
        old_string="## Implementation Patterns",
-       new_string="""## Arrow Conversion Pattern
-
-SQLSpec uses dual-path architecture for Arrow support:
-
-### Native Path
-```python
-# Adapters with native Arrow support (ADBC, DuckDB)
-arrow_table = await cursor.fetch_arrow_table()
-```
-
-### Conversion Path
-```python
-# Adapters using dict-to-Arrow conversion
-dict_result = await cursor.fetchall()
-arrow_table = convert_dict_to_arrow(dict_result)
-```
-
-## Implementation Patterns"""
+       new_string="## Arrow Conversion Pattern\n\n[Document dual-path architecture]\n\n## Implementation Patterns"
    )
    ```
 
@@ -378,67 +339,27 @@ Bash("uv run pytest -n 2 --dist=loadgroup")
 
 **Generate Completion Report**:
 
-Create final summary in archive:
+Create final summary in archive using Write() with markdown template:
 
 ```python
+# Create completion report with phase summaries
+# Include: timestamp, status, phase summaries, coverage metrics, modified files
 Write(
     file_path="specs/archive/{slug}/COMPLETION_REPORT.md",
-    content="""# Completion Report: {Feature Name}
-
-**Completed**: {timestamp}
-**Status**: ✅ All phases passed
-
-## Phase Summary
-
-### Phase 1: Documentation ✅
-- Updated: docs/guides/adapters/asyncpg.md
-- Updated: docs/guides/architecture/arrow-integration.md
-- Examples tested and working
-- Docs build successful
-
-### Phase 2: Quality Gate ✅
-- Tests: 100% pass (542 passed)
-- Linting: Zero errors
-- Anti-patterns: None found
-- Acceptance criteria: All verified
-
-### Phase 3: Knowledge Capture ✅
-- Updated AGENTS.md: Added Arrow Conversion Pattern
-- Updated guides: arrow-integration.md with examples
-- Patterns documented and reusable
-
-### Phase 4: Re-validation ✅
-- Docs rebuild: Success
-- Test suite: 100% pass (no regressions)
-- Linting: Clean
-
-### Phase 5: Archive ✅
-- Cleaned tmp/ directory
-- Workspace archived to specs/archive/{slug}/
-
-## Implementation Summary
-
-{Brief description of what was implemented}
-
-## Coverage Metrics
-
-- Core modules: 92% (target: >90%) ✅
-- Adapters: 87% (target: >80%) ✅
-- Integration tests: 45 added across 6 adapters
-
-## Files Modified
-
-- sqlspec/driver/_async.py
-- sqlspec/utils/arrow_helpers.py
-- sqlspec/adapters/asyncpg/driver.py
-- tests/unit/test_arrow_helpers.py
-- tests/integration/test_adapters/test_asyncpg/test_arrow.py
-
-## Next Steps
-
-Feature complete. Workspace archived. Ready for PR creation.
-"""
+    content=report_markdown  # Build markdown string with phase results
 )
+
+# Report should include:
+# - Completion timestamp and overall status
+# - Phase 1: Documentation updates (files modified, build success)
+# - Phase 2: Quality Gate results (test count, linting, anti-patterns)
+# - Phase 3: Knowledge Capture (AGENTS.md changes, guide updates)
+# - Phase 4: Re-validation results (docs, tests, linting status)
+# - Phase 5: Archive confirmation (tmp cleaned, workspace moved)
+# - Implementation summary (brief description)
+# - Coverage metrics (core >90%, adapters >80%)
+# - Files Modified list
+# - Next Steps (PR creation)
 ```
 
 **Phase 5 Acceptance**:

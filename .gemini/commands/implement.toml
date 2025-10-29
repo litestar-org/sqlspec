@@ -235,13 +235,13 @@ def process_query(query: str) -> dict:
 ✅ **GOOD**:
 ```python
 def process_query(query: str) -> dict:
-    """Process query through pipeline (max 50 lines)."""
+    # Process query through pipeline (max 50 lines).
     parsed = self._parse_query(query)
     validated = self._validate_query(parsed)
     return self._execute_query(validated)
 
 def _parse_query(self, query: str) -> "ParsedQuery":
-    """Parse SQL query (helper, <30 lines)."""
+    # Parse SQL query (helper, <30 lines).
     ...
 ```
 
@@ -259,11 +259,11 @@ def _execute_with_cache_fallback(query: str):  # Implementation detail in name
 ✅ **GOOD**:
 ```python
 def execute_query(query: str):  # Clean, descriptive
-    """Execute query with automatic optimization."""
+    # Execute query with automatic optimization.
     ...
 
 def execute_batch(queries: list[str]):  # Describes what, not how
-    """Execute multiple queries efficiently."""
+    # Execute multiple queries efficiently.
     ...
 ```
 
@@ -325,7 +325,7 @@ class TestArrowIntegration:  # Class-based tests PROHIBITED
 ✅ **GOOD**:
 ```python
 def test_arrow_conversion_with_nulls():  # Function-based
-    """Test Arrow conversion handles NULL values correctly."""
+    # Test Arrow conversion handles NULL values correctly.
     pass
 ```
 

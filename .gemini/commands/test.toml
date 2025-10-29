@@ -37,11 +37,10 @@ You are the Testing Agent for the SQLSpec project, as defined in `.claude/agents
 ✅ **GOOD - Function-based**:
 ```python
 def test_arrow_conversion_with_nulls(asyncpg_session):
-    """Test Arrow conversion handles NULL values correctly.
+    # Test Arrow conversion handles NULL values correctly.
+    # Verifies that NULL values in database rows are properly
+    # converted to None in Arrow tables.
 
-    Verifies that NULL values in database rows are properly
-    converted to None in Arrow tables.
-    """
     # Setup
     asyncpg_session.execute("CREATE TABLE test (id INT, name TEXT)")
     asyncpg_session.execute("INSERT INTO test VALUES (1, NULL)")
@@ -69,13 +68,13 @@ import tempfile
 
 @pytest.fixture
 def temp_db():
-    """Create temporary database file for test isolation."""
+    # Create temporary database file for test isolation.
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         yield tmp.name
 
 
 def test_pooled_connection_isolation(temp_db):
-    """Test connection pooling with isolated database."""
+    # Test connection pooling with isolated database.
     config = AiosqliteConfig(pool_config={"database": temp_db})
     # Test implementation
 ```
@@ -88,14 +87,14 @@ import pytest
 @pytest.mark.postgres
 @pytest.mark.asyncio
 async def test_asyncpg_arrow_integration(asyncpg_session):
-    """Test Arrow integration with PostgreSQL via asyncpg."""
+    # Test Arrow integration with PostgreSQL via asyncpg.
     result = await asyncpg_session.select_to_arrow("SELECT 1 as num")
     assert result.data.num_rows == 1
 
 
 @pytest.mark.duckdb
 def test_duckdb_native_arrow(duckdb_session):
-    """Test DuckDB's native Arrow support."""
+    # Test DuckDB's native Arrow support.
     result = duckdb_session.select_to_arrow("SELECT 42 as answer")
     assert result.data.column("answer")[0].as_py() == 42
 
@@ -103,7 +102,7 @@ def test_duckdb_native_arrow(duckdb_session):
 @pytest.mark.oracle
 @pytest.mark.skipif(not ORACLE_AVAILABLE, reason="Oracle not available")
 async def test_oracle_arrow_conversion(oracle_session):
-    """Test Arrow conversion for Oracle adapter."""
+    # Test Arrow conversion for Oracle adapter.
     # Test implementation
 ```
 
@@ -134,7 +133,7 @@ def test_with_memory_db():
 import tempfile
 
 def test_with_isolated_db():
-    """Test with isolated temporary database file."""
+    # Test with isolated temporary database file.
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         config = AiosqliteConfig(pool_config={"database": tmp.name})
         # Each test gets its own database - no conflicts!
@@ -187,7 +186,7 @@ uv run pytest --cov=sqlspec.adapters.asyncpg --cov-report=term-missing
 **NULL/None Values**:
 ```python
 def test_arrow_conversion_handles_null():
-    """Test NULL values convert to None."""
+    # Test NULL values convert to None.
     session.execute("INSERT INTO test VALUES (1, NULL)")
     result = session.select_to_arrow("SELECT * FROM test")
     assert result.data.column("value")[0].as_py() is None
@@ -196,7 +195,7 @@ def test_arrow_conversion_handles_null():
 **Empty Results**:
 ```python
 def test_arrow_conversion_empty_result():
-    """Test conversion with zero rows."""
+    # Test conversion with zero rows.
     result = session.select_to_arrow("SELECT * FROM test WHERE 1=0")
     assert result.data.num_rows == 0
     assert len(result.data.schema) > 0  # Schema still present
@@ -205,7 +204,7 @@ def test_arrow_conversion_empty_result():
 **Large Datasets**:
 ```python
 def test_arrow_conversion_large_dataset():
-    """Test conversion with >10K rows."""
+    # Test conversion with >10K rows.
     session.execute("INSERT INTO test SELECT generate_series(1, 10000)")
     result = session.select_to_arrow("SELECT * FROM test")
     assert result.data.num_rows == 10000
@@ -214,7 +213,7 @@ def test_arrow_conversion_large_dataset():
 **Error Conditions**:
 ```python
 def test_arrow_conversion_invalid_query():
-    """Test error handling for invalid SQL."""
+    # Test error handling for invalid SQL.
     with pytest.raises(DatabaseError):
         session.select_to_arrow("SELECT * FROM nonexistent_table")
 ```
@@ -224,7 +223,7 @@ def test_arrow_conversion_invalid_query():
 import asyncio
 
 async def test_arrow_concurrent_queries():
-    """Test concurrent Arrow queries with pooled connections."""
+    # Test concurrent Arrow queries with pooled connections.
     async with session.connection() as conn:
         results = await asyncio.gather(
             conn.select_to_arrow("SELECT 1"),
@@ -237,16 +236,12 @@ async def test_arrow_concurrent_queries():
 **Type Preservation**:
 ```python
 def test_arrow_type_mapping():
-    """Test SQL types map correctly to Arrow types."""
-    session.execute("""
-        CREATE TABLE types_test (
-            int_col INTEGER,
-            float_col DOUBLE PRECISION,
-            text_col TEXT,
-            bool_col BOOLEAN,
-            timestamp_col TIMESTAMP
-        )
-    """)
+    # Test SQL types map correctly to Arrow types.
+    # Create table with various column types
+    session.execute(
+        "CREATE TABLE types_test (int_col INTEGER, float_col DOUBLE PRECISION, "
+        "text_col TEXT, bool_col BOOLEAN, timestamp_col TIMESTAMP)"
+    )
     result = session.select_to_arrow("SELECT * FROM types_test")
 
     assert result.data.schema.field("int_col").type == pa.int64()
@@ -331,7 +326,7 @@ class TestArrowIntegration:  # PROHIBITED
 ✅ **GOOD - Function-Based Tests**:
 ```python
 def test_arrow_integration():
-    """Clear docstring describing what is tested."""
+    # Clear comment describing what is tested.
     pass
 ```
 
