@@ -63,9 +63,11 @@ Async Support
 
 SQLSpec supports async/await for non-blocking database operations. Here's the same example with async:
 
-.. literalinclude:: /examples/quickstart/quickstart_4.py
+.. literalinclude:: /examples/quickstart/test_quickstart_4.py
    :language: python
    :caption: ``async support``
+   :lines: 15-30
+   :dedent: 2
 
 The API is identical - just add ``await`` and use async config/drivers!
 

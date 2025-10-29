@@ -1,11 +1,7 @@
-import asyncio
-
 from pydantic import BaseModel
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-
-__all__ = ("User", "main")
 
 
 class User(BaseModel):
@@ -14,7 +10,8 @@ class User(BaseModel):
     email: str
 
 
-async def main() -> None:
+
+async def test_quickstart_4() -> None:
     db_manager = SQLSpec()
     db = db_manager.add_config(AiosqliteConfig(pool_config={"database": ":memory:"}))
 
@@ -32,5 +29,7 @@ async def main() -> None:
 
         print(f"User: {user.name}")
 
-
-asyncio.run(main())
+    assert user == User(id=1, name="Alice", email="alice@example.com")
+    assert isinstance(user, User)
+    assert user.name == "Alice"
+    assert user.email == "alice@example.com"
