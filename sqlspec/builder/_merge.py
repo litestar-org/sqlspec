@@ -189,10 +189,15 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         json_value = data if is_list else [data[0]]
         _, json_param_name = self.add_parameter(json_value, name=json_param_name)
 
-        sample_record = data[0] if data else {}
+        sample_values: dict[str, Any] = {}
+        for record in data:
+            for column, value in record.items():
+                if value is not None and column not in sample_values:
+                    sample_values[column] = value
+
         alias_name = alias or "src"
 
-        column_type_spec = ", ".join([f"{col} {self._infer_postgres_type(sample_record.get(col))}" for col in columns])
+        column_type_spec = ", ".join([f"{col} {self._infer_postgres_type(sample_values.get(col))}" for col in columns])
         column_selects = ", ".join(columns)
         from_sql = f"SELECT {column_selects} FROM jsonb_to_recordset(:{json_param_name}::jsonb) AS {alias_name}({column_type_spec})"
 
@@ -242,9 +247,13 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         """Infer PostgreSQL column type from Python value.
 
         Maps Python types to PostgreSQL types for jsonb_to_recordset column definitions.
+
+        Note: When value is None and we cannot infer the type from other records,
+        we default to NUMERIC which is more permissive than TEXT for NULL values
+        and commonly used for business data.
         """
         if value is None:
-            return "TEXT"
+            return "NUMERIC"
         if isinstance(value, bool):
             return "BOOLEAN"
         if isinstance(value, int):
