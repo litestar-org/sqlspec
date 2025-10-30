@@ -10,6 +10,8 @@ PostgreSQL MERGE syntax differences from Oracle:
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+
 import pytest
 
 from sqlspec import sql
@@ -20,7 +22,7 @@ pytestmark = [pytest.mark.asyncpg, pytest.mark.integration]
 
 
 @pytest.fixture
-async def asyncpg_merge_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncpgDriver:
+async def asyncpg_merge_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncGenerator[AsyncpgDriver, None]:
     """Create test tables for MERGE tests."""
     await asyncpg_async_driver.execute("""
         CREATE TABLE IF NOT EXISTS products (

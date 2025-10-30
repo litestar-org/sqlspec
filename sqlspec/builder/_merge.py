@@ -45,7 +45,7 @@ class _MergeAssignmentMixin:
         if not isinstance(value, str):
             return False
 
-        parsed = exp.maybe_parse(value.strip())
+        parsed: exp.Expression | None = exp.maybe_parse(value.strip())
         if parsed is None:
             return False
 
@@ -112,6 +112,7 @@ class MergeIntoClauseMixin:
 
         assert current_expr is not None
 
+        table_expr: exp.Expression
         if isinstance(table, str):
             table_expr = exp.to_table(table)
             if alias:
@@ -157,8 +158,14 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         Returns:
             Expression for USING clause
         """
-        is_list = isinstance(source, list)
-        data = source if is_list else [source]
+        data: list[dict[str, Any]]
+        is_list: bool
+        if isinstance(source, list):
+            data = source
+            is_list = True
+        else:
+            data = [source]
+            is_list = False
 
         if not data:
             msg = "Cannot create USING clause from empty list"
@@ -310,10 +317,11 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 )
                 union_selects.append(select_expr)
 
+            source_expr: exp.Expression
             if len(union_selects) == 1:
                 source_expr = union_selects[0]
             else:
-                union_expr = union_selects[0]
+                union_expr: exp.Expression = union_selects[0]
                 for select in union_selects[1:]:
                     union_expr = exp.Union(this=union_expr, expression=select, distinct=False)
                 source_expr = union_expr
@@ -563,7 +571,7 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
             if values is None:
                 using_alias = None
                 using_expr = current_expr.args.get("using")
-                if isinstance(using_expr, (exp.Subquery, exp.Table)) or hasattr(using_expr, "alias"):
+                if using_expr is not None and (isinstance(using_expr, (exp.Subquery, exp.Table)) or hasattr(using_expr, "alias")):
                     using_alias = using_expr.alias
                 column_values = [f"{using_alias}.{col}" for col in column_names] if using_alias else column_names
             else:
