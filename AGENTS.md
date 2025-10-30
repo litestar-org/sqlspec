@@ -183,6 +183,94 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 - **Parameter Style Abstraction**: Automatically converts between different parameter styles (?, :name, $1, %s)
 - **Type Safety**: Supports mapping results to Pydantic, msgspec, attrs, and other typed models
 - **Single-Pass Processing**: Parse once → transform once → validate once - SQL object is single source of truth
+- **Abstract Methods with Concrete Implementations**: Protocol defines abstract methods, base classes provide concrete sync/async implementations
+
+### Protocol Abstract Methods Pattern
+
+When adding methods that need to support both sync and async configurations, use this pattern:
+
+**Step 1: Define abstract method in protocol**
+
+```python
+from abc import abstractmethod
+from typing import Awaitable
+
+class DatabaseConfigProtocol(Protocol):
+    is_async: ClassVar[bool]  # Set by base classes
+
+    @abstractmethod
+    def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> "Awaitable[None] | None":
+        """Apply database migrations up to specified revision.
+
+        Args:
+            revision: Target revision or "head" for latest.
+            allow_missing: Allow out-of-order migrations.
+            auto_sync: Auto-reconcile renamed migrations.
+            dry_run: Show what would be done without applying.
+        """
+        raise NotImplementedError
+```
+
+**Step 2: Implement in sync base class (no async/await)**
+
+```python
+class NoPoolSyncConfig(DatabaseConfigProtocol):
+    is_async: ClassVar[bool] = False
+
+    def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
+        """Apply database migrations up to specified revision."""
+        commands = self._ensure_migration_commands()
+        commands.upgrade(revision, allow_missing, auto_sync, dry_run)
+```
+
+**Step 3: Implement in async base class (with async/await)**
+
+```python
+class NoPoolAsyncConfig(DatabaseConfigProtocol):
+    is_async: ClassVar[bool] = True
+
+    async def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
+        """Apply database migrations up to specified revision."""
+        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        await commands.upgrade(revision, allow_missing, auto_sync, dry_run)
+```
+
+**Key principles:**
+
+- Protocol defines the interface with union return type (`Awaitable[T] | T`)
+- Sync base classes implement without `async def` or `await`
+- Async base classes implement with `async def` and `await`
+- Each base class has concrete implementation - no need for child classes to override
+- Use `cast()` to narrow types when delegating to command objects
+- All 4 base classes (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig) implement the same way
+
+**Benefits:**
+
+- Single source of truth (protocol) for API contract
+- Each base class provides complete implementation
+- Child adapter classes (AsyncpgConfig, SqliteConfig, etc.) inherit working methods automatically
+- Type checkers understand sync vs async based on `is_async` class variable
+- No code duplication across adapters
+
+**When to use:**
+
+- Adding convenience methods that delegate to external command objects
+- Methods that need identical behavior across all adapters
+- Operations that differ only in sync vs async execution
+- Any protocol method where behavior is determined by sync/async mode
+
+**Anti-patterns to avoid:**
+
+- Don't use runtime `if self.is_async:` checks in a single implementation
+- Don't make protocol methods concrete (always use `@abstractmethod`)
+- Don't duplicate logic across the 4 base classes
+- Don't forget to update all 4 base classes when adding new methods
 
 ### Database Connection Flow
 

@@ -18,8 +18,7 @@ Tests cover all 4 base config classes:
 
 import tempfile
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -82,8 +81,7 @@ def test_sqlite_config_migrate_up_calls_commands() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
@@ -99,8 +97,7 @@ def test_sqlite_config_migrate_down_calls_commands() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "downgrade", return_value=None) as mock_downgrade:
@@ -116,8 +113,7 @@ def test_sqlite_config_get_current_migration_calls_commands() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "current", return_value="0001") as mock_current:
@@ -134,8 +130,7 @@ def test_sqlite_config_create_migration_calls_commands() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "revision", return_value=None) as mock_revision:
@@ -151,8 +146,7 @@ def test_sqlite_config_init_migrations_calls_commands() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "init", return_value=None) as mock_init:
@@ -168,8 +162,7 @@ def test_sqlite_config_init_migrations_uses_default_directory() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "init", return_value=None) as mock_init:
@@ -185,8 +178,7 @@ def test_sqlite_config_stamp_migration_calls_commands() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "stamp", return_value=None) as mock_stamp:
@@ -202,8 +194,7 @@ def test_sqlite_config_fix_migrations_calls_commands() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "fix", return_value=None) as mock_fix:
@@ -219,8 +210,7 @@ async def test_asyncpg_config_migrate_up_calls_commands() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
@@ -236,8 +226,7 @@ async def test_asyncpg_config_migrate_down_calls_commands() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "downgrade", return_value=None) as mock_downgrade:
@@ -253,8 +242,7 @@ async def test_asyncpg_config_get_current_migration_calls_commands() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "current", return_value="0002") as mock_current:
@@ -271,8 +259,7 @@ async def test_asyncpg_config_create_migration_calls_commands() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "revision", return_value=None) as mock_revision:
@@ -288,8 +275,7 @@ async def test_asyncpg_config_init_migrations_calls_commands() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "init", return_value=None) as mock_init:
@@ -305,8 +291,7 @@ async def test_asyncpg_config_stamp_migration_calls_commands() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "stamp", return_value=None) as mock_stamp:
@@ -322,8 +307,7 @@ async def test_asyncpg_config_fix_migrations_calls_commands() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "fix", return_value=None) as mock_fix:
@@ -338,8 +322,7 @@ def test_duckdb_pooled_config_migrate_up_calls_commands() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = DuckDBConfig(
-            pool_config={"database": ":memory:"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": ":memory:"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
@@ -354,8 +337,7 @@ def test_duckdb_pooled_config_get_current_migration_calls_commands() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = DuckDBConfig(
-            pool_config={"database": ":memory:"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": ":memory:"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "current", return_value=None) as mock_current:
@@ -373,8 +355,7 @@ async def test_aiosqlite_async_config_migrate_up_calls_commands() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = AiosqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
@@ -390,8 +371,7 @@ def test_migrate_up_default_parameters_sync() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
@@ -407,8 +387,7 @@ async def test_migrate_up_default_parameters_async() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "upgrade", return_value=None) as mock_upgrade:
@@ -424,8 +403,7 @@ def test_migrate_down_default_parameters_sync() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "downgrade", return_value=None) as mock_downgrade:
@@ -441,8 +419,7 @@ async def test_migrate_down_default_parameters_async() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "downgrade", return_value=None) as mock_downgrade:
@@ -458,8 +435,7 @@ def test_create_migration_default_file_type_sync() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "revision", return_value=None) as mock_revision:
@@ -475,8 +451,7 @@ async def test_create_migration_default_file_type_async() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "revision", return_value=None) as mock_revision:
@@ -492,8 +467,7 @@ def test_init_migrations_default_package_sync() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "init", return_value=None) as mock_init:
@@ -509,8 +483,7 @@ async def test_init_migrations_default_package_async() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "init", return_value=None) as mock_init:
@@ -526,8 +499,7 @@ def test_fix_migrations_default_parameters_sync() -> None:
         temp_db = str(Path(temp_dir) / "test.db")
 
         config = SqliteConfig(
-            pool_config={"database": temp_db},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"database": temp_db}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(SyncMigrationCommands, "fix", return_value=None) as mock_fix:
@@ -543,8 +515,7 @@ async def test_fix_migrations_default_parameters_async() -> None:
         migration_dir = Path(temp_dir) / "migrations"
 
         config = AsyncpgConfig(
-            pool_config={"dsn": "postgresql://localhost/test"},
-            migration_config={"script_location": str(migration_dir)},
+            pool_config={"dsn": "postgresql://localhost/test"}, migration_config={"script_location": str(migration_dir)}
         )
 
         with patch.object(AsyncMigrationCommands, "fix", return_value=None) as mock_fix:

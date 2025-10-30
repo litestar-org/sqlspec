@@ -569,10 +569,7 @@ async def test_asyncpg_config_create_migration_method(postgres_service: Postgres
                 "password": postgres_service.password,
                 "database": postgres_service.database,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations_create",
-            },
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations_create"},
         )
 
         try:
@@ -603,10 +600,7 @@ async def test_asyncpg_config_stamp_migration_method(postgres_service: PostgresS
                 "password": postgres_service.password,
                 "database": postgres_service.database,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations_stamp",
-            },
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations_stamp"},
         )
 
         try:
@@ -655,10 +649,7 @@ async def test_asyncpg_config_fix_migrations_dry_run(postgres_service: PostgresS
                 "password": postgres_service.password,
                 "database": postgres_service.database,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations_fix",
-            },
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations_fix"},
         )
 
         try:
