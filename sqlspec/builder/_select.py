@@ -629,10 +629,7 @@ class WhereClauseMixin:
             msg = "OR expression requires at least one condition"
             raise SQLBuilderError(msg)
 
-        or_condition = conditions[0]
-        for condition in conditions[1:]:
-            or_condition = exp.Or(this=or_condition, expression=condition)
-        return or_condition
+        return exp.or_(*conditions)
 
     def _process_tuple_condition(self, condition: "tuple[Any, ...]") -> exp.Expression:
         if len(condition) == PAIR_LENGTH:

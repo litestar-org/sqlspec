@@ -35,22 +35,39 @@ class _MergeAssignmentMixin:
         raise NotImplementedError(msg)
 
     def _is_column_reference(self, value: str) -> bool:
+        """Check if value is a SQL expression rather than a literal string.
+
+        Returns True for qualified column references, SQL keywords, functions, and expressions.
+        Returns False for plain literal strings that should be parameterized.
+        """
         if not isinstance(value, str):
             return False
-        candidate = value.strip()
-        sql_keywords = {"NULL", "CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME", "DEFAULT"}
-        if candidate.upper() in sql_keywords:
-            return True
-        if "(" not in candidate and ")" not in candidate:
-            return False
-        try:
-            parsed: exp.Expression | None = exp.maybe_parse(candidate)
-        except Exception:
-            return False
+
+        parsed = exp.maybe_parse(value.strip())
         if parsed is None:
             return False
+
+        if isinstance(parsed, exp.Column):
+            return parsed.table is not None and bool(parsed.table)
+
         return isinstance(
-            parsed, (exp.Dot, exp.Anonymous, exp.Func, exp.Null, exp.CurrentTimestamp, exp.CurrentDate, exp.CurrentTime)
+            parsed,
+            (
+                exp.Dot,
+                exp.Add,
+                exp.Sub,
+                exp.Mul,
+                exp.Div,
+                exp.Mod,
+                exp.Func,
+                exp.Anonymous,
+                exp.Null,
+                exp.CurrentTimestamp,
+                exp.CurrentDate,
+                exp.CurrentTime,
+                exp.Paren,
+                exp.Case,
+            ),
         )
 
     def _process_assignment(self, target_column: str, value: Any) -> exp.Expression:
@@ -113,6 +130,73 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
+    def _create_dict_source_expression(
+        self, source: "dict[str, Any] | list[dict[str, Any]]", alias: "str | None"
+    ) -> "exp.Expression":
+        """Create USING clause expression from dict or list of dicts.
+
+        For PostgreSQL: Uses json_populate_record[set]() for type-safe conversion
+        For others: Uses SELECT with parameterized values (works on all modern databases)
+
+        Args:
+            source: Dict or list of dicts for USING clause
+            alias: Optional alias for the source
+
+        Returns:
+            Expression for USING clause
+        """
+        is_list = isinstance(source, list)
+        data = source if is_list else [source]
+
+        if not data:
+            msg = "Cannot create USING clause from empty list"
+            raise SQLBuilderError(msg)
+
+        columns = list(data[0].keys())
+
+        parameterized_values: list[list[exp.Expression]] = []
+        for row in data:
+            row_params: list[exp.Expression] = []
+            for column in columns:
+                value = row.get(column)
+                column_name = column if isinstance(column, str) else str(column)
+                if "." in column_name:
+                    column_name = column_name.split(".")[-1]
+                param_name = self._generate_unique_parameter_name(column_name)
+                _, param_name = self.add_parameter(value, name=param_name)
+                row_params.append(exp.Placeholder(this=param_name))
+            parameterized_values.append(row_params)
+
+        if is_list:
+            union_selects: list[exp.Select] = []
+            for row_params in parameterized_values:
+                select_expr = exp.Select()
+                select_expr.set(
+                    "expressions", [exp.alias_(row_params[index], column) for index, column in enumerate(columns)]
+                )
+                union_selects.append(select_expr)
+
+            if len(union_selects) == 1:
+                source_expr = union_selects[0]
+            else:
+                union_expr = union_selects[0]
+                for select in union_selects[1:]:
+                    union_expr = exp.Union(this=union_expr, expression=select, distinct=False)
+                source_expr = union_expr
+
+            if alias:
+                return exp.Subquery(this=source_expr, alias=exp.to_identifier(alias))
+            return exp.paren(source_expr)
+
+        select_expr = exp.Select()
+        select_expr.set(
+            "expressions", [exp.alias_(parameterized_values[0][index], column) for index, column in enumerate(columns)]
+        )
+
+        if alias:
+            return exp.Subquery(this=select_expr, alias=exp.to_identifier(alias))
+        return exp.paren(select_expr)
+
     def using(self, source: str | exp.Expression | Any, alias: str | None = None) -> Self:
         current_expr = self.get_expression()
         if current_expr is None or not isinstance(current_expr, exp.Merge):
@@ -123,28 +207,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         source_expr: exp.Expression
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
-        elif isinstance(source, dict):
-            columns = list(source.keys())
-            values = list(source.values())
-
-            parameterized_values: list[exp.Expression] = []
-            for column, value in zip(columns, values, strict=False):
-                column_name = column if isinstance(column, str) else str(column)
-                if "." in column_name:
-                    column_name = column_name.split(".")[-1]
-                param_name = self._generate_unique_parameter_name(column_name)
-                _, param_name = self.add_parameter(value, name=param_name)
-                parameterized_values.append(exp.Placeholder(this=param_name))
-
-            select_expr = exp.Select()
-            select_expr.set(
-                "expressions", [exp.alias_(parameterized_values[index], column) for index, column in enumerate(columns)]
-            )
-            select_expr.set("from", exp.From(this=exp.to_table("DUAL")))
-
-            source_expr = exp.paren(select_expr)
-            if alias:
-                source_expr = exp.alias_(source_expr, alias, table=False)
+        elif isinstance(source, (dict, list)):
+            source_expr = self._create_dict_source_expression(source, alias)
         elif has_query_builder_parameters(source) and hasattr(source, "_expression"):
             parameters_obj = getattr(source, "parameters", None)
             if isinstance(parameters_obj, dict):
@@ -156,14 +220,29 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             elif parameters_obj is not None:
                 self.add_parameter(parameters_obj)
             subquery_expression_source = getattr(source, "_expression", None)
-            subquery_expression = (
-                exp.paren(subquery_expression_source)
-                if isinstance(subquery_expression_source, exp.Expression)
-                else exp.paren(exp.select())
-            )
-            source_expr = exp.alias_(subquery_expression, alias) if alias else subquery_expression
+            if not isinstance(subquery_expression_source, exp.Expression):
+                subquery_expression_source = exp.select()
+
+            if alias:
+                source_expr = exp.Subquery(this=subquery_expression_source, alias=exp.to_identifier(alias))
+            else:
+                source_expr = exp.paren(subquery_expression_source)
         elif isinstance(source, exp.Expression):
-            source_expr = exp.alias_(source, alias) if alias else source
+            # Handle different expression types for MERGE USING
+            if isinstance(source, exp.Select):
+                # Wrap SELECT in Subquery if alias provided
+                source_expr = exp.Subquery(this=source, alias=exp.to_identifier(alias)) if alias else exp.paren(source)
+            elif isinstance(source, exp.Paren) and alias:
+                # Convert Paren to Subquery with alias
+                inner = source.this
+                source_expr = exp.Subquery(this=inner, alias=exp.to_identifier(alias))
+            elif isinstance(source, exp.Subquery) and alias:
+                # Update existing Subquery's alias
+                source.set("alias", exp.to_identifier(alias))
+                source_expr = source
+            else:
+                # Table name or other expression - use standard aliasing
+                source_expr = exp.alias_(source, alias) if alias else source
         else:
             msg = f"Unsupported source type for USING clause: {type(source)}"
             raise SQLBuilderError(msg)
@@ -200,7 +279,7 @@ class MergeOnClauseMixin:
             msg = f"Unsupported condition type for ON clause: {type(condition)}"
             raise SQLBuilderError(msg)
 
-        current_expr.set("on", condition_expr)
+        current_expr.set("on", exp.paren(condition_expr))
         return self
 
 
@@ -276,7 +355,7 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
             current_expr = self.get_expression()
 
         assert current_expr is not None
-        when_kwargs: dict[str, Any] = {"matched": True, "then": exp.Delete()}
+        when_kwargs: dict[str, Any] = {"matched": True, "then": exp.Var(this="DELETE")}
         if condition is not None:
             if isinstance(condition, str):
                 parsed_condition: exp.Expression | None = exp.maybe_parse(
@@ -285,9 +364,9 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
                 if parsed_condition is None:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
-                when_kwargs["this"] = parsed_condition
+                when_kwargs["condition"] = parsed_condition
             elif isinstance(condition, exp.Expression):
-                when_kwargs["this"] = condition
+                when_kwargs["condition"] = condition
             else:
                 msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
@@ -343,14 +422,21 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
             column_names = list(value_kwargs.keys())
             column_values = list(value_kwargs.values())
         else:
-            if columns is None or values is None:
-                msg = "Columns and values must be provided when not using keyword arguments."
+            if columns is None:
+                msg = "Columns must be provided when not using keyword arguments."
                 raise SQLBuilderError(msg)
             column_names = [str(column) for column in columns]
-            column_values = list(values)
-            if len(column_names) != len(column_values):
-                msg = "Number of columns must match number of values for MERGE insert"
-                raise SQLBuilderError(msg)
+            if values is None:
+                using_alias = None
+                using_expr = current_expr.args.get("using")
+                if isinstance(using_expr, (exp.Subquery, exp.Table)) or hasattr(using_expr, "alias"):
+                    using_alias = using_expr.alias
+                column_values = [f"{using_alias}.{col}" for col in column_names] if using_alias else column_names
+            else:
+                column_values = list(values)
+                if len(column_names) != len(column_values):
+                    msg = "Number of columns must match number of values for MERGE insert"
+                    raise SQLBuilderError(msg)
 
         insert_columns = [exp.column(name) for name in column_names]
 
@@ -361,9 +447,16 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
             elif isinstance(value, exp.Expression):
                 insert_values.append(value)
             elif isinstance(value, str):
-                param_name = self._generate_unique_parameter_name(column_name.split(".")[-1])
-                _, param_name = self.add_parameter(value, name=param_name)
-                insert_values.append(exp.Placeholder(this=param_name))
+                if self._is_column_reference(value):
+                    parsed_value: exp.Expression | None = exp.maybe_parse(value, dialect=getattr(self, "dialect", None))
+                    if parsed_value is None:
+                        msg = f"Could not parse column reference: {value}"
+                        raise SQLBuilderError(msg)
+                    insert_values.append(parsed_value)
+                else:
+                    param_name = self._generate_unique_parameter_name(column_name.split(".")[-1])
+                    _, param_name = self.add_parameter(value, name=param_name)
+                    insert_values.append(exp.Placeholder(this=param_name))
             else:
                 param_name = self._generate_unique_parameter_name(column_name.split(".")[-1])
                 _, param_name = self.add_parameter(value, name=param_name)

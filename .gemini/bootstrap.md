@@ -16,6 +16,72 @@ This is a **single-file, self-contained bootstrap** that will:
 
 ---
 
+## PHASE 0: MCP TOOL DISCOVERY
+
+### Step 0.1: Detect Available MCP Servers
+
+**Objective**: Discover which MCP tools are available for research and planning.
+
+```python
+# Check for MCP tool availability
+available_tools = {}
+
+# Try sequential-thinking
+try:
+    # Attempt to use sequential thinking
+    available_tools['sequential_thinking'] = True
+except:
+    available_tools['sequential_thinking'] = False
+
+# Try zen MCP tools
+try:
+    available_tools['zen_planner'] = True  # mcp__zen__planner
+    available_tools['zen_consensus'] = True  # mcp__zen__consensus
+    available_tools['zen_thinkdeep'] = True  # mcp__zen__thinkdeep
+    available_tools['zen_analyze'] = True  # mcp__zen__analyze
+    available_tools['zen_debug'] = True  # mcp__zen__debug
+except:
+    available_tools['zen_planner'] = False
+    available_tools['zen_consensus'] = False
+    available_tools['zen_thinkdeep'] = False
+    available_tools['zen_analyze'] = False
+    available_tools['zen_debug'] = False
+
+# Try context7
+try:
+    available_tools['context7'] = True  # mcp__context7__resolve-library-id, mcp__context7__get-library-docs
+except:
+    available_tools['context7'] = False
+
+# Try web search
+try:
+    available_tools['web_search'] = True  # WebSearch
+except:
+    available_tools['web_search'] = False
+
+# Try github MCP
+try:
+    available_tools['github'] = True  # mcp__github__*
+except:
+    available_tools['github'] = False
+
+print("\n=== MCP TOOL AVAILABILITY ===\n")
+print(f"Sequential Thinking: {'✓' if available_tools['sequential_thinking'] else '✗'}")
+print(f"Zen Planner: {'✓' if available_tools['zen_planner'] else '✗'}")
+print(f"Zen Consensus: {'✓' if available_tools['zen_consensus'] else '✗'}")
+print(f"Zen ThinkDeep: {'✓' if available_tools['zen_thinkdeep'] else '✗'}")
+print(f"Zen Analyze: {'✓' if available_tools['zen_analyze'] else '✗'}")
+print(f"Zen Debug: {'✓' if available_tools['zen_debug'] else '✗'}")
+print(f"Context7: {'✓' if available_tools['context7'] else '✗'}")
+print(f"WebSearch: {'✓' if available_tools['web_search'] else '✗'}")
+print(f"GitHub MCP: {'✓' if available_tools['github'] else '✗'}")
+print()
+```
+
+**Note**: This information will be used to create adaptive research workflows in PRD agent.
+
+---
+
 ## PHASE 1: PROJECT ANALYSIS & DISCOVERY
 
 ### Step 1.1: Discover Project Structure
@@ -230,7 +296,244 @@ Grep(pattern=r'from typing import', path='.')
 Grep(pattern=r'->.*:', path='.')
 ```
 
-### Step 1.5: Detect Code Quality Standards
+### Step 1.5: Detect Domain-Specific Patterns (CRITICAL)
+
+**Objective**: Discover if project has multi-variant patterns that need strategy matrices.
+
+**Multi-Adapter/Multi-Driver Pattern Detection**:
+
+```python
+# Look for adapter or driver patterns
+adapters_found = Grep(pattern=r'class.*Adapter', path='.', output_mode='files_with_matches')
+drivers_found = Grep(pattern=r'class.*Driver', path='.', output_mode='files_with_matches')
+
+has_adapter_pattern = len(adapters_found) > 2  # Multiple adapters indicate pattern
+
+# Common adapter directory patterns
+has_adapters_dir = exists("*/adapters/") or exists("*/drivers/") or exists("*/backends/")
+
+# Detect what types of adapters
+adapter_types = []
+if Grep(pattern=r'database|db|sql', path='*/adapters/', output_mode='count') > 0:
+    adapter_types.append("database")
+if Grep(pattern=r'api|client|http', path='*/adapters/', output_mode='count') > 0:
+    adapter_types.append("api_client")
+if Grep(pattern=r'storage|s3|blob', path='*/adapters/', output_mode='count') > 0:
+    adapter_types.append("storage")
+if Grep(pattern=r'cache|redis|memcache', path='*/adapters/', output_mode='count') > 0:
+    adapter_types.append("cache")
+
+print(f"\n=== DOMAIN PATTERN DETECTION ===\n")
+print(f"Multi-Adapter Pattern: {has_adapter_pattern}")
+if has_adapter_pattern:
+    print(f"Adapter Types: {', '.join(adapter_types)}")
+```
+
+**Multi-Service Pattern Detection**:
+
+```python
+# Look for service layer patterns
+services_found = Grep(pattern=r'class.*Service', path='.', output_mode='count')
+has_service_layer = services_found > 3
+
+# Look for microservices indicators
+has_microservices = (
+    exists("services/*/") or
+    exists("apps/*/") or
+    (Grep(pattern=r'grpc|protobuf', path='.', output_mode='count') > 0)
+)
+
+print(f"Service Layer Pattern: {has_service_layer}")
+print(f"Microservices Pattern: {has_microservices}")
+```
+
+**Repository Pattern Detection**:
+
+```python
+# Look for repository pattern
+repositories_found = Grep(pattern=r'class.*Repository', path='.', output_mode='count')
+has_repository_pattern = repositories_found > 2
+
+print(f"Repository Pattern: {has_repository_pattern}")
+```
+
+**API/Endpoint Pattern Detection**:
+
+```python
+# Detect API framework and endpoint patterns
+has_rest_api = (
+    Grep(pattern=r'@app.route|@router\.|@api_route', path='.', output_mode='count') > 5
+)
+
+has_graphql = Grep(pattern=r'graphql|@strawberry|@ariadne', path='.', output_mode='count') > 0
+
+print(f"REST API Pattern: {has_rest_api}")
+print(f"GraphQL Pattern: {has_graphql}")
+```
+
+**Store Detected Patterns**:
+
+```python
+domain_patterns = {
+    'multi_adapter': has_adapter_pattern,
+    'adapter_types': adapter_types,
+    'service_layer': has_service_layer,
+    'microservices': has_microservices,
+    'repository': has_repository_pattern,
+    'rest_api': has_rest_api,
+    'graphql': has_graphql,
+}
+
+print(f"\nDetected patterns will influence PRD template structure.")
+```
+
+**Language-Specific Framework Detection (Deep Dive)**:
+
+```python
+# Python-specific patterns
+has_django = exists("manage.py") or Grep(pattern=r'from django', path='.', output_mode='count') > 0
+has_django_orm = Grep(pattern=r'from django.db import models|models\.Model', path='.', output_mode='count') > 0
+
+has_sqlalchemy = Grep(pattern=r'from sqlalchemy|import sqlalchemy', path='.', output_mode='count') > 0
+has_sqlalchemy_orm = Grep(pattern=r'declarative_base|Base = declarative_base', path='.', output_mode='count') > 0
+
+has_pydantic = Grep(pattern=r'from pydantic import BaseModel', path='.', output_mode='count') > 0
+has_msgspec = Grep(pattern=r'import msgspec|msgspec\.Struct', path='.', output_mode='count') > 0
+
+print(f"\n=== PYTHON FRAMEWORK DETECTION ===\n")
+print(f"Django: {has_django}")
+print(f"Django ORM: {has_django_orm}")
+print(f"SQLAlchemy: {has_sqlalchemy}")
+print(f"SQLAlchemy ORM: {has_sqlalchemy_orm}")
+print(f"Pydantic Models: {has_pydantic}")
+print(f"msgspec Structs: {has_msgspec}")
+
+# Go-specific patterns
+has_grpc = Grep(pattern=r'google\.golang\.org/grpc|import.*grpc', path='.', output_mode='count') > 0
+has_protobuf = Grep(pattern=r'google\.golang\.org/protobuf|\.proto', path='.', output_mode='count') > 0
+
+if has_grpc or has_protobuf:
+    print(f"\n=== GO FRAMEWORK DETECTION ===\n")
+    print(f"gRPC: {has_grpc}")
+    print(f"Protocol Buffers: {has_protobuf}")
+
+# Rust-specific patterns
+has_tokio = Grep(pattern=r'tokio::|use tokio', path='.', output_mode='count') > 0
+has_async_std = Grep(pattern=r'async_std::|use async_std', path='.', output_mode='count') > 0
+has_serde = Grep(pattern=r'serde::|use serde', path='.', output_mode='count') > 0
+
+if has_tokio or has_async_std or has_serde:
+    print(f"\n=== RUST FRAMEWORK DETECTION ===\n")
+    print(f"Tokio: {has_tokio}")
+    print(f"async-std: {has_async_std}")
+    print(f"Serde: {has_serde}")
+
+# Store language-specific patterns
+language_frameworks = {
+    'django': has_django,
+    'django_orm': has_django_orm,
+    'sqlalchemy': has_sqlalchemy,
+    'sqlalchemy_orm': has_sqlalchemy_orm,
+    'pydantic': has_pydantic,
+    'msgspec': has_msgspec,
+    'grpc': has_grpc,
+    'protobuf': has_protobuf,
+    'tokio': has_tokio,
+    'async_std': has_async_std,
+    'serde': has_serde,
+}
+```
+
+**CI/CD Integration Detection**:
+
+```python
+# Detect CI/CD systems
+has_github_actions = exists(".github/workflows/")
+has_gitlab_ci = exists(".gitlab-ci.yml")
+has_circleci = exists(".circleci/config.yml")
+has_jenkins = exists("Jenkinsfile")
+has_travis = exists(".travis.yml")
+
+print(f"\n=== CI/CD DETECTION ===\n")
+print(f"GitHub Actions: {'✓' if has_github_actions else '✗'}")
+print(f"GitLab CI: {'✓' if has_gitlab_ci else '✗'}")
+print(f"CircleCI: {'✓' if has_circleci else '✗'}")
+print(f"Jenkins: {'✓' if has_jenkins else '✗'}")
+print(f"Travis CI: {'✓' if has_travis else '✗'}")
+
+# Read CI/CD configs to understand deployment patterns
+ci_patterns = {
+    'github_actions': has_github_actions,
+    'gitlab_ci': has_gitlab_ci,
+    'circleci': has_circleci,
+    'jenkins': has_jenkins,
+    'travis': has_travis,
+}
+```
+
+**Testing Framework Deep Detection**:
+
+```python
+# Python testing frameworks
+has_pytest = exists("pytest.ini") or exists("pyproject.toml")  # Check for pytest config
+pytest_plugins = []
+
+if has_pytest:
+    # Detect pytest plugins
+    pytest_asyncio = Grep(pattern=r'pytest-asyncio|pytest_asyncio', path='.', output_mode='count') > 0
+    pytest_cov = Grep(pattern=r'pytest-cov|pytest_cov', path='.', output_mode='count') > 0
+    pytest_xdist = Grep(pattern=r'pytest-xdist|pytest_xdist', path='.', output_mode='count') > 0
+    pytest_mock = Grep(pattern=r'pytest-mock|pytest_mock', path='.', output_mode='count') > 0
+
+    if pytest_asyncio:
+        pytest_plugins.append("pytest-asyncio")
+    if pytest_cov:
+        pytest_plugins.append("pytest-cov")
+    if pytest_xdist:
+        pytest_plugins.append("pytest-xdist")
+    if pytest_mock:
+        pytest_plugins.append("pytest-mock")
+
+# Fixture patterns
+has_conftest = exists("tests/conftest.py") or exists("conftest.py")
+fixture_count = Grep(pattern=r'@pytest\.fixture', path='tests/', output_mode='count') if exists("tests/") else 0
+
+# Test organization
+test_structure = "function-based"  # Default
+class_based_tests = Grep(pattern=r'class Test', path='tests/', output_mode='count') if exists("tests/") else 0
+if class_based_tests > 5:
+    test_structure = "class-based"
+
+print(f"\n=== TESTING FRAMEWORK DETECTION ===\n")
+print(f"pytest: {'✓' if has_pytest else '✗'}")
+if pytest_plugins:
+    print(f"pytest plugins: {', '.join(pytest_plugins)}")
+print(f"Fixtures (conftest.py): {'✓' if has_conftest else '✗'}")
+print(f"Fixture count: {fixture_count}")
+print(f"Test structure: {test_structure}")
+
+# Go testing
+if exists("**/*_test.go"):
+    has_testify = Grep(pattern=r'github\.com/stretchr/testify', path='.', output_mode='count') > 0
+    print(f"\n=== GO TESTING ===\n")
+    print(f"Testify: {'✓' if has_testify else '✗'}")
+
+# Rust testing
+if exists("tests/"):
+    has_proptest = Grep(pattern=r'use proptest', path='.', output_mode='count') > 0
+    print(f"\n=== RUST TESTING ===\n")
+    print(f"Proptest: {'✓' if has_proptest else '✗'}")
+
+testing_framework = {
+    'pytest': has_pytest,
+    'pytest_plugins': pytest_plugins,
+    'has_conftest': has_conftest,
+    'fixture_count': fixture_count,
+    'test_structure': test_structure,
+}
+```
+
+### Step 1.6: Detect Code Quality Standards
 
 **Type Hints**:
 
@@ -594,6 +897,46 @@ print("✓ Created .gemini/GEMINI.md")
 **Variable Population** (extract from project analysis):
 
 ```python
+# Extract from Phase 0: MCP Tool Discovery
+mcp_tools_summary = f"""
+Available MCP Tools (Auto-Detected):
+- Sequential Thinking: {'✓' if available_tools['sequential_thinking'] else '✗ Not available'}
+- Zen Planner: {'✓' if available_tools['zen_planner'] else '✗ Not available'}
+- Zen Consensus: {'✓' if available_tools['zen_consensus'] else '✗ Not available'}
+- Zen ThinkDeep: {'✓' if available_tools['zen_thinkdeep'] else '✗ Not available'}
+- Zen Analyze: {'✓' if available_tools['zen_analyze'] else '✗ Not available'}
+- Zen Debug: {'✓' if available_tools['zen_debug'] else '✗ Not available'}
+- Context7: {'✓' if available_tools['context7'] else '✗ Not available'}
+- WebSearch: {'✓' if available_tools['web_search'] else '✗ Not available'}
+
+**Workflow Adaptation**:
+{'- Use Sequential Thinking for deep analysis (TIER 1)' if available_tools['sequential_thinking'] else ''}
+{'- Use Zen Planner for structured planning (TIER 2)' if available_tools['zen_planner'] and not available_tools['sequential_thinking'] else ''}
+{'- Use Zen Consensus for architectural decisions' if available_tools['zen_consensus'] else '- Document architectural trade-offs manually'}
+{'- Use Context7 for library research' if available_tools['context7'] else '- Read library docs directly'}
+{'- Use WebSearch for best practices' if available_tools['web_search'] else '- Research patterns manually'}
+"""
+
+# Extract from Phase 1.5: Domain Pattern Detection
+domain_patterns_summary = f"""
+Detected Domain Patterns (Auto-Detected):
+- Multi-Adapter/Driver Pattern: {'✓' if domain_patterns['multi_adapter'] else '✗'}
+{f"  - Adapter Types: {', '.join(domain_patterns['adapter_types'])}" if domain_patterns['multi_adapter'] else ''}
+- Service Layer Pattern: {'✓' if domain_patterns['service_layer'] else '✗'}
+- Microservices Pattern: {'✓' if domain_patterns['microservices'] else '✗'}
+- Repository Pattern: {'✓' if domain_patterns['repository'] else '✗'}
+- REST API Pattern: {'✓' if domain_patterns['rest_api'] else '✗'}
+- GraphQL Pattern: {'✓' if domain_patterns['graphql'] else '✗'}
+
+**PRD Template Adaptations**:
+{f"- Add 'Per-{domain_patterns['adapter_types'][0].title()}-Adapter Strategy' section with matrix" if domain_patterns['multi_adapter'] and domain_patterns['adapter_types'] else ''}
+{'- Add "Service Integration Strategy" section' if domain_patterns['service_layer'] else ''}
+{'- Add "Microservice Communication" section' if domain_patterns['microservices'] else ''}
+{'- Add "Repository Layer Changes" section' if domain_patterns['repository'] else ''}
+{'- Add "API Endpoint Strategy" section' if domain_patterns['rest_api'] else ''}
+{'- Add "GraphQL Schema Changes" section' if domain_patterns['graphql'] else ''}
+"""
+
 # Extract from Phase 1 analysis
 primary_language = "Python"  # or detected language
 detected_framework = "FastAPI"  # or detected framework
@@ -709,29 +1052,102 @@ You are the PRD (Product Requirements and Design) Agent for the {project_name} p
 3.  **Consensus Verification**: Get multi-model agreement on complex decisions using `mcp__zen__consensus`.
 4.  **Session Continuity**: Produce detailed artifacts in the `specs/active/{{slug}}` workspace.
 
-**Your Core Workflow (Sequential)**:
+**Available MCP Tools**:
+{mcp_tools_summary}
+
+**Detected Domain Patterns**:
+{domain_patterns_summary}
+
+**Your Core Workflow (Adaptive based on available tools)**:
 
 1.  **Understand Requirements**:
     *   Deconstruct the user's request.
     *   Identify affected components: Which modules, services, adapters, or core components are involved?
 
-2.  **Research Best Practices (MANDATORY PRIORITY ORDER)**:
-    *   **1. Internal Guides (Fastest)**: Read the static guides in `specs/guides/` first. This is your primary source of truth for existing patterns.
-    *   **2. Project Documentation**: Read existing documentation in `docs/` or `README.md`.
-    *   **3. Context7 (Library Docs)**: Use `mcp__context7__resolve-library-id` and `mcp__context7__get-library-docs` for up-to-date external library documentation.
-    *   **4. WebSearch (Modern Practices)**: Use `WebSearch` for recent best practices.
+2.  **Deep Analysis (MANDATORY - Use Best Available Tool)**:
 
-3.  **Create Structured Plan**:
-    *   Use `mcp__zen__planner` to break down the work into small, testable chunks.
-    *   The plan must account for testing (unit + integration), and potential compilation impacts.
-    *   Document all assumptions and constraints.
+    **TIER 1 (If Available): Sequential Thinking**
+    ```python
+    # Use mcp__sequential-thinking__sequentialthinking for deep analysis
+    # Minimum 10-15 thoughts for any non-trivial feature
+    mcp__sequential-thinking__sequentialthinking(
+        thought="Step 1: Analyze feature scope and affected components",
+        thought_number=1,
+        total_thoughts=15,
+        next_thought_needed=True
+    )
+    # Continue through comprehensive analysis...
+    ```
 
-4.  **Get Consensus on Architecture (If Needed)**:
-    *   For significant architectural decisions, you **MUST** use `mcp__zen__consensus`.
-    *   Consult with `gemini-2.5-pro` and `openai/gpt-5`.
-    *   Provide relevant files for context and document the final rationale.
+    **TIER 2 (If Sequential Thinking Unavailable): Zen Planner**
+    ```python
+    # Use mcp__zen__planner for structured breakdown
+    mcp__zen__planner(
+        step="Analyze feature scope: Identify affected modules, dependencies, and integration points",
+        step_number=1,
+        total_steps=8,
+        next_step_required=True
+    )
+    ```
 
-5.  **Create Workspace Artifacts**:
+    **TIER 3 (If No MCP Tools): Internal Planning**
+    * Manually break down into phases
+    * Document analysis in research/plan.md
+    * Be extra thorough - you don't have AI assistance
+
+3.  **Research Best Practices (MANDATORY PRIORITY ORDER)**:
+    *   **1. Internal Guides (Fastest)**: Read `specs/guides/` first - your source of truth for existing patterns.
+    *   **2. Project Documentation**: Read `docs/` or `README.md`.
+    *   **3. Context7 (If Available)**: Use `mcp__context7__resolve-library-id` and `mcp__context7__get-library-docs` for external library docs (5000+ tokens).
+    *   **4. WebSearch (If Available)**: Use `WebSearch` for recent best practices (e.g. "{{framework}} {{feature-type}} best practices 2025").
+    *   **5. Manual Research (Fallback)**: Read library documentation directly if MCP tools unavailable.
+
+4.  **Create Structured Plan**:
+    *   If zen.planner available: Use it for multi-step breakdown
+    *   Otherwise: Create detailed manual breakdown in research/plan.md
+    *   Account for testing (unit + integration)
+    *   Document assumptions and constraints
+
+5.  **Get Consensus on Architecture (Complex Features)**:
+
+    **If zen.consensus Available (PREFERRED)**:
+    ```python
+    mcp__zen__consensus(
+        step="Evaluate architectural approaches for {{feature}}",
+        models=[
+            {{"model": "gemini-2.5-pro", "stance": "for"}},
+            {{"model": "openai/gpt-5-pro", "stance": "against"}},
+            {{"model": "openai/gpt-5", "stance": "neutral"}}
+        ],
+        relevant_files=["path/to/relevant/file.py"]
+    )
+    ```
+
+    **If Not Available**:
+    * Document trade-offs manually
+    * Research architectural patterns thoroughly
+    * Get human review for major decisions
+
+6.  **Adapt PRD Template Based on Domain Patterns**:
+
+    **If Multi-Adapter Pattern Detected**:
+    * Add "Per-Adapter Strategy" section with matrix
+    * Include SQL/code examples per adapter
+    * Specify performance targets per adapter type
+
+    **If Service Layer Detected**:
+    * Add "Service Integration Strategy" section
+    * Document inter-service dependencies
+
+    **If REST API Detected**:
+    * Add "Endpoint Strategy" section
+    * Document API design decisions
+
+    **If GraphQL Detected**:
+    * Add "Schema Changes" section
+    * Document resolver strategy
+
+7.  **Create Workspace Artifacts**:
     *   Create the requirement folder: `specs/active/{{requirement-slug}}/`.
     *   Create the following files:
         *   **`prd.md`**: The Product Requirements Document, including overview, acceptance criteria, technical design, and testing strategy.
@@ -1621,84 +2037,328 @@ print("✓ Created specs/guides/development-workflow.md")
 ### Step 6.1: Create Template PRD
 
 ```python
-template_prd = '''# Feature: [Feature Name]
+# Build adaptive PRD template based on detected patterns
+adaptive_sections = []
+
+# Research artifacts section (always include)
+adaptive_sections.append("""
+## Research Artifacts
+
+See `research/` directory:
+- `research/plan.md` - Implementation strategy and approach
+""")
+
+# Add consensus section if zen.consensus available
+if available_tools.get('zen_consensus'):
+    adaptive_sections.append("""- `research/consensus.md` - Multi-model design decision consensus (if applicable)
+""")
+
+# Add domain-specific research artifacts
+if domain_patterns.get('multi_adapter'):
+    adapter_type = domain_patterns['adapter_types'][0] if domain_patterns['adapter_types'] else "adapter"
+    adaptive_sections.append(f"""- `research/{adapter_type}-matrix.md` - Per-{adapter_type} implementation strategies
+""")
+
+# Multi-model consensus section (conditional)
+consensus_section = ""
+if available_tools.get('zen_consensus'):
+    consensus_section = """
+## Multi-Model Consensus (if applicable)
+
+For features with significant architectural decisions:
+
+| Model | Recommendation | Confidence | Key Insight |
+|-------|---------------|------------|-------------|
+| gemini-2.5-pro | [Option] | [X/10] | [Rationale...] |
+| openai/gpt-5-pro | [Option] | [X/10] | [Rationale...] |
+| openai/gpt-5 | [Option] | [X/10] | [Rationale...] |
+
+**Decision**: [Chosen option]
+**Average Confidence**: [X.X/10]
+**Rationale**: [Synthesis of model inputs]
+"""
+
+# Domain-specific strategy sections (conditional)
+domain_strategy_sections = []
+
+if domain_patterns.get('multi_adapter'):
+    adapter_type = domain_patterns['adapter_types'][0] if domain_patterns['adapter_types'] else "adapter"
+    domain_strategy_sections.append(f"""
+## Per-{adapter_type.title()}-Adapter Strategy
+
+| Adapter | Native Support | Strategy | Complexity | Performance |
+|---------|---------------|----------|------------|-------------|
+| [Adapter1] | [Yes/No] | [Native/Workaround] | [Low/Med/High] | [Metric] |
+| [Adapter2] | [Yes/No] | [Native/Workaround] | [Low/Med/High] | [Metric] |
+
+### Implementation Examples per Adapter
+
+#### [Adapter1]
+```[language]
+[Code example for this adapter]
+```
+
+#### [Adapter2]
+```[language]
+[Code example for this adapter]
+```
+
+### Performance Targets
+
+| Adapter Tier | Operation Size | Target | Hard Floor |
+|--------------|---------------|--------|------------|
+| Tier 1 | N≥100 | ≥2x baseline | 1.5x minimum |
+| Tier 2 | N≥100 | ≥1.5x baseline | Not slower |
+""")
+
+if domain_patterns.get('service_layer') or domain_patterns.get('microservices'):
+    domain_strategy_sections.append("""
+## Service Integration Strategy
+
+### Affected Services
+
+- [Service1]: [How it's affected]
+- [Service2]: [How it's affected]
+
+### Inter-Service Dependencies
+
+[Diagram or description of service interactions]
+
+### Communication Pattern
+
+[REST/GraphQL/gRPC/Message Queue]
+""")
+
+if domain_patterns.get('rest_api'):
+    domain_strategy_sections.append("""
+## API Endpoint Strategy
+
+### New/Modified Endpoints
+
+- `[METHOD] /api/path`: [Purpose]
+- `[METHOD] /api/path2`: [Purpose]
+
+### Request/Response Examples
+
+```json
+// Request
+{
+  "field": "value"
+}
+
+// Response
+{
+  "result": "value"
+}
+```
+
+### API Versioning
+
+[Strategy for backward compatibility]
+""")
+
+if domain_patterns.get('graphql'):
+    domain_strategy_sections.append("""
+## GraphQL Schema Changes
+
+### New Types/Queries/Mutations
+
+```graphql
+type NewType {
+  field: String!
+}
+
+type Query {
+  newQuery: NewType
+}
+```
+
+### Resolver Strategy
+
+[How resolvers will be implemented]
+""")
+
+# Combine all sections into template
+template_prd = f'''# Feature: [Feature Name]
 
 **Created**: [Date]
 **Status**: Planning
+{''.join(adaptive_sections)}
+
+{consensus_section}
 
 ## Overview
 
-[1-2 paragraphs describing what this feature does and why it's needed]
+[2-3 paragraphs with depth - explain WHAT, WHY, WHO benefits]
 
 ## Problem Statement
 
-[Describe the problem this feature solves]
+[Deep analysis of the problem - 3-4 paragraphs minimum]
+
+## Goals
+
+**Primary**: [Main objective with measurable success criteria]
+**Secondary**: [Additional objectives]
+
+## Target Users
+
+**Persona 1**: [How they benefit, specific use cases]
 
 ## Acceptance Criteria
 
-- [ ] Criterion 1: [Specific, measurable criterion]
-- [ ] Criterion 2: [Specific, measurable criterion]
-- [ ] Criterion 3: [Specific, measurable criterion]
+- [ ] Criterion 1: [Specific, measurable, testable]
+- [ ] Criterion 2: [Specific, measurable, testable]
+- [ ] Criterion 3: [Specific, measurable, testable]
+- [ ] Criterion 4: [Specific, measurable, testable]
+- [ ] Criterion 5: [Specific, measurable, testable]
 
 ## Technical Design
 
+### Technology Stack
+
+- Language: [{primary_language}]
+- Framework: [{detected_framework}]
+- Key dependencies: [List]
+
 ### Affected Components
 
-- Modules: [List affected modules]
-- Services: [List affected services]
-- Dependencies: [List new or updated dependencies]
+- Modules: [List ALL affected modules]
+- {'Adapters: [List if multi-adapter pattern]' if domain_patterns.get('multi_adapter') else ''}
+- {'Services: [List if service layer pattern]' if domain_patterns.get('service_layer') else ''}
+- {'Repositories: [List if repository pattern]' if domain_patterns.get('repository') else ''}
+- Dependencies: [List new or updated external dependencies]
+
+{''.join(domain_strategy_sections)}
 
 ### Implementation Approach
 
-[High-level description of how this will be implemented]
-
-### API Changes
-
-[If applicable, describe any API changes]
+[5-10 paragraphs of technical detail:
+- Overall architecture
+- Key algorithms/patterns
+- Data flow
+- Error handling
+- Performance considerations
+]
 
 ### Type Signatures
 
-[If applicable, show expected type signatures]
-
-```python
-def new_function(param: Type) -> ReturnType:
-    """Brief description."""
-    pass
+```{primary_language}
+[Expected function/method signatures with full type annotations]
 ```
+
+### API Design (if applicable)
+
+[Detailed API design with examples]
 
 ## Testing Strategy
 
+**Estimated Test Count**: [100-300 tests for complex features]
+
 ### Unit Tests
 
-[Describe unit test approach]
-
 - Test file: `tests/unit/test_[feature].py`
-- Coverage target: [%]
+- Coverage target: [≥90% for complex features]
+- Key scenarios:
+  * [Scenario 1]
+  * [Scenario 2]
+  * [Scenario 3]
 
 ### Integration Tests
 
-[Describe integration test approach]
-
 - Test file: `tests/integration/test_[feature].py`
-- Test scenarios: [List key scenarios]
+- Test scenarios:
+  * [Integration scenario 1]
+  * [Integration scenario 2]
+  * [Integration scenario 3]
+
+### Edge Cases
+
+- NULL/None value handling
+- Empty result sets
+- Error conditions
+- Boundary values
+{'- Per-adapter edge cases' if domain_patterns.get('multi_adapter') else ''}
+
+### Performance Tests
+
+- [Specific performance benchmarks if applicable]
+- [N+1 query detection if database operations]
+- [Concurrent access tests if shared state]
+
+## Implementation Phases
+
+### Phase 1: Core Implementation ([X hours])
+
+[Detailed breakdown]
+
+### Phase 2: Integration ([Y hours])
+
+[Detailed breakdown]
+
+### Phase 3: Testing ([Z hours])
+
+[Detailed breakdown]
+
+### Phase 4: Documentation ([W hours])
+
+[Detailed breakdown]
+
+**Total Estimate**: [40-66 hours for complex features]
 
 ## Risks & Constraints
 
-- **Risk 1**: [Description and mitigation]
-- **Risk 2**: [Description and mitigation]
+- **Risk 1**: [Description]
+  * **Impact**: [High/Medium/Low]
+  * **Mitigation**: [Specific mitigation strategy]
 
-## Timeline Estimate
+- **Risk 2**: [Description]
+  * **Impact**: [High/Medium/Low]
+  * **Mitigation**: [Specific mitigation strategy]
 
-- Planning: [X days]
-- Implementation: [Y days]
-- Testing: [Z days]
-- Total: [Total days]
+- **Risk 3**: [Description]
+  * **Impact**: [High/Medium/Low]
+  * **Mitigation**: [Specific mitigation strategy]
+
+[Minimum 5 risks for complex features]
+
+## Performance Considerations
+
+[Specific performance targets and optimization strategies]
+
+## Security Considerations
+
+[Security implications and mitigations]
 
 ## References
 
-- Architecture: specs/guides/architecture.md
-- Testing: specs/guides/testing.md
-- Research: specs/active/[slug]/research/plan.md
+- **Internal**:
+  * Architecture: specs/guides/architecture.md
+  * Testing: specs/guides/testing.md
+  * Code Style: specs/guides/code-style.md
+
+- **External** (20+ for well-researched PRDs):
+  * [Library Documentation Link 1]
+  * [Best Practices Article 1]
+  * [Stack Overflow Discussion]
+  * [etc.]
+
+- **Research**:
+  * Research Plan: specs/active/[slug]/research/plan.md
+  {'* Consensus: specs/active/[slug]/research/consensus.md' if available_tools.get('zen_consensus') else ''}
+  {f'* {domain_patterns["adapter_types"][0].title()}-Matrix: specs/active/[slug]/research/{domain_patterns["adapter_types"][0]}-matrix.md' if domain_patterns.get('multi_adapter') and domain_patterns.get('adapter_types') else ''}
+
+## Quality Gate
+
+**PRD Completeness Checklist**:
+
+- [ ] Length: {'500-1000 lines for complex features' if domain_patterns.get('multi_adapter') or domain_patterns.get('microservices') else '300-500 lines for medium features' if domain_patterns.get('service_layer') else '200-400 lines for simple features'}
+- [ ] Research artifacts: {'3+' if available_tools.get('zen_consensus') else '2+'} files in research/
+- [ ] {'Multi-model consensus documented' if available_tools.get('zen_consensus') else 'Architectural trade-offs analyzed'}
+- [ ] Technical depth: {'Implementation examples per adapter' if domain_patterns.get('multi_adapter') else 'Implementation details with code examples'}
+- [ ] Testing: 100+ test case specifications
+- [ ] Effort estimate: Phase-by-phase hour breakdown
+- [ ] Risks: 5+ with mitigations
+- [ ] References: 15+ external links
 '''
 
 Write(file_path="specs/template-spec/prd.md", content=template_prd)

@@ -21,7 +21,7 @@ from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_expression_and_parameters, has_sql_method, has_with_method, is_expression
+from sqlspec.utils.type_guards import has_expression_and_parameters, has_with_method, is_expression
 
 if TYPE_CHECKING:
     from sqlspec.core.result import SQLResult
@@ -458,7 +458,7 @@ class QueryBuilder(ABC):
             final_expression = self._optimize_expression(final_expression)
 
         try:
-            if has_sql_method(final_expression):
+            if isinstance(final_expression, exp.Expression):
                 sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
             else:
                 sql_string = str(final_expression)
@@ -558,8 +558,7 @@ class QueryBuilder(ABC):
         if (
             config.dialect is not None
             and config.dialect != safe_query.dialect
-            and self._expression is not None
-            and has_sql_method(self._expression)
+            and isinstance(self._expression, exp.Expression)
         ):
             try:
                 sql_string = self._expression.sql(dialect=config.dialect, pretty=True)
