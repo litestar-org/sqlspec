@@ -16,10 +16,7 @@ from sqlspec import sql
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.core.result import SQLResult
 
-pytestmark = [
-    pytest.mark.asyncpg,
-    pytest.mark.integration,
-]
+pytestmark = [pytest.mark.asyncpg, pytest.mark.integration]
 
 
 @pytest.fixture
@@ -43,9 +40,15 @@ async def asyncpg_merge_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncpgD
         )
     """)
 
-    await asyncpg_async_driver.execute("INSERT INTO products (id, name, price, stock) VALUES ($1, $2, $3, $4)", [1, "Test Product", 19.99, 10])
-    await asyncpg_async_driver.execute("INSERT INTO products (id, name, price, stock) VALUES ($1, $2, $3, $4)", [2, "Another Product", 29.99, 5])
-    await asyncpg_async_driver.execute("INSERT INTO products (id, name, price, stock) VALUES ($1, $2, $3, $4)", [3, "Third Product", 39.99, 15])
+    await asyncpg_async_driver.execute(
+        "INSERT INTO products (id, name, price, stock) VALUES ($1, $2, $3, $4)", [1, "Test Product", 19.99, 10]
+    )
+    await asyncpg_async_driver.execute(
+        "INSERT INTO products (id, name, price, stock) VALUES ($1, $2, $3, $4)", [2, "Another Product", 29.99, 5]
+    )
+    await asyncpg_async_driver.execute(
+        "INSERT INTO products (id, name, price, stock) VALUES ($1, $2, $3, $4)", [3, "Third Product", 39.99, 15]
+    )
 
     yield asyncpg_async_driver
 
@@ -85,7 +88,9 @@ async def test_asyncpg_merge_basic_insert_new(asyncpg_merge_session: AsyncpgDriv
     result = await asyncpg_merge_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await asyncpg_merge_session.execute("SELECT id, name, price, stock FROM products WHERE id = $1", [10])
+    verify_result = await asyncpg_merge_session.execute(
+        "SELECT id, name, price, stock FROM products WHERE id = $1", [10]
+    )
     assert len(verify_result) == 1
     assert verify_result[0]["name"] == "New Product"
     assert float(verify_result[0]["price"]) == 49.99
@@ -189,8 +194,7 @@ async def test_asyncpg_merge_from_table_source(asyncpg_merge_session: AsyncpgDri
     )
 
     await asyncpg_merge_session.execute(
-        "INSERT INTO staging_products (id, name, price, stock) VALUES ($1, $2, $3, $4)",
-        [4, "Staged New", 149.99, 50],
+        "INSERT INTO staging_products (id, name, price, stock) VALUES ($1, $2, $3, $4)", [4, "Staged New", 149.99, 50]
     )
 
     merge_query = (

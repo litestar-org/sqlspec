@@ -699,18 +699,16 @@ class CommonDriverAttributesMixin:
         Creates a deterministic cache key that includes all factors that affect SQL compilation,
         preventing cache contamination between different compilation contexts.
         """
-        context_hash = hash(
-            (
-                config.parameter_config.hash(),
-                config.dialect,
-                statement.is_script,
-                statement.is_many,
-                flatten_single_parameters,
-                bool(config.parameter_config.output_transformer),
-                bool(config.parameter_config.ast_transformer),
-                bool(config.parameter_config.needs_static_script_compilation),
-            )
-        )
+        context_hash = hash((
+            config.parameter_config.hash(),
+            config.dialect,
+            statement.is_script,
+            statement.is_many,
+            flatten_single_parameters,
+            bool(config.parameter_config.output_transformer),
+            bool(config.parameter_config.ast_transformer),
+            bool(config.parameter_config.needs_static_script_compilation),
+        ))
 
         params = statement.parameters
 

@@ -718,18 +718,16 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on configuration settings."""
-        return hash(
-            (
-                self.enable_parsing,
-                self.enable_validation,
-                self.enable_transformations,
-                self.enable_analysis,
-                self.enable_expression_simplification,
-                self.enable_parameter_type_wrapping,
-                self.enable_caching,
-                str(self.dialect),
-            )
-        )
+        return hash((
+            self.enable_parsing,
+            self.enable_validation,
+            self.enable_transformations,
+            self.enable_analysis,
+            self.enable_expression_simplification,
+            self.enable_parameter_type_wrapping,
+            self.enable_caching,
+            str(self.dialect),
+        ))
 
     def __repr__(self) -> str:
         """String representation of the StatementConfig instance."""

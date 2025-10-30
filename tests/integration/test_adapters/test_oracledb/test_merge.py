@@ -135,7 +135,9 @@ async def test_oracle_merge_basic_update_existing(oracle_merge_async_session: Or
     result = await oracle_merge_async_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await oracle_merge_async_session.execute("SELECT id, name, price FROM products WHERE id = :id", {"id": 1})
+    verify_result = await oracle_merge_async_session.execute(
+        "SELECT id, name, price FROM products WHERE id = :id", {"id": 1}
+    )
     assert len(verify_result) == 1
     assert verify_result[0]["name"] == "Updated Product"
     assert float(verify_result[0]["price"]) == 24.99
@@ -155,7 +157,9 @@ async def test_oracle_merge_basic_insert_new(oracle_merge_async_session: OracleA
     result = await oracle_merge_async_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    verify_result = await oracle_merge_async_session.execute("SELECT id, name, price, stock FROM products WHERE id = :id", {"id": 2})
+    verify_result = await oracle_merge_async_session.execute(
+        "SELECT id, name, price, stock FROM products WHERE id = :id", {"id": 2}
+    )
     assert len(verify_result) == 1
     assert verify_result[0]["name"] == "New Product"
     assert float(verify_result[0]["price"]) == 39.99
@@ -275,7 +279,9 @@ async def test_oracle_merge_from_table_source(oracle_merge_async_session: Oracle
     assert count_result[0]["cnt"] == 2
 
 
-@pytest.mark.skip(reason="Oracle does not support standalone WHEN MATCHED THEN DELETE with conditions - requires UPDATE SET clause first")
+@pytest.mark.skip(
+    reason="Oracle does not support standalone WHEN MATCHED THEN DELETE with conditions - requires UPDATE SET clause first"
+)
 async def test_oracle_merge_when_matched_delete(oracle_merge_async_session: OracleAsyncDriver) -> None:
     """Test MERGE WHEN MATCHED THEN DELETE.
 
@@ -298,7 +304,9 @@ async def test_oracle_merge_when_matched_delete(oracle_merge_async_session: Orac
     result = await oracle_merge_async_session.execute(merge_query)
     assert isinstance(result, SQLResult)
 
-    count_result = await oracle_merge_async_session.execute("SELECT COUNT(*) as cnt FROM products WHERE id = :id", {"id": 1})
+    count_result = await oracle_merge_async_session.execute(
+        "SELECT COUNT(*) as cnt FROM products WHERE id = :id", {"id": 1}
+    )
     assert count_result[0]["cnt"] == 0
 
 

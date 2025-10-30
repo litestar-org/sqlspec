@@ -258,15 +258,13 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {
-                "OracleSyncConnection": OracleSyncConnection,
-                "OracleAsyncConnection": OracleAsyncConnection,
-                "OracleSyncConnectionPool": OracleSyncConnectionPool,
-                "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
-                "OracleSyncCursor": OracleSyncCursor,
-            }
-        )
+        namespace.update({
+            "OracleSyncConnection": OracleSyncConnection,
+            "OracleAsyncConnection": OracleAsyncConnection,
+            "OracleSyncConnectionPool": OracleSyncConnectionPool,
+            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
+            "OracleSyncCursor": OracleSyncCursor,
+        })
         return namespace
 
 
@@ -419,14 +417,12 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {
-                "OracleSyncConnection": OracleSyncConnection,
-                "OracleAsyncConnection": OracleAsyncConnection,
-                "OracleSyncConnectionPool": OracleSyncConnectionPool,
-                "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
-                "OracleSyncCursor": OracleSyncCursor,
-                "OracleAsyncCursor": OracleAsyncCursor,
-            }
-        )
+        namespace.update({
+            "OracleSyncConnection": OracleSyncConnection,
+            "OracleAsyncConnection": OracleAsyncConnection,
+            "OracleSyncConnectionPool": OracleSyncConnectionPool,
+            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
+            "OracleSyncCursor": OracleSyncCursor,
+            "OracleAsyncCursor": OracleAsyncCursor,
+        })
         return namespace

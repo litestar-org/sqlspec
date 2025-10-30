@@ -530,16 +530,14 @@ class ObStoreBackend:
         result: dict[str, Any] = {}
         try:
             metadata = await self.store.head_async(resolved_path)
-            result.update(
-                {
-                    "path": resolved_path,
-                    "exists": True,
-                    "size": metadata.get("size"),
-                    "last_modified": metadata.get("last_modified"),
-                    "e_tag": metadata.get("e_tag"),
-                    "version": metadata.get("version"),
-                }
-            )
+            result.update({
+                "path": resolved_path,
+                "exists": True,
+                "size": metadata.get("size"),
+                "last_modified": metadata.get("last_modified"),
+                "e_tag": metadata.get("e_tag"),
+                "version": metadata.get("version"),
+            })
             if metadata.get("metadata"):
                 result["custom_metadata"] = metadata["metadata"]
 

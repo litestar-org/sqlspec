@@ -57,10 +57,7 @@ def test_merge_using_table_name() -> None:
 def test_merge_using_dict_single_row() -> None:
     """Test MERGE USING clause with dict as source (single row)."""
     query = (
-        sql.merge()
-        .into("products")
-        .using({"id": 1, "name": "Widget", "price": 29.99}, alias="src")
-        .on("t.id = src.id")
+        sql.merge().into("products").using({"id": 1, "name": "Widget", "price": 29.99}, alias="src").on("t.id = src.id")
     )
     stmt = query.build()
 
@@ -353,8 +350,11 @@ def test_merge_complex_scenario() -> None:
 
 def test_merge_with_constructor_table() -> None:
     """Test MERGE with table specified in constructor."""
-    query = sql.merge("products").using("staging", alias="s").on("products.id = s.id").when_matched_then_update(
-        name="s.name"
+    query = (
+        sql.merge("products")
+        .using("staging", alias="s")
+        .on("products.id = s.id")
+        .when_matched_then_update(name="s.name")
     )
     stmt = query.build()
 
@@ -412,8 +412,12 @@ def test_merge_column_reference_detection() -> None:
 def test_merge_subquery_as_source() -> None:
     """Test MERGE with subquery as source."""
     subquery = sql.select("id", "name", "price").from_("staging").where("active = :active", active=True)
-    query = sql.merge().into("products", alias="t").using(subquery, alias="s").on("t.id = s.id").when_matched_then_update(
-        name="s.name"
+    query = (
+        sql.merge()
+        .into("products", alias="t")
+        .using(subquery, alias="s")
+        .on("t.id = s.id")
+        .when_matched_then_update(name="s.name")
     )
     stmt = query.build()
 
@@ -466,10 +470,7 @@ def test_merge_using_list_of_dicts() -> None:
 
 def test_merge_using_list_of_dicts_postgres_dialect() -> None:
     """Test MERGE with list of dicts generates jsonb_to_recordset for PostgreSQL."""
-    data = [
-        {"id": 1, "name": "Widget A"},
-        {"id": 2, "name": "Widget B"},
-    ]
+    data = [{"id": 1, "name": "Widget A"}, {"id": 2, "name": "Widget B"}]
     query = (
         sql.merge(dialect="postgres")
         .into("products", alias="t")

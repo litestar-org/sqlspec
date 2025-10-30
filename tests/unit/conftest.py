@@ -859,14 +859,12 @@ def mock_mysql_connection() -> MockSyncConnection:
 def mock_bigquery_connection() -> MockSyncConnection:
     """Mock BigQuery connection with BigQuery-specific behavior."""
     conn = MockSyncConnection("bigquery_connection", "bigquery")
-    conn.connection_info.update(
-        {
-            "project_id": "test-project",
-            "dataset_id": "test_dataset",
-            "supports_arrays": "True",
-            "supports_structs": "True",
-        }
-    )
+    conn.connection_info.update({
+        "project_id": "test-project",
+        "dataset_id": "test_dataset",
+        "supports_arrays": "True",
+        "supports_structs": "True",
+    })
     return conn
 
 
