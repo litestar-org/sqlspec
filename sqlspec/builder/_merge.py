@@ -5,6 +5,8 @@ parameter binding and validation.
 """
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
+from decimal import Decimal
 from itertools import starmap
 from typing import Any
 
@@ -109,7 +111,15 @@ class MergeIntoClauseMixin:
             current_expr = self.get_expression()
 
         assert current_expr is not None
-        current_expr.set("this", exp.to_table(table, alias=alias) if isinstance(table, str) else table)
+
+        if isinstance(table, str):
+            table_expr = exp.to_table(table)
+            if alias:
+                table_expr = exp.alias_(table_expr, alias, table=True)
+        else:
+            table_expr = table
+
+        current_expr.set("this", table_expr)
         return self
 
 
@@ -135,8 +145,10 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
     ) -> "exp.Expression":
         """Create USING clause expression from dict or list of dicts.
 
-        For PostgreSQL: Uses json_populate_record[set]() for type-safe conversion
-        For others: Uses SELECT with parameterized values (works on all modern databases)
+        Uses JSON-based approach for type-safe bulk operations:
+        - PostgreSQL: json_populate_recordset(NULL::table_name, $1::jsonb)
+        - Oracle: JSON_TABLE(:payload, '$[*]' COLUMNS (...))
+        - Others: Fall back to SELECT with parameterized values
 
         Args:
             source: Dict or list of dicts for USING clause
@@ -153,7 +165,120 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             raise SQLBuilderError(msg)
 
         columns = list(data[0].keys())
+        dialect = getattr(self, "dialect_name", None)
 
+        if dialect == "postgres":
+            return self._create_postgres_json_source(data, columns, is_list, alias)
+        if dialect == "oracle":
+            return self._create_oracle_json_source(data, columns, alias)
+
+        return self._create_select_union_source(data, columns, is_list, alias)
+
+    def _create_postgres_json_source(
+        self, data: "list[dict[str, Any]]", columns: "list[str]", is_list: bool, alias: "str | None"
+    ) -> "exp.Expression":
+        """Create PostgreSQL jsonb_to_recordset source with explicit column definitions.
+
+        Uses jsonb_to_recordset(jsonb) AS alias(col1 type1, col2 type2, ...) pattern
+        which avoids composite type dependencies and provides explicit type definitions.
+
+        Note: AsyncPG requires raw Python list/dict, not pre-serialized JSON string.
+        The driver's JSONB codec handles serialization automatically.
+        """
+        json_param_name = self._generate_unique_parameter_name("json_data")
+        json_value = data if is_list else [data[0]]
+        _, json_param_name = self.add_parameter(json_value, name=json_param_name)
+
+        sample_record = data[0] if data else {}
+        alias_name = alias or "src"
+
+        column_type_spec = ", ".join([f"{col} {self._infer_postgres_type(sample_record.get(col))}" for col in columns])
+        column_selects = ", ".join(columns)
+        from_sql = f"SELECT {column_selects} FROM jsonb_to_recordset(:{json_param_name}::jsonb) AS {alias_name}({column_type_spec})"
+
+        import sqlglot as sg
+
+        parsed = sg.parse_one(from_sql, dialect="postgres")
+        paren_expr = exp.paren(parsed)
+        paren_expr.set("alias", exp.TableAlias(this=exp.to_identifier(alias_name)))
+        return paren_expr
+
+    def _create_oracle_json_source(
+        self, data: "list[dict[str, Any]]", columns: "list[str]", alias: "str | None"
+    ) -> "exp.Expression":
+        """Create Oracle JSON_TABLE source (production-proven pattern from oracledb-vertexai-demo)."""
+        import json
+
+        json_param_name = self._generate_unique_parameter_name("json_payload")
+        json_value = json.dumps(data)
+        _, json_param_name = self.add_parameter(json_value, name=json_param_name)
+
+        sample_values: dict[str, Any] = {}
+        for record in data:
+            for column, value in record.items():
+                if value is not None and column not in sample_values:
+                    sample_values[column] = value
+
+        json_columns = [
+            f"{column} {self._infer_oracle_type(sample_values.get(column))} PATH '$.{column}'" for column in columns
+        ]
+
+        json_table_expr = exp.Anonymous(
+            this="JSON_TABLE",
+            expressions=[
+                exp.Placeholder(this=json_param_name),
+                exp.Literal.string("$[*]"),
+                exp.Paren(this=exp.Literal.string(f"COLUMNS ({', '.join(json_columns)})")),
+            ],
+        )
+
+        select_expr = exp.Select()
+        select_expr.set("expressions", [exp.Column(this=col) for col in columns])
+        select_expr.set("from", exp.From(this=json_table_expr))
+
+        return exp.paren(select_expr)
+
+    def _infer_postgres_type(self, value: "Any") -> str:
+        """Infer PostgreSQL column type from Python value.
+
+        Maps Python types to PostgreSQL types for jsonb_to_recordset column definitions.
+        """
+        if value is None:
+            return "TEXT"
+        if isinstance(value, bool):
+            return "BOOLEAN"
+        if isinstance(value, int):
+            return "INTEGER"
+        if isinstance(value, float):
+            return "DOUBLE PRECISION"
+        if isinstance(value, Decimal):
+            return "NUMERIC"
+        if isinstance(value, (dict, list)):
+            return "JSONB"
+        if isinstance(value, datetime):
+            return "TIMESTAMP"
+        return "TEXT"
+
+    def _infer_oracle_type(self, value: "Any") -> str:
+        """Infer Oracle column type for JSON_TABLE projection."""
+        varchar2_max = 4000
+
+        if isinstance(value, bool):
+            return "NUMBER(1)"
+        if isinstance(value, (int, float, Decimal)):
+            return "NUMBER"
+        if isinstance(value, (dict, list)):
+            return "JSON"
+        if isinstance(value, datetime):
+            return "TIMESTAMP"
+        if value is not None and len(str(value)) > varchar2_max:
+            return "CLOB"
+        return f"VARCHAR2({varchar2_max})"
+
+    def _create_select_union_source(
+        self, data: "list[dict[str, Any]]", columns: "list[str]", is_list: bool, alias: "str | None"
+    ) -> "exp.Expression":
+        """Create fallback SELECT UNION source for other databases."""
         parameterized_values: list[list[exp.Expression]] = []
         for row in data:
             row_params: list[exp.Expression] = []
@@ -184,8 +309,6 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                     union_expr = exp.Union(this=union_expr, expression=select, distinct=False)
                 source_expr = union_expr
 
-            if alias:
-                return exp.Subquery(this=source_expr, alias=exp.to_identifier(alias))
             return exp.paren(source_expr)
 
         select_expr = exp.Select()
@@ -193,8 +316,6 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             "expressions", [exp.alias_(parameterized_values[0][index], column) for index, column in enumerate(columns)]
         )
 
-        if alias:
-            return exp.Subquery(this=select_expr, alias=exp.to_identifier(alias))
         return exp.paren(select_expr)
 
     def using(self, source: str | exp.Expression | Any, alias: str | None = None) -> Self:
@@ -208,7 +329,11 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
         elif isinstance(source, (dict, list)):
-            source_expr = self._create_dict_source_expression(source, alias)
+            paren_expr = self._create_dict_source_expression(source, alias)
+            if alias and isinstance(paren_expr, exp.Paren):
+                source_expr = exp.Subquery(this=paren_expr.this, alias=exp.to_identifier(alias))
+            else:
+                source_expr = paren_expr
         elif has_query_builder_parameters(source) and hasattr(source, "_expression"):
             parameters_obj = getattr(source, "parameters", None)
             if isinstance(parameters_obj, dict):
@@ -575,6 +700,8 @@ class Merge(
             target_table: Target table name
             **kwargs: Additional QueryBuilder arguments
         """
+        if "enable_optimization" not in kwargs:
+            kwargs["enable_optimization"] = False
         super().__init__(**kwargs)
         self._initialize_expression()
 

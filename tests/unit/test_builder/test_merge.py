@@ -465,13 +465,13 @@ def test_merge_using_list_of_dicts() -> None:
 
 
 def test_merge_using_list_of_dicts_postgres_dialect() -> None:
-    """Test MERGE with list of dicts uses SELECT UNION (generic dialect works on PostgreSQL)."""
+    """Test MERGE with list of dicts generates jsonb_to_recordset for PostgreSQL."""
     data = [
         {"id": 1, "name": "Widget A"},
         {"id": 2, "name": "Widget B"},
     ]
     query = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
@@ -479,17 +479,16 @@ def test_merge_using_list_of_dicts_postgres_dialect() -> None:
     )
     stmt = query.build()
 
-    assert "SELECT" in stmt.sql.upper()
-    assert "UNION" in stmt.sql.upper()
-    assert "id_" in stmt.parameters or "id" in stmt.parameters
-    assert "name_" in stmt.parameters or "name" in stmt.parameters
+    assert "jsonb_to_recordset" in stmt.sql.lower()
+    assert 'as "src"("id"' in stmt.sql.lower() or "as src(id" in stmt.sql.lower()
+    assert "json_data" in stmt.parameters
 
 
 def test_merge_using_single_dict_postgres_dialect() -> None:
-    """Test MERGE with single dict uses SELECT (generic dialect works on PostgreSQL)."""
+    """Test MERGE with single dict generates jsonb_to_recordset for PostgreSQL."""
     data = {"id": 1, "name": "Widget A"}
     query = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
@@ -497,9 +496,9 @@ def test_merge_using_single_dict_postgres_dialect() -> None:
     )
     stmt = query.build()
 
-    assert "SELECT" in stmt.sql.upper()
-    assert "id_" in stmt.parameters or "id" in stmt.parameters
-    assert "name_" in stmt.parameters or "name" in stmt.parameters
+    assert "jsonb_to_recordset" in stmt.sql.lower()
+    assert 'as "src"("id"' in stmt.sql.lower() or "as src(id" in stmt.sql.lower()
+    assert "json_data" in stmt.parameters
 
 
 def test_merge_using_empty_list_raises_error() -> None:

@@ -56,7 +56,7 @@ async def asyncpg_merge_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncpgD
 async def test_asyncpg_merge_basic_update_existing(asyncpg_merge_session: AsyncpgDriver) -> None:
     """Test MERGE updates existing row."""
     merge_query = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using({"id": 1, "name": "Updated Product", "price": 24.99}, alias="src")
         .on("t.id = src.id")
@@ -75,7 +75,7 @@ async def test_asyncpg_merge_basic_update_existing(asyncpg_merge_session: Asyncp
 async def test_asyncpg_merge_basic_insert_new(asyncpg_merge_session: AsyncpgDriver) -> None:
     """Test MERGE inserts new row."""
     merge_query = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using({"id": 10, "name": "New Product", "price": 49.99, "stock": 20}, alias="src")
         .on("t.id = src.id")
@@ -95,7 +95,7 @@ async def test_asyncpg_merge_basic_insert_new(asyncpg_merge_session: AsyncpgDriv
 async def test_asyncpg_merge_update_and_insert(asyncpg_merge_session: AsyncpgDriver) -> None:
     """Test MERGE handles both update and insert in single statement."""
     merge_query = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using({"id": 2, "name": "Updated Second", "price": 34.99, "stock": 8}, alias="src")
         .on("t.id = src.id")
@@ -113,7 +113,7 @@ async def test_asyncpg_merge_update_and_insert(asyncpg_merge_session: AsyncpgDri
     assert verify_result[0]["stock"] == 8
 
     merge_query_new = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using({"id": 20, "name": "Brand New", "price": 59.99, "stock": 25}, alias="src")
         .on("t.id = src.id")
@@ -132,7 +132,7 @@ async def test_asyncpg_merge_update_and_insert(asyncpg_merge_session: AsyncpgDri
 async def test_asyncpg_merge_with_expressions(asyncpg_merge_session: AsyncpgDriver) -> None:
     """Test MERGE with SQL expressions in UPDATE."""
     merge_query = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using({"id": 3, "additional_stock": 5}, alias="src")
         .on("t.id = src.id")
@@ -149,7 +149,7 @@ async def test_asyncpg_merge_with_expressions(asyncpg_merge_session: AsyncpgDriv
 async def test_asyncpg_merge_with_null_values(asyncpg_merge_session: AsyncpgDriver) -> None:
     """Test MERGE handles NULL values correctly."""
     merge_query = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using({"id": 1, "name": "Updated", "price": None}, alias="src")
         .on("t.id = src.id")
@@ -166,7 +166,7 @@ async def test_asyncpg_merge_with_null_values(asyncpg_merge_session: AsyncpgDriv
 async def test_asyncpg_merge_with_conditional_update(asyncpg_merge_session: AsyncpgDriver) -> None:
     """Test MERGE with condition in WHEN MATCHED clause."""
     merge_query = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using({"id": 2, "name": "Conditional Update", "price": 99.99}, alias="src")
         .on("t.id = src.id")
@@ -194,7 +194,7 @@ async def test_asyncpg_merge_from_table_source(asyncpg_merge_session: AsyncpgDri
     )
 
     merge_query = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using("staging_products", alias="s")
         .on("t.id = s.id")
@@ -219,7 +219,7 @@ async def test_asyncpg_merge_from_table_source(asyncpg_merge_session: AsyncpgDri
 async def test_asyncpg_merge_delete_matched(asyncpg_merge_session: AsyncpgDriver) -> None:
     """Test MERGE WHEN MATCHED THEN DELETE (PostgreSQL 17+ or conditional)."""
     merge_query = (
-        sql.merge()
+        sql.merge(dialect="postgres")
         .into("products", alias="t")
         .using({"id": 1, "discontinued": 1}, alias="src")
         .on("t.id = src.id")
