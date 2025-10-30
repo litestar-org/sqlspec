@@ -508,11 +508,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
     @abstractmethod
     def migrate_up(
-        self,
-        revision: str = "head",
-        allow_missing: bool = False,
-        auto_sync: bool = True,
-        dry_run: bool = False,
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
     ) -> "Awaitable[None] | None":
         """Apply database migrations up to specified revision.
 
@@ -651,11 +647,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         return None
 
     def migrate_up(
-        self,
-        revision: str = "head",
-        allow_missing: bool = False,
-        auto_sync: bool = True,
-        dry_run: bool = False,
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
     ) -> None:
         """Apply database migrations up to specified revision.
 
@@ -724,9 +716,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         commands = self._ensure_migration_commands()
         return commands.stamp(revision)
 
-    def fix_migrations(
-        self, dry_run: bool = False, update_database: bool = True, yes: bool = False
-    ) -> None:
+    def fix_migrations(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
         """Convert timestamp migrations to sequential format.
 
         Args:
@@ -796,11 +786,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         return None
 
     async def migrate_up(
-        self,
-        revision: str = "head",
-        allow_missing: bool = False,
-        auto_sync: bool = True,
-        dry_run: bool = False,
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
     ) -> None:
         """Apply database migrations up to specified revision.
 
@@ -869,9 +855,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         commands = self._ensure_migration_commands()
         return await commands.stamp(revision)
 
-    async def fix_migrations(
-        self, dry_run: bool = False, update_database: bool = True, yes: bool = False
-    ) -> None:
+    async def fix_migrations(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
         """Convert timestamp migrations to sequential format.
 
         Args:
@@ -964,11 +948,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         raise NotImplementedError
 
     def migrate_up(
-        self,
-        revision: str = "head",
-        allow_missing: bool = False,
-        auto_sync: bool = True,
-        dry_run: bool = False,
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
     ) -> None:
         """Apply database migrations up to specified revision.
 
@@ -1037,9 +1017,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         commands = self._ensure_migration_commands()
         return commands.stamp(revision)
 
-    def fix_migrations(
-        self, dry_run: bool = False, update_database: bool = True, yes: bool = False
-    ) -> None:
+    def fix_migrations(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
         """Convert timestamp migrations to sequential format.
 
         Args:
@@ -1134,11 +1112,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         raise NotImplementedError
 
     async def migrate_up(
-        self,
-        revision: str = "head",
-        allow_missing: bool = False,
-        auto_sync: bool = True,
-        dry_run: bool = False,
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
     ) -> None:
         """Apply database migrations up to specified revision.
 
@@ -1207,9 +1181,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         commands = self._ensure_migration_commands()
         return await commands.stamp(revision)
 
-    async def fix_migrations(
-        self, dry_run: bool = False, update_database: bool = True, yes: bool = False
-    ) -> None:
+    async def fix_migrations(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
         """Convert timestamp migrations to sequential format.
 
         Args:
