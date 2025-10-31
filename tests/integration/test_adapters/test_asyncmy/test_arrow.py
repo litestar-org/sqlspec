@@ -7,6 +7,8 @@ from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig
 
+pytestmark = [pytest.mark.xdist_group("mysql")]
+
 
 @pytest.fixture
 async def asyncmy_arrow_config(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyConfig, None]:

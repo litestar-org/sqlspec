@@ -14,6 +14,8 @@ from sqlspec.core.filters import BeforeAfterFilter, FilterTypes, LimitOffsetFilt
 from sqlspec.extensions.fastapi import SQLSpecPlugin
 from sqlspec.extensions.fastapi.providers import dep_cache
 
+pytestmark = pytest.mark.xdist_group("sqlite")
+
 
 @pytest.fixture(autouse=True)
 def _clear_dependency_cache() -> Generator[None, None, None]:
