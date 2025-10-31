@@ -18,7 +18,7 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_query_builder_parameters
