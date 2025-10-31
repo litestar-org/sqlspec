@@ -51,29 +51,30 @@ Quick Reference
 
 **Basic Query Execution**
 
-.. literalinclude:: /examples/usage/test_index_1.py
-   :language: python
+.. literalinclude:: /docs/examples/usage/test_index_1.py
+   :langage: python
    :caption: ``basic query execution``
-   :lines: 1-5, 14-16
+   :lines: 4-16
+   :dedent: 2
+
 
 **Using the Query Builder**
 
-.. literalinclude:: /examples/usage/test_index_2.py
-   :language: python
-   :caption: ``using query builder``
+.. literalinclude:: /docs/examples/usage/test_index_2.py
+   :langage: python
+   :caption: ``using the qery builder``
    :lines: 19-21
+   :dedent: 2
+
 
 **Loading from SQL Files**
 
-.. code-block:: python
+.. literalinclude:: /docs/examples/usage/test_index_3.py
+   :langage: python
+   :caption: ``loading fron sql files``
+   :lines: 25-29
+   :dedent: 2
 
-   from sqlspec.loader import SQLFileLoader
-
-   loader = SQLFileLoader()
-   loader.load_sql("queries/users.sql")
-
-   user_query = loader.get_sql("get_user_by_id", user_id=123)
-   result = session.execute(user_query)
 
 Next Steps
 ----------
