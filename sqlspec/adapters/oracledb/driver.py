@@ -202,7 +202,7 @@ class OracleAsyncCursor:
                 self.cursor.close()
 
 
-class OracleSyncExceptionHandler:
+class OracleExceptionHandler:
     """Context manager for handling Oracle database exceptions.
 
     Maps Oracle ORA-XXXXX error codes to specific SQLSpec exceptions
@@ -210,6 +210,96 @@ class OracleSyncExceptionHandler:
     """
 
     __slots__ = ()
+
+    def _map_oracle_exception(self, e: Any) -> None:
+        """Map Oracle exception to SQLSpec exception.
+
+        Args:
+            e: oracledb.DatabaseError instance
+        """
+        error_obj = e.args[0] if e.args else None
+        if not error_obj:
+            self._raise_generic_error(e, None)
+
+        error_code = getattr(error_obj, "code", None)
+
+        if not error_code:
+            self._raise_generic_error(e, None)
+
+        if error_code == 1:
+            self._raise_unique_violation(e, error_code)
+        elif error_code in {2291, 2292}:
+            self._raise_foreign_key_violation(e, error_code)
+        elif error_code == ORA_CHECK_CONSTRAINT:
+            self._raise_check_violation(e, error_code)
+        elif error_code in {1400, 1407}:
+            self._raise_not_null_violation(e, error_code)
+        elif error_code and ORA_INTEGRITY_RANGE_START <= error_code < ORA_INTEGRITY_RANGE_END:
+            self._raise_integrity_error(e, error_code)
+        elif error_code in {1017, 12154, 12541, 12545, 12514, 12505}:
+            self._raise_connection_error(e, error_code)
+        elif error_code in {60, 8176}:
+            self._raise_transaction_error(e, error_code)
+        elif error_code in {1722, 1858, 1840}:
+            self._raise_data_error(e, error_code)
+        elif error_code and ORA_PARSING_RANGE_START <= error_code < ORA_PARSING_RANGE_END:
+            self._raise_parsing_error(e, error_code)
+        elif error_code == ORA_TABLESPACE_FULL:
+            self._raise_operational_error(e, error_code)
+        else:
+            self._raise_generic_error(e, error_code)
+
+    def _raise_unique_violation(self, e: Any, code: int) -> None:
+        msg = f"Oracle unique constraint violation [ORA-{code:05d}]: {e}"
+        raise UniqueViolationError(msg) from e
+
+    def _raise_foreign_key_violation(self, e: Any, code: int) -> None:
+        msg = f"Oracle foreign key constraint violation [ORA-{code:05d}]: {e}"
+        raise ForeignKeyViolationError(msg) from e
+
+    def _raise_check_violation(self, e: Any, code: int) -> None:
+        msg = f"Oracle check constraint violation [ORA-{code:05d}]: {e}"
+        raise CheckViolationError(msg) from e
+
+    def _raise_not_null_violation(self, e: Any, code: int) -> None:
+        msg = f"Oracle not-null constraint violation [ORA-{code:05d}]: {e}"
+        raise NotNullViolationError(msg) from e
+
+    def _raise_integrity_error(self, e: Any, code: int) -> None:
+        msg = f"Oracle integrity constraint violation [ORA-{code:05d}]: {e}"
+        raise IntegrityError(msg) from e
+
+    def _raise_parsing_error(self, e: Any, code: int) -> None:
+        msg = f"Oracle SQL syntax error [ORA-{code:05d}]: {e}"
+        raise SQLParsingError(msg) from e
+
+    def _raise_connection_error(self, e: Any, code: int) -> None:
+        msg = f"Oracle connection error [ORA-{code:05d}]: {e}"
+        raise DatabaseConnectionError(msg) from e
+
+    def _raise_transaction_error(self, e: Any, code: int) -> None:
+        msg = f"Oracle transaction error [ORA-{code:05d}]: {e}"
+        raise TransactionError(msg) from e
+
+    def _raise_data_error(self, e: Any, code: int) -> None:
+        msg = f"Oracle data error [ORA-{code:05d}]: {e}"
+        raise DataError(msg) from e
+
+    def _raise_operational_error(self, e: Any, code: int) -> None:
+        msg = f"Oracle operational error [ORA-{code:05d}]: {e}"
+        raise OperationalError(msg) from e
+
+    def _raise_generic_error(self, e: Any, code: "int | None") -> None:
+        msg = f"Oracle database error [ORA-{code:05d}]: {e}" if code else f"Oracle database error: {e}"
+        raise SQLSpecError(msg) from e
+
+
+class OracleSyncExceptionHandler(OracleExceptionHandler):
+    """Sync Context manager for handling Oracle database exceptions.
+
+    Maps Oracle ORA-XXXXX error codes to specific SQLSpec exceptions
+    for better error handling in application code.
+    """
 
     def __enter__(self) -> None:
         return None
@@ -221,97 +311,13 @@ class OracleSyncExceptionHandler:
         if issubclass(exc_type, oracledb.DatabaseError):
             self._map_oracle_exception(exc_val)
 
-    def _map_oracle_exception(self, e: Any) -> None:
-        """Map Oracle exception to SQLSpec exception.
 
-        Args:
-            e: oracledb.DatabaseError instance
-        """
-        error_obj = e.args[0] if e.args else None
-        if not error_obj:
-            self._raise_generic_error(e, None)
-
-        error_code = getattr(error_obj, "code", None)
-
-        if not error_code:
-            self._raise_generic_error(e, None)
-
-        if error_code == 1:
-            self._raise_unique_violation(e, error_code)
-        elif error_code in {2291, 2292}:
-            self._raise_foreign_key_violation(e, error_code)
-        elif error_code == ORA_CHECK_CONSTRAINT:
-            self._raise_check_violation(e, error_code)
-        elif error_code in {1400, 1407}:
-            self._raise_not_null_violation(e, error_code)
-        elif error_code and ORA_INTEGRITY_RANGE_START <= error_code < ORA_INTEGRITY_RANGE_END:
-            self._raise_integrity_error(e, error_code)
-        elif error_code in {1017, 12154, 12541, 12545, 12514, 12505}:
-            self._raise_connection_error(e, error_code)
-        elif error_code in {60, 8176}:
-            self._raise_transaction_error(e, error_code)
-        elif error_code in {1722, 1858, 1840}:
-            self._raise_data_error(e, error_code)
-        elif error_code and ORA_PARSING_RANGE_START <= error_code < ORA_PARSING_RANGE_END:
-            self._raise_parsing_error(e, error_code)
-        elif error_code == ORA_TABLESPACE_FULL:
-            self._raise_operational_error(e, error_code)
-        else:
-            self._raise_generic_error(e, error_code)
-
-    def _raise_unique_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle unique constraint violation [ORA-{code:05d}]: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_foreign_key_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle foreign key constraint violation [ORA-{code:05d}]: {e}"
-        raise ForeignKeyViolationError(msg) from e
-
-    def _raise_check_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle check constraint violation [ORA-{code:05d}]: {e}"
-        raise CheckViolationError(msg) from e
-
-    def _raise_not_null_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle not-null constraint violation [ORA-{code:05d}]: {e}"
-        raise NotNullViolationError(msg) from e
-
-    def _raise_integrity_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle integrity constraint violation [ORA-{code:05d}]: {e}"
-        raise IntegrityError(msg) from e
-
-    def _raise_parsing_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle SQL syntax error [ORA-{code:05d}]: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_connection_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle connection error [ORA-{code:05d}]: {e}"
-        raise DatabaseConnectionError(msg) from e
-
-    def _raise_transaction_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle transaction error [ORA-{code:05d}]: {e}"
-        raise TransactionError(msg) from e
-
-    def _raise_data_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle data error [ORA-{code:05d}]: {e}"
-        raise DataError(msg) from e
-
-    def _raise_operational_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle operational error [ORA-{code:05d}]: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_generic_error(self, e: Any, code: "int | None") -> None:
-        msg = f"Oracle database error [ORA-{code:05d}]: {e}" if code else f"Oracle database error: {e}"
-        raise SQLSpecError(msg) from e
-
-
-class OracleAsyncExceptionHandler:
+class OracleAsyncExceptionHandler(OracleExceptionHandler):
     """Async context manager for handling Oracle database exceptions.
 
     Maps Oracle ORA-XXXXX error codes to specific SQLSpec exceptions
     for better error handling in application code.
     """
-
-    __slots__ = ()
 
     async def __aenter__(self) -> None:
         return None
@@ -322,88 +328,6 @@ class OracleAsyncExceptionHandler:
             return
         if issubclass(exc_type, oracledb.DatabaseError):
             self._map_oracle_exception(exc_val)
-
-    def _map_oracle_exception(self, e: Any) -> None:
-        """Map Oracle exception to SQLSpec exception.
-
-        Args:
-            e: oracledb.DatabaseError instance
-        """
-        error_obj = e.args[0] if e.args else None
-        if not error_obj:
-            self._raise_generic_error(e, None)
-
-        error_code = getattr(error_obj, "code", None)
-
-        if not error_code:
-            self._raise_generic_error(e, None)
-
-        if error_code == 1:
-            self._raise_unique_violation(e, error_code)
-        elif error_code in {2291, 2292}:
-            self._raise_foreign_key_violation(e, error_code)
-        elif error_code == ORA_CHECK_CONSTRAINT:
-            self._raise_check_violation(e, error_code)
-        elif error_code in {1400, 1407}:
-            self._raise_not_null_violation(e, error_code)
-        elif error_code and ORA_INTEGRITY_RANGE_START <= error_code < ORA_INTEGRITY_RANGE_END:
-            self._raise_integrity_error(e, error_code)
-        elif error_code in {1017, 12154, 12541, 12545, 12514, 12505}:
-            self._raise_connection_error(e, error_code)
-        elif error_code in {60, 8176}:
-            self._raise_transaction_error(e, error_code)
-        elif error_code in {1722, 1858, 1840}:
-            self._raise_data_error(e, error_code)
-        elif error_code and ORA_PARSING_RANGE_START <= error_code < ORA_PARSING_RANGE_END:
-            self._raise_parsing_error(e, error_code)
-        elif error_code == ORA_TABLESPACE_FULL:
-            self._raise_operational_error(e, error_code)
-        else:
-            self._raise_generic_error(e, error_code)
-
-    def _raise_unique_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle unique constraint violation [ORA-{code:05d}]: {e}"
-        raise UniqueViolationError(msg) from e
-
-    def _raise_foreign_key_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle foreign key constraint violation [ORA-{code:05d}]: {e}"
-        raise ForeignKeyViolationError(msg) from e
-
-    def _raise_check_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle check constraint violation [ORA-{code:05d}]: {e}"
-        raise CheckViolationError(msg) from e
-
-    def _raise_not_null_violation(self, e: Any, code: int) -> None:
-        msg = f"Oracle not-null constraint violation [ORA-{code:05d}]: {e}"
-        raise NotNullViolationError(msg) from e
-
-    def _raise_integrity_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle integrity constraint violation [ORA-{code:05d}]: {e}"
-        raise IntegrityError(msg) from e
-
-    def _raise_parsing_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle SQL syntax error [ORA-{code:05d}]: {e}"
-        raise SQLParsingError(msg) from e
-
-    def _raise_connection_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle connection error [ORA-{code:05d}]: {e}"
-        raise DatabaseConnectionError(msg) from e
-
-    def _raise_transaction_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle transaction error [ORA-{code:05d}]: {e}"
-        raise TransactionError(msg) from e
-
-    def _raise_data_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle data error [ORA-{code:05d}]: {e}"
-        raise DataError(msg) from e
-
-    def _raise_operational_error(self, e: Any, code: int) -> None:
-        msg = f"Oracle operational error [ORA-{code:05d}]: {e}"
-        raise OperationalError(msg) from e
-
-    def _raise_generic_error(self, e: Any, code: "int | None") -> None:
-        msg = f"Oracle database error [ORA-{code:05d}]: {e}" if code else f"Oracle database error: {e}"
-        raise SQLSpecError(msg) from e
 
 
 class OracleSyncDriver(SyncDriverAdapterBase):
