@@ -18,7 +18,7 @@ from sqlspec import sql
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.core.result import SQLResult
 
-pytestmark = [pytest.mark.asyncpg, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncpg, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 
 
 @pytest.fixture

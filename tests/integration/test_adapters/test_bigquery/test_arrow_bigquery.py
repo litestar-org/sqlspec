@@ -74,7 +74,7 @@ def test_select_to_arrow_table_format(bigquery_session: "BigQueryDriver", table_
 
     try:
         bigquery_session.execute(f"CREATE TABLE {fq_table} (id INT64, value STRING)")
-        bigquery_session.execute(f"INSERT INTO {fq_table} VALUES (1, 'a'), (2, 'b'), (3, 'c')")
+        bigquery_session.execute(f"INSERT INTO {fq_table} (id, value) VALUES (1, 'a'), (2, 'b'), (3, 'c')")
 
         result = bigquery_session.select_to_arrow(f"SELECT * FROM {fq_table}", return_format="table")
 
@@ -93,9 +93,7 @@ def test_select_to_arrow_batch_format(bigquery_session: "BigQueryDriver", table_
 
     try:
         bigquery_session.execute(f"CREATE TABLE {fq_table} (id INT64, value STRING)")
-        bigquery_session.execute(f"INSERT INTO {fq_table} VALUES (1, 'a'), (2, 'b')")
-
-        result = bigquery_session.select_to_arrow(f"SELECT * FROM {fq_table}", return_format="batch")
+        result = bigquery_session.execute(f"INSERT INTO {fq_table} (id, value) VALUES (1, 'a'), (2, 'b')")
 
         assert isinstance(result.data, pa.RecordBatch)
         assert result.rows_affected == 2
@@ -116,7 +114,7 @@ def test_select_to_arrow_with_parameters(bigquery_session: "BigQueryDriver", tab
         )
         bigquery_session.execute(
             f"""
-                INSERT INTO {fq_table} VALUES
+                INSERT INTO {fq_table} (id, name, age) VALUES
                 (1, 'Alice', 30), (2, 'Bob', 25), (3, 'Charlie', 35)
             """
         )
@@ -155,7 +153,7 @@ def test_select_to_arrow_null_handling(bigquery_session: "BigQueryDriver", table
 
     try:
         bigquery_session.execute(f"CREATE TABLE {fq_table} (id INT64, value STRING)")
-        bigquery_session.execute(f"INSERT INTO {fq_table} VALUES (1, 'a'), (2, NULL), (3, 'c')")
+        bigquery_session.execute(f"INSERT INTO {fq_table} (id, value) VALUES (1, 'a'), (2, NULL), (3, 'c')")
 
         result = bigquery_session.select_to_arrow(f"SELECT * FROM {fq_table} ORDER BY id")
 
@@ -191,7 +189,7 @@ def test_fallback_to_conversion_path(bigquery_session: "BigQueryDriver", table_s
 
     try:
         bigquery_session.execute(f"CREATE TABLE {fq_table} (id INT64, value STRING)")
-        bigquery_session.execute(f"INSERT INTO {fq_table} VALUES (1, 'test')")
+        bigquery_session.execute(f"INSERT INTO {fq_table} (id, value) VALUES (1, 'test')")
 
         result = bigquery_session.select_to_arrow(f"SELECT * FROM {fq_table}", native_only=False)
 
@@ -211,7 +209,7 @@ def test_select_to_arrow_to_polars(bigquery_session: "BigQueryDriver", table_sch
 
     try:
         bigquery_session.execute(f"CREATE TABLE {fq_table} (id INT64, value STRING)")
-        bigquery_session.execute(f"INSERT INTO {fq_table} VALUES (1, 'a'), (2, 'b')")
+        bigquery_session.execute(f"INSERT INTO {fq_table} (id, value) VALUES (1, 'a'), (2, 'b')")
 
         result = bigquery_session.select_to_arrow(f"SELECT * FROM {fq_table} ORDER BY id")
         df = result.to_polars()

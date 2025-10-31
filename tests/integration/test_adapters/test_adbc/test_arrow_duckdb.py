@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.adbc import AdbcDriver
 
 pytestmark = [
-    pytest.mark.xdist_group("adbc"),
+    pytest.mark.xdist_group("duckdb"),
     pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed"),
 ]
 

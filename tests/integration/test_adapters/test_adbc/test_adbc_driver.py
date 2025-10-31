@@ -347,6 +347,7 @@ def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> 
     assert agg_result.data[0]["total"] == 300
 
 
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     """Test that FOR UPDATE is stripped by sqlglot for ADBC SQLite backend."""
     from sqlspec import sql
@@ -379,6 +380,7 @@ def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     assert result.data[0]["name"] == "adbc_lock"
 
 
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     """Test that FOR SHARE is stripped by sqlglot for ADBC SQLite backend."""
     from sqlspec import sql
@@ -411,6 +413,7 @@ def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     assert result.data[0]["name"] == "adbc_share"
 
 
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_for_update_skip_locked_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     """Test that FOR UPDATE SKIP LOCKED generates SQL for ADBC."""
     from sqlspec import sql
