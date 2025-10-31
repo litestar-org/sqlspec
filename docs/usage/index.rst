@@ -52,7 +52,7 @@ Quick Reference
 **Basic Query Execution**
 
 .. literalinclude:: /docs/examples/usage/test_index_1.py
-   :langage: python
+   :language: python
    :caption: ``basic query execution``
    :lines: 4-16
    :dedent: 2
@@ -61,8 +61,8 @@ Quick Reference
 **Using the Query Builder**
 
 .. literalinclude:: /docs/examples/usage/test_index_2.py
-   :langage: python
-   :caption: ``using the qery builder``
+   :language: python
+   :caption: ``using the query builder``
    :lines: 19-21
    :dedent: 2
 
@@ -70,8 +70,8 @@ Quick Reference
 **Loading from SQL Files**
 
 .. literalinclude:: /docs/examples/usage/test_index_3.py
-   :langage: python
-   :caption: ``loading fron sql files``
+   :language: python
+   :caption: ``loading from sql files``
    :lines: 25-29
    :dedent: 2
 
