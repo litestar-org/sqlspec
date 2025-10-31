@@ -60,12 +60,10 @@ async def test_select_to_arrow_batch_format(asyncpg_async_driver: AsyncpgDriver)
     await asyncpg_async_driver.execute("INSERT INTO arrow_batch_test VALUES (1, 'a'), (2, 'b')")
 
     result = await asyncpg_async_driver.select_to_arrow(
-        "SELECT * FROM arrow_batch_test ORDER BY id", return_format="batches"
+        "SELECT * FROM arrow_batch_test ORDER BY id", return_format="batch"
     )
 
-    assert isinstance(result.data, list)
-    for batch in result.data:
-        assert isinstance(batch, pa.RecordBatch)
+    assert isinstance(result.data, pa.RecordBatch)
     assert result.rows_affected == 2
 
     await asyncpg_async_driver.execute("DROP TABLE IF EXISTS arrow_batch_test CASCADE")

@@ -31,10 +31,10 @@ def test_select_to_arrow_basic(bigquery_session: "BigQueryDriver", table_schema_
     """Test basic select_to_arrow functionality."""
     import pyarrow as pa
 
-    try:
-        table_name = f"test_arrow_{uuid4().hex[:8]}"
-        fq_table = _qualified_table(table_schema_prefix, table_name)
+    table_name = f"test_arrow_{uuid4().hex[:8]}"
+    fq_table = _qualified_table(table_schema_prefix, table_name)
 
+    try:
         bigquery_session.execute(
             f"""
                 CREATE TABLE {fq_table} (
@@ -69,10 +69,10 @@ def test_select_to_arrow_table_format(bigquery_session: "BigQueryDriver", table_
     """Test select_to_arrow with table return format."""
     import pyarrow as pa
 
-    try:
-        table_name = f"test_arrow_{uuid4().hex[:8]}"
-        fq_table = _qualified_table(table_schema_prefix, table_name)
+    table_name = f"test_arrow_{uuid4().hex[:8]}"
+    fq_table = _qualified_table(table_schema_prefix, table_name)
 
+    try:
         bigquery_session.execute(f"CREATE TABLE {fq_table} (id INT64, value STRING)")
         bigquery_session.execute(f"INSERT INTO {fq_table} VALUES (1, 'a'), (2, 'b'), (3, 'c')")
 
@@ -88,10 +88,10 @@ def test_select_to_arrow_batch_format(bigquery_session: "BigQueryDriver", table_
     """Test select_to_arrow with batch return format."""
     import pyarrow as pa
 
-    try:
-        table_name = f"test_arrow_{uuid4().hex[:8]}"
-        fq_table = _qualified_table(table_schema_prefix, table_name)
+    table_name = f"test_arrow_{uuid4().hex[:8]}"
+    fq_table = _qualified_table(table_schema_prefix, table_name)
 
+    try:
         bigquery_session.execute(f"CREATE TABLE {fq_table} (id INT64, value STRING)")
         bigquery_session.execute(f"INSERT INTO {fq_table} VALUES (1, 'a'), (2, 'b')")
 
@@ -105,10 +105,10 @@ def test_select_to_arrow_batch_format(bigquery_session: "BigQueryDriver", table_
 
 def test_select_to_arrow_with_parameters(bigquery_session: "BigQueryDriver", table_schema_prefix: str) -> None:
     """Test select_to_arrow with query parameters."""
-    try:
-        table_name = f"test_arrow_{uuid4().hex[:8]}"
-        fq_table = _qualified_table(table_schema_prefix, table_name)
+    table_name = f"test_arrow_{uuid4().hex[:8]}"
+    fq_table = _qualified_table(table_schema_prefix, table_name)
 
+    try:
         bigquery_session.execute(
             f"""
                 CREATE TABLE {fq_table} (id INT64, name STRING, age INT64)

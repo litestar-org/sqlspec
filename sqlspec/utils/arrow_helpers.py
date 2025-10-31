@@ -14,7 +14,7 @@ __all__ = ("convert_dict_to_arrow",)
 
 def convert_dict_to_arrow(
     data: "list[dict[str, Any]]",
-    return_format: Literal["table", "reader", "batches"] = "table",
+    return_format: Literal["table", "reader", "batch", "batches"] = "table",
     batch_size: int | None = None,
 ) -> "ArrowTable | ArrowRecordBatch":
     """Convert list of dictionaries to Arrow Table or RecordBatch.
@@ -25,9 +25,9 @@ def convert_dict_to_arrow(
 
     Args:
         data: List of dictionaries (one per row).
-        return_format: Output format - "table" for Table, "batches" for RecordBatch.
+        return_format: Output format - "table" for Table, "batch"/"batches" for RecordBatch.
             "reader" is converted to "table" (streaming handled at driver level).
-        batch_size: Chunk size for batching (used when return_format="batches").
+        batch_size: Chunk size for batching (used when return_format="batch"/"batches").
 
     Returns:
         ArrowTable or ArrowRecordBatch depending on return_format.
@@ -57,7 +57,7 @@ def convert_dict_to_arrow(
         empty_schema = pa.schema([])
         empty_table = pa.Table.from_pydict({}, schema=empty_schema)
 
-        if return_format == "batches":
+        if return_format in ("batch", "batches"):
             # Create empty RecordBatch
             batches = empty_table.to_batches()
             return batches[0] if batches else pa.RecordBatch.from_pydict({})
@@ -72,7 +72,7 @@ def convert_dict_to_arrow(
     arrow_table = pa.Table.from_pydict(columns)
 
     # Return appropriate format
-    if return_format == "batches":
+    if return_format in ("batch", "batches"):
         # Convert table to single RecordBatch
         batches = arrow_table.to_batches()
         return batches[0] if batches else pa.RecordBatch.from_pydict({})

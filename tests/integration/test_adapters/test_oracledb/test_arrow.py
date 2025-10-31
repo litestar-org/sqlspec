@@ -253,6 +253,6 @@ async def test_select_to_arrow_clob_handling(oracle_async_session: "OracleAsyncD
 
         df = result.to_pandas()
         assert len(df) == 1
-        assert isinstance(df["DESCRIPTION"].iloc[0], str)
+        assert isinstance(df["description"].iloc[0], str)
     finally:
         await _safe_drop_table(driver, "arrow_clob_test")

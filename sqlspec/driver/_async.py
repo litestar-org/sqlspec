@@ -367,10 +367,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
             statement: SQL query string, Statement, or QueryBuilder
             *parameters: Query parameters (same format as execute()/select())
             statement_config: Optional statement configuration override
-            return_format: "table" for pyarrow.Table (default), "reader" for RecordBatchReader,
-                         "batches" for iterator of RecordBatches
+            return_format: "table" for pyarrow.Table (default), "batch" for single RecordBatch,
+                         "batches" for iterator of RecordBatches, "reader" for RecordBatchReader
             native_only: If True, raise error if native Arrow unavailable (default: False)
-            batch_size: Rows per batch for "batches" format (default: None = all rows)
+            batch_size: Rows per batch for "batch"/"batches" format (default: None = all rows)
             arrow_schema: Optional pyarrow.Schema for type casting
             **kwargs: Additional keyword arguments
 

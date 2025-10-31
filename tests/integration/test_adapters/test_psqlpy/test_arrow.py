@@ -63,11 +63,12 @@ async def test_select_to_arrow_batch_format(psqlpy_driver: "PsqlpyDriver") -> No
     import pyarrow as pa
 
     driver = psqlpy_driver
+    await driver.execute("DROP TABLE IF EXISTS arrow_batch_test CASCADE")
     await driver.execute("CREATE TABLE arrow_batch_test (id INTEGER, value TEXT)")
     await driver.execute("INSERT INTO arrow_batch_test VALUES (1, 'a'), (2, 'b')")
 
     try:
-        result = await driver.select_to_arrow("SELECT * FROM arrow_batch_test ORDER BY id", return_format="batches")
+        result = await driver.select_to_arrow("SELECT * FROM arrow_batch_test ORDER BY id", return_format="batch")
 
         assert isinstance(result.data, pa.RecordBatch)
         assert result.rows_affected == 2
