@@ -4,6 +4,8 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
 
+pytestmark = pytest.mark.xdist_group("sqlite")
+
 
 @pytest.fixture
 def sqlite_arrow_config() -> SqliteConfig:

@@ -9,6 +9,8 @@ from sqlspec.driver import VersionInfo
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.driver import AdbcDriver
 
+pytestmark = pytest.mark.xdist_group("adbc")
+
 
 @pytest.mark.adbc
 def test_adbc_data_dictionary_version_detection(adbc_sync_driver: "AdbcDriver") -> None:

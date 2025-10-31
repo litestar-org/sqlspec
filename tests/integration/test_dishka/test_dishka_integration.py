@@ -12,6 +12,8 @@ from sqlspec.cli import add_migration_commands
 
 dishka = pytest.importorskip("dishka")
 
+pytestmark = pytest.mark.xdist_group("dishka")
+
 
 def test_simple_sync_dishka_provider(simple_sqlite_provider: Any) -> None:
     """Test CLI with a simple synchronous Dishka provider."""

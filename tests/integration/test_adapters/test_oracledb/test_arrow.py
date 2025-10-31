@@ -7,6 +7,8 @@ from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig
 
+pytestmark = pytest.mark.xdist_group("oracle")
+
 
 @pytest.fixture
 async def oracle_arrow_config(oracle_23ai_service: OracleService) -> AsyncGenerator[OracleAsyncConfig, None]:

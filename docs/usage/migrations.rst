@@ -29,6 +29,156 @@ Initialize Migrations
    # Apply migrations
    sqlspec --config myapp.config upgrade
 
+Programmatic API (Recommended)
+===============================
+
+SQLSpec provides migration convenience methods directly on config classes, eliminating
+the need to instantiate separate command objects.
+
+Async Adapters
+--------------
+
+For async adapters (AsyncPG, Asyncmy, Aiosqlite, Psqlpy), migration methods return awaitables:
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+   config = AsyncpgConfig(
+       pool_config={"dsn": "postgresql://user:pass@localhost/mydb"},
+       migration_config={
+           "enabled": True,
+           "script_location": "migrations",
+       }
+   )
+
+   # Apply migrations
+   await config.migrate_up("head")
+   # Or use the alias
+   await config.upgrade("head")
+
+   # Rollback one revision
+   await config.migrate_down("-1")
+   # Or use the alias
+   await config.downgrade("-1")
+
+   # Check current version
+   current = await config.get_current_migration(verbose=True)
+   print(current)
+
+   # Create new migration
+   await config.create_migration("add users table", file_type="sql")
+
+   # Initialize migrations directory
+   await config.init_migrations()
+
+   # Stamp database to specific revision
+   await config.stamp_migration("0003")
+
+   # Convert timestamp to sequential migrations
+   await config.fix_migrations(dry_run=False, update_database=True, yes=True)
+
+Sync Adapters
+-------------
+
+For sync adapters (SQLite, DuckDB), migration methods execute immediately without await:
+
+.. code-block:: python
+
+   from sqlspec.adapters.sqlite import SqliteConfig
+
+   config = SqliteConfig(
+       pool_config={"database": "myapp.db"},
+       migration_config={
+           "enabled": True,
+           "script_location": "migrations",
+       }
+   )
+
+   # Apply migrations (no await needed)
+   config.migrate_up("head")
+   # Or use the alias
+   config.upgrade("head")
+
+   # Rollback one revision
+   config.migrate_down("-1")
+   # Or use the alias
+   config.downgrade("-1")
+
+   # Check current version
+   current = config.get_current_migration(verbose=True)
+   print(current)
+
+   # Create new migration
+   config.create_migration("add users table", file_type="sql")
+
+   # Initialize migrations directory
+   config.init_migrations()
+
+   # Stamp database to specific revision
+   config.stamp_migration("0003")
+
+   # Convert timestamp to sequential migrations
+   config.fix_migrations(dry_run=False, update_database=True, yes=True)
+
+Available Methods
+-----------------
+
+All database configs (sync and async) provide these migration methods:
+
+``migrate_up(revision="head", allow_missing=False, auto_sync=True, dry_run=False)``
+   Apply migrations up to the specified revision.
+
+   Also available as ``upgrade()`` alias.
+
+``migrate_down(revision="-1", dry_run=False)``
+   Rollback migrations down to the specified revision.
+
+   Also available as ``downgrade()`` alias.
+
+``get_current_migration(verbose=False)``
+   Get the current migration version.
+
+``create_migration(message, file_type="sql")``
+   Create a new migration file.
+
+``init_migrations(directory=None, package=None)``
+   Initialize the migrations directory structure.
+
+``stamp_migration(revision)``
+   Stamp the database to a specific revision without running migrations.
+
+``fix_migrations(dry_run=False, update_database=True, yes=False)``
+   Convert timestamp migrations to sequential format.
+
+Command Classes (Advanced)
+---------------------------
+
+For advanced use cases requiring custom logic, you can still use command classes directly:
+
+.. code-block:: python
+
+   from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+   config = AsyncpgConfig(
+       pool_config={"dsn": "postgresql://..."},
+       migration_config={"script_location": "migrations"}
+   )
+
+   # Create commands instance
+   commands = AsyncMigrationCommands(config)
+
+   # Use commands directly
+   await commands.upgrade("head")
+
+This approach is useful when:
+
+- Building custom migration runners
+- Implementing migration lifecycle hooks
+- Integrating with third-party workflow tools
+- Need fine-grained control over migration execution
+
 Configuration
 =============
 
