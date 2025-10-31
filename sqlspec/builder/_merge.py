@@ -9,20 +9,25 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
 from itertools import starmap
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import trait
 from sqlglot import exp
 from sqlglot.errors import ParseError
 from typing_extensions import Self
 
+if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.core.result import SQLResult
-from sqlspec.exceptions import SQLBuilderError
+from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.type_guards import has_query_builder_parameters
 
 __all__ = ("Merge",)
+
+MERGE_UNSUPPORTED_DIALECTS = frozenset({"mysql", "sqlite", "duckdb"})
 
 
 class _MergeAssignmentMixin:
@@ -747,3 +752,51 @@ class Merge(
             A new sqlglot Merge expression with empty clauses.
         """
         return exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
+
+    def _validate_dialect_support(self) -> None:
+        """Validate that the current dialect supports MERGE statements.
+
+        Raises:
+            DialectNotSupportedError: If the dialect does not support MERGE.
+        """
+        dialect = self.dialect_name
+        if dialect and dialect in MERGE_UNSUPPORTED_DIALECTS:
+            self._raise_dialect_not_supported(dialect)
+
+    def _raise_dialect_not_supported(self, dialect: str) -> None:
+        """Raise error with helpful alternatives for unsupported dialects.
+
+        Args:
+            dialect: Name of the unsupported dialect.
+
+        Raises:
+            DialectNotSupportedError: Always raised with dialect-specific message.
+        """
+        alternatives = {
+            "mysql": "INSERT ... ON DUPLICATE KEY UPDATE",
+            "sqlite": "INSERT ... ON CONFLICT DO UPDATE",
+            "duckdb": "INSERT ... ON CONFLICT DO UPDATE",
+        }
+
+        alternative = alternatives.get(dialect, "INSERT ... ON CONFLICT or equivalent")
+        msg = (
+            f"MERGE statements are not supported in {dialect.upper()}. "
+            f"Use {alternative} instead. "
+            f"See the SQLSpec documentation for examples."
+        )
+        raise DialectNotSupportedError(msg)
+
+    def build(self, dialect: "DialectType" = None) -> "Any":
+        """Build MERGE statement with dialect validation.
+
+        Args:
+            dialect: Optional dialect override for SQL generation.
+
+        Returns:
+            Built statement object.
+
+        Raises:
+            DialectNotSupportedError: If dialect does not support MERGE.
+        """
+        self._validate_dialect_support()
+        return super().build(dialect=dialect)

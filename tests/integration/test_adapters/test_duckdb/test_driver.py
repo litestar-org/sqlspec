@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 import pytest
 
-from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
+from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.core.result import SQLResult
 
 pytestmark = pytest.mark.xdist_group("duckdb")
@@ -14,29 +14,24 @@ ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
 @pytest.fixture
-def duckdb_session() -> Generator[DuckDBDriver, None, None]:
-    """Create a DuckDB session with a test table.
+def duckdb_session(duckdb_basic_session: DuckDBDriver) -> Generator[DuckDBDriver, None, None]:
+    """Create a DuckDB session with a test table."""
 
-    Returns:
-        A DuckDB session with a test table.
-    """
-    adapter = DuckDBConfig(pool_config={"database": ":memory:"})
+    duckdb_basic_session.execute_script("CREATE SEQUENCE IF NOT EXISTS test_id_seq START 1")
+    duckdb_basic_session.execute_script(
+        """
+            CREATE TABLE IF NOT EXISTS test_table (
+                id INTEGER PRIMARY KEY DEFAULT nextval('test_id_seq'),
+                name TEXT NOT NULL
+            )
+        """
+    )
+
     try:
-        with adapter.provide_session() as session:
-            session.execute_script("CREATE SEQUENCE IF NOT EXISTS test_id_seq START 1")
-            create_table_sql = """
-                CREATE TABLE IF NOT EXISTS test_table (
-                    id INTEGER PRIMARY KEY DEFAULT nextval('test_id_seq'),
-                    name TEXT NOT NULL
-                )
-            """
-            session.execute_script(create_table_sql)
-            yield session
-
-            session.execute_script("DROP TABLE IF EXISTS test_table")
-            session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq")
+        yield duckdb_basic_session
     finally:
-        adapter.close_pool()
+        duckdb_basic_session.execute_script("DROP TABLE IF EXISTS test_table")
+        duckdb_basic_session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq")
 
 
 @pytest.mark.parametrize(

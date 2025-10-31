@@ -5,7 +5,6 @@ from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.adapters.psqlpy.litestar.store import PsqlpyStore
@@ -14,26 +13,18 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psqlpy, pytest.ma
 
 
 @pytest.fixture
-async def psqlpy_store(postgres_service: PostgresService) -> "AsyncGenerator[PsqlpyStore, None]":
+async def psqlpy_store(psqlpy_config: PsqlpyConfig) -> "AsyncGenerator[PsqlpyStore, None]":
     """Create Psqlpy store with test database."""
-    config = PsqlpyConfig(
-        pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "username": postgres_service.user,
-            "password": postgres_service.password,
-            "db_name": postgres_service.database,
-        },
-        extension_config={"litestar": {"session_table": "test_psqlpy_sessions"}},
-    )
-    store = PsqlpyStore(config)
+    psqlpy_config.extension_config = {"litestar": {"session_table": "test_psqlpy_sessions"}}
+    store = PsqlpyStore(psqlpy_config)
+    await store.create_table()
     try:
-        await store.create_table()
         yield store
-        await store.delete_all()
     finally:
-        if config.pool_instance:
-            await config.close_pool()
+        try:
+            await store.delete_all()
+        except Exception:  # pragma: no cover - cleanup safeguard
+            pass
 
 
 async def test_store_create_table(psqlpy_store: PsqlpyStore) -> None:

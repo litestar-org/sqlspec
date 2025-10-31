@@ -506,3 +506,144 @@ def test_merge_using_empty_list_raises_error() -> None:
     """Test MERGE with empty list raises appropriate error."""
     with pytest.raises(SQLBuilderError, match="Cannot create USING clause from empty list"):
         sql.merge().into("products").using([], alias="src")
+
+
+def test_merge_mysql_dialect_raises_error() -> None:
+    """Test MERGE with MySQL dialect raises DialectNotSupportedError."""
+    from sqlspec.exceptions import DialectNotSupportedError
+
+    query = (
+        sql.merge(dialect="mysql")
+        .into("products")
+        .using({"id": 1, "name": "Widget"}, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name")
+    )
+
+    with pytest.raises(DialectNotSupportedError, match="MERGE statements are not supported in MYSQL"):
+        query.build()
+
+
+def test_merge_sqlite_dialect_raises_error() -> None:
+    """Test MERGE with SQLite dialect raises DialectNotSupportedError."""
+    from sqlspec.exceptions import DialectNotSupportedError
+
+    query = (
+        sql.merge(dialect="sqlite")
+        .into("products")
+        .using({"id": 1, "name": "Widget"}, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name")
+    )
+
+    with pytest.raises(DialectNotSupportedError, match="MERGE statements are not supported in SQLITE"):
+        query.build()
+
+
+def test_merge_duckdb_dialect_raises_error() -> None:
+    """Test MERGE with DuckDB dialect raises DialectNotSupportedError."""
+    from sqlspec.exceptions import DialectNotSupportedError
+
+    query = (
+        sql.merge(dialect="duckdb")
+        .into("products")
+        .using({"id": 1, "name": "Widget"}, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name")
+    )
+
+    with pytest.raises(DialectNotSupportedError, match="MERGE statements are not supported in DUCKDB"):
+        query.build()
+
+
+def test_merge_mysql_error_suggests_alternative() -> None:
+    """Test MySQL error message includes INSERT ON DUPLICATE KEY suggestion."""
+    from sqlspec.exceptions import DialectNotSupportedError
+
+    query = sql.merge(dialect="mysql").into("products").using({"id": 1}, alias="src").on("t.id = src.id")
+
+    with pytest.raises(DialectNotSupportedError, match=r"INSERT \.\.\. ON DUPLICATE KEY UPDATE"):
+        query.build()
+
+
+def test_merge_sqlite_error_suggests_alternative() -> None:
+    """Test SQLite error message includes INSERT ON CONFLICT suggestion."""
+    from sqlspec.exceptions import DialectNotSupportedError
+
+    query = sql.merge(dialect="sqlite").into("products").using({"id": 1}, alias="src").on("t.id = src.id")
+
+    with pytest.raises(DialectNotSupportedError, match=r"INSERT \.\.\. ON CONFLICT DO UPDATE"):
+        query.build()
+
+
+def test_merge_postgres_dialect_allowed() -> None:
+    """Test MERGE with PostgreSQL dialect is allowed."""
+    query = (
+        sql.merge(dialect="postgres")
+        .into("products")
+        .using({"id": 1, "name": "Widget"}, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name")
+    )
+
+    stmt = query.build()
+    assert "MERGE INTO" in stmt.sql.upper()
+
+
+def test_merge_oracle_dialect_allowed() -> None:
+    """Test MERGE with Oracle dialect is allowed."""
+    query = (
+        sql.merge(dialect="oracle")
+        .into("products")
+        .using({"id": 1, "name": "Widget"}, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name")
+    )
+
+    stmt = query.build()
+    assert "MERGE INTO" in stmt.sql.upper()
+
+
+def test_merge_no_dialect_allowed() -> None:
+    """Test MERGE with no dialect specified is allowed."""
+    query = (
+        sql.merge()
+        .into("products")
+        .using({"id": 1, "name": "Widget"}, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name")
+    )
+
+    stmt = query.build()
+    assert "MERGE INTO" in stmt.sql.upper()
+
+
+def test_merge_property_shorthand() -> None:
+    """Test sql.merge_ property returns new Merge builder."""
+    from sqlspec.builder._merge import Merge
+
+    query = (
+        sql.merge_.into("products", alias="t")
+        .using({"id": 1, "name": "Widget"}, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name")
+        .when_not_matched_then_insert(id="src.id", name="src.name")
+    )
+
+    assert isinstance(query, Merge)
+
+    built = query.build()
+    assert "MERGE INTO" in built.sql
+    assert "products" in built.sql.lower()
+
+
+def test_merge_property_creates_new_instance() -> None:
+    """Test sql.merge_ property returns new instance each time."""
+    from sqlspec.builder._merge import Merge
+
+    builder1 = sql.merge_
+    builder2 = sql.merge_
+
+    assert builder1 is not builder2
+    assert isinstance(builder1, Merge)
+    assert isinstance(builder2, Merge)

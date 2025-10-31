@@ -1,90 +1,14 @@
 """Integration tests for ADBC driver implementation."""
 
-from collections.abc import Generator
 from typing import Any, Literal
 
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
+from sqlspec.adapters.adbc import AdbcDriver
 from sqlspec.core.result import SQLResult
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
-
-
-@pytest.fixture
-def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
-    """Create an ADBC PostgreSQL session with test table."""
-    config = AdbcConfig(
-        connection_config={
-            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql",
-        }
-    )
-
-    with config.provide_session() as session:
-        session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_table (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        yield session
-        try:
-            session.execute_script("DROP TABLE IF EXISTS test_table")
-        except Exception:
-            try:
-                session.execute("ROLLBACK")
-                session.execute_script("DROP TABLE IF EXISTS test_table")
-            except Exception:
-                pass
-
-
-@pytest.fixture
-def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
-    """Create an ADBC SQLite session with test table."""
-    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
-
-    with config.provide_session() as session:
-        session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_table (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        yield session
-
-
-@pytest.fixture
-def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
-    """Create an ADBC DuckDB session with test table."""
-    try:
-        config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
-
-        with config.provide_session() as session:
-            session.execute_script("""
-                CREATE TABLE IF NOT EXISTS test_table (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    value INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            yield session
-    except Exception as e:
-        if (
-            "cannot open shared object file" in str(e)
-            or "No module named" in str(e)
-            or "Failed to import connect function" in str(e)
-            or "Could not configure connection" in str(e)
-        ):
-            pytest.skip(f"DuckDB ADBC driver not available: {e}")
-        raise
 
 
 @pytest.mark.xdist_group("postgres")

@@ -5,16 +5,13 @@ covering all core functionality including CRUD operations, parameter styles,
 transaction management, and error handling.
 """
 
-from __future__ import annotations
-
 import math
-from collections.abc import AsyncGenerator
 from typing import Literal
 
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL
 from sqlspec.utils.serializers import from_json, to_json
@@ -25,7 +22,7 @@ pytestmark = pytest.mark.xdist_group("mysql")
 
 
 @pytest.fixture
-async def asyncmy_driver(asyncmy_session: AsyncmyDriver) -> AsyncmyDriver:
+async def asyncmy_driver(asyncmy_clean_driver: AsyncmyDriver) -> AsyncmyDriver:
     """Create and manage test table lifecycle."""
 
     create_sql = """
@@ -36,30 +33,10 @@ async def asyncmy_driver(asyncmy_session: AsyncmyDriver) -> AsyncmyDriver:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """
-    await asyncmy_session.execute_script(create_sql)
+    await asyncmy_clean_driver.execute_script(create_sql)
+    await asyncmy_clean_driver.execute_script("TRUNCATE TABLE test_table")
 
-    await asyncmy_session.execute_script("TRUNCATE TABLE test_table")
-
-    return asyncmy_session
-
-
-@pytest.fixture
-async def asyncmy_session(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyDriver, None]:
-    """Create an asyncmy session with test database."""
-    config = AsyncmyConfig(
-        pool_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-        },
-        statement_config=asyncmy_statement_config,
-    )
-
-    async with config.provide_session() as session:
-        yield session
+    return asyncmy_clean_driver
 
 
 async def test_asyncmy_basic_crud(asyncmy_driver: AsyncmyDriver) -> None:

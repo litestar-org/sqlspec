@@ -1,11 +1,8 @@
 """Exception handling integration tests for psqlpy adapter."""
 
-from collections.abc import AsyncGenerator
-
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver
+from sqlspec.adapters.psqlpy import PsqlpyDriver
 from sqlspec.exceptions import (
     CheckViolationError,
     ForeignKeyViolationError,
@@ -18,20 +15,10 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-async def psqlpy_exception_session(postgres_service: PostgresService) -> AsyncGenerator[PsqlpyDriver, None]:
-    """Create a psqlpy session for exception testing."""
-    config = PsqlpyConfig(
-        pool_config={
-            "dsn": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "max_db_pool_size": 5,
-        }
-    )
+async def psqlpy_exception_session(psqlpy_driver: PsqlpyDriver) -> PsqlpyDriver:
+    """Reuse shared psqlpy driver for exception scenarios."""
 
-    try:
-        async with config.provide_session() as session:
-            yield session
-    finally:
-        await config.close_pool()
+    return psqlpy_driver
 
 
 async def test_unique_violation(psqlpy_exception_session: PsqlpyDriver) -> None:

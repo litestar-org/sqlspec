@@ -4,9 +4,12 @@ Provides a fluent interface for building SQL DELETE queries with
 parameter binding and validation.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
+
+if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder._dml import DeleteFromClauseMixin
@@ -59,8 +62,11 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
         """
         return exp.Delete()
 
-    def build(self) -> "SafeQuery":
+    def build(self, dialect: "DialectType" = None) -> "SafeQuery":
         """Build the DELETE query with validation.
+
+        Args:
+            dialect: Optional dialect override for SQL generation.
 
         Returns:
             SafeQuery: The built query with SQL and parameters.
@@ -73,4 +79,4 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
             msg = "DELETE requires a table to be specified. Use from() to set the table."
             raise SQLBuilderError(msg)
 
-        return super().build()
+        return super().build(dialect=dialect)

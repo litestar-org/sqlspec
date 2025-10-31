@@ -1,7 +1,5 @@
 """Integration tests for asyncpg driver implementation."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
@@ -17,31 +15,24 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-async def asyncpg_session(postgres_service: PostgresService) -> AsyncGenerator[AsyncpgDriver, None]:
+async def asyncpg_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncGenerator[AsyncpgDriver, None]:
     """Create an asyncpg session with test table."""
-    config = AsyncpgConfig(
-        pool_config={
-            "dsn": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "min_size": 1,
-            "max_size": 5,
-        }
-    )
 
     try:
-        async with config.provide_session() as session:
-            await session.execute_script("""
+        await asyncpg_async_driver.execute_script(
+            """
                 CREATE TABLE IF NOT EXISTS test_table (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     value INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """)
-            yield session
-
-            await session.execute_script("DROP TABLE IF EXISTS test_table")
+            """
+        )
+        await asyncpg_async_driver.execute_script("TRUNCATE TABLE test_table")
+        yield asyncpg_async_driver
     finally:
-        await config.close_pool()
+        await asyncpg_async_driver.execute_script("DROP TABLE IF EXISTS test_table")
 
 
 async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
@@ -658,7 +649,6 @@ async def test_for_update_skip_locked(postgres_service: PostgresService) -> None
     import asyncio
 
     from sqlspec import sql
-    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
     config = AsyncpgConfig(
         pool_config={
