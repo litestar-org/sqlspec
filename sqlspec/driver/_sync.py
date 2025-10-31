@@ -1,7 +1,7 @@
 """Synchronous driver protocol implementation."""
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
 from sqlspec.core import SQL, create_arrow_result
 from sqlspec.driver._common import (
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
-    from sqlspec.typing import SchemaT, StatementParameters
+    from sqlspec.typing import ArrowReturnFormat, SchemaT, StatementParameters
 
 _LOGGER_NAME: Final[str] = "sqlspec"
 logger = get_logger(_LOGGER_NAME)
@@ -350,7 +350,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: "Literal['table', 'reader', 'batch', 'batches']" = "table",
+        return_format: "ArrowReturnFormat" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,
@@ -412,7 +412,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
                 msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
                 raise TypeError(msg)
 
-            arrow_data = arrow_data.cast(arrow_schema)  # pyright: ignore
+            arrow_data = arrow_data.cast(arrow_schema)  # type: ignore[union-attr]
 
         return create_arrow_result(
             statement=result.statement,

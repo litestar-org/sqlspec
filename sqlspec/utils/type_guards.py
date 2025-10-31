@@ -287,7 +287,7 @@ def is_dataclass(obj: Any) -> "TypeGuard[DataclassProtocol]":
     """
     if isinstance(obj, type):
         try:
-            _ = obj.__dataclass_fields__
+            _ = obj.__dataclass_fields__  # type: ignore[attr-defined]
         except AttributeError:
             return False
         else:
@@ -509,7 +509,7 @@ def get_msgspec_rename_config(schema_type: type) -> "str | None":
 
     from msgspec import structs
 
-    fields = structs.fields(schema_type)
+    fields = structs.fields(schema_type)  # type: ignore[arg-type]
     if not fields:
         return None
 

@@ -11,10 +11,14 @@ from oracledb import AsyncCursor, Cursor
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
 from sqlspec.adapters.oracledb.type_converter import OracleTypeConverter
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.result import create_arrow_result
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import (
+    SQL,
+    ParameterStyle,
+    ParameterStyleConfig,
+    StatementConfig,
+    create_arrow_result,
+    get_cache_config,
+)
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
@@ -41,11 +45,9 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import StatementFilter
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import Statement
-    from sqlspec.driver._common import ExecutionResult
-    from sqlspec.typing import StatementParameters
+    from sqlspec.core import SQLResult, Statement, StatementFilter
+    from sqlspec.driver import ExecutionResult
+    from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 logger = logging.getLogger(__name__)
 
@@ -524,7 +526,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
+        return_format: "ArrowReturnFormat" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,
@@ -810,7 +812,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
+        return_format: "ArrowReturnFormat" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,
