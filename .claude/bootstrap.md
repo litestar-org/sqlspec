@@ -507,7 +507,7 @@ Claude uses a **multi-agent system** where specialized agents handle specific ph
 
 ## Workspace Structure
 
-```
+```sh
 
 specs/active/{{slug}}/
 ├── prd.md          # Product Requirements Document
@@ -530,6 +530,7 @@ specs/active/{{slug}}/
 ## Development Commands
 
 ### Build
+
 ```bash
 {build_commands}
 ```
@@ -726,6 +727,7 @@ Grep(pattern="class.*Service", path="{source_dir}")
 ### Step 2: Deep Analysis (MANDATORY - Use Best Available Tool)
 
 **TIER 1 (If Available): Sequential Thinking**
+
 ```python
 # Use sequential thinking for deep analysis
 # Minimum 10-15 thoughts for any non-trivial feature
@@ -739,6 +741,7 @@ mcp__sequential-thinking__sequentialthinking(
 ```
 
 **TIER 2 (If Sequential Thinking Unavailable): Zen Planner**
+
 ```python
 # Use zen.planner for structured breakdown
 mcp__zen__planner(
@@ -750,13 +753,15 @@ mcp__zen__planner(
 ```
 
 **TIER 3 (If No MCP Tools): Internal Planning**
-* Manually break down into phases
-* Document analysis in research/plan.md
-* Be extra thorough - you don't have AI assistance
+
+- Manually break down into phases
+- Document analysis in research/plan.md
+- Be extra thorough - you don't have AI assistance
 
 ### Step 3: Research Best Practices (Adaptive)
 
 **Priority Order:**
+
 1. **Internal Guides (Always First)**: Read `specs/guides/` first
 2. **Project Documentation**: Read `docs/` or `README.md`
 3. **Context7 (If Available)**: External library docs (5000+ tokens)
@@ -764,6 +769,7 @@ mcp__zen__planner(
 5. **Manual Research (Fallback)**: Read library documentation directly
 
 **Context7 Usage (If Available):**
+
 ```python
 mcp__context7__resolve-library-id(libraryName="sqlalchemy")
 mcp__context7__get-library-docs(
@@ -774,6 +780,7 @@ mcp__context7__get-library-docs(
 ```
 
 **WebSearch Usage (If Available):**
+
 ```python
 WebSearch(query="async database connection pooling best practices 2025")
 ```
@@ -781,6 +788,7 @@ WebSearch(query="async database connection pooling best practices 2025")
 ### Step 4: Get Consensus on Architecture (Complex Features)
 
 **If zen.consensus Available (PREFERRED)**:
+
 ```python
 mcp__zen__consensus(
     step="Evaluate architectural approaches for {{feature}}",
@@ -794,9 +802,10 @@ mcp__zen__consensus(
 ```
 
 **If Not Available**:
-* Document trade-offs manually
-* Research architectural patterns thoroughly
-* Get human review for major decisions
+
+- Document trade-offs manually
+- Research architectural patterns thoroughly
+- Get human review for major decisions
 
 ### Step 5: Create Workspace
 
@@ -811,21 +820,25 @@ Write(file_path=f"specs/active/{{slug}}/research/plan.md", content=...)
 ### Step 6: Adapt PRD Template Based on Domain Patterns
 
 **If Multi-Adapter Pattern Detected**:
-* Add "Per-Adapter Strategy" section with matrix
-* Include code examples per adapter
-* Specify performance targets per adapter type
+
+- Add "Per-Adapter Strategy" section with matrix
+- Include code examples per adapter
+- Specify performance targets per adapter type
 
 **If Service Layer Detected**:
-* Add "Service Integration Strategy" section
-* Document inter-service dependencies
+
+- Add "Service Integration Strategy" section
+- Document inter-service dependencies
 
 **If REST API Detected**:
-* Add "Endpoint Strategy" section
-* Document API design decisions
+
+- Add "Endpoint Strategy" section
+- Document API design decisions
 
 **If GraphQL Detected**:
-* Add "Schema Changes" section
-* Document resolver strategy
+
+- Add "Schema Changes" section
+- Document resolver strategy
 
 ### Step 7: Write Comprehensive PRD
 
@@ -1219,6 +1232,7 @@ Edit(file_path="specs/active/{{slug}}/recovery.md", ...)
 ✅ **90%+ coverage achieved**
 ✅ All tests pass
 ✅ Parallel execution works
+
 '''
 
 Write(file_path=".claude/agents/testing.md", content=testing_agent.format(

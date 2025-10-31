@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Oracle-specific constants
-LARGE_STRING_THRESHOLD = 3000  # Threshold for large string parameters to avoid ORA-01704
+LARGE_STRING_THRESHOLD = 4000  # Threshold for large string parameters to avoid ORA-01704
 
 _type_converter = OracleTypeConverter()
 
@@ -463,7 +463,9 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         if prepared_parameters and isinstance(prepared_parameters, dict):
             for param_name, param_value in prepared_parameters.items():
                 if isinstance(param_value, str) and len(param_value) > LARGE_STRING_THRESHOLD:
-                    cursor.setinputsizes(**{param_name: len(param_value)})
+                    clob = self.connection.createlob(oracledb.DB_TYPE_CLOB)
+                    clob.write(param_value)
+                    prepared_parameters[param_name] = clob
 
         cursor.execute(sql, prepared_parameters or {})
 
@@ -744,7 +746,9 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         if prepared_parameters and isinstance(prepared_parameters, dict):
             for param_name, param_value in prepared_parameters.items():
                 if isinstance(param_value, str) and len(param_value) > LARGE_STRING_THRESHOLD:
-                    cursor.setinputsizes(**{param_name: len(param_value)})
+                    clob = await self.connection.createlob(oracledb.DB_TYPE_CLOB)
+                    await clob.write(param_value)
+                    prepared_parameters[param_name] = clob
 
         await cursor.execute(sql, prepared_parameters or {})
 

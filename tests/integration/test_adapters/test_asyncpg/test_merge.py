@@ -63,7 +63,7 @@ async def test_asyncpg_merge_basic_update_existing(asyncpg_merge_session: Asyncp
     merge_query = (
         sql.merge(dialect="postgres")
         .into("products", alias="t")
-        .using({"id": 1, "name": "Updated Product", "price": 24.99}, alias="src")
+        .using([{"id": 1, "name": "Updated Product", "price": 24.99}], alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price")
     )
@@ -82,7 +82,7 @@ async def test_asyncpg_merge_basic_insert_new(asyncpg_merge_session: AsyncpgDriv
     merge_query = (
         sql.merge(dialect="postgres")
         .into("products", alias="t")
-        .using({"id": 10, "name": "New Product", "price": 49.99, "stock": 20}, alias="src")
+        .using([{"id": 10, "name": "New Product", "price": 49.99, "stock": 20}], alias="src")
         .on("t.id = src.id")
         .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price", stock="src.stock")
     )
@@ -104,7 +104,7 @@ async def test_asyncpg_merge_update_and_insert(asyncpg_merge_session: AsyncpgDri
     merge_query = (
         sql.merge(dialect="postgres")
         .into("products", alias="t")
-        .using({"id": 2, "name": "Updated Second", "price": 34.99, "stock": 8}, alias="src")
+        .using([{"id": 2, "name": "Updated Second", "price": 34.99, "stock": 8}], alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock")
         .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price", stock="src.stock")
@@ -122,7 +122,7 @@ async def test_asyncpg_merge_update_and_insert(asyncpg_merge_session: AsyncpgDri
     merge_query_new = (
         sql.merge(dialect="postgres")
         .into("products", alias="t")
-        .using({"id": 20, "name": "Brand New", "price": 59.99, "stock": 25}, alias="src")
+        .using([{"id": 20, "name": "Brand New", "price": 59.99, "stock": 25}], alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price", stock="src.stock")
         .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price", stock="src.stock")
@@ -141,7 +141,7 @@ async def test_asyncpg_merge_with_expressions(asyncpg_merge_session: AsyncpgDriv
     merge_query = (
         sql.merge(dialect="postgres")
         .into("products", alias="t")
-        .using({"id": 3, "additional_stock": 5}, alias="src")
+        .using([{"id": 3, "additional_stock": 5}], alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(stock="t.stock + src.additional_stock")
     )
@@ -158,7 +158,7 @@ async def test_asyncpg_merge_with_null_values(asyncpg_merge_session: AsyncpgDriv
     merge_query = (
         sql.merge(dialect="postgres")
         .into("products", alias="t")
-        .using({"id": 1, "name": "Updated", "price": None}, alias="src")
+        .using([{"id": 1, "name": "Updated", "price": None}], alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(name="src.name", price="src.price")
     )
@@ -175,7 +175,7 @@ async def test_asyncpg_merge_with_conditional_update(asyncpg_merge_session: Asyn
     merge_query = (
         sql.merge(dialect="postgres")
         .into("products", alias="t")
-        .using({"id": 2, "name": "Conditional Update", "price": 99.99}, alias="src")
+        .using([{"id": 2, "name": "Conditional Update", "price": 99.99}], alias="src")
         .on("t.id = src.id")
         .when_matched_then_update(condition="t.price < 50", name="src.name", price="src.price")
     )
@@ -227,7 +227,7 @@ async def test_asyncpg_merge_delete_matched(asyncpg_merge_session: AsyncpgDriver
     merge_query = (
         sql.merge(dialect="postgres")
         .into("products", alias="t")
-        .using({"id": 1, "discontinued": 1}, alias="src")
+        .using([{"id": 1, "discontinued": 1}], alias="src")
         .on("t.id = src.id")
         .when_matched_then_delete(condition="src.discontinued = 1")
     )

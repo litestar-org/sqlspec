@@ -7,7 +7,7 @@ type coercion, error handling, and query job management.
 import datetime
 import logging
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -16,7 +16,7 @@ from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.adapters.bigquery.type_converter import BigQueryTypeConverter
-from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig, get_cache_config
+from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig, create_arrow_result, get_cache_config
 from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     DatabaseConnectionError,
@@ -479,27 +479,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         if statement_config is None:
             cache_config = get_cache_config()
-            type_coercion_map = _get_bigquery_type_coercion_map(self._type_converter)
-
-            param_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.NAMED_AT,
-                supported_parameter_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
-                default_execution_parameter_style=ParameterStyle.NAMED_AT,
-                supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
-                type_coercion_map=type_coercion_map,
-                has_native_list_expansion=True,
-                needs_static_script_compilation=False,
-                preserve_original_params_for_many=True,
-            )
-
-            statement_config = StatementConfig(
-                dialect="bigquery",
-                parameter_config=param_config,
-                enable_parsing=True,
-                enable_validation=True,
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parameter_type_wrapping=True,
-            )
+            statement_config = bigquery_statement_config.replace(cache_config=cache_config)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
@@ -788,7 +768,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
+        return_format: Literal["table", "reader", "batch", "batches"] = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,
@@ -815,7 +795,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         Raises:
             MissingDependencyError: If pyarrow not installed, or if Storage API not available and native_only=True
-            SQLExecutionError: If query execution fails
 
         Example:
             >>> # Will use native Arrow if Storage API available, otherwise converts
@@ -864,8 +843,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         # Use native path with Storage API
         import pyarrow as pa
-
-        from sqlspec.core.result import create_arrow_result
 
         # Prepare statement
         config = statement_config or self.statement_config

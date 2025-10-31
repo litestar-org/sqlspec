@@ -93,7 +93,9 @@ def test_select_to_arrow_batch_format(bigquery_session: "BigQueryDriver", table_
 
     try:
         bigquery_session.execute(f"CREATE TABLE {fq_table} (id INT64, value STRING)")
-        result = bigquery_session.execute(f"INSERT INTO {fq_table} (id, value) VALUES (1, 'a'), (2, 'b')")
+        bigquery_session.execute(f"INSERT INTO {fq_table} (id, value) VALUES (1, 'a'), (2, 'b')")
+
+        result = bigquery_session.select_to_arrow(f"SELECT * FROM {fq_table}", return_format="batch")
 
         assert isinstance(result.data, pa.RecordBatch)
         assert result.rows_affected == 2

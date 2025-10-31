@@ -175,12 +175,7 @@ class DataDictionaryMixin:
         Returns:
             VersionInfo instance or None if parsing fails
         """
-        # Try common version patterns
-        patterns = [
-            r"(\d+)\.(\d+)\.(\d+)",  # x.y.z
-            r"(\d+)\.(\d+)",  # x.y
-            r"(\d+)",  # x
-        ]
+        patterns = [r"(\d+)\.(\d+)\.(\d+)", r"(\d+)\.(\d+)", r"(\d+)"]
 
         for pattern in patterns:
             match = re.search(pattern, version_str)

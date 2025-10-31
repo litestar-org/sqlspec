@@ -2099,6 +2099,7 @@ if domain_patterns.get('multi_adapter'):
 ```
 
 #### [Adapter2]
+
 ```[language]
 [Code example for this adapter]
 ```
@@ -2113,6 +2114,7 @@ if domain_patterns.get('multi_adapter'):
 
 if domain_patterns.get('service_layer') or domain_patterns.get('microservices'):
     domain_strategy_sections.append("""
+
 ## Service Integration Strategy
 
 ### Affected Services
@@ -2131,6 +2133,7 @@ if domain_patterns.get('service_layer') or domain_patterns.get('microservices'):
 
 if domain_patterns.get('rest_api'):
     domain_strategy_sections.append("""
+
 ## API Endpoint Strategy
 
 ### New/Modified Endpoints
@@ -2159,6 +2162,7 @@ if domain_patterns.get('rest_api'):
 
 if domain_patterns.get('graphql'):
     domain_strategy_sections.append("""
+
 ## GraphQL Schema Changes
 
 ### New Types/Queries/Mutations
@@ -2179,6 +2183,7 @@ type Query {
 """)
 
 # Combine all sections into template
+
 template_prd = f'''# Feature: [Feature Name]
 
 **Created**: [Date]
@@ -2233,6 +2238,7 @@ template_prd = f'''# Feature: [Feature Name]
 ### Implementation Approach
 
 [5-10 paragraphs of technical detail:
+
 - Overall architecture
 - Key algorithms/patterns
 - Data flow
@@ -2259,17 +2265,17 @@ template_prd = f'''# Feature: [Feature Name]
 - Test file: `tests/unit/test_[feature].py`
 - Coverage target: [≥90% for complex features]
 - Key scenarios:
-  * [Scenario 1]
-  * [Scenario 2]
-  * [Scenario 3]
+    - [Scenario 1]
+    - [Scenario 2]
+    - [Scenario 3]
 
 ### Integration Tests
 
 - Test file: `tests/integration/test_[feature].py`
 - Test scenarios:
-  * [Integration scenario 1]
-  * [Integration scenario 2]
-  * [Integration scenario 3]
+    - [Integration scenario 1]
+    - [Integration scenario 2]
+    - [Integration scenario 3]
 
 ### Edge Cases
 
@@ -2308,16 +2314,16 @@ template_prd = f'''# Feature: [Feature Name]
 ## Risks & Constraints
 
 - **Risk 1**: [Description]
-  * **Impact**: [High/Medium/Low]
-  * **Mitigation**: [Specific mitigation strategy]
+    - **Impact**: [High/Medium/Low]
+    - **Mitigation**: [Specific mitigation strategy]
 
 - **Risk 2**: [Description]
-  * **Impact**: [High/Medium/Low]
-  * **Mitigation**: [Specific mitigation strategy]
+    - **Impact**: [High/Medium/Low]
+    - **Mitigation**: [Specific mitigation strategy]
 
 - **Risk 3**: [Description]
-  * **Impact**: [High/Medium/Low]
-  * **Mitigation**: [Specific mitigation strategy]
+    - **Impact**: [High/Medium/Low]
+    - **Mitigation**: [Specific mitigation strategy]
 
 [Minimum 5 risks for complex features]
 
@@ -2332,19 +2338,19 @@ template_prd = f'''# Feature: [Feature Name]
 ## References
 
 - **Internal**:
-  * Architecture: specs/guides/architecture.md
-  * Testing: specs/guides/testing.md
-  * Code Style: specs/guides/code-style.md
+    - Architecture: specs/guides/architecture.md
+    - Testing: specs/guides/testing.md
+    - Code Style: specs/guides/code-style.md
 
 - **External** (20+ for well-researched PRDs):
-  * [Library Documentation Link 1]
-  * [Best Practices Article 1]
-  * [Stack Overflow Discussion]
-  * [etc.]
+    - [Library Documentation Link 1]
+    - [Best Practices Article 1]
+    - [Stack Overflow Discussion]
+    - [etc.]
 
 - **Research**:
-  * Research Plan: specs/active/[slug]/research/plan.md
-  {'* Consensus: specs/active/[slug]/research/consensus.md' if available_tools.get('zen_consensus') else ''}
+    - Research Plan: specs/active/[slug]/research/plan.md
+  {'*Consensus: specs/active/[slug]/research/consensus.md' if available_tools.get('zen_consensus') else ''}
   {f'* {domain_patterns["adapter_types"][0].title()}-Matrix: specs/active/[slug]/research/{domain_patterns["adapter_types"][0]}-matrix.md' if domain_patterns.get('multi_adapter') and domain_patterns.get('adapter_types') else ''}
 
 ## Quality Gate

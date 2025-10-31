@@ -1,7 +1,7 @@
 """Asynchronous driver protocol implementation."""
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, overload
 
 from sqlspec.core import SQL, Statement
 from sqlspec.core.result import create_arrow_result
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQLResult, StatementConfig, StatementFilter
+    from sqlspec.core import ArrowResult, SQLResult, StatementConfig, StatementFilter
     from sqlspec.typing import SchemaT, StatementParameters
 
 _LOGGER_NAME: Final[str] = "sqlspec"
@@ -351,12 +351,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
+        return_format: "Literal['table', 'reader', 'batch', 'batches']" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,
         **kwargs: Any,
-    ) -> "Any":
+    ) -> "ArrowResult":
         """Execute query and return results as Apache Arrow format (async).
 
         This base implementation uses the conversion path: execute() → dict → Arrow.
@@ -392,10 +392,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
             ...     "SELECT * FROM users", native_only=True
             ... )
         """
-        # Check pyarrow is available
         ensure_pyarrow()
 
-        # Check if native_only requested but not supported
         if native_only:
             msg = (
                 f"Adapter '{self.__class__.__name__}' does not support native Arrow results. "
@@ -404,15 +402,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
             )
             raise ImproperConfigurationError(msg)
 
-        # Execute query using standard path
         result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
 
-        # Convert dict results to Arrow
-        arrow_data = convert_dict_to_arrow(
-            result.data,
-            return_format=return_format,  # type: ignore[arg-type]
-            batch_size=batch_size,
-        )
+        arrow_data = convert_dict_to_arrow(result.data, return_format=return_format, batch_size=batch_size)
         if arrow_schema is not None:
             import pyarrow as pa
 
@@ -420,7 +412,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
                 msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
                 raise TypeError(msg)
 
-            arrow_data = arrow_data.cast(arrow_schema)
+            arrow_data = arrow_data.cast(arrow_schema)  # pyright: ignore
         return create_arrow_result(
             statement=result.statement,
             data=arrow_data,

@@ -124,6 +124,7 @@ def test_combined_features_json_and_uuid() -> None:
     )
     try:
         with config.provide_session() as session:
+            session.execute("DROP TABLE IF EXISTS test")
             session.execute("CREATE TABLE test (id UUID, data JSON)")
             uuid_str = "550e8400-e29b-41d4-a716-446655440000"
             test_data = {"uuid_field": uuid_str, "other": "data"}

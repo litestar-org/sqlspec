@@ -28,6 +28,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -93,6 +94,8 @@ asyncpg_statement_config = StatementConfig(
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
         type_coercion_map={
+            dict: to_json,
+            list: to_json,
             datetime.datetime: _convert_datetime_param,
             datetime.date: _convert_date_param,
             datetime.time: _convert_time_param,

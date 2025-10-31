@@ -30,6 +30,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -52,7 +53,13 @@ psqlpy_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={tuple: list, decimal.Decimal: float, str: _type_converter.convert_if_detected},
+        type_coercion_map={
+            dict: to_json,
+            list: to_json,
+            tuple: list,
+            decimal.Decimal: float,
+            str: _type_converter.convert_if_detected,
+        },
         has_native_list_expansion=False,
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
