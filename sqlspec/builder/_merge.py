@@ -4,6 +4,7 @@ Provides a fluent interface for building SQL MERGE queries with
 parameter binding and validation.
 """
 
+import contextlib
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
@@ -12,6 +13,7 @@ from typing import Any
 
 from mypy_extensions import trait
 from sqlglot import exp
+from sqlglot.errors import ParseError
 from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
@@ -45,32 +47,34 @@ class _MergeAssignmentMixin:
         if not isinstance(value, str):
             return False
 
-        parsed: exp.Expression | None = exp.maybe_parse(value.strip())
-        if parsed is None:
-            return False
+        with contextlib.suppress(ParseError):
+            parsed: exp.Expression | None = exp.maybe_parse(value.strip())
+            if parsed is None:
+                return False
 
-        if isinstance(parsed, exp.Column):
-            return parsed.table is not None and bool(parsed.table)
+            if isinstance(parsed, exp.Column):
+                return parsed.table is not None and bool(parsed.table)
 
-        return isinstance(
-            parsed,
-            (
-                exp.Dot,
-                exp.Add,
-                exp.Sub,
-                exp.Mul,
-                exp.Div,
-                exp.Mod,
-                exp.Func,
-                exp.Anonymous,
-                exp.Null,
-                exp.CurrentTimestamp,
-                exp.CurrentDate,
-                exp.CurrentTime,
-                exp.Paren,
-                exp.Case,
-            ),
-        )
+            return isinstance(
+                parsed,
+                (
+                    exp.Dot,
+                    exp.Add,
+                    exp.Sub,
+                    exp.Mul,
+                    exp.Div,
+                    exp.Mod,
+                    exp.Func,
+                    exp.Anonymous,
+                    exp.Null,
+                    exp.CurrentTimestamp,
+                    exp.CurrentDate,
+                    exp.CurrentTime,
+                    exp.Paren,
+                    exp.Case,
+                ),
+            )
+        return False
 
     def _process_assignment(self, target_column: str, value: Any) -> exp.Expression:
         column_identifier = exp.column(target_column) if isinstance(target_column, str) else target_column
@@ -571,7 +575,9 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
             if values is None:
                 using_alias = None
                 using_expr = current_expr.args.get("using")
-                if using_expr is not None and (isinstance(using_expr, (exp.Subquery, exp.Table)) or hasattr(using_expr, "alias")):
+                if using_expr is not None and (
+                    isinstance(using_expr, (exp.Subquery, exp.Table)) or hasattr(using_expr, "alias")
+                ):
                     using_alias = using_expr.alias
                 column_values = [f"{using_alias}.{col}" for col in column_names] if using_alias else column_names
             else:

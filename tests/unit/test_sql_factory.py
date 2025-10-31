@@ -1520,7 +1520,9 @@ def test_merge_complete_example() -> None:
     assert "WHEN NOT MATCHED THEN INSERT" in stmt.sql
     assert "WHEN NOT MATCHED BY SOURCE THEN UPDATE" in stmt.sql
     assert "NOW()" in stmt.sql
-    assert len(stmt.parameters) >= 6
+    assert "status" in stmt.parameters
+    assert stmt.parameters["status"] == "archived"
+    assert len(stmt.parameters) == 1
 
 
 def test_querybuilder_parameter_style_handling_regression() -> None:

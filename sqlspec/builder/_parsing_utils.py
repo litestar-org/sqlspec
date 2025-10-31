@@ -28,7 +28,7 @@ def extract_column_name(column: str | exp.Column) -> str:
         Column name as string for use as parameter name
     """
     if isinstance(column, str):
-        col_expr = exp.maybe_parse(column)
+        col_expr: exp.Expression | None = exp.maybe_parse(column)
         if isinstance(col_expr, exp.Column):
             return col_expr.name
         return column.split(".")[-1] if "." in column else column
@@ -93,7 +93,7 @@ def parse_column_expression(column_input: str | exp.Expression | Any, builder: A
 def parse_table_expression(table_input: str, explicit_alias: str | None = None) -> exp.Expression:
     """Parses a table string that can be a name, a name with an alias, or a subquery string."""
     with contextlib.suppress(Exception):
-        parsed = exp.maybe_parse(f"SELECT * FROM {table_input}")
+        parsed: exp.Expression | None = exp.maybe_parse(f"SELECT * FROM {table_input}")
         if isinstance(parsed, exp.Select) and parsed.args.get("from"):
             from_clause = cast("exp.From", parsed.args.get("from"))
             table_expr = from_clause.this
