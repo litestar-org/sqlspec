@@ -211,7 +211,7 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB-specific data types and functionality."""
 
     duckdb_session.execute_script("""
-        CREATE TABLE data_types_test (
+        CREATE TABLE duckdb_data_types_test (
             id INTEGER,
             text_col TEXT,
             numeric_col DECIMAL(10,2),
@@ -224,7 +224,7 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     """)
 
     insert_sql = """
-        INSERT INTO data_types_test VALUES (
+        INSERT INTO duckdb_data_types_test VALUES (
             1,
             'test_text',
             123.45,
@@ -238,7 +238,7 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     result = duckdb_session.execute(insert_sql)
     assert result.rows_affected == 1
 
-    select_result = duckdb_session.execute("SELECT * FROM data_types_test")
+    select_result = duckdb_session.execute("SELECT * FROM duckdb_data_types_test")
     assert len(select_result.data) == 1
     row = select_result.data[0]
 
@@ -249,7 +249,7 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     assert row["array_col"] is not None
     assert row["json_col"] is not None
 
-    duckdb_session.execute_script("DROP TABLE data_types_test")
+    duckdb_session.execute_script("DROP TABLE duckdb_data_types_test")
 
 
 def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:

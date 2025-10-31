@@ -174,7 +174,7 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     """Test SQLite data type handling with aiosqlite."""
 
     await aiosqlite_session.execute_script("""
-        CREATE TABLE data_types_test_unique (
+        CREATE TABLE aiosqlite_data_types_test (
             id INTEGER PRIMARY KEY,
             text_col TEXT,
             integer_col INTEGER,
@@ -187,14 +187,14 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     test_data = ("text_value", 42, math.pi, b"binary_data", None)
 
     insert_result = await aiosqlite_session.execute(
-        "INSERT INTO data_types_test_unique (text_col, integer_col, real_col, blob_col, null_col) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO aiosqlite_data_types_test (text_col, integer_col, real_col, blob_col, null_col) VALUES (?, ?, ?, ?, ?)",
         test_data,
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
     select_result = await aiosqlite_session.execute(
-        "SELECT text_col, integer_col, real_col, blob_col, null_col FROM data_types_test_unique"
+        "SELECT text_col, integer_col, real_col, blob_col, null_col FROM aiosqlite_data_types_test"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -207,7 +207,7 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     assert row["blob_col"] == b"binary_data"
     assert row["null_col"] is None
 
-    await aiosqlite_session.execute_script("DROP TABLE data_types_test_unique")
+    await aiosqlite_session.execute_script("DROP TABLE aiosqlite_data_types_test")
 
 
 async def test_aiosqlite_transactions(aiosqlite_session: AiosqliteDriver) -> None:

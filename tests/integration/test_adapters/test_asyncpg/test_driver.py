@@ -196,7 +196,7 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
     import uuid
 
     await asyncpg_session.execute_script("""
-        CREATE TABLE data_types_test (
+        CREATE TABLE asyncpg_data_types_test (
             id SERIAL PRIMARY KEY,
             text_col TEXT,
             integer_col INTEGER,
@@ -212,7 +212,7 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
 
     await asyncpg_session.execute(
         """
-        INSERT INTO data_types_test (
+        INSERT INTO asyncpg_data_types_test (
             text_col, integer_col, numeric_col, boolean_col, json_col,
             array_col, date_col, timestamp_col, uuid_col
         ) VALUES (
@@ -233,7 +233,7 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
     )
 
     select_result = await asyncpg_session.execute(
-        "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM data_types_test"
+        "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM asyncpg_data_types_test"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
@@ -245,7 +245,7 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
     assert row["boolean_col"] is True
     assert row["array_col"] == [1, 2, 3]
 
-    await asyncpg_session.execute_script("DROP TABLE data_types_test")
+    await asyncpg_session.execute_script("DROP TABLE asyncpg_data_types_test")
 
 
 async def test_asyncpg_transactions(asyncpg_session: AsyncpgDriver) -> None:

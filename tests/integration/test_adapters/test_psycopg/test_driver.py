@@ -202,7 +202,7 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL data type handling with psycopg."""
 
     psycopg_session.execute_script("""
-        CREATE TABLE data_types_test (
+        CREATE TABLE psycopg_data_types_test (
             id SERIAL PRIMARY KEY,
             text_col TEXT,
             integer_col INTEGER,
@@ -218,7 +218,7 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
 
     psycopg_session.execute(
         """
-        INSERT INTO data_types_test (
+        INSERT INTO psycopg_data_types_test (
             text_col, integer_col, numeric_col, boolean_col, json_col,
             array_col, date_col, timestamp_col, uuid_col
         ) VALUES (
@@ -237,7 +237,7 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     )
 
     select_result = psycopg_session.execute(
-        "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM data_types_test"
+        "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM psycopg_data_types_test"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -249,7 +249,7 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     assert row["boolean_col"] is True
     assert row["array_col"] == [1, 2, 3]
 
-    psycopg_session.execute_script("DROP TABLE data_types_test")
+    psycopg_session.execute_script("DROP TABLE psycopg_data_types_test")
 
 
 def test_psycopg_transactions(psycopg_session: PsycopgSyncDriver) -> None:

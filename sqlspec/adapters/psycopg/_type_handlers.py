@@ -7,6 +7,8 @@ via pgvector-python library. Supports both sync and async connections.
 import logging
 from typing import TYPE_CHECKING, Any
 
+from psycopg import ProgrammingError
+
 from sqlspec.typing import NUMPY_INSTALLED, PGVECTOR_INSTALLED
 
 if TYPE_CHECKING:
@@ -39,7 +41,7 @@ def register_pgvector_sync(connection: "Connection[Any]") -> None:
 
         pgvector.psycopg.register_vector(connection)
         logger.debug("Registered pgvector type handlers on psycopg sync connection")
-    except ValueError as error:
+    except (ValueError, ProgrammingError) as error:
         message = str(error).lower()
         if "vector type not found" in message:
             logger.debug("Skipping pgvector registration - extension not enabled in database")
@@ -70,7 +72,7 @@ async def register_pgvector_async(connection: "AsyncConnection[Any]") -> None:
 
         await register_vector_async(connection)
         logger.debug("Registered pgvector type handlers on psycopg async connection")
-    except ValueError as error:
+    except (ValueError, ProgrammingError) as error:
         message = str(error).lower()
         if "vector type not found" in message:
             logger.debug("Skipping pgvector registration - extension not enabled in database")

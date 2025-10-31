@@ -62,7 +62,7 @@ def test_select_to_arrow_batch_format(sqlite_basic_session: "SqliteDriver") -> N
     driver.execute("INSERT INTO arrow_batch_test VALUES (1, 'a'), (2, 'b')")
 
     try:
-        result = driver.select_to_arrow("SELECT * FROM arrow_batch_test ORDER BY id", return_format="batches")
+        result = driver.select_to_arrow("SELECT * FROM arrow_batch_test ORDER BY id", return_format="batch")
 
         assert isinstance(result.data, pa.RecordBatch)
         assert result.rows_affected == 2

@@ -260,7 +260,7 @@ def test_adbc_postgresql_error_handling(adbc_postgresql_session: AdbcDriver) -> 
 def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None:
     """Test PostgreSQL data type handling with ADBC."""
     adbc_postgresql_session.execute_script("""
-        CREATE TABLE data_types_test (
+        CREATE TABLE adbc_data_types_test (
             id SERIAL PRIMARY KEY,
             text_col TEXT,
             integer_col INTEGER,
@@ -274,7 +274,7 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
 
     adbc_postgresql_session.execute(
         """
-        INSERT INTO data_types_test (
+        INSERT INTO adbc_data_types_test (
             text_col, integer_col, numeric_col, boolean_col,
             array_col, date_col, timestamp_col
         ) VALUES (
@@ -285,7 +285,7 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
     )
 
     select_result = adbc_postgresql_session.execute(
-        "SELECT text_col, integer_col, numeric_col, boolean_col, array_col FROM data_types_test"
+        "SELECT text_col, integer_col, numeric_col, boolean_col, array_col FROM adbc_data_types_test"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -297,7 +297,7 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
     assert row["boolean_col"] is True
     assert row["array_col"] == [1, 2, 3]
 
-    adbc_postgresql_session.execute_script("DROP TABLE data_types_test")
+    adbc_postgresql_session.execute_script("DROP TABLE adbc_data_types_test")
 
 
 @pytest.mark.xdist_group("postgres")

@@ -127,7 +127,7 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     await driver.execute_script("""
-        CREATE TABLE IF NOT EXISTS data_types_test (
+        CREATE TABLE IF NOT EXISTS asyncmy_data_types_test (
             id INT AUTO_INCREMENT PRIMARY KEY,
             text_col VARCHAR(255),
             int_col INT,
@@ -144,7 +144,7 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     test_data = ("test_string", 42, math.pi, True, date(2023, 1, 1), datetime(2023, 1, 1, 12, 0, 0), '{"key": "value"}')
 
     result = await driver.execute(
-        """INSERT INTO data_types_test
+        """INSERT INTO asyncmy_data_types_test
            (text_col, int_col, float_col, bool_col, date_col, datetime_col, json_col)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         test_data,
@@ -152,7 +152,7 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     assert result.rows_affected == 1
 
     select_result = await driver.execute(
-        "SELECT * FROM data_types_test WHERE text_col = ? AND int_col = ?", ("test_string", 42)
+        "SELECT * FROM asyncmy_data_types_test WHERE text_col = ? AND int_col = ?", ("test_string", 42)
     )
     assert len(select_result.get_data()) == 1
     row = select_result.get_data()[0]

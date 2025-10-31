@@ -82,7 +82,7 @@ async def test_select_to_arrow_batch_format(oracle_async_session: "OracleAsyncDr
     await driver.commit()
 
     try:
-        result = await driver.select_to_arrow("SELECT * FROM arrow_batch_test ORDER BY id", return_format="batches")
+        result = await driver.select_to_arrow("SELECT * FROM arrow_batch_test ORDER BY id", return_format="batch")
 
         assert isinstance(result.data, pa.RecordBatch)
         assert result.rows_affected == 2
