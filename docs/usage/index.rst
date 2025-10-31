@@ -56,16 +56,12 @@ Quick Reference
    :caption: ``basic query execution``
    :lines: 1-5, 14-16
 
-
 **Using the Query Builder**
 
-.. code-block:: python
-
-   from sqlspec import sql
-
-   query = sql.select("id", "name", "email").from_("users").where("active = ?")
-   result = session.execute(query, True)
-   users = result.all()
+.. literalinclude:: /examples/usage/test_index_2.py
+   :language: python
+   :caption: ``using query builder``
+   :lines: 19-21
 
 **Loading from SQL Files**
 
