@@ -51,30 +51,24 @@ Quick Reference
 
 **Basic Query Execution**
 
-.. literalinclude:: /docs/examples/usage/test_index_1.py
+.. literalinclude:: /examples/usage/test_index_1.py
    :language: python
    :caption: ``basic query execution``
-   :lines: 4-16
-   :dedent: 2
-
+   :lines: 14-16
 
 **Using the Query Builder**
 
-.. literalinclude:: /docs/examples/usage/test_index_2.py
+.. literalinclude:: /examples/usage/test_index_2.py
    :language: python
    :caption: ``using the query builder``
    :lines: 19-21
-   :dedent: 2
-
 
 **Loading from SQL Files**
 
-.. literalinclude:: /docs/examples/usage/test_index_3.py
+.. literalinclude:: /examples/usage/test_index_3.py
    :language: python
    :caption: ``loading from sql files``
-   :lines: 25-29
-   :dedent: 2
-
+   :lines: 24-30
 
 Next Steps
 ----------
