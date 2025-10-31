@@ -10,7 +10,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy._types import PsqlpyConnection
 from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, psqlpy_statement_config
-from sqlspec.config import AsyncDatabaseConfig
+from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
 from sqlspec.core.statement import StatementConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
 
@@ -105,7 +105,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         statement_config: StatementConfig | None = None,
         driver_features: "PsqlpyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize Psqlpy configuration.
 

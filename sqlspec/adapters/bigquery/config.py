@@ -9,7 +9,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver, bigquery_statement_config
-from sqlspec.config import NoPoolSyncConfig
+from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
@@ -109,7 +109,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "BigQueryDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize BigQuery configuration.
 
