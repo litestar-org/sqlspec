@@ -26,6 +26,7 @@ __all__ = (
     "ConfigT",
     "DatabaseConfigProtocol",
     "DriverT",
+    "FastAPIConfig",
     "FlaskConfig",
     "LifecycleConfig",
     "LitestarConfig",
@@ -223,6 +224,25 @@ class StarletteConfig(TypedDict):
 
     Example:
         extra_rollback_statuses={409}
+    """
+
+
+class FastAPIConfig(StarletteConfig):
+    """Configuration options for FastAPI SQLSpec extension.
+
+    All fields are optional with sensible defaults. Use in extension_config["fastapi"]:
+
+    Example:
+        from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+        config = AsyncpgConfig(
+            pool_config={"dsn": "postgresql://localhost/mydb"},
+            extension_config={
+                "fastapi": {
+                    "commit_mode": "autocommit",
+                    "session_key": "db"
+                }
+            }
     """
 
 
@@ -605,12 +625,12 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.extension_config: dict[str, dict[str, Any]] = extension_config or {}
+        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, Any]", extension_config or {})
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -744,12 +764,12 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.extension_config: dict[str, dict[str, Any]] = extension_config or {}
+        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, Any]", extension_config or {})
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -884,12 +904,12 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.extension_config: dict[str, dict[str, Any]] = extension_config or {}
+        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, dict[str, Any]]", extension_config or {})
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -1046,12 +1066,12 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.extension_config: dict[str, dict[str, Any]] = extension_config or {}
+        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, dict[str, Any]]", extension_config or {})
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 

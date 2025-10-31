@@ -9,7 +9,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.duckdb._types import DuckDBConnection
 from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, duckdb_statement_config
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
-from sqlspec.config import SyncDatabaseConfig
+from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig, SyncDatabaseConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -187,7 +187,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         statement_config: "StatementConfig | None" = None,
         driver_features: "DuckDBDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize DuckDB configuration.
 

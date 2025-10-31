@@ -12,7 +12,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncmy._types import AsyncmyConnection
 from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, asyncmy_statement_config
-from sqlspec.config import AsyncDatabaseConfig
+from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -94,7 +94,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         statement_config: "StatementConfig | None" = None,
         driver_features: "AsyncmyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize Asyncmy configuration.
 

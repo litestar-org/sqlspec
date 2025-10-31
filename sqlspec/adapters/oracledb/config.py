@@ -23,7 +23,15 @@ from sqlspec.adapters.oracledb.driver import (
     oracledb_statement_config,
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
-from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+from sqlspec.config import (
+    ADKConfig,
+    AsyncDatabaseConfig,
+    FastAPIConfig,
+    FlaskConfig,
+    LitestarConfig,
+    StarletteConfig,
+    SyncDatabaseConfig,
+)
 from sqlspec.typing import NUMPY_INSTALLED
 
 if TYPE_CHECKING:
@@ -121,7 +129,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         statement_config: "StatementConfig | None" = None,
         driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
@@ -281,7 +289,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         statement_config: "StatementConfig | None" = None,
         driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 

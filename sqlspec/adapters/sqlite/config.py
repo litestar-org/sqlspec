@@ -11,7 +11,7 @@ from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
 from sqlspec.adapters.sqlite._types import SqliteConnection
 from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, sqlite_statement_config
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
-from sqlspec.config import SyncDatabaseConfig
+from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig, SyncDatabaseConfig
 from sqlspec.utils.serializers import from_json, to_json
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         statement_config: "StatementConfig | None" = None,
         driver_features: "SqliteDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize SQLite configuration.
 
