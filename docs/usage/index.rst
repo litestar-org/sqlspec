@@ -51,17 +51,11 @@ Quick Reference
 
 **Basic Query Execution**
 
-.. code-block:: python
+.. literalinclude:: /examples/usage/test_index_1.py
+   :language: python
+   :caption: ``basic query execution``
+   :lines: 1-5, 14-16
 
-   from sqlspec import SQLSpec
-   from sqlspec.adapters.sqlite import SqliteConfig
-
-   spec = SQLSpec()
-   db = spec.add_config(SqliteConfig())
-
-   with spec.provide_session(db) as session:
-       result = session.execute("SELECT * FROM users WHERE id = ?", 1)
-       user = result.one()
 
 **Using the Query Builder**
 
