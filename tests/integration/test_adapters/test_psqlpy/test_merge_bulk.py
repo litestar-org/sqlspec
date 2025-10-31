@@ -22,9 +22,9 @@ pytestmark = [pytest.mark.psqlpy, pytest.mark.integration]
 
 
 @pytest.fixture
-async def psqlpy_bulk_session(psqlpy_async_driver: PsqlpyDriver) -> AsyncGenerator[PsqlpyDriver, None]:
+async def psqlpy_bulk_session(psqlpy_session: PsqlpyDriver) -> AsyncGenerator[PsqlpyDriver, None]:
     """Create test tables for bulk MERGE tests."""
-    await psqlpy_async_driver.execute("""
+    await psqlpy_session.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
@@ -34,9 +34,9 @@ async def psqlpy_bulk_session(psqlpy_async_driver: PsqlpyDriver) -> AsyncGenerat
         )
     """)
 
-    yield psqlpy_async_driver
+    yield psqlpy_session
 
-    await psqlpy_async_driver.execute("DROP TABLE IF EXISTS products CASCADE")
+    await psqlpy_session.execute("DROP TABLE IF EXISTS products CASCADE")
 
 
 async def test_psqlpy_merge_bulk_10_rows(psqlpy_bulk_session: PsqlpyDriver) -> None:

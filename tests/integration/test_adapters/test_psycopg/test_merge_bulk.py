@@ -22,21 +22,27 @@ pytestmark = [pytest.mark.psycopg, pytest.mark.integration]
 
 
 @pytest.fixture
-def psycopg_bulk_session(psycopg_sync_driver: PsycopgSyncDriver) -> Generator[PsycopgSyncDriver, None, None]:
+def psycopg_bulk_session(psycopg_sync_config) -> Generator[PsycopgSyncDriver, None, None]:
     """Create test tables for bulk MERGE tests."""
-    psycopg_sync_driver.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            price NUMERIC(10, 2),
-            stock INTEGER DEFAULT 0,
-            category TEXT
-        )
-    """)
+    with psycopg_sync_config.provide_session() as session:
+        session.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                price NUMERIC(10, 2),
+                stock INTEGER DEFAULT 0,
+                category TEXT
+            )
+        """)
+        session.commit()
 
-    yield psycopg_sync_driver
+        yield session
 
-    psycopg_sync_driver.execute("DROP TABLE IF EXISTS products CASCADE")
+        try:
+            session.execute("DROP TABLE IF EXISTS products CASCADE")
+            session.commit()
+        except Exception:
+            pass
 
 
 def test_psycopg_merge_bulk_10_rows(psycopg_bulk_session: PsycopgSyncDriver) -> None:
