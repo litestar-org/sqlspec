@@ -29,24 +29,6 @@ __all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgDriverFeatures", 
 logger = logging.getLogger("sqlspec")
 
 
-def _smart_json_encoder(value: Any) -> str:
-    """Smart JSON encoder for AsyncPG that handles pre-serialized JSON strings.
-
-    When binding parameters to JSONB columns, AsyncPG calls the encoder on ALL values.
-    This encoder detects pre-serialized JSON strings (from MERGE builder, etc.) and
-    passes them through unchanged to avoid double-serialization.
-
-    Args:
-        value: Python object or pre-serialized JSON string.
-
-    Returns:
-        JSON string representation.
-    """
-    if isinstance(value, str):
-        return value
-    return to_json(value)
-
-
 class AsyncpgConnectionConfig(TypedDict):
     """TypedDict for AsyncPG connection parameters."""
 
@@ -141,7 +123,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         features_dict: dict[str, Any] = dict(driver_features) if driver_features else {}
 
         if "json_serializer" not in features_dict:
-            features_dict["json_serializer"] = _smart_json_encoder
+            features_dict["json_serializer"] = to_json
         if "json_deserializer" not in features_dict:
             features_dict["json_deserializer"] = from_json
         if "enable_json_codecs" not in features_dict:

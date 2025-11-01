@@ -11,6 +11,7 @@ from decimal import Decimal
 from itertools import starmap
 from typing import TYPE_CHECKING, Any
 
+import sqlglot
 from mypy_extensions import trait
 from sqlglot import exp
 from sqlglot.errors import ParseError
@@ -20,7 +21,6 @@ from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
-from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_query_builder_parameters
 
 if TYPE_CHECKING:
@@ -199,12 +199,12 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         Uses jsonb_to_recordset(jsonb) AS alias(col1 type1, col2 type2, ...) pattern
         which avoids composite type dependencies and provides explicit type definitions.
 
-        Note: Serializes to JSON string for compatibility across all PostgreSQL adapters.
-        AsyncPG will deserialize automatically, while Psycopg/Psqlpy require pre-serialized JSON.
+        Passes native Python list to driver for JSON serialization via driver-specific
+        mechanisms (AsyncPG json_serializer, Psycopg/Psqlpy JSON codecs).
         """
 
         json_param_name = self._generate_unique_parameter_name("json_data")
-        json_value = to_json(data if is_list else [data[0]])
+        json_value = data if is_list else [data[0]]
         _, json_param_name = self.add_parameter(json_value, name=json_param_name)
 
         sample_values: dict[str, Any] = {}
@@ -229,12 +229,14 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
     def _create_oracle_json_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", alias: "str | None"
     ) -> "exp.Expression":
-        """Create Oracle JSON_TABLE source (production-proven pattern from oracledb-vertexai-demo)."""
-        from sqlspec.utils.serializers import to_json
+        """Create Oracle JSON_TABLE source (production-proven pattern from oracledb-vertexai-demo).
+
+        Passes native Python list to driver for JSON serialization via OracleDB's
+        type_coercion_map which handles dict/list conversion automatically.
+        """
 
         json_param_name = self._generate_unique_parameter_name("json_payload")
-        json_value = to_json(data)
-        _, json_param_name = self.add_parameter(json_value, name=json_param_name)
+        _, json_param_name = self.add_parameter(data, name=json_param_name)
 
         sample_values: dict[str, Any] = {}
         for record in data:
@@ -246,17 +248,11 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             f"{column} {self._infer_oracle_type(sample_values.get(column))} PATH '$.{column}'" for column in columns
         ]
 
-        alias_name = alias or "src"
-        column_selects = ", ".join(columns)
-        columns_clause = ", ".join(json_columns)
+        from_sql = f"SELECT {', '.join(columns)} FROM JSON_TABLE(:{json_param_name}, '$[*]' COLUMNS ({', '.join(json_columns)}))"
 
-        from_sql = f"SELECT {column_selects} FROM JSON_TABLE(:{json_param_name}, '$[*]' COLUMNS ({columns_clause}))"
-
-        import sqlglot as sg
-
-        parsed = sg.parse_one(from_sql, dialect="oracle")
+        parsed = sqlglot.parse_one(from_sql, dialect="oracle")
         paren_expr = exp.paren(parsed)
-        paren_expr.set("alias", exp.TableAlias(this=exp.to_identifier(alias_name)))
+        paren_expr.set("alias", exp.TableAlias(this=exp.to_identifier(alias or "src")))
         return paren_expr
 
     def _infer_postgres_type(self, value: "Any") -> str:
