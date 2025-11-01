@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -7,71 +8,33 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 
 
 @pytest.fixture(scope="function")
-async def asyncpg_arrow_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
-    """Create an AsyncPG session for Arrow testing."""
-    config = AsyncpgConfig(
-        pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        }
-    )
+def asyncpg_pool_config(postgres_service: PostgresService) -> "dict[str, Any]":
+    """Base pool configuration for AsyncPG tests."""
 
+    return {
+        "host": postgres_service.host,
+        "port": postgres_service.port,
+        "user": postgres_service.user,
+        "password": postgres_service.password,
+        "database": postgres_service.database,
+    }
+
+
+@pytest.fixture(scope="function")
+async def asyncpg_config(asyncpg_pool_config: "dict[str, Any]") -> "AsyncGenerator[AsyncpgConfig, None]":
+    """Provide an AsyncpgConfig instance with shared pool settings."""
+
+    config = AsyncpgConfig(pool_config=dict(asyncpg_pool_config))
     try:
-        async with config.provide_session() as session:
-            # Create test table with various data types
-            await session.execute_script("""
-                CREATE TABLE IF NOT EXISTS test_arrow (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    value INTEGER,
-                    price DECIMAL(10, 2),
-                    is_active BOOLEAN,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            # Clear any existing data
-            await session.execute_script("TRUNCATE TABLE test_arrow RESTART IDENTITY")
-
-            # Insert test data
-            await session.execute_many(
-                "INSERT INTO test_arrow (name, value, price, is_active) VALUES ($1, $2, $3, $4)",
-                [
-                    ("Product A", 100, 19.99, True),
-                    ("Product B", 200, 29.99, True),
-                    ("Product C", 300, 39.99, False),
-                    ("Product D", 400, 49.99, True),
-                    ("Product E", 500, 59.99, False),
-                ],
-            )
-            yield session
-            # Cleanup
-            await session.execute_script("DROP TABLE IF EXISTS test_arrow")
+        yield config
     finally:
-        # Ensure pool is closed properly to avoid threading issues during test shutdown
         if config.pool_instance:
             await config.close_pool()
 
 
 @pytest.fixture(scope="function")
-async def asyncpg_async_driver(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
-    """Create an AsyncPG driver for data dictionary testing."""
-    config = AsyncpgConfig(
-        pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        }
-    )
+async def asyncpg_async_driver(asyncpg_config: AsyncpgConfig) -> "AsyncGenerator[AsyncpgDriver, None]":
+    """Create an AsyncPG driver for integration tests."""
 
-    try:
-        async with config.provide_session() as session:
-            yield session
-    finally:
-        # Ensure pool is closed properly to avoid threading issues during test shutdown
-        if config.pool_instance:
-            await config.close_pool()
+    async with asyncpg_config.provide_session() as session:
+        yield session

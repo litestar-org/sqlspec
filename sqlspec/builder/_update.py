@@ -17,6 +17,8 @@ from sqlspec.core.result import SQLResult
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.builder._select import Select
     from sqlspec.protocols import SQLBuilderProtocol
 
@@ -128,8 +130,11 @@ class Update(
 
         return self
 
-    def build(self) -> "SafeQuery":
+    def build(self, dialect: "DialectType" = None) -> "SafeQuery":
         """Build the UPDATE query with validation.
+
+        Args:
+            dialect: Optional dialect override for SQL generation.
 
         Returns:
             SafeQuery: The built query with SQL and parameters.
@@ -153,4 +158,4 @@ class Update(
             msg = "At least one SET clause must be specified for UPDATE statement."
             raise SQLBuilderError(msg)
 
-        return super().build()
+        return super().build(dialect=dialect)

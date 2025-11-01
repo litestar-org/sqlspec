@@ -276,16 +276,14 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {
-                "AiosqliteConnection": AiosqliteConnection,
-                "AiosqliteConnectionPool": AiosqliteConnectionPool,
-                "AiosqliteConnectTimeoutError": AiosqliteConnectTimeoutError,
-                "AiosqliteCursor": AiosqliteCursor,
-                "AiosqlitePoolClosedError": AiosqlitePoolClosedError,
-                "AiosqlitePoolConnection": AiosqlitePoolConnection,
-            }
-        )
+        namespace.update({
+            "AiosqliteConnection": AiosqliteConnection,
+            "AiosqliteConnectionPool": AiosqliteConnectionPool,
+            "AiosqliteConnectTimeoutError": AiosqliteConnectTimeoutError,
+            "AiosqliteCursor": AiosqliteCursor,
+            "AiosqlitePoolClosedError": AiosqlitePoolClosedError,
+            "AiosqlitePoolConnection": AiosqlitePoolConnection,
+        })
         return namespace
 
     async def _close_pool(self) -> None:

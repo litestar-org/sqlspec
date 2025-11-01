@@ -11,10 +11,14 @@ from oracledb import AsyncCursor, Cursor
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
 from sqlspec.adapters.oracledb.type_converter import OracleTypeConverter
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.result import create_arrow_result
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import (
+    SQL,
+    ParameterStyle,
+    ParameterStyleConfig,
+    StatementConfig,
+    create_arrow_result,
+    get_cache_config,
+)
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
@@ -41,16 +45,14 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import StatementFilter
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import Statement
-    from sqlspec.driver._common import ExecutionResult
-    from sqlspec.typing import StatementParameters
+    from sqlspec.core import SQLResult, Statement, StatementFilter
+    from sqlspec.driver import ExecutionResult
+    from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 logger = logging.getLogger(__name__)
 
 # Oracle-specific constants
-LARGE_STRING_THRESHOLD = 3000  # Threshold for large string parameters to avoid ORA-01704
+LARGE_STRING_THRESHOLD = 4000  # Threshold for large string parameters to avoid ORA-01704
 
 _type_converter = OracleTypeConverter()
 
@@ -463,7 +465,9 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         if prepared_parameters and isinstance(prepared_parameters, dict):
             for param_name, param_value in prepared_parameters.items():
                 if isinstance(param_value, str) and len(param_value) > LARGE_STRING_THRESHOLD:
-                    cursor.setinputsizes(**{param_name: len(param_value)})
+                    clob = self.connection.createlob(oracledb.DB_TYPE_CLOB)
+                    clob.write(param_value)
+                    prepared_parameters[param_name] = clob
 
         cursor.execute(sql, prepared_parameters or {})
 
@@ -522,7 +526,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
+        return_format: "ArrowReturnFormat" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,
@@ -744,7 +748,9 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         if prepared_parameters and isinstance(prepared_parameters, dict):
             for param_name, param_value in prepared_parameters.items():
                 if isinstance(param_value, str) and len(param_value) > LARGE_STRING_THRESHOLD:
-                    cursor.setinputsizes(**{param_name: len(param_value)})
+                    clob = await self.connection.createlob(oracledb.DB_TYPE_CLOB)
+                    await clob.write(param_value)
+                    prepared_parameters[param_name] = clob
 
         await cursor.execute(sql, prepared_parameters or {})
 
@@ -806,7 +812,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
+        return_format: "ArrowReturnFormat" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,

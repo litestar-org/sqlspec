@@ -24,7 +24,7 @@ def test_convert_empty_data_to_batch() -> None:
     """Test converting empty data to RecordBatch."""
     from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
-    result = convert_dict_to_arrow([], return_format="batches")
+    result = convert_dict_to_arrow([], return_format="batch")
 
     assert result.num_rows == 0
     assert result.num_columns == 0
@@ -63,7 +63,7 @@ def test_convert_to_record_batch() -> None:
     from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 
     data = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
-    result = convert_dict_to_arrow(data, return_format="batches")
+    result = convert_dict_to_arrow(data, return_format="batch")
 
     assert result.num_rows == 2
     assert result.num_columns == 2

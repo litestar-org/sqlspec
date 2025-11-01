@@ -44,6 +44,8 @@ TRIPLE_LENGTH = 3
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
     from sqlspec.builder._expression_wrappers import ExpressionWrapper
     from sqlspec.protocols import SQLBuilderProtocol
@@ -629,10 +631,7 @@ class WhereClauseMixin:
             msg = "OR expression requires at least one condition"
             raise SQLBuilderError(msg)
 
-        or_condition = conditions[0]
-        for condition in conditions[1:]:
-            or_condition = exp.Or(this=or_condition, expression=condition)
-        return or_condition
+        return exp.or_(*conditions)
 
     def _process_tuple_condition(self, condition: "tuple[Any, ...]") -> exp.Expression:
         if len(condition) == PAIR_LENGTH:
@@ -1407,16 +1406,21 @@ class Select(
         self._hints.append({"hint": hint, "location": location, "table": table, "dialect": dialect})
         return self
 
-    def build(self) -> "SafeQuery":
+    def build(self, dialect: "DialectType" = None) -> "SafeQuery":
         """Builds the SQL query string and parameters with hint injection.
+
+        Args:
+            dialect: Optional dialect override for SQL generation.
 
         Returns:
             SafeQuery: A dataclass containing the SQL string and parameters.
         """
-        safe_query = super().build()
+        safe_query = super().build(dialect=dialect)
 
         if not self._hints:
             return safe_query
+
+        target_dialect = str(dialect) if dialect else self.dialect_name
 
         modified_expr = self._expression or self._create_base_expression()
 
@@ -1427,7 +1431,7 @@ class Select(
                 def parse_hint_safely(hint: Any) -> exp.Expression:
                     try:
                         hint_str = str(hint)
-                        hint_expr: exp.Expression | None = exp.maybe_parse(hint_str, dialect=self.dialect_name)
+                        hint_expr: exp.Expression | None = exp.maybe_parse(hint_str, dialect=target_dialect)
                         return hint_expr or exp.Anonymous(this=hint_str)
                     except Exception:
                         return exp.Anonymous(this=str(hint))
@@ -1437,7 +1441,7 @@ class Select(
                 if hint_expressions:
                     modified_expr.set("hint", exp.Hint(expressions=hint_expressions))
 
-        modified_sql = modified_expr.sql(dialect=self.dialect_name, pretty=True)
+        modified_sql = modified_expr.sql(dialect=target_dialect, pretty=True)
 
         for hint_dict in self._hints:
             if hint_dict.get("location") == "table" and hint_dict.get("table"):

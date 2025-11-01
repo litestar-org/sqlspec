@@ -7,32 +7,20 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.core.result import SQLResult
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture(scope="function")
-async def asyncpg_parameters_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
+async def asyncpg_parameters_session(asyncpg_async_driver: AsyncpgDriver) -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an AsyncPG session for parameter style testing."""
-    config = AsyncpgConfig(
-        pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-            "min_size": 1,
-            "max_size": 3,
-        }
-    )
 
     try:
-        async with config.provide_session() as session:
-            await session.execute_script("""
+        await asyncpg_async_driver.execute_script(
+            """
                 DROP TABLE IF EXISTS test_parameters CASCADE;
                 CREATE TABLE test_parameters (
                     id SERIAL PRIMARY KEY,
@@ -48,12 +36,11 @@ async def asyncpg_parameters_session(postgres_service: PostgresService) -> "Asyn
                     ('alpha', 50, 'Alpha test'),
                     ('beta', 75, 'Beta test'),
                     ('gamma', 250, 'Gamma test');
-            """)
-
-            yield session
+            """
+        )
+        yield asyncpg_async_driver
     finally:
-        if config.pool_instance:
-            await config.close_pool()
+        await asyncpg_async_driver.execute_script("DROP TABLE IF EXISTS test_parameters")
 
 
 @pytest.mark.parametrize("parameters,expected_count", [(("test1",), 1), (["test1"], 1)])

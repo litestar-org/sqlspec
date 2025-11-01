@@ -186,7 +186,7 @@ def _resolve_click_reference(target: str) -> bool:
         return hasattr(click, target)
     except ImportError:
         try:
-            import click
+            import click  # type: ignore[no-redef]
 
             if target == "Group":
                 return True

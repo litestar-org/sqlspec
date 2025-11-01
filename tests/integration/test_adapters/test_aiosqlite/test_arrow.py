@@ -74,7 +74,7 @@ async def test_select_to_arrow_batch_format(aiosqlite_arrow_config: AiosqliteCon
             await session.execute("INSERT INTO arrow_batch_test VALUES (1, 'a'), (2, 'b')")
 
             result = await session.select_to_arrow(
-                "SELECT * FROM arrow_batch_test ORDER BY id", return_format="batches"
+                "SELECT * FROM arrow_batch_test ORDER BY id", return_format="batch"
             )
 
             assert isinstance(result.data, pa.RecordBatch)

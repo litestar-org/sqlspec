@@ -465,7 +465,6 @@ def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
     """
     from sqlspec.utils.text import camelize, kebabize, pascalize
 
-    # Test camelCase conversion
     if encode_name == camelize(field_name) and encode_name != field_name:
         return "camel"
 
@@ -514,13 +513,10 @@ def get_msgspec_rename_config(schema_type: type) -> "str | None":
     if not fields:
         return None
 
-    # Check if any field name differs from its encode_name
     for field in fields:
         if field.name != field.encode_name:
-            # Detect the rename pattern by comparing transformations
             return _detect_rename_pattern(field.name, field.encode_name)
 
-    # If all field names match their encode_name, no rename is applied
     return None
 
 

@@ -8,7 +8,7 @@ import fnmatch
 import io
 import logging
 from collections.abc import AsyncIterator, Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Final, cast
 from urllib.parse import urlparse
 
@@ -119,21 +119,18 @@ class ObStoreBackend:
 
         """
         ensure_obstore()
+        base_path = kwargs.pop("base_path", "")
 
+        self.store_uri = uri
+        self.base_path = base_path.rstrip("/") if base_path else ""
+        self.store_options = kwargs
+        self.store: Any
+        self._path_cache: dict[str, str] = {}
+        self._is_local_store = False
+        self._local_store_root = ""
+        self.protocol = uri.split("://", 1)[0] if "://" in uri else "file"
+        self.backend_type = "obstore"
         try:
-            # Extract base_path from kwargs
-            base_path = kwargs.pop("base_path", "")
-
-            self.store_uri = uri
-            self.base_path = base_path.rstrip("/") if base_path else ""
-            self.store_options = kwargs
-            self.store: Any
-            self._path_cache: dict[str, str] = {}
-            self._is_local_store = False
-            self._local_store_root = ""
-            self.protocol = uri.split("://", 1)[0] if "://" in uri else "file"
-            self.backend_type = "obstore"
-
             if uri.startswith("memory://"):
                 from obstore.store import MemoryStore
 
@@ -141,21 +138,15 @@ class ObStoreBackend:
             elif uri.startswith("file://"):
                 from obstore.store import LocalStore
 
-                # Parse URI to extract path
-                # Note: urlparse splits on '#', so we need to reconstruct the full path
                 parsed = urlparse(uri)
                 path_str = parsed.path or "/"
-                # Append fragment if present (handles paths with '#' character)
                 if parsed.fragment:
                     path_str = f"{path_str}#{parsed.fragment}"
                 path_obj = Path(path_str)
 
-                # If path points to a file, use its parent as the base directory
                 if path_obj.is_file():
                     path_str = str(path_obj.parent)
 
-                # If base_path provided via kwargs, use it as LocalStore root
-                # Otherwise use the URI path
                 local_store_root = self.base_path or path_str
 
                 self._is_local_store = True
@@ -190,24 +181,19 @@ class ObStoreBackend:
 
         path_obj = Path(str(path))
 
-        # If absolute path, try to make it relative to LocalStore root
         if path_obj.is_absolute() and self._local_store_root:
             try:
                 return str(path_obj.relative_to(self._local_store_root))
             except ValueError:
-                # Path is outside LocalStore root - strip leading / as fallback
                 return str(path).lstrip("/")
 
-        # Relative path - return as-is (already relative to LocalStore root)
         return str(path)
 
     def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes using obstore."""
-        # For LocalStore, use special path resolution (relative to LocalStore root)
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
-            # For cloud storage, use standard resolution
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         result = self.store.get(resolved_path)
@@ -215,12 +201,10 @@ class ObStoreBackend:
 
     def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes using obstore."""
-        # For LocalStore, use special path resolution (relative to LocalStore root)
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-
         self.store.put(resolved_path, data)
 
     def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
@@ -275,7 +259,6 @@ class ObStoreBackend:
 
         Lists all objects and filters them client-side using the pattern.
         """
-        from pathlib import PurePosixPath
 
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
         all_objects = self.list_objects(recursive=True, **kwargs)
@@ -356,8 +339,6 @@ class ObStoreBackend:
     def read_arrow(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
         """Read Arrow table using obstore."""
         ensure_pyarrow()
-        import io
-
         import pyarrow.parquet as pq
 
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
@@ -367,8 +348,6 @@ class ObStoreBackend:
     def write_arrow(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table using obstore."""
         ensure_pyarrow()
-        import io
-
         import pyarrow as pa
         import pyarrow.parquet as pq
 
@@ -403,8 +382,6 @@ class ObStoreBackend:
             Iterator of Arrow record batches from matching objects.
         """
         ensure_pyarrow()
-        from io import BytesIO
-
         import pyarrow.parquet as pq
 
         for obj_path in self.glob(pattern, **kwargs):
@@ -412,7 +389,7 @@ class ObStoreBackend:
             result = self.store.get(resolved_path)
             bytes_obj = result.bytes()
             data = bytes_obj.to_bytes()
-            buffer = BytesIO(data)
+            buffer = io.BytesIO(data)
             parquet_file = pq.ParquetFile(buffer)
             yield from parquet_file.iter_batches()
 
@@ -423,7 +400,6 @@ class ObStoreBackend:
 
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes from storage asynchronously."""
-        # For LocalStore (file protocol with base_path), use special resolution
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
@@ -435,7 +411,6 @@ class ObStoreBackend:
 
     async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes to storage asynchronously."""
-        # For LocalStore (file protocol with base_path), use special resolution
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
@@ -473,7 +448,6 @@ class ObStoreBackend:
 
     async def exists_async(self, path: "str | Path", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Check if object exists in storage asynchronously."""
-        # For LocalStore (file protocol with base_path), use special resolution
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
@@ -487,7 +461,6 @@ class ObStoreBackend:
 
     async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Delete object from storage asynchronously."""
-        # For LocalStore (file protocol with base_path), use special resolution
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
@@ -497,7 +470,6 @@ class ObStoreBackend:
 
     async def copy_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Copy object in storage asynchronously."""
-        # For LocalStore (file protocol with base_path), use special resolution
         if self._is_local_store:
             source_path = self._resolve_path_for_local_store(source)
             dest_path = self._resolve_path_for_local_store(destination)
@@ -509,7 +481,6 @@ class ObStoreBackend:
 
     async def move_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Move object in storage asynchronously."""
-        # For LocalStore (file protocol with base_path), use special resolution
         if self._is_local_store:
             source_path = self._resolve_path_for_local_store(source)
             dest_path = self._resolve_path_for_local_store(destination)
@@ -521,7 +492,6 @@ class ObStoreBackend:
 
     async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
         """Get object metadata from storage asynchronously."""
-        # For LocalStore (file protocol with base_path), use special resolution
         if self._is_local_store:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
@@ -530,16 +500,14 @@ class ObStoreBackend:
         result: dict[str, Any] = {}
         try:
             metadata = await self.store.head_async(resolved_path)
-            result.update(
-                {
-                    "path": resolved_path,
-                    "exists": True,
-                    "size": metadata.get("size"),
-                    "last_modified": metadata.get("last_modified"),
-                    "e_tag": metadata.get("e_tag"),
-                    "version": metadata.get("version"),
-                }
-            )
+            result.update({
+                "path": resolved_path,
+                "exists": True,
+                "size": metadata.get("size"),
+                "last_modified": metadata.get("last_modified"),
+                "e_tag": metadata.get("e_tag"),
+                "version": metadata.get("version"),
+            })
             if metadata.get("metadata"):
                 result["custom_metadata"] = metadata["metadata"]
 
@@ -551,8 +519,6 @@ class ObStoreBackend:
     async def read_arrow_async(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
         """Read Arrow table from storage asynchronously."""
         ensure_pyarrow()
-        import io
-
         import pyarrow.parquet as pq
 
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
@@ -562,8 +528,6 @@ class ObStoreBackend:
     async def write_arrow_async(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously."""
         ensure_pyarrow()
-        import io
-
         import pyarrow.parquet as pq
 
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)

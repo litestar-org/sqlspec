@@ -258,13 +258,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
             app_config.before_send.append(state.before_send_handler)
             app_config.lifespan.append(state.lifespan_handler)
-            app_config.dependencies.update(
-                {
-                    state.connection_key: Provide(state.connection_provider),
-                    state.pool_key: Provide(state.pool_provider),
-                    state.session_key: Provide(state.session_provider),
-                }
-            )
+            app_config.dependencies.update({
+                state.connection_key: Provide(state.connection_provider),
+                state.pool_key: Provide(state.pool_provider),
+                state.session_key: Provide(state.session_provider),
+            })
 
         if signature_namespace:
             app_config.signature_namespace.update(signature_namespace)

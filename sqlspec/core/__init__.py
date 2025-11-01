@@ -107,7 +107,7 @@ from sqlspec.core.parameters import (
     ParameterStyleConfig,
     TypedParameter,
 )
-from sqlspec.core.result import ArrowResult, SQLResult, StatementResult
+from sqlspec.core.result import ArrowResult, SQLResult, StatementResult, create_arrow_result, create_sql_result
 from sqlspec.core.statement import SQL, Statement, StatementConfig
 
 __all__ = (
@@ -129,6 +129,8 @@ __all__ = (
     "StatementResult",
     "TypedParameter",
     "UnifiedCache",
+    "create_arrow_result",
+    "create_sql_result",
     "filters",
     "get_cache",
     "get_cache_config",

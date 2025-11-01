@@ -267,6 +267,64 @@ class SQLFactory:
             return builder.into(table_or_sql)
         return builder
 
+    @property
+    def merge_(self) -> "Merge":
+        """Create a new MERGE builder (property shorthand).
+
+        Property that returns a new Merge builder instance using the factory's
+        default dialect. Cleaner syntax alternative to merge() method.
+
+        Examples:
+            query = sql.merge_.into("products").using(data, alias="src")
+            query = sql.merge_.into("products", alias="t").on("t.id = src.id")
+
+        Returns:
+            New Merge builder instance
+        """
+        return Merge(dialect=self.dialect)
+
+    def upsert(self, table: str, dialect: DialectType = None) -> "Merge | Insert":
+        """Create an upsert builder (MERGE or INSERT ON CONFLICT).
+
+        Automatically selects the appropriate builder based on database dialect:
+        - PostgreSQL 15+, Oracle, BigQuery: Returns MERGE builder
+        - SQLite, DuckDB, MySQL: Returns INSERT builder with ON CONFLICT support
+
+        Args:
+            table: Target table name
+            dialect: Optional SQL dialect (uses factory default if not provided)
+
+        Returns:
+            MERGE builder for supported databases, INSERT builder otherwise
+
+        Examples:
+            PostgreSQL/Oracle/BigQuery (uses MERGE):
+                upsert_query = (
+                    sql.upsert("products", dialect="postgres")
+                    .using([{"id": 1, "name": "Product 1"}], alias="src")
+                    .on("t.id = src.id")
+                    .when_matched_then_update(name="src.name")
+                    .when_not_matched_then_insert(id="src.id", name="src.name")
+                )
+
+            SQLite/DuckDB/MySQL (uses INSERT ON CONFLICT):
+                upsert_query = (
+                    sql.upsert("products", dialect="sqlite")
+                    .values(id=1, name="Product 1")
+                    .on_conflict("id")
+                    .do_update(name="EXCLUDED.name")
+                )
+        """
+        builder_dialect = dialect or self.dialect
+        dialect_str = str(builder_dialect).lower() if builder_dialect else None
+
+        merge_supported = {"postgres", "postgresql", "oracle", "bigquery"}
+
+        if dialect_str in merge_supported:
+            return self.merge(table, dialect=builder_dialect)
+
+        return self.insert(table, dialect=builder_dialect)
+
     def create_table(self, table_name: str, dialect: DialectType = None) -> "CreateTable":
         """Create a CREATE TABLE builder.
 

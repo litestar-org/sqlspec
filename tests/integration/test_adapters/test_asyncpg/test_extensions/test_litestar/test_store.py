@@ -5,7 +5,6 @@ from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
@@ -14,26 +13,18 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncpg, pytest.m
 
 
 @pytest.fixture
-async def asyncpg_store(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgStore, None]":
+async def asyncpg_store(asyncpg_config: AsyncpgConfig) -> "AsyncGenerator[AsyncpgStore, None]":
     """Create AsyncPG store with test database."""
-    config = AsyncpgConfig(
-        pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        },
-        extension_config={"litestar": {"session_table": "test_sessions"}},
-    )
-    store = AsyncpgStore(config)
+    asyncpg_config.extension_config = {"litestar": {"session_table": "test_sessions"}}
+    store = AsyncpgStore(asyncpg_config)
+    await store.create_table()
     try:
-        await store.create_table()
         yield store
-        await store.delete_all()
     finally:
-        if config.pool_instance:
-            await config.close_pool()
+        try:
+            await store.delete_all()
+        except Exception:
+            pass
 
 
 async def test_store_create_table(asyncpg_store: AsyncpgStore) -> None:

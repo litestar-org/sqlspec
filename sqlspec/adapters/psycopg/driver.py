@@ -111,6 +111,7 @@ psycopg_statement_config = StatementConfig(
         },
         type_coercion_map={
             dict: to_json,
+            list: to_json,
             datetime.datetime: lambda x: x,
             datetime.date: lambda x: x,
             datetime.time: lambda x: x,

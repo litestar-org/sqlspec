@@ -9,7 +9,7 @@ from sqlspec.driver import VersionInfo
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.driver import AdbcDriver
 
-pytestmark = pytest.mark.xdist_group("adbc")
+pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.mark.adbc

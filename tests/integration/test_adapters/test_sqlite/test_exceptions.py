@@ -1,10 +1,8 @@
 """Exception handling integration tests for sqlite adapter."""
 
-from collections.abc import Generator
-
 import pytest
 
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.exceptions import (
     CheckViolationError,
     ForeignKeyViolationError,
@@ -17,16 +15,10 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 @pytest.fixture
-def sqlite_exception_session() -> Generator[SqliteDriver, None, None]:
-    """Create a SQLite session for exception testing."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+def sqlite_exception_session(sqlite_basic_session: SqliteDriver) -> SqliteDriver:
+    """Reuse shared SQLite session for exception scenarios."""
 
-    try:
-        with config.provide_session() as session:
-            session.execute("PRAGMA foreign_keys = ON")
-            yield session
-    finally:
-        pass
+    return sqlite_basic_session
 
 
 def test_unique_violation(sqlite_exception_session: SqliteDriver) -> None:

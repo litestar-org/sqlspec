@@ -27,7 +27,6 @@ def _safe_convert_key(key: Any, converter: Callable[[str], str]) -> Any:
     try:
         return converter(key)
     except (TypeError, ValueError, AttributeError):
-        # If conversion fails, return the original key
         return key
 
 
@@ -95,13 +94,8 @@ def _transform_dict(data: dict, converter: Callable[[str], str]) -> dict:
     transformed = {}
 
     for key, value in data.items():
-        # Convert the key using the provided converter function
-        # Use safe conversion that handles edge cases without try-except
         converted_key = _safe_convert_key(key, converter)
-
-        # Recursively transform the value
         transformed_value = transform_dict_keys(value, converter)
-
         transformed[converted_key] = transformed_value
 
     return transformed
@@ -117,5 +111,4 @@ def _transform_list(data: list, converter: Callable[[str], str]) -> list:
     Returns:
         List with recursively transformed elements.
     """
-    # Use list comprehension for better performance and avoid try-except in loop
     return [transform_dict_keys(item, converter) for item in data]

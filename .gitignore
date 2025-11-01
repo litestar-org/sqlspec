@@ -65,3 +65,4 @@ requirements/archive/*
 requirements/*
 !requirements/example-feature
 !requirements/README.md
+!.claude/bootstrap.md

@@ -27,7 +27,7 @@ RUNNERS: "tuple[str, ...]" = (
 def _callable_from_path(path: str) -> "Callable[[], Any]":
     module_name, func_name = path.split(":", 1)
     module = import_module(module_name)
-    return getattr(module, func_name)
+    return getattr(module, func_name)  # type: ignore[no-any-return]
 
 
 def _invoke(func: "Callable[[], Any]") -> None:

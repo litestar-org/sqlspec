@@ -251,9 +251,12 @@ def test_fastapi_multiple_filters_combined() -> None:
         filters: Annotated[
             list[FilterTypes],
             Depends(
-                db_ext.provide_filters(
-                    {"id_filter": UUID, "search": "name", "pagination_type": "limit_offset", "sort_field": "created_at"}
-                )
+                db_ext.provide_filters({
+                    "id_filter": UUID,
+                    "search": "name",
+                    "pagination_type": "limit_offset",
+                    "sort_field": "created_at",
+                })
             ),
         ],
     ) -> dict[str, Any]:

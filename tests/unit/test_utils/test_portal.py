@@ -1,13 +1,25 @@
 """Unit tests for portal provider and portal manager."""
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Generator
 from typing import Any
 
 import pytest
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.portal import Portal, PortalManager, PortalProvider, get_global_portal
+from sqlspec.utils.singleton import SingletonMeta
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_portal_manager() -> Generator[None, None, None]:
+    """Clean up the portal manager after each test."""
+    yield
+    manager = PortalManager()
+    if manager.is_running:
+        manager.stop()
+    if PortalManager in SingletonMeta._instances:  # pyright: ignore
+        del SingletonMeta._instances[PortalManager]  # pyright: ignore
 
 
 @pytest.fixture()

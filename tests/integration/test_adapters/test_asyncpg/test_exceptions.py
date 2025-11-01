@@ -3,9 +3,8 @@
 from collections.abc import AsyncGenerator
 
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.exceptions import (
     CheckViolationError,
     ForeignKeyViolationError,
@@ -18,21 +17,10 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-async def asyncpg_exception_session(postgres_service: PostgresService) -> AsyncGenerator[AsyncpgDriver, None]:
+async def asyncpg_exception_session(asyncpg_async_driver: AsyncpgDriver) -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an asyncpg session for exception testing."""
-    config = AsyncpgConfig(
-        pool_config={
-            "dsn": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "min_size": 1,
-            "max_size": 5,
-        }
-    )
 
-    try:
-        async with config.provide_session() as session:
-            yield session
-    finally:
-        await config.close_pool()
+    yield asyncpg_async_driver
 
 
 async def test_unique_violation(asyncpg_exception_session: AsyncpgDriver) -> None:

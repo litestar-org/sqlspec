@@ -4,30 +4,30 @@ from collections.abc import Generator
 
 import pytest
 
-from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
+from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.core.result import SQLResult
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 
 
 @pytest.fixture
-def duckdb_batch_session() -> "Generator[DuckDBDriver, None, None]":
+def duckdb_batch_session(duckdb_basic_session: DuckDBDriver) -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for batch operation testing."""
-    import uuid
 
-    # Use unique database for each test to avoid data contamination
-    config = DuckDBConfig(pool_config={"database": f":memory:{uuid.uuid4().hex}"})
-
-    with config.provide_session() as session:
-        session.execute_script("""
+    duckdb_basic_session.execute_script(
+        """
             CREATE TABLE test_batch (
                 id INTEGER PRIMARY KEY,
                 name VARCHAR NOT NULL,
                 value INTEGER DEFAULT 0,
                 category VARCHAR
             )
-        """)
-        yield session
+        """
+    )
+    try:
+        yield duckdb_basic_session
+    finally:
+        duckdb_basic_session.execute_script("DROP TABLE IF EXISTS test_batch")
 
 
 def test_duckdb_execute_many_basic(duckdb_batch_session: DuckDBDriver) -> None:
