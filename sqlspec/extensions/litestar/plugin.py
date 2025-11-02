@@ -72,6 +72,7 @@ class _PluginConfigState:
     extra_commit_statuses: "set[int] | None"
     extra_rollback_statuses: "set[int] | None"
     enable_correlation_middleware: bool
+    disable_di: bool
     connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]]" = field(init=False)
     pool_provider: "Callable[[State, Scope], Any]" = field(init=False)
     session_provider: "Callable[..., AsyncGenerator[Any, None]]" = field(init=False)
@@ -157,6 +158,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "extra_commit_statuses": litestar_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": litestar_config.get("extra_rollback_statuses"),
             "enable_correlation_middleware": litestar_config.get("enable_correlation_middleware", True),
+            "disable_di": litestar_config.get("disable_di", False),
         }
 
     def _create_config_state(
@@ -174,9 +176,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             extra_commit_statuses=settings.get("extra_commit_statuses"),
             extra_rollback_statuses=settings.get("extra_rollback_statuses"),
             enable_correlation_middleware=settings["enable_correlation_middleware"],
+            disable_di=settings["disable_di"],
         )
 
-        self._setup_handlers(state)
+        if not state.disable_di:
+            self._setup_handlers(state)
         return state
 
     def _setup_handlers(self, state: _PluginConfigState) -> None:
@@ -256,13 +260,14 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
             signature_namespace.update(state.config.get_signature_namespace())  # type: ignore[arg-type]
 
-            app_config.before_send.append(state.before_send_handler)
-            app_config.lifespan.append(state.lifespan_handler)
-            app_config.dependencies.update({
-                state.connection_key: Provide(state.connection_provider),
-                state.pool_key: Provide(state.pool_provider),
-                state.session_key: Provide(state.session_provider),
-            })
+            if not state.disable_di:
+                app_config.before_send.append(state.before_send_handler)
+                app_config.lifespan.append(state.lifespan_handler)
+                app_config.dependencies.update({
+                    state.connection_key: Provide(state.connection_provider),
+                    state.pool_key: Provide(state.pool_provider),
+                    state.session_key: Provide(state.session_provider),
+                })
 
         if signature_namespace:
             app_config.signature_namespace.update(signature_namespace)

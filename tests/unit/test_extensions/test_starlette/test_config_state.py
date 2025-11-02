@@ -17,6 +17,7 @@ def test_config_state_creation() -> None:
         commit_mode="manual",
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
+        disable_di=False,
     )
 
     assert state.config is mock_config
@@ -42,6 +43,7 @@ def test_config_state_with_extra_statuses() -> None:
         commit_mode="autocommit",
         extra_commit_statuses=extra_commit,
         extra_rollback_statuses=extra_rollback,
+        disable_di=False,
     )
 
     assert state.extra_commit_statuses == extra_commit
@@ -61,5 +63,6 @@ def test_config_state_commit_modes() -> None:
             commit_mode=mode,  # type: ignore[arg-type]
             extra_commit_statuses=None,
             extra_rollback_statuses=None,
+            disable_di=False,
         )
         assert state.commit_mode == mode

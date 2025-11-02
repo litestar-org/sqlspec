@@ -2616,6 +2616,138 @@ class StarletteConfig(TypedDict):
     extra_rollback_statuses: NotRequired[set[int]]
 ```
 
+### Disabling Built-in Dependency Injection (disable_di Pattern)
+
+**When to Use**: When users want to integrate SQLSpec with their own dependency injection solution (e.g., Dishka, dependency-injector) and need full control over database lifecycle management.
+
+**Pattern**: Add a `disable_di` boolean flag to framework extension configuration that conditionally skips the built-in DI setup.
+
+**Implementation Steps**:
+
+1. **Add to TypedDict in `sqlspec/config.py`**:
+
+```python
+class StarletteConfig(TypedDict):
+    # ... existing fields ...
+
+    disable_di: NotRequired[bool]
+    """Disable built-in dependency injection. Default: False.
+    When True, the Starlette/FastAPI extension will not add middleware for managing
+    database connections and sessions. Users are responsible for managing the
+    database lifecycle manually via their own DI solution.
+    """
+```
+
+2. **Add to Configuration State Dataclass**:
+
+```python
+@dataclass
+class SQLSpecConfigState:
+    config: "DatabaseConfigProtocol[Any, Any, Any]"
+    connection_key: str
+    pool_key: str
+    session_key: str
+    commit_mode: CommitMode
+    extra_commit_statuses: "set[int] | None"
+    extra_rollback_statuses: "set[int] | None"
+    disable_di: bool  # Add this field
+```
+
+3. **Extract from Config and Default to False**:
+
+```python
+def _extract_starlette_settings(self, config):
+    starlette_config = config.extension_config.get("starlette", {})
+    return {
+        # ... existing keys ...
+        "disable_di": starlette_config.get("disable_di", False),  # Default False
+    }
+```
+
+4. **Conditionally Skip DI Setup**:
+
+**Middleware-based (Starlette/FastAPI)**:
+```python
+def init_app(self, app):
+    # ... lifespan setup ...
+
+    for config_state in self._config_states:
+        if not config_state.disable_di:  # Only add if DI enabled
+            self._add_middleware(app, config_state)
+```
+
+**Provider-based (Litestar)**:
+```python
+def on_app_init(self, app_config):
+    for state in self._plugin_configs:
+        # ... signature namespace ...
+
+        if not state.disable_di:  # Only register if DI enabled
+            app_config.before_send.append(state.before_send_handler)
+            app_config.lifespan.append(state.lifespan_handler)
+            app_config.dependencies.update({
+                state.connection_key: Provide(state.connection_provider),
+                state.pool_key: Provide(state.pool_provider),
+                state.session_key: Provide(state.session_provider),
+            })
+```
+
+**Hook-based (Flask)**:
+```python
+def init_app(self, app):
+    # ... pool setup ...
+
+    # Only register hooks if at least one config has DI enabled
+    if any(not state.disable_di for state in self._config_states):
+        app.before_request(self._before_request_handler)
+        app.after_request(self._after_request_handler)
+        app.teardown_appcontext(self._teardown_appcontext_handler)
+
+def _before_request_handler(self):
+    for config_state in self._config_states:
+        if config_state.disable_di:  # Skip if DI disabled
+            continue
+        # ... connection setup ...
+```
+
+**Testing Requirements**:
+
+1. **Test with `disable_di=True`**: Verify DI mechanisms are not active
+2. **Test default behavior**: Verify `disable_di=False` preserves existing functionality
+3. **Integration tests**: Demonstrate manual DI setup works correctly
+
+**Example Usage**:
+
+```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.base import SQLSpec
+from sqlspec.extensions.starlette import SQLSpecPlugin
+
+sql = SQLSpec()
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/db"},
+    extension_config={"starlette": {"disable_di": True}}  # Disable built-in DI
+)
+sql.add_config(config)
+plugin = SQLSpecPlugin(sql)
+
+# User is now responsible for manual lifecycle management
+async def my_route(request):
+    pool = await config.create_pool()
+    async with config.provide_connection(pool) as connection:
+        session = config.driver_type(connection=connection, statement_config=config.statement_config)
+        result = await session.execute("SELECT 1")
+        await config.close_pool()
+        return result
+```
+
+**Key Principles**:
+
+- **Backward Compatible**: Default `False` preserves existing behavior
+- **Consistent Naming**: Use `disable_di` across all frameworks
+- **Clear Documentation**: Warn users they are responsible for lifecycle management
+- **Complete Control**: When disabled, extension does zero automatic DI
+
 ### Multi-Database Support
 
 **Key validation ensures unique state keys**:

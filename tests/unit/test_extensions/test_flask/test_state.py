@@ -13,6 +13,7 @@ def test_should_commit_manual_mode() -> None:
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
         is_async=False,
+        disable_di=False,
     )
 
     assert not state.should_commit(200)
@@ -32,6 +33,7 @@ def test_should_commit_autocommit_mode() -> None:
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
         is_async=False,
+        disable_di=False,
     )
 
     assert state.should_commit(200)
@@ -55,6 +57,7 @@ def test_should_commit_autocommit_include_redirect_mode() -> None:
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
         is_async=False,
+        disable_di=False,
     )
 
     assert state.should_commit(200)
@@ -81,6 +84,7 @@ def test_should_commit_extra_commit_statuses() -> None:
         extra_commit_statuses={404, 500},
         extra_rollback_statuses=None,
         is_async=False,
+        disable_di=False,
     )
 
     assert state.should_commit(200)
@@ -98,6 +102,7 @@ def test_should_commit_extra_rollback_statuses() -> None:
         extra_commit_statuses=None,
         extra_rollback_statuses={201},
         is_async=False,
+        disable_di=False,
     )
 
     assert state.should_commit(200)
@@ -114,6 +119,7 @@ def test_should_rollback_manual_mode() -> None:
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
         is_async=False,
+        disable_di=False,
     )
 
     assert not state.should_rollback(200)
@@ -131,6 +137,7 @@ def test_should_rollback_autocommit_mode() -> None:
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
         is_async=False,
+        disable_di=False,
     )
 
     assert not state.should_rollback(200)
@@ -152,6 +159,7 @@ def test_should_rollback_autocommit_include_redirect_mode() -> None:
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
         is_async=False,
+        disable_di=False,
     )
 
     assert not state.should_rollback(200)

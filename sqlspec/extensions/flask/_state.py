@@ -27,6 +27,7 @@ class FlaskConfigState:
     extra_commit_statuses: "set[int] | None"
     extra_rollback_statuses: "set[int] | None"
     is_async: bool
+    disable_di: bool
 
     def should_commit(self, status_code: int) -> bool:
         """Determine if HTTP status code should trigger commit.
