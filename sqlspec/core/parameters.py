@@ -19,6 +19,7 @@ Processing:
 - Support for multiple parameter styles and database adapters
 """
 
+import hashlib
 import re
 from collections import OrderedDict
 from collections.abc import Callable, Generator, Mapping, Sequence
@@ -1108,34 +1109,33 @@ class ParameterProcessor:
         target_style = self._determine_target_execution_style(original_styles, config)
         return self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)
 
+    def _fingerprint_parameters(self, parameters: Any) -> str:
+        """Create deterministic fingerprint for parameter values."""
+        if parameters is None:
+            return "none"
+
+        if isinstance(parameters, Mapping):
+            try:
+                items = sorted(parameters.items(), key=lambda item: repr(item[0]))
+            except Exception:
+                items = list(parameters.items())
+            data = repr(tuple(items))
+        elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+            data = repr(tuple(parameters))
+        else:
+            data = repr(parameters)
+
+        digest = hashlib.sha256(data.encode("utf-8")).hexdigest()
+        return f"{type(parameters).__name__}:{digest}"
+
     def _generate_processor_cache_key(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, is_many: bool, dialect: "str | None"
     ) -> str:
-        """Generate optimized cache key for parameter processing.
-
-        Uses parameter fingerprint (type + structure) instead of repr()
-        for better performance on large parameter sets.
-
-        Args:
-            sql: SQL string
-            parameters: Parameter values
-            config: Parameter style configuration
-            is_many: Whether this is execute_many
-            dialect: SQL dialect
-
-        Returns:
-            Cache key string
-        """
-        param_fingerprint = (
-            "none"
-            if parameters is None
-            else f"seq_{len(parameters)}_{type(parameters).__name__}"
-            if isinstance(parameters, (list, tuple))
-            else f"map_{len(parameters)}"
-            if isinstance(parameters, dict)
-            else f"scalar_{type(parameters).__name__}"
-        )
-        return f"{sql}:{param_fingerprint}:{config.default_parameter_style}:{is_many}:{dialect}"
+        """Generate cache key for parameter processing."""
+        param_fingerprint = self._fingerprint_parameters(parameters)
+        dialect_marker = dialect or "default"
+        default_style = config.default_parameter_style.value if config.default_parameter_style else "unknown"
+        return f"{sql}:{param_fingerprint}:{default_style}:{is_many}:{dialect_marker}"
 
     def process(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, dialect: str | None = None, is_many: bool = False

@@ -7,8 +7,9 @@ Components:
 """
 
 import hashlib
+import logging
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -35,15 +36,16 @@ OperationType = Literal[
     "SCRIPT",
     "DDL",
     "PRAGMA",
+    "MERGE",
     "UNKNOWN",
 ]
 
 
 __all__ = ("CompiledSQL", "OperationProfile", "OperationType", "SQLProcessor")
 
-logger = get_logger("sqlspec.core.compiler")
+logger: "Final[logging.Logger]" = get_logger("sqlspec.core.compiler")
 
-OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
+OPERATION_TYPE_MAP: "Final[dict[type[exp.Expression], OperationType]]" = {
     exp.Select: "SELECT",
     exp.Insert: "INSERT",
     exp.Update: "UPDATE",
@@ -477,14 +479,9 @@ class SQLProcessor:
         modifies_rows = False
 
         expr = expression
-        if isinstance(expr, (exp.Select, exp.Values, exp.Table, exp.TableSample)) or isinstance(expr, exp.With):
+        if isinstance(expr, (exp.Select, exp.Values, exp.Table, exp.TableSample, exp.With)):
             returns_rows = True
-        elif (
-            isinstance(expr, exp.Insert)
-            or isinstance(expr, exp.Update)
-            or isinstance(expr, exp.Delete)
-            or isinstance(expr, exp.Merge)
-        ):
+        elif isinstance(expr, (exp.Insert, exp.Update, exp.Delete, exp.Merge)):
             modifies_rows = True
             returns_rows = bool(expr.args.get("returning"))
         elif isinstance(expr, exp.Copy):

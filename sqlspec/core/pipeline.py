@@ -8,9 +8,9 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.core.compiler import CompiledSQL, SQLProcessor
 
-DEBUG_ENV_FLAG: Final = "SQLSPEC_DEBUG_PIPELINE_CACHE"
-DEFAULT_PIPELINE_CACHE_SIZE: Final = 1000
-DEFAULT_PIPELINE_COUNT: Final = 32
+DEBUG_ENV_FLAG: Final[str] = "SQLSPEC_DEBUG_PIPELINE_CACHE"
+DEFAULT_PIPELINE_CACHE_SIZE: Final[int] = 1000
+DEFAULT_PIPELINE_COUNT: Final[int] = 32
 
 
 def _is_truthy(value: "str | None") -> bool:
@@ -164,7 +164,7 @@ class StatementPipelineRegistry:
         return f"pipeline::{fingerprint}"
 
 
-_PIPELINE_REGISTRY: Final = StatementPipelineRegistry()
+_PIPELINE_REGISTRY: "Final[StatementPipelineRegistry]" = StatementPipelineRegistry()
 
 
 def compile_with_shared_pipeline(config: "Any", sql: str, parameters: Any, is_many: bool = False) -> "CompiledSQL":
