@@ -146,13 +146,13 @@ ORA_TABLESPACE_FULL = 1652
 
 
 _ORACLE_PARAMETER_CONFIG = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.POSITIONAL_COLON,
-        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.NAMED_COLON,
-        supported_execution_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
-        has_native_list_expansion=False,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
+    default_parameter_style=ParameterStyle.POSITIONAL_COLON,
+    supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK},
+    default_execution_parameter_style=ParameterStyle.NAMED_COLON,
+    supported_execution_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
+    has_native_list_expansion=False,
+    needs_static_script_compilation=False,
+    preserve_parameter_format=True,
 )
 
 oracledb_statement_config = StatementConfig(

@@ -50,14 +50,14 @@ MYSQL_ER_NO_DEFAULT_FOR_FIELD = 1364
 MYSQL_ER_CHECK_CONSTRAINT_VIOLATED = 3819
 
 _ASYNCMY_PARAMETER_CONFIG = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
-        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},
-        type_coercion_map={bool: int},
-        has_native_list_expansion=False,
-        needs_static_script_compilation=True,
-        preserve_parameter_format=True,
+    default_parameter_style=ParameterStyle.QMARK,
+    supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
+    default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+    supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},
+    type_coercion_map={bool: int},
+    has_native_list_expansion=False,
+    needs_static_script_compilation=True,
+    preserve_parameter_format=True,
 )
 
 asyncmy_statement_config = StatementConfig(

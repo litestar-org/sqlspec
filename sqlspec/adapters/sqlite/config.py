@@ -118,8 +118,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         json_deserializer = processed_driver_features.get("json_deserializer")
         if json_serializer is not None:
             parameter_config = base_statement_config.parameter_config.with_json_serializers(
-                json_serializer,
-                deserializer=json_deserializer,
+                json_serializer, deserializer=json_deserializer
             )
             base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
 

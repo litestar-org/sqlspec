@@ -314,24 +314,20 @@ bigquery_type_coercion_map = _get_bigquery_type_coercion_map(_default_type_conve
 
 
 _BIGQUERY_PARAMETER_CONFIG = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.NAMED_AT,
-        supported_parameter_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.NAMED_AT,
-        supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
-        type_coercion_map=bigquery_type_coercion_map,
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_original_params_for_many=True,
+    default_parameter_style=ParameterStyle.NAMED_AT,
+    supported_parameter_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
+    default_execution_parameter_style=ParameterStyle.NAMED_AT,
+    supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
+    type_coercion_map=bigquery_type_coercion_map,
+    has_native_list_expansion=True,
+    needs_static_script_compilation=False,
+    preserve_original_params_for_many=True,
 )
 
 _BIGQUERY_PARAMETER_CONFIG = _BIGQUERY_PARAMETER_CONFIG.with_json_serializers(to_json, tuple_strategy="tuple")
 
 _BIGQUERY_PARAMETER_CONFIG = _BIGQUERY_PARAMETER_CONFIG.replace(
-    type_coercion_map={
-        **_BIGQUERY_PARAMETER_CONFIG.type_coercion_map,
-        list: lambda x: x,
-        tuple: list,
-    }
+    type_coercion_map={**_BIGQUERY_PARAMETER_CONFIG.type_coercion_map, list: lambda x: x, tuple: list}
 )
 
 bigquery_statement_config = StatementConfig(

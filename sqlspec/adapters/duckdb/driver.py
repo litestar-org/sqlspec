@@ -44,20 +44,20 @@ _type_converter = DuckDBTypeConverter()
 
 
 _DUCKDB_PARAMETER_CONFIG = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
-        default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
-        type_coercion_map={
-            bool: int,
-            datetime.datetime: lambda v: v.isoformat(),
-            datetime.date: lambda v: v.isoformat(),
-            Decimal: str,
-        },
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-        allow_mixed_parameter_styles=False,
+    default_parameter_style=ParameterStyle.QMARK,
+    supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
+    default_execution_parameter_style=ParameterStyle.QMARK,
+    supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
+    type_coercion_map={
+        bool: int,
+        datetime.datetime: lambda v: v.isoformat(),
+        datetime.date: lambda v: v.isoformat(),
+        Decimal: str,
+    },
+    has_native_list_expansion=True,
+    needs_static_script_compilation=False,
+    preserve_parameter_format=True,
+    allow_mixed_parameter_styles=False,
 )
 
 duckdb_statement_config = StatementConfig(

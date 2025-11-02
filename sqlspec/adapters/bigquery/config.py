@@ -149,10 +149,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             parameter_config = base_statement_config.parameter_config
             previous_list_converter = parameter_config.type_coercion_map.get(list)
             previous_tuple_converter = parameter_config.type_coercion_map.get(tuple)
-            updated_parameter_config = parameter_config.with_json_serializers(
-                json_serializer,
-                tuple_strategy="tuple",
-            )
+            updated_parameter_config = parameter_config.with_json_serializers(json_serializer, tuple_strategy="tuple")
             updated_map = dict(updated_parameter_config.type_coercion_map)
             if previous_list_converter is not None:
                 updated_map[list] = previous_list_converter

@@ -31,6 +31,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.asyncpg._types import AsyncpgConnection
@@ -87,23 +88,39 @@ def _convert_time_param(value: Any) -> Any:
 
 
 _ASYNC_PG_PARAMETER_CONFIG = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.NUMERIC,
-        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT},
-        default_execution_parameter_style=ParameterStyle.NUMERIC,
-        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={
-            datetime.datetime: _convert_datetime_param,
-            datetime.date: _convert_date_param,
-            datetime.time: _convert_time_param,
-        },
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
+    default_parameter_style=ParameterStyle.NUMERIC,
+    supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT},
+    default_execution_parameter_style=ParameterStyle.NUMERIC,
+    supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+    type_coercion_map={
+        datetime.datetime: _convert_datetime_param,
+        datetime.date: _convert_date_param,
+        datetime.time: _convert_time_param,
+    },
+    has_native_list_expansion=True,
+    needs_static_script_compilation=False,
+    preserve_parameter_format=True,
 )
+
+
+def _configure_asyncpg_parameter_serializers(
+    parameter_config: ParameterStyleConfig,
+    serializer: "Callable[[Any], str]",
+    deserializer: "Callable[[str], Any] | None" = None,
+) -> ParameterStyleConfig:
+    """Configure JSON serializers while preserving native array handling."""
+
+    updated_config = parameter_config.with_json_serializers(serializer, deserializer=deserializer)
+    updated_type_map = dict(updated_config.type_coercion_map)
+    updated_type_map.pop(dict, None)
+    updated_type_map.pop(list, None)
+    updated_type_map.pop(tuple, None)
+    return updated_config.replace(type_coercion_map=updated_type_map)
+
 
 asyncpg_statement_config = StatementConfig(
     dialect="postgres",
-    parameter_config=_ASYNC_PG_PARAMETER_CONFIG.with_json_serializers(to_json),
+    parameter_config=_configure_asyncpg_parameter_serializers(_ASYNC_PG_PARAMETER_CONFIG, to_json),
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,

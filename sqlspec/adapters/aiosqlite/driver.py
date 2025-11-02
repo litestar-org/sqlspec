@@ -48,19 +48,19 @@ SQLITE_MISMATCH_CODE = 20
 
 
 _AIOSQLITE_PARAMETER_CONFIG = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK},
-        type_coercion_map={
-            bool: int,
-            datetime.datetime: lambda v: v.isoformat(),
-            datetime.date: lambda v: v.isoformat(),
-            Decimal: str,
-        },
-        has_native_list_expansion=False,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
+    default_parameter_style=ParameterStyle.QMARK,
+    supported_parameter_styles={ParameterStyle.QMARK},
+    default_execution_parameter_style=ParameterStyle.QMARK,
+    supported_execution_parameter_styles={ParameterStyle.QMARK},
+    type_coercion_map={
+        bool: int,
+        datetime.datetime: lambda v: v.isoformat(),
+        datetime.date: lambda v: v.isoformat(),
+        Decimal: str,
+    },
+    has_native_list_expansion=False,
+    needs_static_script_compilation=False,
+    preserve_parameter_format=True,
 )
 
 aiosqlite_statement_config = StatementConfig(

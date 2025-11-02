@@ -45,19 +45,19 @@ SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
 
 _SQLITE_PARAMETER_CONFIG = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-        default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-        type_coercion_map={
-            bool: int,
-            datetime.datetime: lambda v: v.isoformat(),
-            datetime.date: lambda v: v.isoformat(),
-            Decimal: str,
-        },
-        has_native_list_expansion=False,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
+    default_parameter_style=ParameterStyle.QMARK,
+    supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+    default_execution_parameter_style=ParameterStyle.QMARK,
+    supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+    type_coercion_map={
+        bool: int,
+        datetime.datetime: lambda v: v.isoformat(),
+        datetime.date: lambda v: v.isoformat(),
+        Decimal: str,
+    },
+    has_native_list_expansion=False,
+    needs_static_script_compilation=False,
+    preserve_parameter_format=True,
 )
 
 sqlite_statement_config = StatementConfig(

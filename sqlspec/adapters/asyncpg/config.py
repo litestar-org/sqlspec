@@ -12,7 +12,12 @@ from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg._types import AsyncpgConnection
-from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver, asyncpg_statement_config
+from sqlspec.adapters.asyncpg.driver import (
+    AsyncpgCursor,
+    AsyncpgDriver,
+    _configure_asyncpg_parameter_serializers,  # pyright: ignore
+    asyncpg_statement_config,
+)
 from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import from_json, to_json
@@ -136,9 +141,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         json_serializer = features_dict.get("json_serializer")
         json_deserializer = features_dict.get("json_deserializer")
         if json_serializer is not None:
-            parameter_config = base_statement_config.parameter_config.with_json_serializers(
-                json_serializer,
-                deserializer=json_deserializer,
+            parameter_config = _configure_asyncpg_parameter_serializers(
+                base_statement_config.parameter_config, json_serializer, deserializer=json_deserializer
             )
             base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
 
