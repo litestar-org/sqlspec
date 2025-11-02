@@ -164,7 +164,7 @@ class StatementPipelineRegistry:
         return f"pipeline::{fingerprint}"
 
 
-_PIPELINE_REGISTRY: "Final[StatementPipelineRegistry]" = StatementPipelineRegistry()
+_PIPELINE_REGISTRY: "StatementPipelineRegistry" = StatementPipelineRegistry()
 
 
 def compile_with_shared_pipeline(config: "Any", sql: str, parameters: Any, is_many: bool = False) -> "CompiledSQL":

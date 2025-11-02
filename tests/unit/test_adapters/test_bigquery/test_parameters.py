@@ -2,7 +2,7 @@
 
 import pytest
 
-from sqlspec.adapters.bigquery.driver import _create_bq_parameters
+from sqlspec.adapters.bigquery.driver import _create_bq_parameters  # pyright: ignore
 from sqlspec.exceptions import SQLSpecError
 
 

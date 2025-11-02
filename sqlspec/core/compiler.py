@@ -16,7 +16,7 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
-from sqlspec.core.parameters import ParameterProcessor, ParameterProfile
+from sqlspec.core.parameters import ParameterProcessor, ParameterProfile, validate_parameter_alignment
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -124,6 +124,8 @@ class CompiledSQL:
             parameter_style: Parameter style used in compilation
             supports_many: Whether this supports execute_many operations
             parameter_casts: Mapping of parameter positions to cast types
+            parameter_profile: Profile describing detected placeholders
+            operation_profile: Profile describing semantic characteristics
         """
         self.compiled_sql = compiled_sql
         self.execution_parameters = execution_parameters
@@ -301,6 +303,9 @@ class SQLProcessor:
                 final_sql, final_params = self._apply_final_transformations(
                     expression, processed_sql, final_parameters, dialect_str
                 )
+
+            if self._config.enable_validation:
+                validate_parameter_alignment(parameter_profile, final_params, is_many=is_many)
 
             return CompiledSQL(
                 compiled_sql=final_sql,

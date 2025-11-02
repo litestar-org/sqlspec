@@ -15,10 +15,10 @@ Key Test Coverage:
 8. Edge cases - Complex queries, comments, string literals
 """
 
+import os
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import os
 import pytest
 from sqlglot import expressions as exp
 

@@ -14,7 +14,13 @@ from sqlglot import exp
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.adbc.type_converter import ADBCTypeConverter
 from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters import (
+    ParameterProfile,
+    ParameterStyle,
+    ParameterStyleConfig,
+    ParameterValidator,
+    validate_parameter_alignment,
+)
 from sqlspec.core.result import create_arrow_result
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
@@ -69,6 +75,8 @@ DIALECT_PARAMETER_STYLES = {
     "snowflake": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC]),
 }
 
+_AST_PARAMETER_VALIDATOR: "ParameterValidator" = ParameterValidator()
+
 
 def _is_execute_many_parameters(parameters: Any) -> bool:
     """Check if parameters are in execute_many format (list/tuple of lists/tuples)."""
@@ -116,6 +124,10 @@ def _adbc_ast_transformer(expression: Any, parameters: Any, dialect: str = "post
     # sets may have None values in different positions, making transformation complex
     if _is_execute_many_parameters(parameters):
         return expression, parameters
+
+    parameter_info = _AST_PARAMETER_VALIDATOR.extract_parameters(expression.sql(dialect=dialect))
+    parameter_profile = ParameterProfile(parameter_info)
+    validate_parameter_alignment(parameter_profile, parameters)
 
     # Find positions of None values for single execution
     null_positions = _find_null_positions(parameters)

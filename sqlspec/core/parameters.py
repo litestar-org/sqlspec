@@ -27,9 +27,11 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from functools import singledispatch
-from typing import Any
+from typing import Any, cast
 
 from mypy_extensions import mypyc_attr
+
+import sqlspec.exceptions
 
 __all__ = (
     "ParameterConverter",
@@ -42,6 +44,7 @@ __all__ = (
     "ParameterValidator",
     "TypedParameter",
     "is_iterable_parameters",
+    "validate_parameter_alignment",
     "wrap_with_type",
 )
 
@@ -1004,7 +1007,7 @@ class ParameterProcessingResult:
         self.parameters = parameters
         self.parameter_profile = parameter_profile
 
-    def __iter__(self) -> Generator[str | Any, Any, None]:
+    def __iter__(self) -> "Generator[str | Any, Any, None]":
         yield self.sql
         yield self.parameters
 
@@ -1018,6 +1021,144 @@ class ParameterProcessingResult:
             return self.parameters
         msg = "ParameterProcessingResult exposes exactly two positional items"
         raise IndexError(msg)
+
+
+def _is_sequence_like(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+
+
+def _normalize_parameter_key(key: Any) -> "tuple[str, int | str]":
+    if isinstance(key, str):
+        stripped_numeric = key.lstrip("$")
+        if stripped_numeric.isdigit():
+            return ("index", int(stripped_numeric) - 1)
+        if key.isdigit():
+            return ("index", int(key) - 1)
+        if key.startswith("param_") and key[6:].isdigit():
+            return ("index", int(key[6:]))
+        return ("named", key)
+    if isinstance(key, int):
+        if key > 0:
+            return ("index", key - 1)
+        return ("index", key)
+    return ("named", str(key))
+
+
+def _collect_expected_identifiers(parameter_profile: "ParameterProfile") -> "set[tuple[str, int | str]]":
+    identifiers: set[tuple[str, int | str]] = set()
+    for parameter in parameter_profile.parameters:
+        style = parameter.style
+        name = parameter.name
+        if style in {
+            ParameterStyle.NAMED_COLON,
+            ParameterStyle.NAMED_AT,
+            ParameterStyle.NAMED_DOLLAR,
+            ParameterStyle.NAMED_PYFORMAT,
+        }:
+            identifiers.add(("named", name or f"param_{parameter.ordinal}"))
+        elif style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}:
+            if name and name.isdigit():
+                identifiers.add(("index", int(name) - 1))
+            else:
+                identifiers.add(("index", parameter.ordinal))
+        else:
+            identifiers.add(("index", parameter.ordinal))
+    return identifiers
+
+
+def _collect_actual_identifiers(parameters: Any) -> "tuple[set[tuple[str, int | str]], int]":
+    if parameters is None:
+        return set(), 0
+    if isinstance(parameters, Mapping):
+        identifiers = {_normalize_parameter_key(key) for key in parameters}
+        return identifiers, len(parameters)
+    if _is_sequence_like(parameters):
+        identifiers = {("index", cast("int | str", index)) for index in range(len(parameters))}
+        return identifiers, len(parameters)
+    identifiers = {("index", cast("int | str", 0))}
+    return identifiers, 1
+
+
+def _format_identifiers(identifiers: "set[tuple[str, int | str]]") -> str:
+    if not identifiers:
+        return "[]"
+    formatted: list[str] = []
+    for identifier in sorted(identifiers, key=lambda item: (item[0], str(item[1]))):
+        kind, value = identifier
+        if kind == "named":
+            formatted.append(str(value))
+        elif isinstance(value, int):
+            formatted.append(str(value + 1))
+        else:
+            formatted.append(str(value))
+    return "[" + ", ".join(formatted) + "]"
+
+
+def _validate_single_parameter_set(
+    parameter_profile: "ParameterProfile", parameters: Any, batch_index: "int | None" = None
+) -> None:
+    expected_identifiers = _collect_expected_identifiers(parameter_profile)
+    actual_identifiers, actual_count = _collect_actual_identifiers(parameters)
+    expected_count = len(expected_identifiers)
+
+    if expected_count == 0 and actual_count == 0:
+        return
+
+    prefix = "Parameter count mismatch"
+    if batch_index is not None:
+        prefix = f"{prefix} in batch {batch_index}"
+
+    if expected_count == 0 and actual_count > 0:
+        msg = f"{prefix}: statement does not accept parameters."
+        raise sqlspec.exceptions.SQLSpecError(msg)
+
+    if expected_count > 0 and actual_count == 0:
+        msg = f"{prefix}: expected {expected_count} parameters, received 0."
+        raise sqlspec.exceptions.SQLSpecError(msg)
+
+    if expected_count != actual_count:
+        msg = f"{prefix}: {actual_count} parameters provided but {expected_count} placeholders detected."
+        raise sqlspec.exceptions.SQLSpecError(msg)
+
+    if expected_identifiers != actual_identifiers:
+        msg = (
+            f"{prefix}: expected identifiers {_format_identifiers(expected_identifiers)}, "
+            f"received {_format_identifiers(actual_identifiers)}."
+        )
+        raise sqlspec.exceptions.SQLSpecError(msg)
+
+
+def validate_parameter_alignment(
+    parameter_profile: "ParameterProfile | None", parameters: Any, *, is_many: bool = False
+) -> None:
+    """Validate that provided parameters align with detected placeholders.
+
+    Args:
+        parameter_profile: Placeholder metadata produced by parameter processing.
+        parameters: Parameters that will be bound for execution.
+        is_many: Whether parameters represent execute_many payload.
+
+    Raises:
+        SQLSpecError: If parameter counts or identifiers do not align.
+    """
+    profile = parameter_profile or ParameterProfile.empty()
+
+    if is_many:
+        if parameters is None:
+            if profile.total_count == 0:
+                return
+            msg = "Parameter count mismatch: expected parameter sets for execute_many."
+            raise sqlspec.exceptions.SQLSpecError(msg)
+        if not _is_sequence_like(parameters):
+            msg = "Parameter count mismatch: expected sequence of parameter sets for execute_many."
+            raise sqlspec.exceptions.SQLSpecError(msg)
+        if len(parameters) == 0:
+            return
+        for index, param_set in enumerate(parameters):
+            _validate_single_parameter_set(profile, param_set, batch_index=index)
+        return
+
+    _validate_single_parameter_set(profile, parameters)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
