@@ -127,6 +127,11 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         if "json_deserializer" not in processed_driver_features:
             processed_driver_features["json_deserializer"] = from_json
 
+        json_serializer = processed_driver_features.get("json_serializer")
+        if json_serializer is not None:
+            parameter_config = statement_config.parameter_config.with_json_serializers(json_serializer)
+            statement_config = statement_config.replace(parameter_config=parameter_config)
+
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,

@@ -30,7 +30,6 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.asyncmy._types import AsyncmyConnection
@@ -243,81 +242,10 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                 dialect="mysql",
             )
 
-        final_statement_config = self._apply_json_serializer_feature(final_statement_config, driver_features)
-
         super().__init__(
             connection=connection, statement_config=final_statement_config, driver_features=driver_features
         )
         self._data_dictionary: AsyncDataDictionaryBase | None = None
-
-    @staticmethod
-    def _clone_parameter_config(
-        parameter_config: ParameterStyleConfig, type_coercion_map: "dict[type[Any], Callable[[Any], Any]]"
-    ) -> ParameterStyleConfig:
-        """Create a copy of the parameter configuration with updated coercion map.
-
-        Args:
-            parameter_config: Existing parameter configuration to copy.
-            type_coercion_map: Updated coercion mapping for parameter serialization.
-
-        Returns:
-            ParameterStyleConfig with the updated type coercion map applied.
-        """
-
-        supported_execution_styles = (
-            set(parameter_config.supported_execution_parameter_styles)
-            if parameter_config.supported_execution_parameter_styles is not None
-            else None
-        )
-
-        return ParameterStyleConfig(
-            default_parameter_style=parameter_config.default_parameter_style,
-            supported_parameter_styles=set(parameter_config.supported_parameter_styles),
-            supported_execution_parameter_styles=supported_execution_styles,
-            default_execution_parameter_style=parameter_config.default_execution_parameter_style,
-            type_coercion_map=type_coercion_map,
-            has_native_list_expansion=parameter_config.has_native_list_expansion,
-            needs_static_script_compilation=parameter_config.needs_static_script_compilation,
-            allow_mixed_parameter_styles=parameter_config.allow_mixed_parameter_styles,
-            preserve_parameter_format=parameter_config.preserve_parameter_format,
-            preserve_original_params_for_many=parameter_config.preserve_original_params_for_many,
-            output_transformer=parameter_config.output_transformer,
-            ast_transformer=parameter_config.ast_transformer,
-        )
-
-    @staticmethod
-    def _apply_json_serializer_feature(
-        statement_config: "StatementConfig", driver_features: "dict[str, Any] | None"
-    ) -> "StatementConfig":
-        """Apply driver-level JSON serializer customization to the statement config.
-
-        Args:
-            statement_config: Base statement configuration for the driver.
-            driver_features: Driver feature mapping provided via configuration.
-
-        Returns:
-            StatementConfig with serializer adjustments applied when configured.
-        """
-
-        if not driver_features:
-            return statement_config
-
-        serializer = driver_features.get("json_serializer")
-        if serializer is None:
-            return statement_config
-
-        parameter_config = statement_config.parameter_config
-        type_coercion_map = dict(parameter_config.type_coercion_map)
-
-        def serialize_tuple(value: Any) -> Any:
-            return serializer(list(value))
-
-        type_coercion_map[dict] = serializer
-        type_coercion_map[list] = serializer
-        type_coercion_map[tuple] = serialize_tuple
-
-        updated_parameter_config = AsyncmyDriver._clone_parameter_config(parameter_config, type_coercion_map)
-        return statement_config.replace(parameter_config=updated_parameter_config)
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         """Create cursor context manager for the connection.

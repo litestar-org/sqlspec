@@ -27,7 +27,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from functools import singledispatch
-from typing import Any, Final, cast
+from typing import Any, Final, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -251,6 +251,8 @@ class ParameterStyleConfig:
         "default_execution_parameter_style",
         "default_parameter_style",
         "has_native_list_expansion",
+        "json_deserializer",
+        "json_serializer",
         "needs_static_script_compilation",
         "output_transformer",
         "preserve_original_params_for_many",
@@ -274,6 +276,8 @@ class ParameterStyleConfig:
         preserve_original_params_for_many: bool = False,
         output_transformer: Callable[[str, Any], tuple[str, Any]] | None = None,
         ast_transformer: Callable[[Any, Any], tuple[Any, Any]] | None = None,
+        json_serializer: Callable[[Any], str] | None = None,
+        json_deserializer: Callable[[str], Any] | None = None,
     ) -> None:
         """Initialize parameter style configuration.
 
@@ -290,6 +294,8 @@ class ParameterStyleConfig:
             preserve_parameter_format: Maintain original parameter structure
             preserve_original_params_for_many: Return original list of tuples for execute_many
             ast_transformer: AST-based transformation hook for SQL/parameter manipulation
+            json_serializer: Optional JSON serializer to apply to dict/list/tuple parameters
+            json_deserializer: Optional JSON deserializer retained for driver use
         """
         self.default_parameter_style = default_parameter_style
         self.supported_parameter_styles = (
@@ -305,6 +311,8 @@ class ParameterStyleConfig:
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.preserve_parameter_format = preserve_parameter_format
         self.preserve_original_params_for_many = preserve_original_params_for_many
+        self.json_serializer = json_serializer
+        self.json_deserializer = json_deserializer
 
     def hash(self) -> int:
         """Generate hash for cache key generation.
@@ -329,8 +337,68 @@ class ParameterStyleConfig:
             self.allow_mixed_parameter_styles,
             self.preserve_parameter_format,
             bool(self.ast_transformer),
+            self.json_serializer,
+            self.json_deserializer,
         )
         return hash(hash_components)
+
+    def replace(self, **overrides: Any) -> "ParameterStyleConfig":
+        data: dict[str, Any] = {
+            "default_parameter_style": self.default_parameter_style,
+            "supported_parameter_styles": set(self.supported_parameter_styles),
+            "supported_execution_parameter_styles": (
+                set(self.supported_execution_parameter_styles)
+                if self.supported_execution_parameter_styles is not None
+                else None
+            ),
+            "default_execution_parameter_style": self.default_execution_parameter_style,
+            "type_coercion_map": dict(self.type_coercion_map),
+            "has_native_list_expansion": self.has_native_list_expansion,
+            "needs_static_script_compilation": self.needs_static_script_compilation,
+            "allow_mixed_parameter_styles": self.allow_mixed_parameter_styles,
+            "preserve_parameter_format": self.preserve_parameter_format,
+            "preserve_original_params_for_many": self.preserve_original_params_for_many,
+            "output_transformer": self.output_transformer,
+            "ast_transformer": self.ast_transformer,
+            "json_serializer": self.json_serializer,
+            "json_deserializer": self.json_deserializer,
+        }
+        data.update(overrides)
+        return ParameterStyleConfig(**data)
+
+    def with_json_serializers(
+        self,
+        serializer: "Callable[[Any], str]",
+        *,
+        tuple_strategy: Literal["list", "tuple"] = "list",
+        deserializer: "Callable[[str], Any] | None" = None,
+    ) -> "ParameterStyleConfig":
+        """Return a copy configured to serialize dict/list/tuple parameters with a custom JSON encoder."""
+
+        if tuple_strategy == "list":
+
+            def tuple_adapter(value: Any) -> Any:
+                return serializer(list(value))
+
+        elif tuple_strategy == "tuple":
+
+            def tuple_adapter(value: Any) -> Any:
+                return serializer(value)
+
+        else:
+            msg = f"Unsupported tuple_strategy: {tuple_strategy}"
+            raise ValueError(msg)
+
+        updated_type_map = dict(self.type_coercion_map)
+        updated_type_map[dict] = serializer
+        updated_type_map[list] = serializer
+        updated_type_map[tuple] = tuple_adapter
+
+        return self.replace(
+            type_coercion_map=updated_type_map,
+            json_serializer=serializer,
+            json_deserializer=deserializer or self.json_deserializer,
+        )
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
