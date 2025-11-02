@@ -8,6 +8,7 @@ Components:
 
 import hashlib
 from collections import OrderedDict
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import sqlglot
@@ -76,6 +77,16 @@ class OperationProfile:
 
     def __repr__(self) -> str:
         return f"OperationProfile(returns_rows={self.returns_rows!r}, modifies_rows={self.modifies_rows!r})"
+
+
+def _is_effectively_empty_parameters(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, Mapping):
+        return len(value) == 0
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return len(value) == 0
+    return False
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -304,7 +315,14 @@ class SQLProcessor:
                     expression, processed_sql, final_parameters, dialect_str
                 )
 
-            if self._config.enable_validation:
+            should_validate = True
+            if (
+                _is_effectively_empty_parameters(final_params)
+                and _is_effectively_empty_parameters(parameters)
+                and not is_many
+            ):
+                should_validate = False
+            if self._config.enable_validation and should_validate:
                 validate_parameter_alignment(parameter_profile, final_params, is_many=is_many)
 
             return CompiledSQL(
