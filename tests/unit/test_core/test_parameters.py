@@ -17,16 +17,6 @@ from typing import Any
 import pytest
 import sqlglot
 
-import sqlspec.adapters.adbc.driver
-import sqlspec.adapters.aiosqlite.driver
-import sqlspec.adapters.asyncmy.driver
-import sqlspec.adapters.asyncpg.driver
-import sqlspec.adapters.bigquery.driver
-import sqlspec.adapters.duckdb.driver
-import sqlspec.adapters.oracledb.driver
-import sqlspec.adapters.psqlpy.driver
-import sqlspec.adapters.psycopg.driver
-import sqlspec.adapters.sqlite.driver  # noqa: F401
 from sqlspec.core.parameters import (
     DRIVER_PARAMETER_PROFILES,
     DriverParameterProfile,
@@ -40,9 +30,9 @@ from sqlspec.core.parameters import (
     build_statement_config_from_profile,
     get_driver_profile,
     is_iterable_parameters,
+    register_driver_profile,
     replace_null_parameters_with_literals,
     replace_placeholders_with_literals,
-    register_driver_profile,
     wrap_with_type,
 )
 from sqlspec.exceptions import ImproperConfigurationError
@@ -339,11 +329,7 @@ def test_replace_placeholders_with_literals_named_mapping() -> None:
     """Named parameters in mappings are embedded as string literals."""
 
     expression = sqlglot.parse_one("SELECT @name AS user", dialect="bigquery")
-    transformed = replace_placeholders_with_literals(
-        expression,
-        {"@name": "bob"},
-        json_serializer=json.dumps,
-    )
+    transformed = replace_placeholders_with_literals(expression, {"@name": "bob"}, json_serializer=json.dumps)
 
     assert transformed.sql(dialect="bigquery") == "SELECT 'bob' AS user"
 
@@ -596,7 +582,7 @@ def test_parameter_style_config_advanced() -> None:
 
     assert config.default_parameter_style == ParameterStyle.NAMED_COLON
     assert config.supported_parameter_styles == {ParameterStyle.NAMED_COLON, ParameterStyle.QMARK}
-    assert config.supported_execution_parameter_styles == {ParameterStyle.QMARK}
+    assert config.supported_execution_parameter_styles == {ParameterStyle.QMARK}  # type: ignore[comparison-overlap]
     assert config.default_execution_parameter_style == ParameterStyle.QMARK
     assert config.type_coercion_map == coercion_map
     assert config.has_native_list_expansion is True

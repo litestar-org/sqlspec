@@ -121,7 +121,6 @@ __all__ = (
     "DriverParameterProfile",
     "MultiLevelCache",
     "OperationType",
-    "P",
     "ParameterConverter",
     "ParameterProcessor",
     "ParameterStyle",

@@ -159,9 +159,7 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
     }
 
     if detected_dialect in {"postgres", "postgresql"}:
-        parameter_overrides["ast_transformer"] = partial(
-            replace_null_parameters_with_literals, dialect=sqlglot_dialect
-        )
+        parameter_overrides["ast_transformer"] = partial(replace_null_parameters_with_literals, dialect=sqlglot_dialect)
 
     return build_statement_config_from_profile(
         get_driver_profile("adbc"),

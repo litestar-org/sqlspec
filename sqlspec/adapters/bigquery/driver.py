@@ -7,7 +7,7 @@ type coercion, error handling, and query job management.
 import datetime
 import logging
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import sqlglot
 from google.cloud.bigquery import ArrayQueryParameter, QueryJob, QueryJobConfig, ScalarQueryParameter
@@ -535,13 +535,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         except sqlglot.ParseError:
             return sql
 
-        transformed_ast = replace_placeholders_with_literals(
-            ast,
-            parameters,
-            json_serializer=self._json_serializer,
-        )
+        transformed_ast = replace_placeholders_with_literals(ast, parameters, json_serializer=self._json_serializer)
 
-        return transformed_ast.sql(dialect="bigquery")
+        return cast("str", transformed_ast.sql(dialect="bigquery"))
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL script with statement splitting and parameter handling.
