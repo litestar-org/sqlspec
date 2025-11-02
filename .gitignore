@@ -67,3 +67,4 @@ requirements/*
 !requirements/README.md
 !.claude/bootstrap.md
 .pre-commit-cache
+.gh-cache

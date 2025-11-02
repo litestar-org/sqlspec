@@ -427,6 +427,12 @@ class ParameterValidator:
 
             style, name = self._extract_parameter_style(match)
 
+            if style is ParameterStyle.QMARK:
+                tail = sql[match.end() :]
+                next_non_space = tail.lstrip()
+                if next_non_space.startswith(("'", '"')):
+                    continue
+
             if style is not None:
                 parameters.append(
                     ParameterInfo(
@@ -1027,6 +1033,16 @@ def _is_sequence_like(value: Any) -> bool:
     return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
 
 
+def _looks_like_execute_many(parameters: Any) -> bool:
+    if not _is_sequence_like(parameters):
+        return False
+    if len(parameters) < 2:
+        return False
+    if not all(_is_sequence_like(entry) or isinstance(entry, Mapping) for entry in parameters):
+        return False
+    return True
+
+
 def _normalize_parameter_key(key: Any) -> "tuple[str, int | str]":
     if isinstance(key, str):
         stripped_numeric = key.lstrip("$")
@@ -1034,8 +1050,6 @@ def _normalize_parameter_key(key: Any) -> "tuple[str, int | str]":
             return ("index", int(stripped_numeric) - 1)
         if key.isdigit():
             return ("index", int(key) - 1)
-        if key.startswith("param_") and key[6:].isdigit():
-            return ("index", int(key[6:]))
         return ("named", key)
     if isinstance(key, int):
         if key > 0:
@@ -1072,6 +1086,12 @@ def _collect_actual_identifiers(parameters: Any) -> "tuple[set[tuple[str, int | 
     if isinstance(parameters, Mapping):
         identifiers = {_normalize_parameter_key(key) for key in parameters}
         return identifiers, len(parameters)
+    if _looks_like_execute_many(parameters):
+        identifiers: set[tuple[str, int | str]] = set()
+        for entry in parameters:
+            entry_identifiers, _ = _collect_actual_identifiers(entry)
+            identifiers.update(entry_identifiers)
+        return identifiers, len(identifiers)
     if _is_sequence_like(parameters):
         identifiers = {("index", cast("int | str", index)) for index in range(len(parameters))}
         return identifiers, len(parameters)
@@ -1142,8 +1162,12 @@ def validate_parameter_alignment(
         SQLSpecError: If parameter counts or identifiers do not align.
     """
     profile = parameter_profile or ParameterProfile.empty()
+    if profile.total_count == 0:
+        return
 
-    if is_many:
+    effective_is_many = is_many or _looks_like_execute_many(parameters)
+
+    if effective_is_many:
         if parameters is None:
             if profile.total_count == 0:
                 return
