@@ -346,10 +346,33 @@ class SQLProcessor:
         if not expression:
             return {}
 
-        cast_positions = {}
+        cast_positions: dict[int, str] = {}
+        placeholder_positions: dict[str, int] = {}
+        placeholder_counter = 0
+
+        def _assign_placeholder_position(placeholder: "exp.Placeholder") -> "int | None":
+            nonlocal placeholder_counter
+
+            name_expr = placeholder.name if placeholder.name is not None else None
+            if name_expr is not None:
+                placeholder_key = str(name_expr)
+            else:
+                value = placeholder.args.get("this")
+                placeholder_key = str(value) if value is not None else placeholder.sql()
+
+            if not placeholder_key:
+                return None
+
+            if placeholder_key not in placeholder_positions:
+                placeholder_counter += 1
+                placeholder_positions[placeholder_key] = placeholder_counter
+
+            return placeholder_positions[placeholder_key]
 
         # Walk all nodes in order to track parameter positions
         for node in expression.walk():
+            if isinstance(node, exp.Placeholder):
+                _assign_placeholder_position(node)
             # Check for cast nodes with parameter children
             if isinstance(node, exp.Cast):
                 cast_target = node.this
@@ -361,8 +384,7 @@ class SQLProcessor:
                     if isinstance(param_value, exp.Literal):
                         position = int(param_value.this)
                 elif isinstance(cast_target, exp.Placeholder):
-                    # For ? style, we need to count position (will implement if needed)
-                    pass
+                    position = _assign_placeholder_position(cast_target)
                 elif isinstance(cast_target, exp.Column):
                     # Handle cases where $1 gets parsed as a column
                     column_name = str(cast_target.this) if cast_target.this else str(cast_target)

@@ -275,7 +275,6 @@ async def test_oracle_merge_bulk_mixed_operations(oracle_bulk_session: OracleAsy
     assert verify_new[0]["count"] == 2
 
 
-@pytest.mark.skip(reason="Oracle Cloud Free Tier may timeout on very large datasets")
 async def test_oracle_merge_bulk_5000_rows(oracle_bulk_session: OracleAsyncDriver) -> None:
     """Test MERGE with 5000 rows - stress test for JSON_TABLE strategy."""
     bulk_data = [

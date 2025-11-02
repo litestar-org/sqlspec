@@ -299,7 +299,6 @@ def _get_bigquery_type_coercion_map(type_converter: BigQueryTypeConverter) -> di
         bool: lambda x: x,
         int: lambda x: x,
         float: lambda x: x,
-        str: type_converter.convert_if_detected,
         bytes: lambda x: x,
         datetime.datetime: lambda x: x,
         datetime.date: lambda x: x,

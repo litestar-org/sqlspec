@@ -58,7 +58,6 @@ duckdb_statement_config = StatementConfig(
             Decimal: str,
             dict: to_json,
             list: to_json,
-            str: _type_converter.convert_if_detected,
         },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,

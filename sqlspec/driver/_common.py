@@ -657,7 +657,10 @@ class CommonDriverAttributesMixin:
         compiled_sql, execution_parameters = prepared_statement.compile()
 
         prepared_parameters = self.prepare_driver_parameters(
-            execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
+            execution_parameters,
+            statement_config,
+            is_many=prepared_statement.is_many,
+            prepared_statement=prepared_statement,
         )
 
         if statement_config.parameter_config.output_transformer:
@@ -680,7 +683,7 @@ class CommonDriverAttributesMixin:
                         else prepared_parameters
                     )
                 ),
-                expression=statement.expression,
+                expression=prepared_statement.expression,
             )
             cache.put("statement", cache_key, cached_statement, str(statement.dialect) if statement.dialect else None)
 

@@ -86,6 +86,25 @@ def _convert_list_to_postgres_array(value: Any) -> str:
     return f"{{{','.join(elements)}}}"
 
 
+def _should_serialize_list(value: "list[Any]") -> bool:
+    """Detect whether list should be serialized to JSON."""
+    return any(isinstance(item, (dict, list, tuple)) for item in value)
+
+
+def _prepare_list_parameter(value: "list[Any]") -> Any:
+    """Convert complex lists to JSON strings while keeping primitive arrays."""
+    if not value:
+        return value
+    if _should_serialize_list(value):
+        return to_json(value)
+    return value
+
+
+def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> Any:
+    """Normalize tuple parameters for psycopg binding."""
+    return _prepare_list_parameter(list(value))
+
+
 psycopg_statement_config = StatementConfig(
     dialect="postgres",
     pre_process_steps=None,
@@ -111,7 +130,8 @@ psycopg_statement_config = StatementConfig(
         },
         type_coercion_map={
             dict: to_json,
-            list: to_json,
+            list: _prepare_list_parameter,
+            tuple: _prepare_tuple_parameter,
             datetime.datetime: lambda x: x,
             datetime.date: lambda x: x,
             datetime.time: lambda x: x,

@@ -716,6 +716,8 @@ class ParameterConverter:
             return tuple(param_values)
         if isinstance(original_parameters, list):
             return param_values
+        if isinstance(original_parameters, Mapping):
+            return param_values
 
         if hasattr(original_parameters, "__class__") and callable(original_parameters.__class__):
             try:

@@ -318,8 +318,6 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     Returns:
         Mapping of Python types to conversion functions
     """
-    tc = ADBCTypeConverter(dialect)
-
     return {
         datetime.datetime: lambda x: x,
         datetime.date: lambda x: x,
@@ -328,7 +326,6 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
         bool: lambda x: x,
         int: lambda x: x,
         float: lambda x: x,
-        str: tc.convert_if_detected,
         bytes: lambda x: x,
         tuple: _convert_array_for_postgres_adbc,
         list: _convert_array_for_postgres_adbc,
