@@ -88,9 +88,23 @@ def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> tuple[Any, ...]:
 
 
 def _normalize_scalar_parameter(value: Any) -> Any:
-    """Convert scalars to driver-friendly representations."""
+    """Return scalar value without additional coercion."""
+    return value
+
+
+def _coerce_numeric_for_write(value: Any) -> Any:
+    """Convert write parameters to driver-compatible numeric types."""
     if isinstance(value, float):
         return decimal.Decimal(str(value))
+    if isinstance(value, decimal.Decimal):
+        return value
+    if isinstance(value, list):
+        return [_coerce_numeric_for_write(item) for item in value]
+    if isinstance(value, tuple):
+        coerced = [_coerce_numeric_for_write(item) for item in value]
+        return tuple(coerced)
+    if isinstance(value, dict):
+        return {key: _coerce_numeric_for_write(item) for key, item in value.items()}
     return value
 
 
@@ -436,12 +450,17 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             prepared_parameters, self.statement_config, is_many=True, prepared_statement=statement
         )
 
+        operation_type = statement.operation_type
+        should_coerce = operation_type != "SELECT"
+
         formatted_parameters = []
         for param_set in driver_parameters:
-            if isinstance(param_set, (list, tuple)):
-                formatted_parameters.append(list(param_set))
-            else:
-                formatted_parameters.append([param_set])
+            values = list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
+
+            if should_coerce:
+                values = list(_coerce_numeric_for_write(values))
+
+            formatted_parameters.append(values)
 
         await cursor.execute_many(sql, formatted_parameters)
 
@@ -462,9 +481,12 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         driver_parameters = prepared_parameters
+        operation_type = statement.operation_type
+        should_coerce = operation_type != "SELECT"
+        effective_parameters = _coerce_numeric_for_write(driver_parameters) if should_coerce else driver_parameters
 
         if statement.returns_rows():
-            query_result = await cursor.fetch(sql, driver_parameters or [])
+            query_result = await cursor.fetch(sql, effective_parameters or [])
             dict_rows: list[dict[str, Any]] = query_result.result() if query_result else []
 
             return self.create_execution_result(
@@ -475,7 +497,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        result = await cursor.execute(sql, driver_parameters or [])
+        result = await cursor.execute(sql, effective_parameters or [])
         rows_affected = self._extract_rows_affected(result)
 
         return self.create_execution_result(cursor, rowcount_override=rows_affected)

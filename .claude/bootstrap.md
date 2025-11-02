@@ -26,6 +26,12 @@ This is a **single-file, self-contained bootstrap** that will:
 # Check for MCP tool availability
 available_tools = {}
 
+# Try crash
+try:
+    available_tools['crash'] = True
+except:
+    available_tools['crash'] = False
+
 # Try sequential-thinking
 try:
     available_tools['sequential_thinking'] = True
@@ -59,6 +65,7 @@ except:
     available_tools['web_search'] = False
 
 print("\n=== MCP TOOL AVAILABILITY ===\n")
+print(f"Crash: {'✓' if available_tools.get('crash') else '✗'}")
 print(f"Sequential Thinking: {'✓' if available_tools['sequential_thinking'] else '✗'}")
 print(f"Zen Planner: {'✓' if available_tools['zen_planner'] else '✗'}")
 print(f"Zen Consensus: {'✓' if available_tools['zen_consensus'] else '✗'}")
@@ -726,11 +733,28 @@ Grep(pattern="class.*Service", path="{source_dir}")
 
 ### Step 2: Deep Analysis (MANDATORY - Use Best Available Tool)
 
-**TIER 1 (If Available): Sequential Thinking**
+**TIER 1 (Preferred): Crash**
+
+```python
+# Use crash for structured, revisable deep analysis
+mcp__crash__crash(
+    step_number=1,
+    estimated_total=12,
+    purpose="analysis",
+    thought="Step 1: Analyze feature scope and affected components",
+    next_action="Map dependencies",
+    outcome="pending",
+    rationale="Crash enables branching and revisions",
+    context="Initial planning"
+)
+# Continue through comprehensive crash steps (≥12 for non-trivial work)
+```
+
+**TIER 2 (If Crash Unavailable but Sequential Thinking Installed): Sequential Thinking**
 
 ```python
 # Use sequential thinking for deep analysis
-# Minimum 10-15 thoughts for any non-trivial feature
+# Minimum 12-15 thoughts for any non-trivial feature
 mcp__sequential-thinking__sequentialthinking(
     thought="Step 1: Analyze feature scope and affected components",
     thought_number=1,
@@ -740,7 +764,7 @@ mcp__sequential-thinking__sequentialthinking(
 # Continue through comprehensive analysis...
 ```
 
-**TIER 2 (If Sequential Thinking Unavailable): Zen Planner**
+**TIER 3 (If Neither Crash nor Sequential Thinking Available): Zen Planner**
 
 ```python
 # Use zen.planner for structured breakdown
@@ -752,7 +776,7 @@ mcp__zen__planner(
 )
 ```
 
-**TIER 3 (If No MCP Tools): Internal Planning**
+**TIER 4 (If No MCP Tools): Internal Planning**
 
 - Manually break down into phases
 - Document analysis in research/plan.md

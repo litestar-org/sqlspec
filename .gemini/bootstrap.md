@@ -94,6 +94,7 @@ cat > tools/scripts/detect_mcp_tools.py << 'EOF'
 def detect_mcp_tools():
     """Detect which MCP tools are available."""
     tools = {
+        'crash': False,
         'sequential_thinking': False,
         'context7': False,
         'zen_planner': False,
@@ -105,6 +106,7 @@ def detect_mcp_tools():
     }
 
     # Try each tool (implementation would actually test availability)
+    # Prefer crash when present; sequential thinking is the fallback
     # For bootstrap: detect from environment or config
 
     return tools
@@ -324,7 +326,7 @@ You are the PRD Agent for the {{PROJECT_NAME}} project. Your mission is to creat
 
 1. **NO CODE MODIFICATION** - You MUST NOT modify any source code during PRD phase
 2. **WORKSPACE FIRST** - You MUST create workspace BEFORE starting research
-3. **DEEP THINKING REQUIRED** - You MUST use Sequential Thinking (minimum 15 thoughts) for complex features
+3. **DEEP THINKING REQUIRED** - You MUST use the Crash MCP tool when available (≥12 structured steps). If Crash is unavailable, fall back to Sequential Thinking (≥15 thoughts).
 4. **RESEARCH GROUNDED** - You MUST conduct minimum 500+ words of research
 5. **COMPREHENSIVE PRD** - You MUST write minimum 800+ words PRD with specific acceptance criteria
 6. **GIT VERIFICATION** - You MUST verify git status shows no src/ changes at end
@@ -414,13 +416,33 @@ ls -la specs/active/{{slug}}/
 
 ---
 
-### Checkpoint 3: Deep Analysis with Sequential Thinking (REQUIRED)
+### Checkpoint 3: Deep Analysis with Crash (preferred) or Sequential Thinking
 
-**⚠️ CRITICAL**: For non-trivial features, you MUST use Sequential Thinking MCP tool.
+**⚠️ CRITICAL**: For non-trivial features you MUST use a structured reasoning MCP tool.
 
-**Check if Sequential Thinking is available** (from `.gemini/mcp-tools.txt`):
+**Step 3.1 - Prefer Crash when available** (check `.gemini/mcp-tools.txt`):
 
-**If available (PREFERRED)**:
+```python
+mcp__crash__crash(
+    step_number=1,
+    estimated_total=12,
+    purpose="analysis",
+    thought="Understand feature scope and impacted modules",
+    next_action="Map dependencies",
+    outcome="pending",
+    rationale="Crash provides richer branching and revision support",
+    context="Initial planning"
+)
+# Continue with iterative crash steps (>=12 for medium complexity)
+```
+
+**Minimum structured reasoning requirements**:
+
+- Simple feature (CRUD, config change): 10 structured steps
+- Medium feature (new service, API endpoint): 12-15 structured steps
+- Complex feature (architecture change, multi-component): 18+ structured steps
+
+**Step 3.2 - Fallback to Sequential Thinking if Crash unavailable**:
 
 ```python
 mcp__sequential-thinking__sequentialthinking(
@@ -429,16 +451,10 @@ mcp__sequential-thinking__sequentialthinking(
     total_thoughts=15,
     next_thought_needed=True
 )
-# Continue through minimum 15 thoughts for comprehensive analysis
+# Continue through minimum required thoughts for comprehensive analysis
 ```
 
-**Minimum thinking requirements**:
-
-- Simple feature (CRUD, config change): 10 thoughts minimum
-- Medium feature (new service, API endpoint): 15 thoughts minimum
-- Complex feature (architecture change, multi-component): 20+ thoughts minimum
-
-**If Sequential Thinking not available**:
+**Step 3.3 - Manual planning if neither tool is available**:
 
 - Manually break down into phases
 - Document exhaustively in `specs/active/{{slug}}/research/plan.md`
@@ -450,7 +466,7 @@ mcp__sequential-thinking__sequentialthinking(
 
 ## Analysis Summary
 
-{Summary of Sequential Thinking analysis}
+{Summary of Crash or Sequential Thinking analysis}
 
 ## Key Findings
 
@@ -459,7 +475,7 @@ mcp__sequential-thinking__sequentialthinking(
    ...
 ```
 
-**Output**: "✓ Checkpoint 3 complete - Deep analysis finished (minimum 15 thoughts)"
+**Output**: "✓ Checkpoint 3 complete - Deep analysis finished (Crash ≥12 steps or Sequential Thinking fallback ≥15 thoughts)"
 
 ---
 
@@ -501,7 +517,7 @@ mcp__context7__get-library-docs(
 )
 ```
 
-**Priority 4 - Sequential Thinking** (for complex decisions):
+**Priority 4 - Crash (preferred) / Sequential Thinking fallback** (for complex decisions):
 
 ```python
 # Use for architectural decisions
@@ -889,7 +905,7 @@ Status: Ready for implementation
 
 Deliverables:
 - ✓ Workspace created
-- ✓ Deep analysis (15+ thoughts)
+- ✓ Deep analysis completed (Crash ≥12 steps or Sequential Thinking fallback ≥15 thoughts)
 - ✓ Research completed (500+ words)
 - ✓ PRD written (800+ words)
 - ✓ Tasks broken down
@@ -908,7 +924,7 @@ Next step: Run `/implement {{slug}}`
 - [ ] **Context Loaded**: AGENTS.md, GEMINI.md, guides, MCP tools read
 - [ ] **Requirements Analyzed**: Clear understanding of what's needed
 - [ ] **Workspace Created**: specs/active/{{slug}}/ exists with all files
-- [ ] **Deep Analysis Done**: Sequential Thinking used (15+ thoughts minimum)
+- [ ] **Deep Analysis Done**: Crash used (≥12 structured steps) or Sequential Thinking fallback (≥15 thoughts)
 - [ ] **Research Complete**: 500+ words documented in research/plan.md
 - [ ] **PRD Written**: 800+ words with specific acceptance criteria
 - [ ] **Tasks Broken Down**: Testable chunks, not micro-tasks
@@ -921,7 +937,7 @@ Next step: Run `/implement {{slug}}`
 
 ❌ **Modifying source code** - PRD is planning only, implementation happens in /implement
 ❌ **Vague acceptance criteria** - Must be specific and measurable
-❌ **Skipping Sequential Thinking** - Required for non-trivial features (15+ thoughts)
+❌ **Skipping structured reasoning** - Crash (preferred) or Sequential Thinking fallback is mandatory for non-trivial features
 ❌ **Insufficient research** - Minimum 500 words required
 ❌ **Short PRD** - Minimum 800 words required for comprehensive planning
 ❌ **Starting research before workspace** - Workspace MUST be created at Checkpoint 2
@@ -1059,11 +1075,10 @@ mcp__context7__get_library_docs(
 )
 ```
 
-**Use Sequential Thinking for complex decisions** (available in `.gemini/mcp-tools.txt`):
+**Use Crash (preferred) or Sequential Thinking fallback for complex decisions** (available in `.gemini/mcp-tools.txt`):
 
-- Use it for architectural decisions
-- Use it for error handling strategies
-- Minimum 10 thoughts for complex features
+- Crash: capture architectural decisions, branching scenarios, revision steps (≥10 structured steps)
+- Sequential Thinking: fallback when Crash unavailable (≥15 thoughts)
 
 **Output**: "✓ Checkpoint 2 complete - Research complete, patterns identified"
 
@@ -1490,10 +1505,10 @@ grep -q "Phase 2 (Implementation) - COMPLETE" specs/active/{{slug}}/recovery.md 
 4. **Identify shared state** - Will need concurrent access tests
 5. **Identify edge cases** - NULL, empty, errors
 
-**Use Sequential Thinking for complex test planning** (available in `.gemini/mcp-tools.txt`):
+**Use Crash (preferred) or Sequential Thinking fallback for complex test planning** (available in `.gemini/mcp-tools.txt`):
 
-- Use it for complex test strategies
-- Minimum 10 thoughts for comprehensive test planning
+- Crash: map test matrices, concurrency scenarios, failure injections (≥10 structured steps)
+- Sequential Thinking: fallback when Crash unavailable (≥15 thoughts)
 
 **Create test plan in workspace**:
 
