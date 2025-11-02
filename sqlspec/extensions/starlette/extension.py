@@ -104,6 +104,7 @@ class SQLSpecPlugin:
             "commit_mode": commit_mode,
             "extra_commit_statuses": starlette_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": starlette_config.get("extra_rollback_statuses"),
+            "disable_di": starlette_config.get("disable_di", False),
         }
 
     def _create_config_state(self, config: Any, settings: "dict[str, Any]") -> SQLSpecConfigState:
@@ -124,6 +125,7 @@ class SQLSpecPlugin:
             commit_mode=settings["commit_mode"],
             extra_commit_statuses=settings["extra_commit_statuses"],
             extra_rollback_statuses=settings["extra_rollback_statuses"],
+            disable_di=settings["disable_di"],
         )
 
     def init_app(self, app: "Starlette") -> None:
@@ -146,7 +148,8 @@ class SQLSpecPlugin:
         app.router.lifespan_context = combined_lifespan
 
         for config_state in self._config_states:
-            self._add_middleware(app, config_state)
+            if not config_state.disable_di:
+                self._add_middleware(app, config_state)
 
     def _validate_unique_keys(self) -> None:
         """Validate that all state keys are unique across configs.

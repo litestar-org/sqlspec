@@ -22,6 +22,7 @@ def test_get_connection_from_request() -> None:
         commit_mode="manual",
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
+        disable_di=False,
     )
 
     setattr(mock_request.state, "db_connection", mock_connection)
@@ -45,6 +46,7 @@ def test_get_connection_from_request_raises_when_missing() -> None:
         commit_mode="manual",
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
+        disable_di=False,
     )
 
     with pytest.raises(AttributeError):
@@ -70,6 +72,7 @@ def test_get_or_create_session_creates_new_session() -> None:
         commit_mode="manual",
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
+        disable_di=False,
     )
 
     setattr(mock_request.state, "db_connection", mock_connection)
@@ -103,6 +106,7 @@ def test_get_or_create_session_returns_cached_session() -> None:
         commit_mode="manual",
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
+        disable_di=False,
     )
 
     setattr(mock_request.state, "db_connection", mock_connection)
@@ -133,6 +137,7 @@ def test_get_or_create_session_uses_unique_cache_key() -> None:
         commit_mode="manual",
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
+        disable_di=False,
     )
 
     setattr(mock_request.state, "db_connection", mock_connection)

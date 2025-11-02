@@ -142,6 +142,13 @@ class FlaskConfig(TypedDict):
     extra_rollback_statuses: NotRequired[set[int]]
     """Additional HTTP status codes that trigger rollback. Default: None."""
 
+    disable_di: NotRequired[bool]
+    """Disable built-in dependency injection. Default: False.
+    When True, the Flask extension will not register request hooks for managing
+    database connections and sessions. Users are responsible for managing the
+    database lifecycle manually via their own DI solution.
+    """
+
 
 class LitestarConfig(TypedDict):
     """Configuration options for Litestar SQLSpec plugin.
@@ -169,6 +176,13 @@ class LitestarConfig(TypedDict):
 
     extra_rollback_statuses: NotRequired[set[int]]
     """Additional HTTP status codes that trigger rollback. Default: set()"""
+
+    disable_di: NotRequired[bool]
+    """Disable built-in dependency injection. Default: False.
+    When True, the Litestar plugin will not register dependency providers for managing
+    database connections, pools, and sessions. Users are responsible for managing the
+    database lifecycle manually via their own DI solution.
+    """
 
 
 class StarletteConfig(TypedDict):
@@ -223,6 +237,13 @@ class StarletteConfig(TypedDict):
 
     Example:
         extra_rollback_statuses={409}
+    """
+
+    disable_di: NotRequired[bool]
+    """Disable built-in dependency injection. Default: False.
+    When True, the Starlette/FastAPI extension will not add middleware for managing
+    database connections and sessions. Users are responsible for managing the
+    database lifecycle manually via their own DI solution.
     """
 
 
