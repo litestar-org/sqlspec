@@ -49,112 +49,17 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
 
-__all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "psqlpy_statement_config")
+__all__ = (
+    "PsqlpyCursor",
+    "PsqlpyDriver",
+    "PsqlpyExceptionHandler",
+    "build_psqlpy_statement_config",
+    "psqlpy_statement_config",
+)
 
 logger = get_logger("adapters.psqlpy")
 
 _type_converter = PostgreSQLTypeConverter()
-
-
-def _convert_decimals_in_structure(obj: Any) -> Any:
-    """Recursively convert Decimal values to float in nested structures.
-
-    Psqlpy's Rust layer expects native Python dict/list for JSONB parameters
-    (when using CAST(... AS JSONB) in SQL), but cannot handle Decimal objects.
-    This function walks through dict/list structures and converts any Decimal
-    values to float while preserving the native Python structure.
-
-    Args:
-        obj: Object to process (dict, list, or scalar value).
-
-    Returns:
-        Object with all Decimal values converted to float, preserving structure.
-    """
-    if isinstance(obj, decimal.Decimal):
-        return float(obj)
-    if isinstance(obj, dict):
-        return {k: _convert_decimals_in_structure(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_convert_decimals_in_structure(item) for item in obj]
-    return obj
-
-
-def _prepare_dict_parameter(value: "dict[str, Any]") -> dict[str, Any]:
-    """Normalize dict parameters while preserving native structures."""
-    normalized = _convert_decimals_in_structure(value)
-    return normalized if isinstance(normalized, dict) else value
-
-
-def _prepare_list_parameter(value: "list[Any]") -> list[Any]:
-    """Normalize list parameters while preserving native list semantics."""
-    return [_convert_decimals_in_structure(item) for item in value]
-
-
-def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> tuple[Any, ...]:
-    """Normalize tuple parameters by deferring to list handling."""
-    return tuple(_convert_decimals_in_structure(item) for item in value)
-
-
-def _normalize_scalar_parameter(value: Any) -> Any:
-    """Return scalar value without additional coercion."""
-    return value
-
-
-def _coerce_numeric_for_write(value: Any) -> Any:
-    """Convert write parameters to driver-compatible numeric types."""
-    if isinstance(value, float):
-        return decimal.Decimal(str(value))
-    if isinstance(value, decimal.Decimal):
-        return value
-    if isinstance(value, list):
-        return [_coerce_numeric_for_write(item) for item in value]
-    if isinstance(value, tuple):
-        coerced = [_coerce_numeric_for_write(item) for item in value]
-        return tuple(coerced)
-    if isinstance(value, dict):
-        return {key: _coerce_numeric_for_write(item) for key, item in value.items()}
-    return value
-
-
-def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
-    """Construct parameter config with shared JSON serializer support."""
-
-    base_config = build_statement_config_from_profile(_PSQLPY_PROFILE, json_serializer=serializer).parameter_config
-
-    updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[dict] = _prepare_dict_parameter
-    updated_type_map[list] = _prepare_list_parameter
-    updated_type_map[tuple] = _prepare_tuple_parameter
-
-    return base_config.replace(type_coercion_map=updated_type_map)
-
-
-_PSQLPY_PROFILE = DriverParameterProfile(
-    name="Psqlpy",
-    default_style=ParameterStyle.NUMERIC,
-    supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
-    default_execution_style=ParameterStyle.NUMERIC,
-    supported_execution_styles={ParameterStyle.NUMERIC},
-    has_native_list_expansion=False,
-    preserve_parameter_format=True,
-    needs_static_script_compilation=False,
-    allow_mixed_parameter_styles=False,
-    preserve_original_params_for_many=False,
-    json_serializer_strategy="helper",
-    custom_type_coercions={decimal.Decimal: float},
-    default_dialect="postgres",
-)
-
-register_driver_profile("psqlpy", _PSQLPY_PROFILE)
-
-psqlpy_statement_config = StatementConfig(
-    dialect="postgres",
-    parameter_config=_create_psqlpy_parameter_config(to_json),
-    enable_parsing=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-)
 
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
@@ -600,3 +505,98 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = PsqlpyAsyncDataDictionary()
         return self._data_dictionary
+
+
+def _convert_decimals_in_structure(obj: Any) -> Any:
+    """Recursively convert Decimal values to float in nested structures."""
+
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: _convert_decimals_in_structure(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_convert_decimals_in_structure(item) for item in obj]
+    return obj
+
+
+def _prepare_dict_parameter(value: "dict[str, Any]") -> dict[str, Any]:
+    normalized = _convert_decimals_in_structure(value)
+    return normalized if isinstance(normalized, dict) else value
+
+
+def _prepare_list_parameter(value: "list[Any]") -> list[Any]:
+    return [_convert_decimals_in_structure(item) for item in value]
+
+
+def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> tuple[Any, ...]:
+    return tuple(_convert_decimals_in_structure(item) for item in value)
+
+
+def _normalize_scalar_parameter(value: Any) -> Any:
+    return value
+
+
+def _coerce_numeric_for_write(value: Any) -> Any:
+    if isinstance(value, float):
+        return decimal.Decimal(str(value))
+    if isinstance(value, decimal.Decimal):
+        return value
+    if isinstance(value, list):
+        return [_coerce_numeric_for_write(item) for item in value]
+    if isinstance(value, tuple):
+        coerced = [_coerce_numeric_for_write(item) for item in value]
+        return tuple(coerced)
+    if isinstance(value, dict):
+        return {key: _coerce_numeric_for_write(item) for key, item in value.items()}
+    return value
+
+
+def _build_psqlpy_profile() -> DriverParameterProfile:
+    """Create the psqlpy driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="Psqlpy",
+        default_style=ParameterStyle.NUMERIC,
+        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.NUMERIC,
+        supported_execution_styles={ParameterStyle.NUMERIC},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={decimal.Decimal: float},
+        default_dialect="postgres",
+    )
+
+
+_PSQLPY_PROFILE = _build_psqlpy_profile()
+
+register_driver_profile("psqlpy", _PSQLPY_PROFILE)
+
+
+def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
+    base_config = build_statement_config_from_profile(_PSQLPY_PROFILE, json_serializer=serializer).parameter_config
+
+    updated_type_map = dict(base_config.type_coercion_map)
+    updated_type_map[dict] = _prepare_dict_parameter
+    updated_type_map[list] = _prepare_list_parameter
+    updated_type_map[tuple] = _prepare_tuple_parameter
+
+    return base_config.replace(type_coercion_map=updated_type_map)
+
+
+def build_psqlpy_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> StatementConfig:
+    parameter_config = _create_psqlpy_parameter_config(json_serializer)
+    return StatementConfig(
+        dialect="postgres",
+        parameter_config=parameter_config,
+        enable_parsing=True,
+        enable_validation=True,
+        enable_caching=True,
+        enable_parameter_type_wrapping=True,
+    )
+
+
+psqlpy_statement_config = build_psqlpy_statement_config()

@@ -15,6 +15,7 @@ from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncDriver,
     PsycopgSyncCursor,
     PsycopgSyncDriver,
+    build_psycopg_statement_config,
     psycopg_statement_config,
 )
 from sqlspec.config import (
@@ -27,6 +28,7 @@ from sqlspec.config import (
     SyncDatabaseConfig,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
@@ -82,9 +84,13 @@ class PsycopgDriverFeatures(TypedDict):
         Provides automatic conversion between Python objects and PostgreSQL vector types.
         Enables vector similarity operations and index support.
         Set to False to disable pgvector support even when package is available.
+    json_serializer: Custom JSON serializer for StatementConfig parameter handling.
+    json_deserializer: Custom JSON deserializer reference stored alongside the serializer for parity with asyncpg.
     """
 
     enable_pgvector: NotRequired[bool]
+    json_serializer: NotRequired["Callable[[Any], str]"]
+    json_deserializer: NotRequired["Callable[[str], Any]"]
 
 
 __all__ = (
@@ -132,17 +138,17 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
 
-        if driver_features is None:
-            driver_features = {}
-        if "enable_pgvector" not in driver_features:
-            driver_features["enable_pgvector"] = PGVECTOR_INSTALLED
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
+        processed_driver_features.setdefault("json_serializer", serializer)
+        processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or psycopg_statement_config,
-            driver_features=driver_features,
+            statement_config=statement_config or build_psycopg_statement_config(json_serializer=serializer),
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )
@@ -323,17 +329,17 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
 
-        if driver_features is None:
-            driver_features = {}
-        if "enable_pgvector" not in driver_features:
-            driver_features["enable_pgvector"] = PGVECTOR_INSTALLED
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
+        processed_driver_features.setdefault("json_serializer", serializer)
+        processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or psycopg_statement_config,
-            driver_features=driver_features,
+            statement_config=statement_config or build_psycopg_statement_config(json_serializer=serializer),
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )

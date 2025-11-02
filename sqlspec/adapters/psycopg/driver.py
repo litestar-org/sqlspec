@@ -63,6 +63,7 @@ __all__ = (
     "PsycopgSyncCursor",
     "PsycopgSyncDriver",
     "PsycopgSyncExceptionHandler",
+    "build_psycopg_statement_config",
     "psycopg_statement_config",
 )
 
@@ -74,118 +75,6 @@ TRANSACTION_STATUS_ACTIVE = 1
 TRANSACTION_STATUS_INTRANS = 2
 TRANSACTION_STATUS_INERROR = 3
 TRANSACTION_STATUS_UNKNOWN = 4
-
-
-def _convert_list_to_postgres_array(value: Any) -> str:
-    """Convert Python list to PostgreSQL array literal format.
-
-    Args:
-        value: Python list to convert
-
-    Returns:
-        PostgreSQL array literal string
-    """
-    if not isinstance(value, list):
-        return str(value)
-
-    elements = []
-    for item in value:
-        if isinstance(item, list):
-            elements.append(_convert_list_to_postgres_array(item))
-        elif isinstance(item, str):
-            escaped = item.replace("'", "''")
-            elements.append(f"'{escaped}'")
-        elif item is None:
-            elements.append("NULL")
-        else:
-            elements.append(str(item))
-
-    return f"{{{','.join(elements)}}}"
-
-
-def _should_serialize_list(value: "list[Any]") -> bool:
-    """Detect whether list should be serialized to JSON."""
-    return any(isinstance(item, (dict, list, tuple)) for item in value)
-
-
-def _build_list_parameter_converter(serializer: "Callable[[Any], str]") -> "Callable[[list[Any]], Any]":
-    """Create converter that serializes nested lists while preserving arrays."""
-
-    def convert(value: "list[Any]") -> Any:
-        if not value:
-            return value
-        if _should_serialize_list(value):
-            return serializer(value)
-        return value
-
-    return convert
-
-
-def _build_tuple_parameter_converter(serializer: "Callable[[Any], str]") -> "Callable[[tuple[Any, ...]], Any]":
-    """Create converter mirroring list handling for tuple parameters."""
-
-    list_converter = _build_list_parameter_converter(serializer)
-
-    def convert(value: "tuple[Any, ...]") -> Any:
-        return list_converter(list(value))
-
-    return convert
-
-
-def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
-    """Construct parameter config with shared JSON serializer support."""
-
-    base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=serializer).parameter_config
-
-    updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[list] = _build_list_parameter_converter(serializer)
-    updated_type_map[tuple] = _build_tuple_parameter_converter(serializer)
-
-    return base_config.replace(type_coercion_map=updated_type_map)
-
-
-def _identity(value: Any) -> Any:
-    return value
-
-
-_PSYCOPG_PROFILE = DriverParameterProfile(
-    name="Psycopg",
-    default_style=ParameterStyle.POSITIONAL_PYFORMAT,
-    supported_styles={
-        ParameterStyle.POSITIONAL_PYFORMAT,
-        ParameterStyle.NAMED_PYFORMAT,
-        ParameterStyle.NUMERIC,
-        ParameterStyle.QMARK,
-    },
-    default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
-    supported_execution_styles={
-        ParameterStyle.POSITIONAL_PYFORMAT,
-        ParameterStyle.NAMED_PYFORMAT,
-        ParameterStyle.NUMERIC,
-    },
-    has_native_list_expansion=True,
-    preserve_parameter_format=True,
-    needs_static_script_compilation=False,
-    allow_mixed_parameter_styles=False,
-    preserve_original_params_for_many=False,
-    json_serializer_strategy="helper",
-    custom_type_coercions={datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity},
-    default_dialect="postgres",
-)
-
-register_driver_profile("psycopg", _PSYCOPG_PROFILE)
-
-psycopg_statement_config = StatementConfig(
-    dialect="postgres",
-    pre_process_steps=None,
-    post_process_steps=None,
-    enable_parsing=True,
-    enable_transformations=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-    parameter_config=_create_psycopg_parameter_config(to_json),
-)
 
 
 class PsycopgSyncCursor:
@@ -927,3 +816,130 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
+
+
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _convert_list_to_postgres_array(value: Any) -> str:
+    """Convert a Python list to PostgreSQL array literal format."""
+
+    if not isinstance(value, list):
+        return str(value)
+
+    elements: list[str] = []
+    for item in value:
+        if isinstance(item, list):
+            elements.append(_convert_list_to_postgres_array(item))
+        elif isinstance(item, str):
+            escaped = item.replace("'", "''")
+            elements.append(f"'{escaped}'")
+        elif item is None:
+            elements.append("NULL")
+        else:
+            elements.append(str(item))
+
+    return "{" + ",".join(elements) + "}"
+
+
+def _should_serialize_list(value: "list[Any]") -> bool:
+    """Detect whether a list should be serialized to JSON."""
+
+    return any(isinstance(item, (dict, list, tuple)) for item in value)
+
+
+def _build_list_parameter_converter(serializer: "Callable[[Any], str]") -> "Callable[[list[Any]], Any]":
+    """Create converter that serializes nested lists while preserving arrays."""
+
+    def convert(value: "list[Any]") -> Any:
+        if not value:
+            return value
+        if _should_serialize_list(value):
+            return serializer(value)
+        return value
+
+    return convert
+
+
+def _build_tuple_parameter_converter(serializer: "Callable[[Any], str]") -> "Callable[[tuple[Any, ...]], Any]":
+    """Create converter mirroring list handling for tuple parameters."""
+
+    list_converter = _build_list_parameter_converter(serializer)
+
+    def convert(value: "tuple[Any, ...]") -> Any:
+        return list_converter(list(value))
+
+    return convert
+
+
+def _build_psycopg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]:
+    """Return custom type coercions for psycopg."""
+
+    return {datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity}
+
+
+def _build_psycopg_profile() -> DriverParameterProfile:
+    """Create the psycopg driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="Psycopg",
+        default_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_styles={
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            ParameterStyle.NAMED_PYFORMAT,
+            ParameterStyle.NUMERIC,
+            ParameterStyle.QMARK,
+        },
+        default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_execution_styles={
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            ParameterStyle.NAMED_PYFORMAT,
+            ParameterStyle.NUMERIC,
+        },
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions=_build_psycopg_custom_type_coercions(),
+        default_dialect="postgres",
+    )
+
+
+_PSYCOPG_PROFILE = _build_psycopg_profile()
+
+register_driver_profile("psycopg", _PSYCOPG_PROFILE)
+
+
+def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
+    """Construct parameter configuration with shared JSON serializer support."""
+
+    base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=serializer).parameter_config
+
+    updated_type_map = dict(base_config.type_coercion_map)
+    updated_type_map[list] = _build_list_parameter_converter(serializer)
+    updated_type_map[tuple] = _build_tuple_parameter_converter(serializer)
+
+    return base_config.replace(type_coercion_map=updated_type_map)
+
+
+def build_psycopg_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> StatementConfig:
+    """Construct the psycopg statement configuration with optional JSON codecs."""
+
+    parameter_config = _create_psycopg_parameter_config(json_serializer)
+    return StatementConfig(
+        dialect="postgres",
+        pre_process_steps=None,
+        post_process_steps=None,
+        enable_parsing=True,
+        enable_transformations=True,
+        enable_validation=True,
+        enable_caching=True,
+        enable_parameter_type_wrapping=True,
+        parameter_config=parameter_config,
+    )
+
+
+psycopg_statement_config = build_psycopg_statement_config()
