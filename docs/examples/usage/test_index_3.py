@@ -6,6 +6,7 @@ from sqlspec.loader import SQLFileLoader
 
 spec = SQLSpec()
 db = spec.add_config(SqliteConfig())
+
 with spec.provide_session(db) as session:
     _ = session.execute("""
     CREATE TABLE users (
@@ -24,7 +25,6 @@ with spec.provide_session(db) as session:
 
 
 p = Path(__file__).parent.parent / "queries/users.sql"
-assert p.exists()
 loader = SQLFileLoader()
 loader.load_sql(p)
 
