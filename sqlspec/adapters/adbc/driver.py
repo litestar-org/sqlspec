@@ -70,84 +70,9 @@ DIALECT_PARAMETER_STYLES = {
 }
 
 
-def _count_placeholders(expression: Any) -> int:
-    """Count the number of unique parameter placeholders in a SQLGlot expression.
-
-    For PostgreSQL ($1, $2) style: counts highest numbered parameter (e.g., $1, $1, $2 = 2)
-    For QMARK (?) style: counts total occurrences (each ? is a separate parameter)
-    For named (:name) style: counts unique parameter names
-
-    Args:
-        expression: SQLGlot AST expression
-
-    Returns:
-        Number of unique parameter placeholders expected
-    """
-    numeric_params = set()  # For $1, $2 style
-    qmark_count = 0  # For ? style
-    named_params = set()  # For :name style
-
-    def count_node(node: Any) -> Any:
-        nonlocal qmark_count
-        if isinstance(node, exp.Parameter):
-            # PostgreSQL style: $1, $2, etc.
-            param_str = str(node)
-            if param_str.startswith("$") and param_str[1:].isdigit():
-                numeric_params.add(int(param_str[1:]))
-            elif ":" in param_str:
-                # Named parameter: :name
-                named_params.add(param_str)
-            else:
-                # Other parameter formats
-                named_params.add(param_str)
-        elif isinstance(node, exp.Placeholder):
-            # QMARK style: ?
-            qmark_count += 1
-        return node
-
-    expression.transform(count_node)
-
-    # Return the appropriate count based on parameter style detected
-    if numeric_params:
-        # PostgreSQL style: return highest numbered parameter
-        return max(numeric_params)
-    if named_params:
-        # Named parameters: return count of unique names
-        return len(named_params)
-    # QMARK style: return total count
-    return qmark_count
-
-
 def _is_execute_many_parameters(parameters: Any) -> bool:
     """Check if parameters are in execute_many format (list/tuple of lists/tuples)."""
     return isinstance(parameters, (list, tuple)) and len(parameters) > 0 and isinstance(parameters[0], (list, tuple))
-
-
-def _validate_parameter_counts(expression: Any, parameters: Any, dialect: str) -> None:
-    """Validate parameter count against placeholder count in SQL."""
-    placeholder_count = _count_placeholders(expression)
-    is_execute_many = _is_execute_many_parameters(parameters)
-
-    if is_execute_many:
-        # For execute_many, validate each inner parameter set
-        for i, param_set in enumerate(parameters):
-            param_count = len(param_set) if isinstance(param_set, (list, tuple)) else 0
-            if param_count != placeholder_count:
-                msg = f"Parameter count mismatch in set {i}: {param_count} parameters provided but {placeholder_count} placeholders in SQL (dialect: {dialect})"
-                raise SQLSpecError(msg)
-    else:
-        # For single execution, validate the parameter set directly
-        param_count = (
-            len(parameters)
-            if isinstance(parameters, (list, tuple))
-            else len(parameters)
-            if isinstance(parameters, dict)
-            else 0
-        )
-
-        if param_count != placeholder_count:
-            msg = f"Parameter count mismatch: {param_count} parameters provided but {placeholder_count} placeholders in SQL (dialect: {dialect})"
-            raise SQLSpecError(msg)
 
 
 def _find_null_positions(parameters: Any) -> set[int]:
@@ -186,9 +111,6 @@ def _adbc_ast_transformer(expression: Any, parameters: Any, dialect: str = "post
     """
     if not parameters:
         return expression, parameters
-
-    # Validate parameter count before transformation
-    _validate_parameter_counts(expression, parameters, dialect)
 
     # For execute_many operations, skip AST transformation as different parameter
     # sets may have None values in different positions, making transformation complex

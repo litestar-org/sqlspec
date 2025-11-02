@@ -16,7 +16,7 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
-from sqlspec.core.parameters import ParameterProcessor
+from sqlspec.core.parameters import ParameterProcessor, ParameterProfile
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -39,7 +39,7 @@ OperationType = Literal[
 ]
 
 
-__all__ = ("CompiledSQL", "OperationType", "SQLProcessor")
+__all__ = ("CompiledSQL", "OperationProfile", "OperationType", "SQLProcessor")
 
 logger = get_logger("sqlspec.core.compiler")
 
@@ -53,7 +53,26 @@ OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
     exp.Create: "DDL",
     exp.Drop: "DDL",
     exp.Alter: "DDL",
+    exp.Merge: "MERGE",
 }
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class OperationProfile:
+    """Semantic characteristics derived from the parsed SQL expression."""
+
+    __slots__ = ("modifies_rows", "returns_rows")
+
+    def __init__(self, returns_rows: bool = False, modifies_rows: bool = False) -> None:
+        self.returns_rows = returns_rows
+        self.modifies_rows = modifies_rows
+
+    @classmethod
+    def empty(cls) -> "OperationProfile":
+        return cls(returns_rows=False, modifies_rows=False)
+
+    def __repr__(self) -> str:
+        return f"OperationProfile(returns_rows={self.returns_rows!r}, modifies_rows={self.modifies_rows!r})"
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -70,8 +89,10 @@ class CompiledSQL:
         "compiled_sql",
         "execution_parameters",
         "expression",
+        "operation_profile",
         "operation_type",
         "parameter_casts",
+        "parameter_profile",
         "parameter_style",
         "supports_many",
     )
@@ -87,6 +108,8 @@ class CompiledSQL:
         parameter_style: str | None = None,
         supports_many: bool = False,
         parameter_casts: Optional["dict[int, str]"] = None,
+        parameter_profile: "ParameterProfile | None" = None,
+        operation_profile: "OperationProfile | None" = None,
     ) -> None:
         """Initialize compiled result.
 
@@ -106,6 +129,8 @@ class CompiledSQL:
         self.parameter_style = parameter_style
         self.supports_many = supports_many
         self.parameter_casts = parameter_casts or {}
+        self.parameter_profile = parameter_profile
+        self.operation_profile = operation_profile or OperationProfile.empty()
         self._hash: int | None = None
 
     def __hash__(self) -> int:
@@ -203,18 +228,24 @@ class SQLProcessor:
         Returns:
             CompiledSQL result
         """
+        parameter_profile = ParameterProfile.empty()
+        operation_profile = OperationProfile.empty()
+
         try:
             dialect_str = str(self._config.dialect) if self._config.dialect else None
 
             processed_sql: str
             processed_params: Any
-            processed_sql, processed_params = self._parameter_processor.process(
+            process_result = self._parameter_processor.process(
                 sql=sql,
                 parameters=parameters,
                 config=self._config.parameter_config,
                 dialect=dialect_str,
                 is_many=is_many,
             )
+            processed_sql = process_result.sql
+            processed_params = process_result.parameters
+            parameter_profile = process_result.parameter_profile
 
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 sqlglot_sql = processed_sql
@@ -234,6 +265,7 @@ class SQLProcessor:
                     expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
                     operation_type = self._detect_operation_type(expression)
                     parameter_casts = self._detect_parameter_casts(expression)
+                    operation_profile = self._build_operation_profile(expression, operation_type)
 
                     ast_transformer = self._config.parameter_config.ast_transformer
                     if ast_transformer:
@@ -244,17 +276,21 @@ class SQLProcessor:
                     expression = None
                     operation_type = "EXECUTE"
                     parameter_casts = {}
+                    operation_profile = OperationProfile.empty()
 
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
             elif ast_was_transformed and expression is not None:
-                final_sql, final_params = self._parameter_processor.process(
+                transformed_result = self._parameter_processor.process(
                     sql=expression.sql(dialect=dialect_str),
                     parameters=final_parameters,
                     config=self._config.parameter_config,
                     dialect=dialect_str,
                     is_many=is_many,
                 )
+                final_sql = transformed_result.sql
+                final_params = transformed_result.parameters
+                parameter_profile = transformed_result.parameter_profile
                 output_transformer = self._config.output_transformer
                 if output_transformer:
                     final_sql, final_params = output_transformer(final_sql, final_params)
@@ -271,6 +307,8 @@ class SQLProcessor:
                 parameter_style=self._config.parameter_config.default_parameter_style.value,
                 supports_many=isinstance(final_params, list) and len(final_params) > 0,
                 parameter_casts=parameter_casts,
+                parameter_profile=parameter_profile,
+                operation_profile=operation_profile,
             )
 
         except sqlspec.exceptions.SQLSpecError:
@@ -278,7 +316,12 @@ class SQLProcessor:
         except Exception as e:
             logger.warning("Compilation failed, using fallback: %s", e)
             return CompiledSQL(
-                compiled_sql=sql, execution_parameters=parameters, operation_type="UNKNOWN", parameter_casts={}
+                compiled_sql=sql,
+                execution_parameters=parameters,
+                operation_type="UNKNOWN",
+                parameter_casts={},
+                parameter_profile=parameter_profile,
+                operation_profile=operation_profile,
             )
 
     def _make_cache_key(self, sql: str, parameters: Any, is_many: bool = False) -> str:
@@ -423,6 +466,39 @@ class SQLProcessor:
             return output_transformer(sql, parameters)
 
         return sql, parameters
+
+    def _build_operation_profile(
+        self, expression: "exp.Expression | None", operation_type: "OperationType"
+    ) -> "OperationProfile":
+        if expression is None:
+            return OperationProfile.empty()
+
+        returns_rows = False
+        modifies_rows = False
+
+        expr = expression
+        if isinstance(expr, (exp.Select, exp.Values, exp.Table, exp.TableSample)) or isinstance(expr, exp.With):
+            returns_rows = True
+        elif (
+            isinstance(expr, exp.Insert)
+            or isinstance(expr, exp.Update)
+            or isinstance(expr, exp.Delete)
+            or isinstance(expr, exp.Merge)
+        ):
+            modifies_rows = True
+            returns_rows = bool(expr.args.get("returning"))
+        elif isinstance(expr, exp.Copy):
+            copy_kind = expr.args.get("kind")
+            modifies_rows = copy_kind is True
+            returns_rows = copy_kind is False
+
+        if not returns_rows and operation_type in {"SELECT", "WITH", "VALUES", "TABLE"}:
+            returns_rows = True
+
+        if not modifies_rows and operation_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}:
+            modifies_rows = True
+
+        return OperationProfile(returns_rows=returns_rows, modifies_rows=modifies_rows)
 
     def clear_cache(self) -> None:
         """Clear compilation cache and reset statistics."""

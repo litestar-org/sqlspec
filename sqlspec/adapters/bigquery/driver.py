@@ -279,8 +279,8 @@ def _create_bq_parameters(
                 raise SQLSpecError(msg)
 
     elif isinstance(parameters, (list, tuple)):
-        logger.warning("BigQuery received positional parameters instead of named parameters")
-        return []
+        msg = "BigQuery driver requires named parameters (e.g., @name); positional parameters are not supported"
+        raise SQLSpecError(msg)
 
     return bq_parameters
 

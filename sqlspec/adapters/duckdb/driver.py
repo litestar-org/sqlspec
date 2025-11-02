@@ -5,7 +5,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
 
 import duckdb
-from sqlglot import exp
 
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBTypeConverter
@@ -294,26 +293,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         _ = (cursor, statement)
         return None
 
-    def _is_modifying_operation(self, statement: SQL) -> bool:
-        """Check if the SQL statement modifies data.
-
-        Determines if a statement is an INSERT, UPDATE, or DELETE operation
-        using AST analysis when available, falling back to text parsing.
-
-        Args:
-            statement: SQL statement to analyze
-
-        Returns:
-            True if the operation modifies data (INSERT/UPDATE/DELETE)
-        """
-
-        expression = statement.expression
-        if expression and isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
-            return True
-
-        sql_upper = statement.sql.strip().upper()
-        return any(sql_upper.startswith(op) for op in MODIFYING_OPERATIONS)
-
     def _execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
@@ -359,7 +338,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if prepared_parameters:
             cursor.executemany(sql, prepared_parameters)
 
-            if self._is_modifying_operation(statement):
+            if statement.is_modifying_operation():
                 row_count = len(prepared_parameters)
             else:
                 try:

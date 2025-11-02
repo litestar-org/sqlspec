@@ -21,7 +21,7 @@ Processing:
 
 import re
 from collections import OrderedDict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
@@ -33,7 +33,9 @@ from mypy_extensions import mypyc_attr
 __all__ = (
     "ParameterConverter",
     "ParameterInfo",
+    "ParameterProcessingResult",
     "ParameterProcessor",
+    "ParameterProfile",
     "ParameterStyle",
     "ParameterStyleConfig",
     "ParameterValidator",
@@ -945,6 +947,79 @@ class ParameterConverter:
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
+class ParameterProfile:
+    """Aggregate metadata describing detected parameters."""
+
+    __slots__ = ("_parameters", "_placeholder_counts", "named_parameters", "reused_ordinals", "styles")
+
+    def __init__(self, parameters: "Sequence[ParameterInfo] | None" = None) -> None:
+        param_tuple: tuple[ParameterInfo, ...] = tuple(parameters) if parameters else ()
+        self._parameters = param_tuple
+        self.styles = tuple(sorted({param.style.value for param in param_tuple})) if param_tuple else ()
+        placeholder_counts: dict[str, int] = {}
+        reused_ordinals: list[int] = []
+        named_parameters: list[str] = []
+
+        for param in param_tuple:
+            placeholder = param.placeholder_text
+            current_count = placeholder_counts.get(placeholder, 0)
+            placeholder_counts[placeholder] = current_count + 1
+            if current_count:
+                reused_ordinals.append(param.ordinal)
+            if param.name is not None:
+                named_parameters.append(param.name)
+
+        self._placeholder_counts = placeholder_counts
+        self.reused_ordinals = tuple(reused_ordinals)
+        self.named_parameters = tuple(named_parameters)
+
+    @classmethod
+    def empty(cls) -> "ParameterProfile":
+        return cls(())
+
+    @property
+    def parameters(self) -> "tuple[ParameterInfo, ...]":
+        return self._parameters
+
+    @property
+    def total_count(self) -> int:
+        return len(self._parameters)
+
+    def placeholder_count(self, placeholder: str) -> int:
+        return self._placeholder_counts.get(placeholder, 0)
+
+    def is_empty(self) -> bool:
+        return not self._parameters
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class ParameterProcessingResult:
+    """Return container for parameter processing output."""
+
+    __slots__ = ("parameter_profile", "parameters", "sql")
+
+    def __init__(self, sql: str, parameters: Any, parameter_profile: "ParameterProfile") -> None:
+        self.sql = sql
+        self.parameters = parameters
+        self.parameter_profile = parameter_profile
+
+    def __iter__(self) -> Generator[str | Any, Any, None]:
+        yield self.sql
+        yield self.parameters
+
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, index: int) -> Any:
+        if index == 0:
+            return self.sql
+        if index == 1:
+            return self.parameters
+        msg = "ParameterProcessingResult exposes exactly two positional items"
+        raise IndexError(msg)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterProcessor:
     """Parameter processing engine.
 
@@ -965,14 +1040,14 @@ class ParameterProcessor:
 
     def __init__(self) -> None:
         """Initialize processor with component coordination."""
-        self._cache: dict[str, tuple[str, Any]] = {}
+        self._cache: dict[str, ParameterProcessingResult] = {}
         self._cache_size = 0
         self._validator = ParameterValidator()
         self._converter = ParameterConverter()
 
     def _handle_static_embedding(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, is_many: bool, cache_key: str
-    ) -> "tuple[str, Any]":
+    ) -> "ParameterProcessingResult":
         """Handle static parameter embedding for script compilation.
 
         Args:
@@ -992,8 +1067,11 @@ class ParameterProcessor:
         static_sql, static_params = self._converter.convert_placeholder_style(
             sql, coerced_params, ParameterStyle.STATIC, is_many
         )
-        self._cache[cache_key] = (static_sql, static_params)
-        return static_sql, static_params
+        result = ParameterProcessingResult(static_sql, static_params, ParameterProfile.empty())
+        if self._cache_size < self.DEFAULT_CACHE_SIZE:
+            self._cache[cache_key] = result
+            self._cache_size += 1
+        return result
 
     def _process_parameters_conversion(
         self,
@@ -1061,7 +1139,7 @@ class ParameterProcessor:
 
     def process(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, dialect: str | None = None, is_many: bool = False
-    ) -> "tuple[str, Any]":
+    ) -> "ParameterProcessingResult":
         """Process parameters through the complete pipeline.
 
         Coordinates the entire parameter processing workflow:
@@ -1082,8 +1160,9 @@ class ParameterProcessor:
             Tuple of (final_sql, execution_parameters)
         """
         cache_key = self._generate_processor_cache_key(sql, parameters, config, is_many, dialect)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        cached_result = self._cache.get(cache_key)
+        if cached_result is not None:
+            return cached_result
 
         param_info = self._validator.extract_parameters(sql)
         original_styles = {p.style for p in param_info} if param_info else set()
@@ -1101,7 +1180,11 @@ class ParameterProcessor:
             and not config.type_coercion_map
             and not config.output_transformer
         ):
-            return sql, parameters
+            result = ParameterProcessingResult(sql, parameters, ParameterProfile(param_info))
+            if self._cache_size < self.DEFAULT_CACHE_SIZE:
+                self._cache[cache_key] = result
+                self._cache_size += 1
+            return result
 
         processed_sql, processed_parameters = sql, parameters
 
@@ -1127,11 +1210,15 @@ class ParameterProcessor:
         if config.output_transformer:
             processed_sql, processed_parameters = config.output_transformer(processed_sql, processed_parameters)
 
+        final_param_info = self._validator.extract_parameters(processed_sql)
+        final_profile = ParameterProfile(final_param_info)
+        result = ParameterProcessingResult(processed_sql, processed_parameters, final_profile)
+
         if self._cache_size < self.DEFAULT_CACHE_SIZE:
-            self._cache[cache_key] = (processed_sql, processed_parameters)
+            self._cache[cache_key] = result
             self._cache_size += 1
 
-        return processed_sql, processed_parameters
+        return result
 
     def get_sqlglot_compatible_sql(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, dialect: str | None = None
