@@ -22,7 +22,13 @@ import psycopg
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters import (
+    DriverParameterProfile,
+    ParameterStyle,
+    ParameterStyleConfig,
+    build_statement_config_from_profile,
+    register_driver_profile,
+)
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -129,25 +135,7 @@ def _build_tuple_parameter_converter(serializer: "Callable[[Any], str]") -> "Cal
 def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
     """Construct parameter config with shared JSON serializer support."""
 
-    base_config = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_parameter_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-            ParameterStyle.QMARK,
-        },
-        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_parameter_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-        },
-        type_coercion_map={datetime.datetime: lambda x: x, datetime.date: lambda x: x, datetime.time: lambda x: x},
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-    ).with_json_serializers(serializer)
+    base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=serializer).parameter_config
 
     updated_type_map = dict(base_config.type_coercion_map)
     updated_type_map[list] = _build_list_parameter_converter(serializer)
@@ -155,6 +143,37 @@ def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> Para
 
     return base_config.replace(type_coercion_map=updated_type_map)
 
+
+def _identity(value: Any) -> Any:
+    return value
+
+
+_PSYCOPG_PROFILE = DriverParameterProfile(
+    name="Psycopg",
+    default_style=ParameterStyle.POSITIONAL_PYFORMAT,
+    supported_styles={
+        ParameterStyle.POSITIONAL_PYFORMAT,
+        ParameterStyle.NAMED_PYFORMAT,
+        ParameterStyle.NUMERIC,
+        ParameterStyle.QMARK,
+    },
+    default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
+    supported_execution_styles={
+        ParameterStyle.POSITIONAL_PYFORMAT,
+        ParameterStyle.NAMED_PYFORMAT,
+        ParameterStyle.NUMERIC,
+    },
+    has_native_list_expansion=True,
+    preserve_parameter_format=True,
+    needs_static_script_compilation=False,
+    allow_mixed_parameter_styles=False,
+    preserve_original_params_for_many=False,
+    json_serializer_strategy="helper",
+    custom_type_coercions={datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity},
+    default_dialect="postgres",
+)
+
+register_driver_profile("psycopg", _PSYCOPG_PROFILE)
 
 psycopg_statement_config = StatementConfig(
     dialect="postgres",

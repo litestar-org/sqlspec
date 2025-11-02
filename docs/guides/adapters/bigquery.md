@@ -11,6 +11,12 @@ This guide provides specific instructions for the `bigquery` adapter.
 -   **Driver:** `google-cloud-bigquery`
 -   **Parameter Style:** `named` (e.g., `@name`)
 
+## Parameter Profile
+
+-   **Registry Key:** `"bigquery"`
+-   **JSON Strategy:** `helper` with `json_tuple_strategy="tuple"`
+-   **Extras:** `type_coercion_overrides` keep list values intact while converting tuples to lists during binding
+
 ## Best Practices
 
 -   **Authentication:** BigQuery requires authentication with Google Cloud. For local development, the easiest way is to use the Google Cloud CLI and run `gcloud auth application-default login`.

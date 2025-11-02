@@ -12,6 +12,12 @@ This guide provides specific instructions for the `psqlpy` adapter for PostgreSQ
 -   **Parameter Style:** `numeric` (e.g., `$1, $2`)
 -   **Type System:** Rust-level type conversion (not Python-level)
 
+## Parameter Profile
+
+-   **Registry Key:** `"psqlpy"`
+-   **JSON Strategy:** `helper` (shared JSON serializer applied before Rust-side codecs)
+-   **Extras:** Decimal writes coerce through `_decimal_to_float` to match Rust numeric expectations
+
 ## Architecture
 
 Psqlpy handles type conversion differently than other PostgreSQL drivers:

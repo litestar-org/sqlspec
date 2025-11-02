@@ -11,6 +11,12 @@ This guide provides specific instructions and best practices for working with th
 -   **Driver:** `asyncpg`
 -   **Parameter Style:** `numeric` (e.g., `$1, $2`)
 
+## Parameter Profile
+
+-   **Registry Key:** `"asyncpg"`
+-   **JSON Strategy:** `driver` (delegates JSON binding to asyncpg codecs)
+-   **Extras:** None (codecs registered through config init hook)
+
 ## Best Practices
 
 -   **High-Performance:** `asyncpg` is often chosen for high-performance applications due to its speed. It's a good choice for applications with a high volume of database traffic.

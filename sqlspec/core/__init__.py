@@ -101,11 +101,14 @@ from sqlspec.core.hashing import (
     hash_sql_statement,
 )
 from sqlspec.core.parameters import (
+    DriverParameterProfile,
     ParameterConverter,
     ParameterProcessor,
     ParameterStyle,
     ParameterStyleConfig,
     TypedParameter,
+    build_statement_config_from_profile,
+    register_driver_profile,
 )
 from sqlspec.core.result import ArrowResult, SQLResult, StatementResult, create_arrow_result, create_sql_result
 from sqlspec.core.statement import SQL, Statement, StatementConfig
@@ -115,8 +118,10 @@ __all__ = (
     "ArrowResult",
     "CacheConfig",
     "CacheStats",
+    "DriverParameterProfile",
     "MultiLevelCache",
     "OperationType",
+    "P",
     "ParameterConverter",
     "ParameterProcessor",
     "ParameterStyle",
@@ -129,6 +134,7 @@ __all__ = (
     "StatementResult",
     "TypedParameter",
     "UnifiedCache",
+    "build_statement_config_from_profile",
     "create_arrow_result",
     "create_sql_result",
     "filters",
@@ -139,4 +145,5 @@ __all__ = (
     "hash_optimized_expression",
     "hash_parameters",
     "hash_sql_statement",
+    "register_driver_profile",
 )

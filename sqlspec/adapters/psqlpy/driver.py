@@ -14,7 +14,13 @@ from psqlpy.extra_types import JSONB
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLTypeConverter
 from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters import (
+    DriverParameterProfile,
+    ParameterStyle,
+    ParameterStyleConfig,
+    build_statement_config_from_profile,
+    register_driver_profile,
+)
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
@@ -113,17 +119,7 @@ def _coerce_numeric_for_write(value: Any) -> Any:
 def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
     """Construct parameter config with shared JSON serializer support."""
 
-    base_config = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.NUMERIC,
-        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.NUMERIC,
-        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={decimal.Decimal: float, str: _type_converter.convert_if_detected},
-        has_native_list_expansion=False,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_parameter_format=True,
-    ).with_json_serializers(serializer)
+    base_config = build_statement_config_from_profile(_PSQLPY_PROFILE, json_serializer=serializer).parameter_config
 
     updated_type_map = dict(base_config.type_coercion_map)
     updated_type_map[dict] = _prepare_dict_parameter
@@ -132,6 +128,24 @@ def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> Param
 
     return base_config.replace(type_coercion_map=updated_type_map)
 
+
+_PSQLPY_PROFILE = DriverParameterProfile(
+    name="Psqlpy",
+    default_style=ParameterStyle.NUMERIC,
+    supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
+    default_execution_style=ParameterStyle.NUMERIC,
+    supported_execution_styles={ParameterStyle.NUMERIC},
+    has_native_list_expansion=False,
+    preserve_parameter_format=True,
+    needs_static_script_compilation=False,
+    allow_mixed_parameter_styles=False,
+    preserve_original_params_for_many=False,
+    json_serializer_strategy="helper",
+    custom_type_coercions={decimal.Decimal: float},
+    default_dialect="postgres",
+)
+
+register_driver_profile("psqlpy", _PSQLPY_PROFILE)
 
 psqlpy_statement_config = StatementConfig(
     dialect="postgres",

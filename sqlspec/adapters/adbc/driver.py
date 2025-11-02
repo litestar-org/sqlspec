@@ -7,19 +7,19 @@ database dialects, parameter style conversion, and transaction management.
 import contextlib
 import datetime
 import decimal
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
-
-from sqlglot import exp
 
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.adbc.type_converter import ADBCTypeConverter
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import (
-    ParameterProfile,
+    DriverParameterProfile,
     ParameterStyle,
-    ParameterStyleConfig,
-    ParameterValidator,
-    validate_parameter_alignment,
+    build_statement_config_from_profile,
+    get_driver_profile,
+    register_driver_profile,
+    replace_null_parameters_with_literals,
 )
 from sqlspec.core.result import create_arrow_result
 from sqlspec.core.statement import SQL, StatementConfig
@@ -76,188 +76,22 @@ DIALECT_PARAMETER_STYLES = {
     "snowflake": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC]),
 }
 
-_AST_PARAMETER_VALIDATOR: "ParameterValidator" = ParameterValidator()
 
-
-def _is_execute_many_parameters(parameters: Any) -> bool:
-    """Check if parameters are in execute_many format (list/tuple of lists/tuples)."""
-    return isinstance(parameters, (list, tuple)) and len(parameters) > 0 and isinstance(parameters[0], (list, tuple))
-
-
-def _find_null_positions(parameters: Any) -> set[int]:
-    """Find positions of None values in parameters for single execution."""
-    null_positions = set()
-    if isinstance(parameters, (list, tuple)):
-        for i, param in enumerate(parameters):
-            if param is None:
-                null_positions.add(i)
-    elif isinstance(parameters, dict):
-        for key, param in parameters.items():
-            if param is None:
-                try:
-                    if isinstance(key, str) and key.lstrip("$").isdigit():
-                        param_num = int(key.lstrip("$"))
-                        null_positions.add(param_num - 1)
-                except ValueError:
-                    pass
-    return null_positions
-
-
-def _adbc_ast_transformer(expression: Any, parameters: Any, dialect: str = "postgres") -> tuple[Any, Any]:
-    """Transform AST to handle NULL parameters.
-
-    Replaces NULL parameter placeholders with NULL literals in the AST
-    to prevent Arrow from inferring 'na' types which cause binding errors.
-    Validates parameter count before transformation.
-
-    Args:
-        expression: SQLGlot AST expression parsed with proper dialect
-        parameters: Parameter values that may contain None
-        dialect: SQLGlot dialect used for parsing (default: "postgres")
-
-    Returns:
-        Tuple of (modified_expression, cleaned_parameters)
-    """
-    if not parameters:
-        return expression, parameters
-
-    # For execute_many operations, skip AST transformation as different parameter
-    # sets may have None values in different positions, making transformation complex
-    if _is_execute_many_parameters(parameters):
-        return expression, parameters
-
-    parameter_info = _AST_PARAMETER_VALIDATOR.extract_parameters(expression.sql(dialect=dialect))
-    parameter_profile = ParameterProfile(parameter_info)
-    validate_parameter_alignment(parameter_profile, parameters)
-
-    # Find positions of None values for single execution
-    null_positions = _find_null_positions(parameters)
-    if not null_positions:
-        return expression, parameters
-
-    qmark_position = [0]
-
-    def transform_node(node: Any) -> Any:
-        if isinstance(node, exp.Placeholder) and (not hasattr(node, "this") or node.this is None):
-            current_pos = qmark_position[0]
-            qmark_position[0] += 1
-
-            if current_pos in null_positions:
-                return exp.Null()
-
-            return node
-
-        if isinstance(node, exp.Placeholder) and hasattr(node, "this") and node.this is not None:
-            try:
-                param_str = str(node.this).lstrip("$")
-                param_num = int(param_str)
-                param_index = param_num - 1
-
-                if param_index in null_positions:
-                    return exp.Null()
-
-                nulls_before = sum(1 for idx in null_positions if idx < param_index)
-                new_param_num = param_num - nulls_before
-                return exp.Placeholder(this=f"${new_param_num}")
-            except (ValueError, AttributeError):
-                pass
-
-        if isinstance(node, exp.Parameter) and hasattr(node, "this"):
-            try:
-                param_str = str(node.this)
-                param_num = int(param_str)
-                param_index = param_num - 1
-
-                if param_index in null_positions:
-                    return exp.Null()
-
-                nulls_before = sum(1 for idx in null_positions if idx < param_index)
-                new_param_num = param_num - nulls_before
-                return exp.Parameter(this=str(new_param_num))
-            except (ValueError, AttributeError):
-                pass
-
-        return node
-
-    modified_expression = expression.transform(transform_node)
-
-    cleaned_params: Any
-    if isinstance(parameters, (list, tuple)):
-        cleaned_params = [p for i, p in enumerate(parameters) if i not in null_positions]
-    elif isinstance(parameters, dict):
-        cleaned_params_dict = {}
-        new_num = 1
-        for val in parameters.values():
-            if val is not None:
-                cleaned_params_dict[str(new_num)] = val
-                new_num += 1
-        cleaned_params = cleaned_params_dict
-    else:
-        cleaned_params = parameters
-
-    return modified_expression, cleaned_params
-
-
-def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
-    """Create statement configuration for the specified dialect."""
-    default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
-        detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
-    )
-
-    type_map = get_type_coercion_map(detected_dialect)
-
-    sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
-
-    parameter_config = ParameterStyleConfig(
-        default_parameter_style=default_style,
-        supported_parameter_styles=set(supported_styles),
-        default_execution_parameter_style=default_style,
-        supported_execution_parameter_styles=set(supported_styles),
-        type_coercion_map=type_map,
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-        ast_transformer=_adbc_ast_transformer if detected_dialect in {"postgres", "postgresql"} else None,
-    ).with_json_serializers(to_json)
-
-    updated_type_map = dict(parameter_config.type_coercion_map)
-    updated_type_map[list] = _convert_array_for_postgres_adbc
-    updated_type_map[tuple] = _convert_array_for_postgres_adbc
-    parameter_config = parameter_config.replace(type_coercion_map=updated_type_map)
-
-    return StatementConfig(
-        dialect=sqlglot_dialect,
-        parameter_config=parameter_config,
-        enable_parsing=True,
-        enable_validation=True,
-        enable_caching=True,
-        enable_parameter_type_wrapping=True,
-    )
+def _identity(value: Any) -> Any:
+    return value
 
 
 def _convert_array_for_postgres_adbc(value: Any) -> Any:
-    """Convert array values for PostgreSQL compatibility.
+    """Convert array values for PostgreSQL compatibility."""
 
-    Args:
-        value: Value to convert
-
-    Returns:
-        Converted value (tuples become lists)
-    """
     if isinstance(value, tuple):
         return list(value)
     return value
 
 
 def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
-    """Get type coercion map for Arrow type handling with dialect-aware type conversion.
+    """Get type coercion map for Arrow type handling with dialect-aware type conversion."""
 
-    Args:
-        dialect: Database dialect name
-
-    Returns:
-        Mapping of Python types to conversion functions
-    """
     return {
         datetime.datetime: lambda x: x,
         datetime.date: lambda x: x,
@@ -271,6 +105,70 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
         list: _convert_array_for_postgres_adbc,
         dict: lambda x: x,
     }
+
+
+_ADBC_PROFILE = DriverParameterProfile(
+    name="ADBC",
+    default_style=ParameterStyle.QMARK,
+    supported_styles={ParameterStyle.QMARK},
+    default_execution_style=ParameterStyle.QMARK,
+    supported_execution_styles={ParameterStyle.QMARK},
+    has_native_list_expansion=True,
+    preserve_parameter_format=True,
+    needs_static_script_compilation=False,
+    allow_mixed_parameter_styles=False,
+    preserve_original_params_for_many=False,
+    json_serializer_strategy="helper",
+    custom_type_coercions={
+        datetime.datetime: _identity,
+        datetime.date: _identity,
+        datetime.time: _identity,
+        decimal.Decimal: float,
+        bool: _identity,
+        int: _identity,
+        float: _identity,
+        bytes: _identity,
+        tuple: _convert_array_for_postgres_adbc,
+        list: _convert_array_for_postgres_adbc,
+        dict: _identity,
+    },
+    extras={
+        "type_coercion_overrides": {list: _convert_array_for_postgres_adbc, tuple: _convert_array_for_postgres_adbc}
+    },
+)
+
+register_driver_profile("adbc", _ADBC_PROFILE)
+
+
+def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
+    """Create statement configuration for the specified dialect."""
+    default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
+        detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
+    )
+
+    type_map = get_type_coercion_map(detected_dialect)
+
+    sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
+
+    parameter_overrides: dict[str, Any] = {
+        "default_parameter_style": default_style,
+        "supported_parameter_styles": set(supported_styles),
+        "default_execution_parameter_style": default_style,
+        "supported_execution_parameter_styles": set(supported_styles),
+        "type_coercion_map": type_map,
+    }
+
+    if detected_dialect in {"postgres", "postgresql"}:
+        parameter_overrides["ast_transformer"] = partial(
+            replace_null_parameters_with_literals, dialect=sqlglot_dialect
+        )
+
+    return build_statement_config_from_profile(
+        get_driver_profile("adbc"),
+        parameter_overrides=parameter_overrides,
+        statement_overrides={"dialect": sqlglot_dialect},
+        json_serializer=to_json,
+    )
 
 
 class AdbcCursor:

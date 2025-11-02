@@ -185,6 +185,18 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 - **Single-Pass Processing**: Parse once → transform once → validate once - SQL object is single source of truth
 - **Abstract Methods with Concrete Implementations**: Protocol defines abstract methods, base classes provide concrete sync/async implementations
 
+### Driver Parameter Profile Registry
+
+- All adapter parameter defaults live in `DriverParameterProfile` entries inside `sqlspec/core/parameters.py`.
+- Use lowercase adapter keys (e.g., `"asyncpg"`, `"duckdb"`) and populate every required field: default style, supported styles, execution style, native list expansion flags, JSON strategy, and optional extras.
+- JSON behaviour is controlled through `json_serializer_strategy`:
+  - `"helper"`: call `ParameterStyleConfig.with_json_serializers()` (dict/list/tuple auto-encode)
+  - `"driver"`: defer to driver codecs while surfacing serializer references for later registration
+  - `"none"`: skip JSON helpers entirely (reserve for adapters that must not touch JSON)
+- Extras should encapsulate adapter-specific tweaks (e.g., `type_coercion_overrides`, `json_tuple_strategy`). Document new extras inline and keep them immutable.
+- Always build `StatementConfig` via `build_statement_config_from_profile()` and pass adapter-specific overrides through the helper instead of instantiating configs manually in drivers.
+- When introducing a new adapter, add its profile, update relevant guides, and extend unit coverage so each JSON strategy path is exercised.
+
 ### Protocol Abstract Methods Pattern
 
 When adding methods that need to support both sync and async configurations, use this pattern:

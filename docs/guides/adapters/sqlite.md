@@ -11,6 +11,12 @@ This guide covers `sqlite3` (sync) and `aiosqlite` (async).
 -   **Driver:** `sqlite3` (built-in), `aiosqlite`
 -   **Parameter Style:** `qmark` (e.g., `?`)
 
+## Parameter Profile
+
+-   **Registry Keys:** `"sqlite"` (sync), `"aiosqlite"` (async)
+-   **JSON Strategy:** `helper` for both drivers (shared serializer handles dict/list/tuple parameters)
+-   **Extras:** None (profiles apply ISO formatting for datetime/date and convert Decimal to string)
+
 ## Best Practices
 
 -   **Use Cases:** Ideal for testing, local development, and embedded applications. Not suitable for high-concurrency production workloads.

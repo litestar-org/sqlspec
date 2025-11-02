@@ -19,21 +19,29 @@ Processing:
 - Support for multiple parameter styles and database adapters
 """
 
+import bisect
 import hashlib
 import re
 from collections import OrderedDict
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from functools import singledispatch
-from typing import Any, Final, Literal, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
 import sqlspec.exceptions
+from sqlspec.utils.serializers import from_json, to_json
 
+if TYPE_CHECKING:
+    from sqlspec.core.statement import StatementConfig
 __all__ = (
+    "DRIVER_PARAMETER_PROFILES",
+    "DriverParameterProfile",
     "ParameterConverter",
     "ParameterInfo",
     "ParameterProcessingResult",
@@ -43,11 +51,15 @@ __all__ = (
     "ParameterStyleConfig",
     "ParameterValidator",
     "TypedParameter",
+    "build_statement_config_from_profile",
+    "replace_placeholders_with_literals",
+    "replace_null_parameters_with_literals",
+    "get_driver_profile",
     "is_iterable_parameters",
+    "register_driver_profile",
     "validate_parameter_alignment",
     "wrap_with_type",
 )
-
 
 _PARAMETER_REGEX = re.compile(
     r"""
@@ -399,6 +411,217 @@ class ParameterStyleConfig:
             json_serializer=serializer,
             json_deserializer=deserializer or self.json_deserializer,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class DriverParameterProfile:
+    """Adapter-specific parameter behaviour profile."""
+
+    name: str
+    default_style: "ParameterStyle"
+    supported_styles: "Collection[ParameterStyle]"
+    default_execution_style: "ParameterStyle"
+    supported_execution_styles: "Collection[ParameterStyle] | None"
+    has_native_list_expansion: bool
+    preserve_parameter_format: bool
+    needs_static_script_compilation: bool
+    allow_mixed_parameter_styles: bool
+    preserve_original_params_for_many: bool
+    json_serializer_strategy: Literal["helper", "driver", "none"]
+    custom_type_coercions: "Mapping[type[Any], Callable[[Any], Any]]" = field(default_factory=dict)
+    extras: "Mapping[str, Any]" = field(default_factory=dict)
+    default_dialect: "str | None" = None
+    statement_kwargs: "Mapping[str, Any]" = field(default_factory=dict)
+    default_ast_transformer: "Callable[[Any, Any], tuple[Any, Any]] | None" = None
+    default_output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None
+
+    def __post_init__(self) -> None:
+        supported = frozenset(self.supported_styles)
+        execution_supported = self.supported_execution_styles
+        object.__setattr__(self, "supported_styles", supported)
+        object.__setattr__(
+            self,
+            "supported_execution_styles",
+            frozenset(execution_supported) if execution_supported is not None else None,
+        )
+        object.__setattr__(self, "custom_type_coercions", MappingProxyType(dict(self.custom_type_coercions)))
+        object.__setattr__(self, "extras", MappingProxyType(dict(self.extras)))
+        object.__setattr__(self, "statement_kwargs", MappingProxyType(dict(self.statement_kwargs)))
+
+
+_DEFAULT_JSON_SERIALIZER: Final[Callable[[Any], str]] = to_json
+_DEFAULT_JSON_DESERIALIZER: Final[Callable[[str], Any]] = from_json
+
+
+DRIVER_PARAMETER_PROFILES: "dict[str, DriverParameterProfile]" = {}
+
+
+def get_driver_profile(adapter_key: str) -> DriverParameterProfile:
+    """Retrieve a registered driver parameter profile.
+
+    Args:
+        adapter_key: Canonical adapter identifier (case insensitive).
+
+    Returns:
+        DriverParameterProfile for the requested adapter.
+
+    Raises:
+        ImproperConfigurationError: If no profile is registered for the adapter.
+    """
+
+    key = adapter_key.lower()
+    try:
+        return DRIVER_PARAMETER_PROFILES[key]
+    except KeyError as error:
+        msg = f"No driver parameter profile registered for adapter '{adapter_key}'."
+        raise sqlspec.exceptions.ImproperConfigurationError(msg) from error
+
+
+def register_driver_profile(adapter_key: str, profile: DriverParameterProfile, *, allow_override: bool = False) -> None:
+    """Register a driver parameter profile.
+
+    Args:
+        adapter_key: Canonical adapter identifier (case insensitive).
+        profile: Driver parameter profile definition.
+        allow_override: When True, replace an existing profile for the adapter.
+
+    Raises:
+        ImproperConfigurationError: If a profile already exists and overrides are not allowed.
+    """
+
+    key = adapter_key.lower()
+    if not allow_override and key in DRIVER_PARAMETER_PROFILES:
+        msg = f"Profile already registered for adapter '{adapter_key}'."
+        raise sqlspec.exceptions.ImproperConfigurationError(msg)
+    DRIVER_PARAMETER_PROFILES[key] = profile
+
+
+def _build_parameter_style_config_from_profile(
+    profile: DriverParameterProfile,
+    parameter_overrides: "dict[str, Any] | None",
+    json_serializer: "Callable[[Any], str] | None",
+    json_deserializer: "Callable[[str], Any] | None",
+) -> ParameterStyleConfig:
+    overrides = dict(parameter_overrides or {})
+    supported_styles_override = overrides.pop("supported_parameter_styles", None)
+    execution_styles_override = overrides.pop("supported_execution_parameter_styles", None)
+    type_coercion_override = overrides.pop("type_coercion_map", None)
+    json_serializer_override = overrides.pop("json_serializer", None)
+    json_deserializer_override = overrides.pop("json_deserializer", None)
+    tuple_strategy_override = overrides.pop("json_tuple_strategy", None)
+
+    supported_styles = (
+        set(supported_styles_override) if supported_styles_override is not None else set(profile.supported_styles)
+    )
+    if execution_styles_override is None:
+        execution_supported = (
+            set(profile.supported_execution_styles) if profile.supported_execution_styles is not None else None
+        )
+    else:
+        execution_supported = set(execution_styles_override) if execution_styles_override is not None else None
+
+    type_map = (
+        dict(type_coercion_override) if type_coercion_override is not None else dict(profile.custom_type_coercions)
+    )
+
+    parameter_kwargs: dict[str, Any] = {
+        "default_parameter_style": overrides.pop("default_parameter_style", profile.default_style),
+        "supported_parameter_styles": supported_styles,
+        "supported_execution_parameter_styles": execution_supported,
+        "default_execution_parameter_style": overrides.pop(
+            "default_execution_parameter_style", profile.default_execution_style
+        ),
+        "type_coercion_map": type_map,
+        "has_native_list_expansion": overrides.pop("has_native_list_expansion", profile.has_native_list_expansion),
+        "needs_static_script_compilation": overrides.pop(
+            "needs_static_script_compilation", profile.needs_static_script_compilation
+        ),
+        "allow_mixed_parameter_styles": overrides.pop(
+            "allow_mixed_parameter_styles", profile.allow_mixed_parameter_styles
+        ),
+        "preserve_parameter_format": overrides.pop("preserve_parameter_format", profile.preserve_parameter_format),
+        "preserve_original_params_for_many": overrides.pop(
+            "preserve_original_params_for_many", profile.preserve_original_params_for_many
+        ),
+        "output_transformer": overrides.pop("output_transformer", profile.default_output_transformer),
+        "ast_transformer": overrides.pop("ast_transformer", profile.default_ast_transformer),
+    }
+
+    # Filter None values for optional kwargs expected by ParameterStyleConfig
+    parameter_kwargs = {k: v for k, v in parameter_kwargs.items() if v is not None}
+
+    strategy = profile.json_serializer_strategy
+    serializer_value = json_serializer_override or json_serializer
+    deserializer_value = json_deserializer_override or json_deserializer
+
+    if serializer_value is None:
+        serializer_value = profile.extras.get("default_json_serializer", _DEFAULT_JSON_SERIALIZER)
+    if deserializer_value is None:
+        deserializer_value = profile.extras.get("default_json_deserializer", _DEFAULT_JSON_DESERIALIZER)
+
+    if strategy == "driver":
+        parameter_kwargs["json_serializer"] = serializer_value
+        parameter_kwargs["json_deserializer"] = deserializer_value
+
+    parameter_kwargs.update(overrides)
+    parameter_config = ParameterStyleConfig(**parameter_kwargs)
+
+    if strategy == "helper":
+        tuple_strategy = tuple_strategy_override or profile.extras.get("json_tuple_strategy", "list")
+        tuple_strategy_literal = cast("Literal['list', 'tuple']", tuple_strategy)
+        parameter_config = parameter_config.with_json_serializers(
+            serializer_value, tuple_strategy=tuple_strategy_literal, deserializer=deserializer_value
+        )
+    elif strategy == "driver":
+        parameter_config = parameter_config.replace(
+            json_serializer=serializer_value, json_deserializer=deserializer_value
+        )
+
+    type_overrides = profile.extras.get("type_coercion_overrides")
+    if type_overrides:
+        updated_map = {**parameter_config.type_coercion_map, **dict(type_overrides)}
+        parameter_config = parameter_config.replace(type_coercion_map=updated_map)
+
+    return parameter_config
+
+
+def build_statement_config_from_profile(
+    profile: DriverParameterProfile,
+    *,
+    parameter_overrides: "dict[str, Any] | None" = None,
+    statement_overrides: "dict[str, Any] | None" = None,
+    json_serializer: "Callable[[Any], str] | None" = None,
+    json_deserializer: "Callable[[str], Any] | None" = None,
+) -> "StatementConfig":
+    """Create a StatementConfig seeded from a driver parameter profile.
+
+    Args:
+        profile: Driver parameter profile definition.
+        parameter_overrides: Optional overrides applied to ParameterStyleConfig construction.
+        statement_overrides: Optional overrides applied when instantiating StatementConfig.
+        json_serializer: Custom JSON serializer to use in place of profile defaults.
+        json_deserializer: Custom JSON deserializer to use in place of profile defaults.
+
+    Returns:
+        StatementConfig instance configured according to the profile and overrides.
+    """
+
+    parameter_config = _build_parameter_style_config_from_profile(
+        profile, parameter_overrides, json_serializer, json_deserializer
+    )
+
+    from sqlspec.core.statement import StatementConfig as _StatementConfig
+
+    statement_kwargs: dict[str, Any] = {}
+    if profile.default_dialect is not None:
+        statement_kwargs["dialect"] = profile.default_dialect
+    if profile.statement_kwargs:
+        statement_kwargs.update(profile.statement_kwargs)
+    if statement_overrides:
+        statement_kwargs.update(statement_overrides)
+
+    filtered_statement_kwargs = {k: v for k, v in statement_kwargs.items() if v is not None}
+    return _StatementConfig(parameter_config=parameter_config, **filtered_statement_kwargs)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1123,6 +1346,247 @@ def _normalize_parameter_key(key: Any) -> "tuple[str, int | str]":
             return ("index", key - 1)
         return ("index", key)
     return ("named", str(key))
+
+
+_AST_TRANSFORMER_VALIDATOR: Final[ParameterValidator] = ParameterValidator()
+
+
+def _collect_null_parameter_ordinals(parameters: Any, profile: "ParameterProfile") -> "set[int]":
+    if parameters is None:
+        return set()
+
+    null_positions: set[int] = set()
+
+    if isinstance(parameters, Mapping):
+        name_lookup: dict[str, int] = {}
+        for parameter in profile.parameters:
+            if parameter.name:
+                name_lookup[parameter.name] = parameter.ordinal
+                stripped_name = parameter.name.lstrip("@")
+                name_lookup.setdefault(stripped_name, parameter.ordinal)
+                name_lookup.setdefault(f"@{stripped_name}", parameter.ordinal)
+
+        for key, value in parameters.items():
+            if value is not None:
+                continue
+            key_kind, normalized_key = _normalize_parameter_key(key)
+            if key_kind == "index" and isinstance(normalized_key, int):
+                null_positions.add(normalized_key)
+                continue
+            if key_kind == "named":
+                ordinal = name_lookup.get(str(normalized_key))
+                if ordinal is not None:
+                    null_positions.add(ordinal)
+        return null_positions
+
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+        for index, value in enumerate(parameters):
+            if value is None:
+                null_positions.add(index)
+        return null_positions
+
+    return null_positions
+
+
+def replace_null_parameters_with_literals(
+    expression: Any,
+    parameters: Any,
+    *,
+    dialect: str = "postgres",
+    validator: "ParameterValidator | None" = None,
+) -> "tuple[Any, Any]":
+    """Replace NULL-bound parameters with literal NULLs in the SQL AST.
+
+    Args:
+        expression: SQLGlot expression representing the compiled SQL.
+        parameters: Bound parameters for execution.
+        dialect: SQL dialect used for serialising the expression back to SQL.
+        validator: Optional validator override for parameter extraction.
+
+    Returns:
+        Tuple containing the possibly modified expression and cleaned parameters.
+    """
+
+    if not parameters:
+        return expression, parameters
+
+    if _looks_like_execute_many(parameters):
+        return expression, parameters
+
+    validator_instance = validator or _AST_TRANSFORMER_VALIDATOR
+    parameter_info = validator_instance.extract_parameters(expression.sql(dialect=dialect))
+    parameter_profile = ParameterProfile(parameter_info)
+    validate_parameter_alignment(parameter_profile, parameters)
+
+    null_positions = _collect_null_parameter_ordinals(parameters, parameter_profile)
+    if not null_positions:
+        return expression, parameters
+
+    sorted_null_positions = sorted(null_positions)
+
+    from sqlglot import exp as _exp  # Imported lazily to avoid module-level dependency
+
+    qmark_position = 0
+
+    def transform_node(node: Any) -> Any:
+        nonlocal qmark_position
+
+        if isinstance(node, _exp.Placeholder) and getattr(node, "this", None) is None:
+            current_position = qmark_position
+            qmark_position += 1
+            if current_position in null_positions:
+                return _exp.Null()
+            return node
+
+        if isinstance(node, _exp.Placeholder) and getattr(node, "this", None) is not None:
+            placeholder_text = str(node.this)
+            normalized_text = placeholder_text.lstrip("$")
+            if normalized_text.isdigit():
+                param_index = int(normalized_text) - 1
+                if param_index in null_positions:
+                    return _exp.Null()
+                shift = bisect.bisect_left(sorted_null_positions, param_index)
+                new_param_num = param_index - shift + 1
+                return _exp.Placeholder(this=f"${new_param_num}")
+            return node
+
+        if isinstance(node, _exp.Parameter) and getattr(node, "this", None) is not None:
+            parameter_text = str(node.this)
+            if parameter_text.isdigit():
+                param_index = int(parameter_text) - 1
+                if param_index in null_positions:
+                    return _exp.Null()
+                shift = bisect.bisect_left(sorted_null_positions, param_index)
+                new_param_num = param_index - shift + 1
+                return _exp.Parameter(this=str(new_param_num))
+            return node
+
+        return node
+
+    transformed_expression = expression.transform(transform_node)
+
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+        cleaned_parameters = [value for index, value in enumerate(parameters) if index not in null_positions]
+    elif isinstance(parameters, Mapping):
+        cleaned_dict: dict[str, Any] = {}
+        next_numeric_index = 1
+
+        for key, value in parameters.items():
+            if value is None:
+                continue
+            key_kind, normalized_key = _normalize_parameter_key(key)
+            if key_kind == "index" and isinstance(normalized_key, int):
+                cleaned_dict[str(next_numeric_index)] = value
+                next_numeric_index += 1
+            else:
+                cleaned_dict[str(normalized_key)] = value
+        cleaned_parameters = cleaned_dict
+    else:
+        cleaned_parameters = parameters
+
+    return transformed_expression, cleaned_parameters
+
+
+def _create_literal_expression(value: Any, json_serializer: "Callable[[Any], str]") -> Any:
+    from sqlglot import exp as _exp
+
+    if value is None:
+        return _exp.Null()
+    if isinstance(value, bool):
+        return _exp.Boolean(this=value)
+    if isinstance(value, (int, float)):
+        return _exp.Literal.number(str(value))
+    if isinstance(value, str):
+        return _exp.Literal.string(value)
+    if isinstance(value, (list, tuple)):
+        items = [_create_literal_expression(item, json_serializer) for item in value]
+        return _exp.Array(expressions=items)
+    if isinstance(value, dict):
+        json_value = json_serializer(value)
+        return _exp.Literal.string(json_value)
+    return _exp.Literal.string(str(value))
+
+
+def replace_placeholders_with_literals(
+    expression: Any,
+    parameters: Any,
+    *,
+    json_serializer: "Callable[[Any], str]",
+) -> Any:
+    """Replace placeholders within an expression with literal values.
+
+    Args:
+        expression: SQLGlot expression to transform.
+        parameters: Parameter payload to source literal values from.
+        json_serializer: Serializer used for mapping/list parameters.
+
+    Returns:
+        Transformed SQLGlot expression with placeholders replaced by literals where applicable.
+    """
+
+    if not parameters:
+        return expression
+
+    from sqlglot import exp as _exp
+
+    placeholder_counter = {"index": 0}
+
+    def resolve_mapping_value(param_name: str, payload: Mapping[str, Any]) -> Any | None:
+        candidate_names = (
+            param_name,
+            f"@{param_name}",
+            f":{param_name}",
+            f"${param_name}",
+            f"param_{param_name}",
+        )
+        for candidate in candidate_names:
+            if candidate in payload:
+                return getattr(payload[candidate], "value", payload[candidate])
+        normalized = param_name.lstrip("@:$")
+        if normalized in payload:
+            return getattr(payload[normalized], "value", payload[normalized])
+        return None
+
+    def transform(node: Any) -> Any:
+        if isinstance(node, _exp.Placeholder) and isinstance(parameters, Sequence) and not isinstance(
+            parameters, (str, bytes, bytearray)
+        ):
+            current_index = placeholder_counter["index"]
+            placeholder_counter["index"] += 1
+            if current_index < len(parameters):
+                literal_value = getattr(parameters[current_index], "value", parameters[current_index])
+                return _create_literal_expression(literal_value, json_serializer)
+            return node
+
+        if isinstance(node, _exp.Parameter):
+            param_name = str(node.this) if getattr(node, "this", None) is not None else ""
+
+            if isinstance(parameters, Mapping):
+                resolved_value = resolve_mapping_value(param_name, parameters)
+                if resolved_value is not None:
+                    return _create_literal_expression(resolved_value, json_serializer)
+                return node
+
+            if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+                name = param_name
+                try:
+                    if name.startswith("param_"):
+                        index_value = int(name[6:])
+                        if 0 <= index_value < len(parameters):
+                            literal_value = getattr(parameters[index_value], "value", parameters[index_value])
+                            return _create_literal_expression(literal_value, json_serializer)
+                    if name.isdigit():
+                        index_value = int(name)
+                        if 0 <= index_value < len(parameters):
+                            literal_value = getattr(parameters[index_value], "value", parameters[index_value])
+                            return _create_literal_expression(literal_value, json_serializer)
+                except (ValueError, AttributeError):
+                    return node
+            return node
+
+        return node
+
+    return expression.transform(transform)
 
 
 def _collect_expected_identifiers(parameter_profile: "ParameterProfile") -> "set[tuple[str, int | str]]":
