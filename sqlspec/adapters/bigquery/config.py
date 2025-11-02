@@ -142,13 +142,30 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
 
-        if statement_config is None:
-            statement_config = bigquery_statement_config
+        base_statement_config = statement_config or bigquery_statement_config
+
+        json_serializer = self.driver_features.get("json_serializer")
+        if json_serializer is not None:
+            parameter_config = base_statement_config.parameter_config
+            previous_list_converter = parameter_config.type_coercion_map.get(list)
+            previous_tuple_converter = parameter_config.type_coercion_map.get(tuple)
+            updated_parameter_config = parameter_config.with_json_serializers(
+                json_serializer,
+                tuple_strategy="tuple",
+            )
+            updated_map = dict(updated_parameter_config.type_coercion_map)
+            if previous_list_converter is not None:
+                updated_map[list] = previous_list_converter
+            if previous_tuple_converter is not None:
+                updated_map[tuple] = previous_tuple_converter
+            base_statement_config = base_statement_config.replace(
+                parameter_config=updated_parameter_config.replace(type_coercion_map=updated_map)
+            )
 
         super().__init__(
             connection_config=self.connection_config,
             migration_config=migration_config,
-            statement_config=statement_config,
+            statement_config=base_statement_config,
             driver_features=self.driver_features,
             bind_key=bind_key,
             extension_config=extension_config,

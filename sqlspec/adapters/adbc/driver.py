@@ -39,6 +39,7 @@ from sqlspec.exceptions import (
 from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -217,7 +218,12 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
         ast_transformer=_adbc_ast_transformer if detected_dialect in {"postgres", "postgresql"} else None,
-    )
+    ).with_json_serializers(to_json)
+
+    updated_type_map = dict(parameter_config.type_coercion_map)
+    updated_type_map[list] = _convert_array_for_postgres_adbc
+    updated_type_map[tuple] = _convert_array_for_postgres_adbc
+    parameter_config = parameter_config.replace(type_coercion_map=updated_type_map)
 
     return StatementConfig(
         dialect=sqlglot_dialect,
@@ -552,9 +558,9 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Parameters with cast-aware type coercion applied
         """
-        from sqlspec.utils.serializers import to_json
-
-        json_encoder = self.driver_features.get("json_serializer", to_json)
+        json_encoder = statement_config.parameter_config.json_serializer or self.driver_features.get(
+            "json_serializer", to_json
+        )
 
         if isinstance(parameters, (list, tuple)):
             result: list[Any] = []

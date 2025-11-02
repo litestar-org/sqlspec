@@ -313,9 +313,7 @@ def _get_bigquery_type_coercion_map(type_converter: BigQueryTypeConverter) -> di
 bigquery_type_coercion_map = _get_bigquery_type_coercion_map(_default_type_converter)
 
 
-bigquery_statement_config = StatementConfig(
-    dialect="bigquery",
-    parameter_config=ParameterStyleConfig(
+_BIGQUERY_PARAMETER_CONFIG = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_AT,
         supported_parameter_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
         default_execution_parameter_style=ParameterStyle.NAMED_AT,
@@ -324,7 +322,21 @@ bigquery_statement_config = StatementConfig(
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_original_params_for_many=True,
-    ),
+)
+
+_BIGQUERY_PARAMETER_CONFIG = _BIGQUERY_PARAMETER_CONFIG.with_json_serializers(to_json, tuple_strategy="tuple")
+
+_BIGQUERY_PARAMETER_CONFIG = _BIGQUERY_PARAMETER_CONFIG.replace(
+    type_coercion_map={
+        **_BIGQUERY_PARAMETER_CONFIG.type_coercion_map,
+        list: lambda x: x,
+        tuple: list,
+    }
+)
+
+bigquery_statement_config = StatementConfig(
+    dialect="bigquery",
+    parameter_config=_BIGQUERY_PARAMETER_CONFIG,
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,
@@ -466,18 +478,18 @@ class BigQueryDriver(SyncDriverAdapterBase):
     ) -> None:
         features = driver_features or {}
 
-        json_serializer = features.get("json_serializer")
-        if json_serializer is None:
-            json_serializer = to_json
-
-        self._json_serializer: Callable[[Any], str] = json_serializer
-
         enable_uuid_conversion = features.get("enable_uuid_conversion", True)
         self._type_converter = BigQueryTypeConverter(enable_uuid_conversion=enable_uuid_conversion)
 
         if statement_config is None:
             cache_config = get_cache_config()
             statement_config = bigquery_statement_config.replace(cache_config=cache_config)
+
+        parameter_json_serializer = statement_config.parameter_config.json_serializer
+        if parameter_json_serializer is None:
+            parameter_json_serializer = features.get("json_serializer", to_json)
+
+        self._json_serializer: Callable[[Any], str] = parameter_json_serializer
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")

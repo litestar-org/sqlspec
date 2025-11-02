@@ -131,11 +131,22 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         if "enable_pgvector" not in features_dict:
             features_dict["enable_pgvector"] = PGVECTOR_INSTALLED
 
+        base_statement_config = statement_config or asyncpg_statement_config
+
+        json_serializer = features_dict.get("json_serializer")
+        json_deserializer = features_dict.get("json_deserializer")
+        if json_serializer is not None:
+            parameter_config = base_statement_config.parameter_config.with_json_serializers(
+                json_serializer,
+                deserializer=json_deserializer,
+            )
+            base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
+
         super().__init__(
             pool_config=dict(pool_config) if pool_config else {},
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or asyncpg_statement_config,
+            statement_config=base_statement_config,
             driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,

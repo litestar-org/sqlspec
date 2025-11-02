@@ -123,11 +123,22 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         if "json_deserializer" not in processed_driver_features:
             processed_driver_features["json_deserializer"] = from_json
 
+        base_statement_config = statement_config or aiosqlite_statement_config
+
+        json_serializer = processed_driver_features.get("json_serializer")
+        json_deserializer = processed_driver_features.get("json_deserializer")
+        if json_serializer is not None:
+            parameter_config = base_statement_config.parameter_config.with_json_serializers(
+                json_serializer,
+                deserializer=json_deserializer,
+            )
+            base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
+
         super().__init__(
             pool_config=config_dict,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or aiosqlite_statement_config,
+            statement_config=base_statement_config,
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,

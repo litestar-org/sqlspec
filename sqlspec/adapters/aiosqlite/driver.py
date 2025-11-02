@@ -47,9 +47,7 @@ SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
 
 
-aiosqlite_statement_config = StatementConfig(
-    dialect="sqlite",
-    parameter_config=ParameterStyleConfig(
+_AIOSQLITE_PARAMETER_CONFIG = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK},
         default_execution_parameter_style=ParameterStyle.QMARK,
@@ -59,14 +57,15 @@ aiosqlite_statement_config = StatementConfig(
             datetime.datetime: lambda v: v.isoformat(),
             datetime.date: lambda v: v.isoformat(),
             Decimal: str,
-            dict: to_json,
-            list: to_json,
-            tuple: lambda v: to_json(list(v)),
         },
         has_native_list_expansion=False,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
-    ),
+)
+
+aiosqlite_statement_config = StatementConfig(
+    dialect="sqlite",
+    parameter_config=_AIOSQLITE_PARAMETER_CONFIG.with_json_serializers(to_json),
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,

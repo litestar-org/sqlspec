@@ -49,18 +49,20 @@ MYSQL_ER_DUP_ENTRY = 1062
 MYSQL_ER_NO_DEFAULT_FOR_FIELD = 1364
 MYSQL_ER_CHECK_CONSTRAINT_VIOLATED = 3819
 
-asyncmy_statement_config = StatementConfig(
-    dialect="mysql",
-    parameter_config=ParameterStyleConfig(
+_ASYNCMY_PARAMETER_CONFIG = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
         default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
         supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},
-        type_coercion_map={dict: to_json, list: to_json, tuple: lambda v: to_json(list(v)), bool: int},
+        type_coercion_map={bool: int},
         has_native_list_expansion=False,
         needs_static_script_compilation=True,
         preserve_parameter_format=True,
-    ),
+)
+
+asyncmy_statement_config = StatementConfig(
+    dialect="mysql",
+    parameter_config=_ASYNCMY_PARAMETER_CONFIG.with_json_serializers(to_json),
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,

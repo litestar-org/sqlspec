@@ -43,9 +43,7 @@ logger = get_logger("adapters.duckdb")
 _type_converter = DuckDBTypeConverter()
 
 
-duckdb_statement_config = StatementConfig(
-    dialect="duckdb",
-    parameter_config=ParameterStyleConfig(
+_DUCKDB_PARAMETER_CONFIG = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
         default_execution_parameter_style=ParameterStyle.QMARK,
@@ -55,14 +53,16 @@ duckdb_statement_config = StatementConfig(
             datetime.datetime: lambda v: v.isoformat(),
             datetime.date: lambda v: v.isoformat(),
             Decimal: str,
-            dict: to_json,
-            list: to_json,
         },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
         allow_mixed_parameter_styles=False,
-    ),
+)
+
+duckdb_statement_config = StatementConfig(
+    dialect="duckdb",
+    parameter_config=_DUCKDB_PARAMETER_CONFIG.with_json_serializers(to_json),
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,

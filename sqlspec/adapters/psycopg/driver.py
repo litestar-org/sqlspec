@@ -43,11 +43,22 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
+
+__all__ = (
+    "PsycopgAsyncCursor",
+    "PsycopgAsyncDriver",
+    "PsycopgAsyncExceptionHandler",
+    "PsycopgSyncCursor",
+    "PsycopgSyncDriver",
+    "PsycopgSyncExceptionHandler",
+    "psycopg_statement_config",
+)
 
 logger = get_logger("adapters.psycopg")
 
@@ -91,30 +102,34 @@ def _should_serialize_list(value: "list[Any]") -> bool:
     return any(isinstance(item, (dict, list, tuple)) for item in value)
 
 
-def _prepare_list_parameter(value: "list[Any]") -> Any:
-    """Convert complex lists to JSON strings while keeping primitive arrays."""
-    if not value:
+def _build_list_parameter_converter(serializer: "Callable[[Any], str]") -> "Callable[[list[Any]], Any]":
+    """Create converter that serializes nested lists while preserving arrays."""
+
+    def convert(value: "list[Any]") -> Any:
+        if not value:
+            return value
+        if _should_serialize_list(value):
+            return serializer(value)
         return value
-    if _should_serialize_list(value):
-        return to_json(value)
-    return value
+
+    return convert
 
 
-def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> Any:
-    """Normalize tuple parameters for psycopg binding."""
-    return _prepare_list_parameter(list(value))
+def _build_tuple_parameter_converter(serializer: "Callable[[Any], str]") -> "Callable[[tuple[Any, ...]], Any]":
+    """Create converter mirroring list handling for tuple parameters."""
+
+    list_converter = _build_list_parameter_converter(serializer)
+
+    def convert(value: "tuple[Any, ...]") -> Any:
+        return list_converter(list(value))
+
+    return convert
 
 
-psycopg_statement_config = StatementConfig(
-    dialect="postgres",
-    pre_process_steps=None,
-    post_process_steps=None,
-    enable_parsing=True,
-    enable_transformations=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-    parameter_config=ParameterStyleConfig(
+def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
+    """Construct parameter config with shared JSON serializer support."""
+
+    base_config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
         supported_parameter_styles={
             ParameterStyle.POSITIONAL_PYFORMAT,
@@ -128,28 +143,29 @@ psycopg_statement_config = StatementConfig(
             ParameterStyle.NAMED_PYFORMAT,
             ParameterStyle.NUMERIC,
         },
-        type_coercion_map={
-            dict: to_json,
-            list: _prepare_list_parameter,
-            tuple: _prepare_tuple_parameter,
-            datetime.datetime: lambda x: x,
-            datetime.date: lambda x: x,
-            datetime.time: lambda x: x,
-        },
+        type_coercion_map={datetime.datetime: lambda x: x, datetime.date: lambda x: x, datetime.time: lambda x: x},
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
-    ),
-)
+    ).with_json_serializers(serializer)
 
-__all__ = (
-    "PsycopgAsyncCursor",
-    "PsycopgAsyncDriver",
-    "PsycopgAsyncExceptionHandler",
-    "PsycopgSyncCursor",
-    "PsycopgSyncDriver",
-    "PsycopgSyncExceptionHandler",
-    "psycopg_statement_config",
+    updated_type_map = dict(base_config.type_coercion_map)
+    updated_type_map[list] = _build_list_parameter_converter(serializer)
+    updated_type_map[tuple] = _build_tuple_parameter_converter(serializer)
+
+    return base_config.replace(type_coercion_map=updated_type_map)
+
+
+psycopg_statement_config = StatementConfig(
+    dialect="postgres",
+    pre_process_steps=None,
+    post_process_steps=None,
+    enable_parsing=True,
+    enable_transformations=True,
+    enable_validation=True,
+    enable_caching=True,
+    enable_parameter_type_wrapping=True,
+    parameter_config=_create_psycopg_parameter_config(to_json),
 )
 
 

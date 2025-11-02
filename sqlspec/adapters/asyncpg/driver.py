@@ -28,6 +28,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -85,9 +86,7 @@ def _convert_time_param(value: Any) -> Any:
     return value
 
 
-asyncpg_statement_config = StatementConfig(
-    dialect="postgres",
-    parameter_config=ParameterStyleConfig(
+_ASYNC_PG_PARAMETER_CONFIG = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,
         supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
@@ -100,7 +99,11 @@ asyncpg_statement_config = StatementConfig(
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
-    ),
+)
+
+asyncpg_statement_config = StatementConfig(
+    dialect="postgres",
+    parameter_config=_ASYNC_PG_PARAMETER_CONFIG.with_json_serializers(to_json),
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,

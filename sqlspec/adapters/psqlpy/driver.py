@@ -32,8 +32,10 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.psqlpy._types import PsqlpyConnection
@@ -108,25 +110,32 @@ def _coerce_numeric_for_write(value: Any) -> Any:
     return value
 
 
-psqlpy_statement_config = StatementConfig(
-    dialect="postgres",
-    parameter_config=ParameterStyleConfig(
+def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
+    """Construct parameter config with shared JSON serializer support."""
+
+    base_config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,
         supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={
-            dict: _prepare_dict_parameter,
-            list: _prepare_list_parameter,
-            tuple: _prepare_tuple_parameter,
-            decimal.Decimal: float,
-            str: _type_converter.convert_if_detected,
-        },
+        type_coercion_map={decimal.Decimal: float, str: _type_converter.convert_if_detected},
         has_native_list_expansion=False,
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
         preserve_parameter_format=True,
-    ),
+    ).with_json_serializers(serializer)
+
+    updated_type_map = dict(base_config.type_coercion_map)
+    updated_type_map[dict] = _prepare_dict_parameter
+    updated_type_map[list] = _prepare_list_parameter
+    updated_type_map[tuple] = _prepare_tuple_parameter
+
+    return base_config.replace(type_coercion_map=updated_type_map)
+
+
+psqlpy_statement_config = StatementConfig(
+    dialect="postgres",
+    parameter_config=_create_psqlpy_parameter_config(to_json),
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,
