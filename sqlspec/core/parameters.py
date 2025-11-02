@@ -27,7 +27,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from functools import singledispatch
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -1029,18 +1029,17 @@ class ParameterProcessingResult:
         raise IndexError(msg)
 
 
+EXECUTE_MANY_MIN_ROWS: Final[int] = 2
+
+
 def _is_sequence_like(value: Any) -> bool:
     return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
 
 
 def _looks_like_execute_many(parameters: Any) -> bool:
-    if not _is_sequence_like(parameters):
+    if not _is_sequence_like(parameters) or len(parameters) < EXECUTE_MANY_MIN_ROWS:
         return False
-    if len(parameters) < 2:
-        return False
-    if not all(_is_sequence_like(entry) or isinstance(entry, Mapping) for entry in parameters):
-        return False
-    return True
+    return all(_is_sequence_like(entry) or isinstance(entry, Mapping) for entry in parameters)
 
 
 def _normalize_parameter_key(key: Any) -> "tuple[str, int | str]":
@@ -1084,14 +1083,14 @@ def _collect_actual_identifiers(parameters: Any) -> "tuple[set[tuple[str, int | 
     if parameters is None:
         return set(), 0
     if isinstance(parameters, Mapping):
-        identifiers = {_normalize_parameter_key(key) for key in parameters}
-        return identifiers, len(parameters)
+        mapping_identifiers = {_normalize_parameter_key(key) for key in parameters}
+        return mapping_identifiers, len(parameters)
     if _looks_like_execute_many(parameters):
-        identifiers: set[tuple[str, int | str]] = set()
+        aggregated_identifiers: set[tuple[str, int | str]] = set()
         for entry in parameters:
             entry_identifiers, _ = _collect_actual_identifiers(entry)
-            identifiers.update(entry_identifiers)
-        return identifiers, len(identifiers)
+            aggregated_identifiers.update(entry_identifiers)
+        return aggregated_identifiers, len(aggregated_identifiers)
     if _is_sequence_like(parameters):
         identifiers = {("index", cast("int | str", index)) for index in range(len(parameters))}
         return identifiers, len(parameters)
