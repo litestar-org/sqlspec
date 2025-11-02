@@ -225,6 +225,29 @@ def test_mixed_parameter_style_with_processor() -> None:
     assert len(processed_params) == 2
 
 
+def test_parameter_processing_result_profile_metadata() -> None:
+    """Parameter profile captures placeholder reuse and style information."""
+
+    sql = "SELECT :id::int AS id, :id::int AS other"
+    parameters = {"id": 42}
+
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+    )
+
+    processor = ParameterProcessor()
+    result = processor.process(sql=sql, parameters=parameters, config=config, dialect="postgres")
+    profile = result.parameter_profile
+
+    assert profile.total_count == 2
+    assert profile.placeholder_count("$1") == 2
+    assert profile.reused_ordinals == (1,)
+    assert profile.styles == (ParameterStyle.NUMERIC.value,)
+
+
 def test_mixed_parameters_order_sensitivity() -> None:
     """Test that mixed parameters maintain correct order mapping."""
 

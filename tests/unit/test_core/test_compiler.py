@@ -627,7 +627,9 @@ def test_memory_efficiency_with_slots() -> None:
         "execution_parameters",
         "expression",
         "operation_type",
+        "operation_profile",
         "parameter_casts",
+        "parameter_profile",
         "parameter_style",
         "supports_many",
     }

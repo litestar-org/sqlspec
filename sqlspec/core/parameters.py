@@ -19,26 +19,32 @@ Processing:
 - Support for multiple parameter styles and database adapters
 """
 
+import hashlib
 import re
 from collections import OrderedDict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from functools import singledispatch
-from typing import Any
+from typing import Any, Final, Literal, cast
 
 from mypy_extensions import mypyc_attr
+
+import sqlspec.exceptions
 
 __all__ = (
     "ParameterConverter",
     "ParameterInfo",
+    "ParameterProcessingResult",
     "ParameterProcessor",
+    "ParameterProfile",
     "ParameterStyle",
     "ParameterStyleConfig",
     "ParameterValidator",
     "TypedParameter",
     "is_iterable_parameters",
+    "validate_parameter_alignment",
     "wrap_with_type",
 )
 
@@ -245,6 +251,8 @@ class ParameterStyleConfig:
         "default_execution_parameter_style",
         "default_parameter_style",
         "has_native_list_expansion",
+        "json_deserializer",
+        "json_serializer",
         "needs_static_script_compilation",
         "output_transformer",
         "preserve_original_params_for_many",
@@ -268,6 +276,8 @@ class ParameterStyleConfig:
         preserve_original_params_for_many: bool = False,
         output_transformer: Callable[[str, Any], tuple[str, Any]] | None = None,
         ast_transformer: Callable[[Any, Any], tuple[Any, Any]] | None = None,
+        json_serializer: Callable[[Any], str] | None = None,
+        json_deserializer: Callable[[str], Any] | None = None,
     ) -> None:
         """Initialize parameter style configuration.
 
@@ -284,6 +294,8 @@ class ParameterStyleConfig:
             preserve_parameter_format: Maintain original parameter structure
             preserve_original_params_for_many: Return original list of tuples for execute_many
             ast_transformer: AST-based transformation hook for SQL/parameter manipulation
+            json_serializer: Optional JSON serializer to apply to dict/list/tuple parameters
+            json_deserializer: Optional JSON deserializer retained for driver use
         """
         self.default_parameter_style = default_parameter_style
         self.supported_parameter_styles = (
@@ -299,6 +311,8 @@ class ParameterStyleConfig:
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.preserve_parameter_format = preserve_parameter_format
         self.preserve_original_params_for_many = preserve_original_params_for_many
+        self.json_serializer = json_serializer
+        self.json_deserializer = json_deserializer
 
     def hash(self) -> int:
         """Generate hash for cache key generation.
@@ -323,8 +337,68 @@ class ParameterStyleConfig:
             self.allow_mixed_parameter_styles,
             self.preserve_parameter_format,
             bool(self.ast_transformer),
+            self.json_serializer,
+            self.json_deserializer,
         )
         return hash(hash_components)
+
+    def replace(self, **overrides: Any) -> "ParameterStyleConfig":
+        data: dict[str, Any] = {
+            "default_parameter_style": self.default_parameter_style,
+            "supported_parameter_styles": set(self.supported_parameter_styles),
+            "supported_execution_parameter_styles": (
+                set(self.supported_execution_parameter_styles)
+                if self.supported_execution_parameter_styles is not None
+                else None
+            ),
+            "default_execution_parameter_style": self.default_execution_parameter_style,
+            "type_coercion_map": dict(self.type_coercion_map),
+            "has_native_list_expansion": self.has_native_list_expansion,
+            "needs_static_script_compilation": self.needs_static_script_compilation,
+            "allow_mixed_parameter_styles": self.allow_mixed_parameter_styles,
+            "preserve_parameter_format": self.preserve_parameter_format,
+            "preserve_original_params_for_many": self.preserve_original_params_for_many,
+            "output_transformer": self.output_transformer,
+            "ast_transformer": self.ast_transformer,
+            "json_serializer": self.json_serializer,
+            "json_deserializer": self.json_deserializer,
+        }
+        data.update(overrides)
+        return ParameterStyleConfig(**data)
+
+    def with_json_serializers(
+        self,
+        serializer: "Callable[[Any], str]",
+        *,
+        tuple_strategy: Literal["list", "tuple"] = "list",
+        deserializer: "Callable[[str], Any] | None" = None,
+    ) -> "ParameterStyleConfig":
+        """Return a copy configured to serialize dict/list/tuple parameters with a custom JSON encoder."""
+
+        if tuple_strategy == "list":
+
+            def tuple_adapter(value: Any) -> Any:
+                return serializer(list(value))
+
+        elif tuple_strategy == "tuple":
+
+            def tuple_adapter(value: Any) -> Any:
+                return serializer(value)
+
+        else:
+            msg = f"Unsupported tuple_strategy: {tuple_strategy}"
+            raise ValueError(msg)
+
+        updated_type_map = dict(self.type_coercion_map)
+        updated_type_map[dict] = serializer
+        updated_type_map[list] = serializer
+        updated_type_map[tuple] = tuple_adapter
+
+        return self.replace(
+            type_coercion_map=updated_type_map,
+            json_serializer=serializer,
+            json_deserializer=deserializer or self.json_deserializer,
+        )
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -420,6 +494,12 @@ class ParameterValidator:
                 continue
 
             style, name = self._extract_parameter_style(match)
+
+            if style is ParameterStyle.QMARK:
+                tail = sql[match.end() :]
+                next_non_space = tail.lstrip()
+                if next_non_space.startswith(("'", '"')):
+                    continue
 
             if style is not None:
                 parameters.append(
@@ -945,6 +1025,234 @@ class ParameterConverter:
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
+class ParameterProfile:
+    """Aggregate metadata describing detected parameters."""
+
+    __slots__ = ("_parameters", "_placeholder_counts", "named_parameters", "reused_ordinals", "styles")
+
+    def __init__(self, parameters: "Sequence[ParameterInfo] | None" = None) -> None:
+        param_tuple: tuple[ParameterInfo, ...] = tuple(parameters) if parameters else ()
+        self._parameters = param_tuple
+        self.styles = tuple(sorted({param.style.value for param in param_tuple})) if param_tuple else ()
+        placeholder_counts: dict[str, int] = {}
+        reused_ordinals: list[int] = []
+        named_parameters: list[str] = []
+
+        for param in param_tuple:
+            placeholder = param.placeholder_text
+            current_count = placeholder_counts.get(placeholder, 0)
+            placeholder_counts[placeholder] = current_count + 1
+            if current_count:
+                reused_ordinals.append(param.ordinal)
+            if param.name is not None:
+                named_parameters.append(param.name)
+
+        self._placeholder_counts = placeholder_counts
+        self.reused_ordinals = tuple(reused_ordinals)
+        self.named_parameters = tuple(named_parameters)
+
+    @classmethod
+    def empty(cls) -> "ParameterProfile":
+        return cls(())
+
+    @property
+    def parameters(self) -> "tuple[ParameterInfo, ...]":
+        return self._parameters
+
+    @property
+    def total_count(self) -> int:
+        return len(self._parameters)
+
+    def placeholder_count(self, placeholder: str) -> int:
+        return self._placeholder_counts.get(placeholder, 0)
+
+    def is_empty(self) -> bool:
+        return not self._parameters
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class ParameterProcessingResult:
+    """Return container for parameter processing output."""
+
+    __slots__ = ("parameter_profile", "parameters", "sql")
+
+    def __init__(self, sql: str, parameters: Any, parameter_profile: "ParameterProfile") -> None:
+        self.sql = sql
+        self.parameters = parameters
+        self.parameter_profile = parameter_profile
+
+    def __iter__(self) -> "Generator[str | Any, Any, None]":
+        yield self.sql
+        yield self.parameters
+
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, index: int) -> Any:
+        if index == 0:
+            return self.sql
+        if index == 1:
+            return self.parameters
+        msg = "ParameterProcessingResult exposes exactly two positional items"
+        raise IndexError(msg)
+
+
+EXECUTE_MANY_MIN_ROWS: Final[int] = 2
+
+
+def _is_sequence_like(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+
+
+def _looks_like_execute_many(parameters: Any) -> bool:
+    if not _is_sequence_like(parameters) or len(parameters) < EXECUTE_MANY_MIN_ROWS:
+        return False
+    return all(_is_sequence_like(entry) or isinstance(entry, Mapping) for entry in parameters)
+
+
+def _normalize_parameter_key(key: Any) -> "tuple[str, int | str]":
+    if isinstance(key, str):
+        stripped_numeric = key.lstrip("$")
+        if stripped_numeric.isdigit():
+            return ("index", int(stripped_numeric) - 1)
+        if key.isdigit():
+            return ("index", int(key) - 1)
+        return ("named", key)
+    if isinstance(key, int):
+        if key > 0:
+            return ("index", key - 1)
+        return ("index", key)
+    return ("named", str(key))
+
+
+def _collect_expected_identifiers(parameter_profile: "ParameterProfile") -> "set[tuple[str, int | str]]":
+    identifiers: set[tuple[str, int | str]] = set()
+    for parameter in parameter_profile.parameters:
+        style = parameter.style
+        name = parameter.name
+        if style in {
+            ParameterStyle.NAMED_COLON,
+            ParameterStyle.NAMED_AT,
+            ParameterStyle.NAMED_DOLLAR,
+            ParameterStyle.NAMED_PYFORMAT,
+        }:
+            identifiers.add(("named", name or f"param_{parameter.ordinal}"))
+        elif style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}:
+            if name and name.isdigit():
+                identifiers.add(("index", int(name) - 1))
+            else:
+                identifiers.add(("index", parameter.ordinal))
+        else:
+            identifiers.add(("index", parameter.ordinal))
+    return identifiers
+
+
+def _collect_actual_identifiers(parameters: Any) -> "tuple[set[tuple[str, int | str]], int]":
+    if parameters is None:
+        return set(), 0
+    if isinstance(parameters, Mapping):
+        mapping_identifiers = {_normalize_parameter_key(key) for key in parameters}
+        return mapping_identifiers, len(parameters)
+    if _looks_like_execute_many(parameters):
+        aggregated_identifiers: set[tuple[str, int | str]] = set()
+        for entry in parameters:
+            entry_identifiers, _ = _collect_actual_identifiers(entry)
+            aggregated_identifiers.update(entry_identifiers)
+        return aggregated_identifiers, len(aggregated_identifiers)
+    if _is_sequence_like(parameters):
+        identifiers = {("index", cast("int | str", index)) for index in range(len(parameters))}
+        return identifiers, len(parameters)
+    identifiers = {("index", cast("int | str", 0))}
+    return identifiers, 1
+
+
+def _format_identifiers(identifiers: "set[tuple[str, int | str]]") -> str:
+    if not identifiers:
+        return "[]"
+    formatted: list[str] = []
+    for identifier in sorted(identifiers, key=lambda item: (item[0], str(item[1]))):
+        kind, value = identifier
+        if kind == "named":
+            formatted.append(str(value))
+        elif isinstance(value, int):
+            formatted.append(str(value + 1))
+        else:
+            formatted.append(str(value))
+    return "[" + ", ".join(formatted) + "]"
+
+
+def _validate_single_parameter_set(
+    parameter_profile: "ParameterProfile", parameters: Any, batch_index: "int | None" = None
+) -> None:
+    expected_identifiers = _collect_expected_identifiers(parameter_profile)
+    actual_identifiers, actual_count = _collect_actual_identifiers(parameters)
+    expected_count = len(expected_identifiers)
+
+    if expected_count == 0 and actual_count == 0:
+        return
+
+    prefix = "Parameter count mismatch"
+    if batch_index is not None:
+        prefix = f"{prefix} in batch {batch_index}"
+
+    if expected_count == 0 and actual_count > 0:
+        msg = f"{prefix}: statement does not accept parameters."
+        raise sqlspec.exceptions.SQLSpecError(msg)
+
+    if expected_count > 0 and actual_count == 0:
+        msg = f"{prefix}: expected {expected_count} parameters, received 0."
+        raise sqlspec.exceptions.SQLSpecError(msg)
+
+    if expected_count != actual_count:
+        msg = f"{prefix}: {actual_count} parameters provided but {expected_count} placeholders detected."
+        raise sqlspec.exceptions.SQLSpecError(msg)
+
+    if expected_identifiers != actual_identifiers:
+        msg = (
+            f"{prefix}: expected identifiers {_format_identifiers(expected_identifiers)}, "
+            f"received {_format_identifiers(actual_identifiers)}."
+        )
+        raise sqlspec.exceptions.SQLSpecError(msg)
+
+
+def validate_parameter_alignment(
+    parameter_profile: "ParameterProfile | None", parameters: Any, *, is_many: bool = False
+) -> None:
+    """Validate that provided parameters align with detected placeholders.
+
+    Args:
+        parameter_profile: Placeholder metadata produced by parameter processing.
+        parameters: Parameters that will be bound for execution.
+        is_many: Whether parameters represent execute_many payload.
+
+    Raises:
+        SQLSpecError: If parameter counts or identifiers do not align.
+    """
+    profile = parameter_profile or ParameterProfile.empty()
+    if profile.total_count == 0:
+        return
+
+    effective_is_many = is_many or _looks_like_execute_many(parameters)
+
+    if effective_is_many:
+        if parameters is None:
+            if profile.total_count == 0:
+                return
+            msg = "Parameter count mismatch: expected parameter sets for execute_many."
+            raise sqlspec.exceptions.SQLSpecError(msg)
+        if not _is_sequence_like(parameters):
+            msg = "Parameter count mismatch: expected sequence of parameter sets for execute_many."
+            raise sqlspec.exceptions.SQLSpecError(msg)
+        if len(parameters) == 0:
+            return
+        for index, param_set in enumerate(parameters):
+            _validate_single_parameter_set(profile, param_set, batch_index=index)
+        return
+
+    _validate_single_parameter_set(profile, parameters)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterProcessor:
     """Parameter processing engine.
 
@@ -965,14 +1273,14 @@ class ParameterProcessor:
 
     def __init__(self) -> None:
         """Initialize processor with component coordination."""
-        self._cache: dict[str, tuple[str, Any]] = {}
+        self._cache: dict[str, ParameterProcessingResult] = {}
         self._cache_size = 0
         self._validator = ParameterValidator()
         self._converter = ParameterConverter()
 
     def _handle_static_embedding(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, is_many: bool, cache_key: str
-    ) -> "tuple[str, Any]":
+    ) -> "ParameterProcessingResult":
         """Handle static parameter embedding for script compilation.
 
         Args:
@@ -992,8 +1300,11 @@ class ParameterProcessor:
         static_sql, static_params = self._converter.convert_placeholder_style(
             sql, coerced_params, ParameterStyle.STATIC, is_many
         )
-        self._cache[cache_key] = (static_sql, static_params)
-        return static_sql, static_params
+        result = ParameterProcessingResult(static_sql, static_params, ParameterProfile.empty())
+        if self._cache_size < self.DEFAULT_CACHE_SIZE:
+            self._cache[cache_key] = result
+            self._cache_size += 1
+        return result
 
     def _process_parameters_conversion(
         self,
@@ -1030,38 +1341,37 @@ class ParameterProcessor:
         target_style = self._determine_target_execution_style(original_styles, config)
         return self._converter.convert_placeholder_style(sql, parameters, target_style, is_many)
 
+    def _fingerprint_parameters(self, parameters: Any) -> str:
+        """Create deterministic fingerprint for parameter values."""
+        if parameters is None:
+            return "none"
+
+        if isinstance(parameters, Mapping):
+            try:
+                items = sorted(parameters.items(), key=lambda item: repr(item[0]))
+            except Exception:
+                items = list(parameters.items())
+            data = repr(tuple(items))
+        elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+            data = repr(tuple(parameters))
+        else:
+            data = repr(parameters)
+
+        digest = hashlib.sha256(data.encode("utf-8")).hexdigest()
+        return f"{type(parameters).__name__}:{digest}"
+
     def _generate_processor_cache_key(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, is_many: bool, dialect: "str | None"
     ) -> str:
-        """Generate optimized cache key for parameter processing.
-
-        Uses parameter fingerprint (type + structure) instead of repr()
-        for better performance on large parameter sets.
-
-        Args:
-            sql: SQL string
-            parameters: Parameter values
-            config: Parameter style configuration
-            is_many: Whether this is execute_many
-            dialect: SQL dialect
-
-        Returns:
-            Cache key string
-        """
-        param_fingerprint = (
-            "none"
-            if parameters is None
-            else f"seq_{len(parameters)}_{type(parameters).__name__}"
-            if isinstance(parameters, (list, tuple))
-            else f"map_{len(parameters)}"
-            if isinstance(parameters, dict)
-            else f"scalar_{type(parameters).__name__}"
-        )
-        return f"{sql}:{param_fingerprint}:{config.default_parameter_style}:{is_many}:{dialect}"
+        """Generate cache key for parameter processing."""
+        param_fingerprint = self._fingerprint_parameters(parameters)
+        dialect_marker = dialect or "default"
+        default_style = config.default_parameter_style.value if config.default_parameter_style else "unknown"
+        return f"{sql}:{param_fingerprint}:{default_style}:{is_many}:{dialect_marker}"
 
     def process(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, dialect: str | None = None, is_many: bool = False
-    ) -> "tuple[str, Any]":
+    ) -> "ParameterProcessingResult":
         """Process parameters through the complete pipeline.
 
         Coordinates the entire parameter processing workflow:
@@ -1082,8 +1392,9 @@ class ParameterProcessor:
             Tuple of (final_sql, execution_parameters)
         """
         cache_key = self._generate_processor_cache_key(sql, parameters, config, is_many, dialect)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        cached_result = self._cache.get(cache_key)
+        if cached_result is not None:
+            return cached_result
 
         param_info = self._validator.extract_parameters(sql)
         original_styles = {p.style for p in param_info} if param_info else set()
@@ -1101,7 +1412,11 @@ class ParameterProcessor:
             and not config.type_coercion_map
             and not config.output_transformer
         ):
-            return sql, parameters
+            result = ParameterProcessingResult(sql, parameters, ParameterProfile(param_info))
+            if self._cache_size < self.DEFAULT_CACHE_SIZE:
+                self._cache[cache_key] = result
+                self._cache_size += 1
+            return result
 
         processed_sql, processed_parameters = sql, parameters
 
@@ -1127,11 +1442,15 @@ class ParameterProcessor:
         if config.output_transformer:
             processed_sql, processed_parameters = config.output_transformer(processed_sql, processed_parameters)
 
+        final_param_info = self._validator.extract_parameters(processed_sql)
+        final_profile = ParameterProfile(final_param_info)
+        result = ParameterProcessingResult(processed_sql, processed_parameters, final_profile)
+
         if self._cache_size < self.DEFAULT_CACHE_SIZE:
-            self._cache[cache_key] = (processed_sql, processed_parameters)
+            self._cache[cache_key] = result
             self._cache_size += 1
 
-        return processed_sql, processed_parameters
+        return result
 
     def get_sqlglot_compatible_sql(
         self, sql: str, parameters: Any, config: ParameterStyleConfig, dialect: str | None = None

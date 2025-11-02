@@ -5,7 +5,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
 
 import duckdb
-from sqlglot import exp
 
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBTypeConverter
@@ -225,36 +224,20 @@ class DuckDBDriver(SyncDriverAdapterBase):
             statement_config = updated_config
 
         if driver_features:
+            param_config = statement_config.parameter_config
             json_serializer = driver_features.get("json_serializer")
+            if json_serializer:
+                param_config = param_config.with_json_serializers(json_serializer, tuple_strategy="tuple")
+
             enable_uuid_conversion = driver_features.get("enable_uuid_conversion", True)
-
-            if json_serializer or not enable_uuid_conversion:
+            if not enable_uuid_conversion:
                 type_converter = DuckDBTypeConverter(enable_uuid_conversion=enable_uuid_conversion)
-                type_coercion_map = dict(statement_config.parameter_config.type_coercion_map)
+                type_coercion_map = dict(param_config.type_coercion_map)
+                type_coercion_map[str] = type_converter.convert_if_detected
+                param_config = param_config.replace(type_coercion_map=type_coercion_map)
 
-                if json_serializer:
-                    type_coercion_map[dict] = json_serializer
-                    type_coercion_map[list] = json_serializer
-
-                if not enable_uuid_conversion:
-                    type_coercion_map[str] = type_converter.convert_if_detected
-
-                param_config = statement_config.parameter_config
-                updated_param_config = ParameterStyleConfig(
-                    default_parameter_style=param_config.default_parameter_style,
-                    supported_parameter_styles=param_config.supported_parameter_styles,
-                    supported_execution_parameter_styles=param_config.supported_execution_parameter_styles,
-                    default_execution_parameter_style=param_config.default_execution_parameter_style,
-                    type_coercion_map=type_coercion_map,
-                    has_native_list_expansion=param_config.has_native_list_expansion,
-                    needs_static_script_compilation=param_config.needs_static_script_compilation,
-                    allow_mixed_parameter_styles=param_config.allow_mixed_parameter_styles,
-                    preserve_parameter_format=param_config.preserve_parameter_format,
-                    preserve_original_params_for_many=param_config.preserve_original_params_for_many,
-                    output_transformer=param_config.output_transformer,
-                    ast_transformer=param_config.ast_transformer,
-                )
-                statement_config = statement_config.replace(parameter_config=updated_param_config)
+            if param_config is not statement_config.parameter_config:
+                statement_config = statement_config.replace(parameter_config=param_config)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SyncDataDictionaryBase | None = None
@@ -293,26 +276,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         _ = (cursor, statement)
         return None
-
-    def _is_modifying_operation(self, statement: SQL) -> bool:
-        """Check if the SQL statement modifies data.
-
-        Determines if a statement is an INSERT, UPDATE, or DELETE operation
-        using AST analysis when available, falling back to text parsing.
-
-        Args:
-            statement: SQL statement to analyze
-
-        Returns:
-            True if the operation modifies data (INSERT/UPDATE/DELETE)
-        """
-
-        expression = statement.expression
-        if expression and isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
-            return True
-
-        sql_upper = statement.sql.strip().upper()
-        return any(sql_upper.startswith(op) for op in MODIFYING_OPERATIONS)
 
     def _execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -359,7 +322,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if prepared_parameters:
             cursor.executemany(sql, prepared_parameters)
 
-            if self._is_modifying_operation(statement):
+            if statement.is_modifying_operation():
                 row_count = len(prepared_parameters)
             else:
                 try:

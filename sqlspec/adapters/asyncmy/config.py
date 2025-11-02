@@ -117,7 +117,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         if "port" not in processed_pool_config:
             processed_pool_config["port"] = 3306
 
-        if statement_config is None:
+        using_default_statement_config = statement_config is None
+        if using_default_statement_config:
             statement_config = asyncmy_statement_config
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
@@ -126,6 +127,14 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             processed_driver_features["json_serializer"] = to_json
         if "json_deserializer" not in processed_driver_features:
             processed_driver_features["json_deserializer"] = from_json
+
+        if statement_config is None:
+            statement_config = asyncmy_statement_config
+
+        json_serializer = processed_driver_features.get("json_serializer")
+        if json_serializer is not None and using_default_statement_config:
+            parameter_config = statement_config.parameter_config.with_json_serializers(json_serializer)
+            statement_config = statement_config.replace(parameter_config=parameter_config)
 
         super().__init__(
             pool_config=processed_pool_config,
