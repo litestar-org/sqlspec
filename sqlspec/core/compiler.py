@@ -7,9 +7,8 @@ Components:
 """
 
 import hashlib
-import logging
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -21,6 +20,8 @@ from sqlspec.core.parameters import ParameterProcessor, ParameterProfile
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    import logging
+
     from sqlspec.core.statement import StatementConfig
 
 
@@ -43,9 +44,9 @@ OperationType = Literal[
 
 __all__ = ("CompiledSQL", "OperationProfile", "OperationType", "SQLProcessor")
 
-logger: "Final[logging.Logger]" = get_logger("sqlspec.core.compiler")
+logger: "logging.Logger" = get_logger("sqlspec.core.compiler")
 
-OPERATION_TYPE_MAP: "Final[dict[type[exp.Expression], OperationType]]" = {
+OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
     exp.Select: "SELECT",
     exp.Insert: "INSERT",
     exp.Update: "UPDATE",
