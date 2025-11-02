@@ -7,6 +7,7 @@ __all__ = (
     "ConfigResolverError",
     "DataError",
     "DatabaseConnectionError",
+    "DialectNotSupportedError",
     "FileNotFoundInStorageError",
     "ForeignKeyViolationError",
     "ImproperConfigurationError",
@@ -114,6 +115,10 @@ class SQLConversionError(SQLSpecError):
 
 class ImproperConfigurationError(SQLSpecError):
     """Raised when configuration is invalid or incomplete."""
+
+
+class DialectNotSupportedError(SQLBuilderError):
+    """Raised when a SQL dialect does not support a specific feature."""
 
 
 class SerializationError(SQLSpecError):

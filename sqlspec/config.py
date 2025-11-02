@@ -45,7 +45,6 @@ ConfigT = TypeVar(
     bound="AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]",
 )
 
-# Define TypeVars for Generic classes
 ConnectionT = TypeVar("ConnectionT")
 PoolT = TypeVar("PoolT")
 DriverT = TypeVar("DriverT", bound="SyncDriverAdapterBase | AsyncDriverAdapterBase")
@@ -472,7 +471,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         Returns:
             SQLFileLoader instance for migration files.
         """
-        # Auto-load migration files from configured migration path if it exists
         migration_config = self.migration_config or {}
         script_location = migration_config.get("script_location", "migrations")
 

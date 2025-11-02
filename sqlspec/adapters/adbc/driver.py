@@ -41,11 +41,10 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.adbc._types import AdbcConnection
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import Statement, StatementFilter
-    from sqlspec.core.result import ArrowResult, SQLResult
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
-    from sqlspec.typing import StatementParameters
+    from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "get_adbc_statement_config")
 
@@ -319,8 +318,6 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     Returns:
         Mapping of Python types to conversion functions
     """
-    tc = ADBCTypeConverter(dialect)
-
     return {
         datetime.datetime: lambda x: x,
         datetime.date: lambda x: x,
@@ -329,7 +326,6 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
         bool: lambda x: x,
         int: lambda x: x,
         float: lambda x: x,
-        str: tc.convert_if_detected,
         bytes: lambda x: x,
         tuple: _convert_array_for_postgres_adbc,
         list: _convert_array_for_postgres_adbc,
@@ -862,7 +858,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
+        return_format: "ArrowReturnFormat" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,

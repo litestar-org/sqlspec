@@ -3,8 +3,7 @@
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
-from sqlspec.core import SQL
-from sqlspec.core.result import create_arrow_result
+from sqlspec.core import SQL, create_arrow_result
 from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
     DataDictionaryMixin,
@@ -23,8 +22,8 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQLResult, Statement, StatementConfig, StatementFilter
-    from sqlspec.typing import SchemaT, StatementParameters
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.typing import ArrowReturnFormat, SchemaT, StatementParameters
 
 _LOGGER_NAME: Final[str] = "sqlspec"
 logger = get_logger(_LOGGER_NAME)
@@ -351,12 +350,12 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
+        return_format: "ArrowReturnFormat" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,
         **kwargs: Any,
-    ) -> "Any":
+    ) -> "ArrowResult":
         """Execute query and return results as Apache Arrow format.
 
         This base implementation uses the conversion path: execute() → dict → Arrow.
@@ -367,10 +366,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
             statement: SQL query string, Statement, or QueryBuilder
             *parameters: Query parameters (same format as execute()/select())
             statement_config: Optional statement configuration override
-            return_format: "table" for pyarrow.Table (default), "reader" for RecordBatchReader,
-                         "batches" for iterator of RecordBatches
+            return_format: "table" for pyarrow.Table (default), "batch" for single RecordBatch,
+                         "batches" for iterator of RecordBatches, "reader" for RecordBatchReader
             native_only: If True, raise error if native Arrow unavailable (default: False)
-            batch_size: Rows per batch for "batches" format (default: None = all rows)
+            batch_size: Rows per batch for "batch"/"batches" format (default: None = all rows)
             arrow_schema: Optional pyarrow.Schema for type casting
             **kwargs: Additional keyword arguments
 
@@ -378,9 +377,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
             ArrowResult containing pyarrow.Table, RecordBatchReader, or RecordBatches
 
         Raises:
-            MissingDependencyError: If pyarrow not installed
             ImproperConfigurationError: If native_only=True and adapter doesn't support native Arrow
-            SQLExecutionError: If query execution fails
 
         Examples:
             >>> result = driver.select_to_arrow(
@@ -394,10 +391,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
             ...     "SELECT * FROM users", native_only=True
             ... )
         """
-        # Check pyarrow is available
         ensure_pyarrow()
 
-        # Check if native_only requested but not supported
         if native_only:
             msg = (
                 f"Adapter '{self.__class__.__name__}' does not support native Arrow results. "
@@ -406,17 +401,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
             )
             raise ImproperConfigurationError(msg)
 
-        # Execute query using standard path
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
 
-        # Convert dict results to Arrow
-        arrow_data = convert_dict_to_arrow(
-            result.data,
-            return_format=return_format,  # type: ignore[arg-type]
-            batch_size=batch_size,
-        )
+        arrow_data = convert_dict_to_arrow(result.data, return_format=return_format, batch_size=batch_size)
 
-        # Apply schema casting if requested
         if arrow_schema is not None:
             import pyarrow as pa
 
@@ -424,9 +412,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
                 msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
                 raise TypeError(msg)
 
-            arrow_data = arrow_data.cast(arrow_schema)
+            arrow_data = arrow_data.cast(arrow_schema)  # type: ignore[union-attr]
 
-        # Create ArrowResult
         return create_arrow_result(
             statement=result.statement,
             data=arrow_data,

@@ -5,7 +5,6 @@ from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
 from sqlspec.adapters.psycopg.litestar.store import PsycopgAsyncStore
@@ -14,29 +13,18 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psycopg, pytest.m
 
 
 @pytest.fixture
-async def psycopg_async_store(postgres_service: PostgresService) -> "AsyncGenerator[PsycopgAsyncStore, None]":
+async def psycopg_async_store(psycopg_async_config: PsycopgAsyncConfig) -> "AsyncGenerator[PsycopgAsyncStore, None]":
     """Create Psycopg async store with test database."""
-    config = PsycopgAsyncConfig(
-        pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "dbname": postgres_service.database,
-        },
-        extension_config={"litestar": {"session_table": "test_psycopg_async_sessions"}},
-    )
-    store = PsycopgAsyncStore(config)
+    psycopg_async_config.extension_config = {"litestar": {"session_table": "test_psycopg_async_sessions"}}
+    store = PsycopgAsyncStore(psycopg_async_config)
+    await store.create_table()
     try:
-        await store.create_table()
         yield store
+    finally:
         try:
             await store.delete_all()
         except Exception:
             pass
-    finally:
-        if config.pool_instance:
-            await config.close_pool()
 
 
 async def test_store_create_table(psycopg_async_store: PsycopgAsyncStore) -> None:

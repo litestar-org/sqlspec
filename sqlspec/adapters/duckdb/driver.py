@@ -9,9 +9,7 @@ from sqlglot import exp
 
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBTypeConverter
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig, get_cache_config
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -34,11 +32,10 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.duckdb._types import DuckDBConnection
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import Statement, StatementFilter
-    from sqlspec.core.result import ArrowResult, SQLResult
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
-    from sqlspec.typing import StatementParameters
+    from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "duckdb_statement_config")
 
@@ -61,7 +58,6 @@ duckdb_statement_config = StatementConfig(
             Decimal: str,
             dict: to_json,
             list: to_json,
-            str: _type_converter.convert_if_detected,
         },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
@@ -458,7 +454,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
+        return_format: "ArrowReturnFormat" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,

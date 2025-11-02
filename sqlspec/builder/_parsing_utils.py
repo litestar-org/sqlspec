@@ -7,7 +7,7 @@ passed as strings to builder methods.
 import contextlib
 from typing import Any, Final, cast
 
-from sqlglot import exp, maybe_parse, parse_one
+from sqlglot import exp, maybe_parse
 
 from sqlspec.core.parameters import ParameterStyle, ParameterValidator
 from sqlspec.utils.type_guards import (
@@ -28,15 +28,27 @@ def extract_column_name(column: str | exp.Column) -> str:
         Column name as string for use as parameter name
     """
     if isinstance(column, str):
-        if "." in column:
-            return column.split(".")[-1]
-        return column
+        col_expr: exp.Expression | None = exp.maybe_parse(column)
+        if isinstance(col_expr, exp.Column):
+            return col_expr.name
+        return column.split(".")[-1] if "." in column else column
     if isinstance(column, exp.Column):
-        try:
-            return str(column.this.this)
-        except AttributeError:
-            return str(column.this) if column.this else "column"
+        return column.name
     return "column"
+
+
+def _merge_sql_parameters(sql_obj: Any, builder: Any) -> None:
+    """Merge parameters from SQL object into builder.
+
+    Args:
+        sql_obj: SQL object with parameters attribute
+        builder: Builder instance with add_parameter method
+    """
+    if not (builder and has_expression_and_parameters(sql_obj) and hasattr(builder, "add_parameter")):
+        return
+
+    for param_name, param_value in sql_obj.parameters.items():
+        builder.add_parameter(param_value, name=param_name)
 
 
 def parse_column_expression(column_input: str | exp.Expression | Any, builder: Any | None = None) -> exp.Expression:
@@ -61,26 +73,19 @@ def parse_column_expression(column_input: str | exp.Expression | Any, builder: A
     if isinstance(column_input, exp.Expression):
         return column_input
 
-    if has_expression_and_sql(column_input):
-        expression = getattr(column_input, "expression", None)
-        if expression is not None and isinstance(expression, exp.Expression):
-            # Merge parameters from SQL object into builder if available
-            if builder and has_expression_and_parameters(column_input) and hasattr(builder, "add_parameter"):
-                sql_parameters = getattr(column_input, "parameters", {})
-                for param_name, param_value in sql_parameters.items():
-                    builder.add_parameter(param_value, name=param_name)
-            return cast("exp.Expression", expression)
-        sql_text = getattr(column_input, "sql", "")
-        if builder and has_expression_and_parameters(column_input) and hasattr(builder, "add_parameter"):
-            sql_parameters = getattr(column_input, "parameters", {})
-            for param_name, param_value in sql_parameters.items():
-                builder.add_parameter(param_value, name=param_name)
-        return exp.maybe_parse(sql_text) or exp.column(str(sql_text))
+    if isinstance(column_input, str):
+        return exp.maybe_parse(column_input) or exp.column(column_input)
 
-    if has_expression_attr(column_input):
-        attr_value = getattr(column_input, "_expression", None)
-        if isinstance(attr_value, exp.Expression):
-            return attr_value
+    if has_expression_and_sql(column_input):
+        if column_input.expression is not None and isinstance(column_input.expression, exp.Expression):
+            _merge_sql_parameters(column_input, builder)
+            return cast("exp.Expression", column_input.expression)
+
+        _merge_sql_parameters(column_input, builder)
+        return exp.maybe_parse(column_input.sql) or exp.column(str(column_input.sql))
+
+    if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expression):
+        return column_input._expression
 
     return exp.maybe_parse(column_input) or exp.column(str(column_input))
 
@@ -88,7 +93,7 @@ def parse_column_expression(column_input: str | exp.Expression | Any, builder: A
 def parse_table_expression(table_input: str, explicit_alias: str | None = None) -> exp.Expression:
     """Parses a table string that can be a name, a name with an alias, or a subquery string."""
     with contextlib.suppress(Exception):
-        parsed = parse_one(f"SELECT * FROM {table_input}")
+        parsed: exp.Expression | None = exp.maybe_parse(f"SELECT * FROM {table_input}")
         if isinstance(parsed, exp.Select) and parsed.args.get("from"):
             from_clause = cast("exp.From", parsed.args.get("from"))
             table_expr = from_clause.this
@@ -118,10 +123,9 @@ def parse_order_expression(order_input: str | exp.Expression) -> exp.Expression:
     if isinstance(order_input, exp.Expression):
         return order_input
 
-    with contextlib.suppress(Exception):
-        parsed = maybe_parse(str(order_input), into=exp.Ordered)
-        if parsed:
-            return parsed
+    parsed = maybe_parse(str(order_input), into=exp.Ordered)
+    if parsed:
+        return parsed
 
     return parse_column_expression(order_input)
 
@@ -224,30 +228,13 @@ def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp
         msg = f"Value does not have both expression and sql attributes: {type(value)}"
         raise ValueError(msg)
 
-    # Try expression attribute first
-    expression = getattr(value, "expression", None)
-    if expression is not None and isinstance(expression, exp.Expression):
-        # Merge parameters if available and builder supports it
-        if builder and hasattr(value, "parameters") and hasattr(builder, "add_parameter"):
-            sql_parameters = getattr(value, "parameters", {})
-            for param_name, param_value in sql_parameters.items():
-                builder.add_parameter(param_value, name=param_name)
-        return cast("exp.Expression", expression)
+    if value.expression is not None and isinstance(value.expression, exp.Expression):
+        _merge_sql_parameters(value, builder)
+        return cast("exp.Expression", value.expression)
 
-    # Fall back to parsing raw SQL text
-    sql_text = getattr(value, "sql", "")
+    _merge_sql_parameters(value, builder)
+    sql_text = value.sql if not callable(value.sql) else str(value)
 
-    # Merge parameters even when parsing raw SQL
-    if builder and hasattr(value, "parameters") and hasattr(builder, "add_parameter"):
-        sql_parameters = getattr(value, "parameters", {})
-        for param_name, param_value in sql_parameters.items():
-            builder.add_parameter(param_value, name=param_name)
-
-    # Handle callable SQL text
-    if callable(sql_text):
-        sql_text = str(value)
-
-    # Parse SQL text and return as expression
     return exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
 
 

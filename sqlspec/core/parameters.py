@@ -677,6 +677,16 @@ class ParameterConverter:
         if ordinal_key in parameters:
             return parameters[ordinal_key], True
 
+        # Fallback: rely on insertion order when placeholders were normalized to positional names
+        if isinstance(parameters, Mapping):
+            try:
+                ordered_keys = list(parameters.keys())
+            except AttributeError:
+                ordered_keys = []
+            if ordered_keys and param.ordinal < len(ordered_keys):
+                key = ordered_keys[param.ordinal]
+                return parameters[key], True
+
         return None, False
 
     def _extract_param_value_single_style(
@@ -700,6 +710,15 @@ class ParameterConverter:
         if ordinal_key in parameters:
             return parameters[ordinal_key], True
 
+        try:
+            ordered_keys = list(parameters.keys())
+        except AttributeError:
+            ordered_keys = []
+        if ordered_keys and param.ordinal < len(ordered_keys):
+            key = ordered_keys[param.ordinal]
+            if key in parameters:
+                return parameters[key], True
+
         return None, False
 
     def _preserve_original_format(self, param_values: "list[Any]", original_parameters: Any) -> Any:
@@ -716,6 +735,8 @@ class ParameterConverter:
             return tuple(param_values)
         if isinstance(original_parameters, list):
             return param_values
+        if isinstance(original_parameters, Mapping):
+            return tuple(param_values)
 
         if hasattr(original_parameters, "__class__") and callable(original_parameters.__class__):
             try:
