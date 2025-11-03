@@ -1,16 +1,44 @@
-"""JSON serialization utilities for SQLSpec.
+"""Serialization utilities for SQLSpec.
 
-Re-exports common JSON encoding and decoding functions from the core
-serialization module for convenient access.
-
-Provides NumPy array serialization hooks for framework integrations
-that support custom type encoders and decoders (e.g., Litestar).
+Provides JSON helpers, serializer pipelines, and optional dependency hooks.
 """
 
-from typing import Any, Literal, overload
+from __future__ import annotations
+
+import dataclasses
+from threading import RLock
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from sqlspec._serialization import decode_json, encode_json
-from sqlspec.typing import NUMPY_INSTALLED
+from sqlspec.typing import (
+    ATTRS_INSTALLED,
+    MSGSPEC_INSTALLED,
+    NUMPY_INSTALLED,
+    PYDANTIC_INSTALLED,
+    UNSET,
+    ArrowReturnFormat,
+    attrs_asdict,
+    attrs_has,
+)
+from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
+from sqlspec.utils.type_guards import has_dict_attribute
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Hashable, Iterable
+
+__all__ = (
+    "SchemaSerializer",
+    "from_json",
+    "get_collection_serializer",
+    "get_serializer_metrics",
+    "numpy_array_dec_hook",
+    "numpy_array_enc_hook",
+    "numpy_array_predicate",
+    "reset_serializer_cache",
+    "schema_dump",
+    "serialize_collection",
+    "to_json",
+)
 
 
 @overload
@@ -93,7 +121,7 @@ def numpy_array_enc_hook(value: Any) -> Any:
     return value
 
 
-def numpy_array_dec_hook(value: Any) -> "Any":
+def numpy_array_dec_hook(value: Any) -> Any:
     """Decode list to NumPy array.
 
     Converts Python lists to NumPy arrays when appropriate.
@@ -164,4 +192,165 @@ def numpy_array_predicate(value: Any) -> bool:
     return isinstance(value, np.ndarray)
 
 
-__all__ = ("from_json", "numpy_array_dec_hook", "numpy_array_enc_hook", "numpy_array_predicate", "to_json")
+class SchemaSerializer:
+    """Serializer pipeline that caches conversions for repeated schema dumps."""
+
+    __slots__ = ("_dump", "_key")
+
+    def __init__(self, key: tuple[type[Any] | None, bool], dump: Callable[[Any], dict[str, Any]]) -> None:
+        self._key = key
+        self._dump = dump
+
+    @property
+    def key(self) -> tuple[type[Any] | None, bool]:
+        return self._key
+
+    def dump_one(self, item: Any) -> dict[str, Any]:
+        return self._dump(item)
+
+    def dump_many(self, items: Iterable[Any]) -> list[dict[str, Any]]:
+        return [self._dump(item) for item in items]
+
+    def to_arrow(
+        self, items: Iterable[Any], *, return_format: ArrowReturnFormat = "table", batch_size: int | None = None
+    ) -> Any:
+        payload = self.dump_many(items)
+        return convert_dict_to_arrow(payload, return_format=return_format, batch_size=batch_size)
+
+
+_SERIALIZER_LOCK: RLock = RLock()
+_SCHEMA_SERIALIZERS: dict[tuple[type[Any] | None, bool], SchemaSerializer] = {}
+
+
+def _is_dataclass_instance(value: Any) -> bool:
+    return dataclasses.is_dataclass(value) and not isinstance(value, type)
+
+
+def _is_pydantic_model(value: Any) -> bool:
+    if not PYDANTIC_INSTALLED:
+        return False
+    return hasattr(value, "model_dump")
+
+
+def _is_msgspec_struct(value: Any) -> bool:
+    if not MSGSPEC_INSTALLED:
+        return False
+    return hasattr(value, "__struct_fields__")
+
+
+def _is_attrs_instance(value: Any) -> bool:
+    if not ATTRS_INSTALLED:
+        return False
+    return attrs_has(type(value))
+
+
+def _make_serializer_key(sample: Any, exclude_unset: bool) -> tuple[type[Any] | None, bool]:
+    if sample is None or isinstance(sample, dict):
+        return (None, exclude_unset)
+    return (type(sample), exclude_unset)
+
+
+def _build_dump_function(sample: Any, exclude_unset: bool) -> Callable[[Any], dict[str, Any]]:
+    if sample is None or isinstance(sample, dict):
+        return lambda value: cast("dict[str, Any]", value)
+
+    if _is_dataclass_instance(sample):
+
+        def _dump_dataclass(value: Any) -> dict[str, Any]:
+            return dataclasses.asdict(value)
+
+        return _dump_dataclass
+    if _is_pydantic_model(sample):
+
+        def _dump_pydantic(value: Any) -> dict[str, Any]:
+            return cast("dict[str, Any]", value.model_dump(exclude_unset=exclude_unset))
+
+        return _dump_pydantic
+    if _is_msgspec_struct(sample):
+        if exclude_unset:
+
+            def _dump(value: Any) -> dict[str, Any]:
+                return {f: val for f in value.__struct_fields__ if (val := getattr(value, f, None)) != UNSET}
+
+            return _dump
+
+        return lambda value: {f: getattr(value, f, None) for f in value.__struct_fields__}
+
+    if _is_attrs_instance(sample):
+
+        def _dump_attrs(value: Any) -> dict[str, Any]:
+            return attrs_asdict(value, recurse=True)
+
+        return _dump_attrs
+
+    if has_dict_attribute(sample):
+
+        def _dump_dict_attr(value: Any) -> dict[str, Any]:
+            return dict(value.__dict__)
+
+        return _dump_dict_attr
+
+    return lambda value: dict(value)
+
+
+def get_collection_serializer(sample: Any, *, exclude_unset: bool = True) -> SchemaSerializer:
+    """Return cached serializer pipeline for the provided sample object."""
+
+    key = _make_serializer_key(sample, exclude_unset)
+    with _SERIALIZER_LOCK:
+        pipeline = _SCHEMA_SERIALIZERS.get(key)
+        if pipeline is not None:
+            return pipeline
+
+        dump = _build_dump_function(sample, exclude_unset)
+        pipeline = SchemaSerializer(key, dump)
+        _SCHEMA_SERIALIZERS[key] = pipeline
+        return pipeline
+
+
+def serialize_collection(items: Iterable[Any], *, exclude_unset: bool = True) -> list[Any]:
+    """Serialize a collection using cached pipelines keyed by item type."""
+
+    serialized: list[Any] = []
+    cache: dict[tuple[type[Any] | None, bool], SchemaSerializer] = {}
+
+    for item in items:
+        if isinstance(item, (str, bytes, int, float, bool)) or item is None or isinstance(item, dict):
+            serialized.append(item)
+            continue
+
+        key = _make_serializer_key(item, exclude_unset)
+        pipeline = cache.get(key)
+        if pipeline is None:
+            pipeline = get_collection_serializer(item, exclude_unset=exclude_unset)
+            cache[key] = pipeline
+        serialized.append(pipeline.dump_one(item))
+    return serialized
+
+
+def reset_serializer_cache() -> None:
+    """Clear cached serializer pipelines."""
+
+    with _SERIALIZER_LOCK:
+        _SCHEMA_SERIALIZERS.clear()
+
+
+def get_serializer_metrics() -> dict[str, Hashable]:
+    """Return metrics describing the serializer pipeline cache."""
+
+    with _SERIALIZER_LOCK:
+        return {"size": len(_SCHEMA_SERIALIZERS)}
+
+
+def schema_dump(data: Any, *, exclude_unset: bool = True) -> dict[str, Any]:
+    """Dump a schema model or dict to a plain dictionary.
+
+    Args:
+        data: Schema model instance or dictionary to dump.
+        exclude_unset: Whether to exclude unset fields (for models that support it).
+
+    Returns:
+        A plain dictionary representation of the schema model.
+    """
+    serializer = get_collection_serializer(data, exclude_unset=exclude_unset)
+    return serializer.dump_one(data)

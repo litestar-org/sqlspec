@@ -9,6 +9,7 @@ import io
 import logging
 import re
 from collections.abc import AsyncIterator, Iterator
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, cast
 from urllib.parse import urlparse
@@ -17,6 +18,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, resolve_storage_path
+from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 from sqlspec.utils.module_loader import ensure_obstore
 from sqlspec.utils.sync_tools import async_
@@ -197,8 +199,13 @@ class ObStoreBackend:
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
-        result = self.store.get(resolved_path)
-        return cast("bytes", result.bytes().to_bytes())
+        def _action() -> bytes:
+            result = self.store.get(resolved_path)
+            return cast("bytes", result.bytes().to_bytes())
+
+        return execute_sync_storage_operation(
+            _action, backend=self.backend_type, operation="read_bytes", path=resolved_path
+        )
 
     def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes using obstore."""
@@ -206,7 +213,13 @@ class ObStoreBackend:
             resolved_path = self._resolve_path_for_local_store(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        self.store.put(resolved_path, data)
+
+        execute_sync_storage_operation(
+            lambda: self.store.put(resolved_path, data),
+            backend=self.backend_type,
+            operation="write_bytes",
+            path=resolved_path,
+        )
 
     def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text using obstore."""
@@ -241,19 +254,31 @@ class ObStoreBackend:
     def delete(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Delete object using obstore."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        self.store.delete(resolved_path)
+        execute_sync_storage_operation(
+            lambda: self.store.delete(resolved_path), backend=self.backend_type, operation="delete", path=resolved_path
+        )
 
     def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Copy object using obstore."""
         source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
         dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
-        self.store.copy(source_path, dest_path)
+        execute_sync_storage_operation(
+            lambda: self.store.copy(source_path, dest_path),
+            backend=self.backend_type,
+            operation="copy",
+            path=f"{source_path}->{dest_path}",
+        )
 
     def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Move object using obstore."""
         source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
         dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
-        self.store.rename(source_path, dest_path)
+        execute_sync_storage_operation(
+            lambda: self.store.rename(source_path, dest_path),
+            backend=self.backend_type,
+            operation="move",
+            path=f"{source_path}->{dest_path}",
+        )
 
     def glob(self, pattern: str, **kwargs: Any) -> list[str]:
         """Find objects matching pattern.
@@ -342,7 +367,15 @@ class ObStoreBackend:
         pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
         data = self.read_bytes(resolved_path)
-        return cast("ArrowTable", pq.read_table(io.BytesIO(data), **kwargs))
+        return cast(
+            "ArrowTable",
+            execute_sync_storage_operation(
+                lambda: pq.read_table(io.BytesIO(data), **kwargs),
+                backend=self.backend_type,
+                operation="read_arrow",
+                path=resolved_path,
+            ),
+        )
 
     def write_arrow(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table using obstore."""
@@ -366,7 +399,12 @@ class ObStoreBackend:
             table = table.cast(pa.schema(new_fields))
 
         buffer = io.BytesIO()
-        pq.write_table(table, buffer, **kwargs)
+        execute_sync_storage_operation(
+            lambda: pq.write_table(table, buffer, **kwargs),
+            backend=self.backend_type,
+            operation="write_arrow",
+            path=resolved_path,
+        )
         buffer.seek(0)
         self.write_bytes(resolved_path, buffer.read())
 
@@ -379,11 +417,18 @@ class ObStoreBackend:
         pq = import_pyarrow_parquet()
         for obj_path in self.glob(pattern, **kwargs):
             resolved_path = resolve_storage_path(obj_path, self.base_path, self.protocol, strip_file_scheme=True)
-            result = self.store.get(resolved_path)
+            result = execute_sync_storage_operation(
+                partial(self.store.get, resolved_path),
+                backend=self.backend_type,
+                operation="stream_read",
+                path=resolved_path,
+            )
             bytes_obj = result.bytes()
             data = bytes_obj.to_bytes()
             buffer = io.BytesIO(data)
-            parquet_file = pq.ParquetFile(buffer)
+            parquet_file = execute_sync_storage_operation(
+                partial(pq.ParquetFile, buffer), backend=self.backend_type, operation="stream_arrow", path=resolved_path
+            )
             yield from parquet_file.iter_batches()
 
     def sign(self, path: str, expires_in: int = 3600, for_upload: bool = False) -> str:
