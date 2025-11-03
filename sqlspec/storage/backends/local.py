@@ -7,7 +7,7 @@ No external dependencies like fsspec or obstore required.
 import shutil
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
@@ -234,7 +234,7 @@ class LocalStore:
     def read_arrow(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from file."""
         pq = import_pyarrow_parquet()
-        return pq.read_table(str(self._resolve_path(path)), **kwargs)  # pyright: ignore
+        return cast("ArrowTable", pq.read_table(str(self._resolve_path(path)), **kwargs))
 
     def write_arrow(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to file."""

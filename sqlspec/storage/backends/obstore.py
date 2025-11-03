@@ -342,7 +342,7 @@ class ObStoreBackend:
         pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
         data = self.read_bytes(resolved_path)
-        return pq.read_table(io.BytesIO(data), **kwargs)
+        return cast("ArrowTable", pq.read_table(io.BytesIO(data), **kwargs))
 
     def write_arrow(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table using obstore."""
@@ -514,7 +514,7 @@ class ObStoreBackend:
         pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
         data = await self.read_bytes_async(resolved_path)
-        return pq.read_table(io.BytesIO(data), **kwargs)
+        return cast("ArrowTable", pq.read_table(io.BytesIO(data), **kwargs))
 
     async def write_arrow_async(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously."""

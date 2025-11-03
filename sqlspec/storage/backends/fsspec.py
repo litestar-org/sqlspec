@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -209,7 +209,7 @@ class FSSpecBackend:
 
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
-            return pq.read_table(f)
+            return cast("ArrowTable", pq.read_table(f))
 
     def write_arrow(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
         """Write an Arrow table to storage."""
