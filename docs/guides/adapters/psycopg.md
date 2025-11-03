@@ -23,9 +23,47 @@ This guide provides specific instructions and best practices for working with th
 
 ## Driver Features
 
-The `psycopg` adapter supports the following driver features:
+The `psycopg` adapter configuration is managed through a `TypedDict` for clarity and type safety.
 
--   `enable_pgvector`: A boolean to enable or disable `pgvector` support. Defaults to `True` if `pgvector` is installed.
+### PsycopgDriverFeatures TypedDict
+
+```python
+class PsycopgDriverFeatures(TypedDict):
+    """Psycopg driver feature flags.
+
+    enable_pgvector: Enable automatic pgvector extension support for vector similarity search.
+        Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
+        Defaults to True when pgvector-python is installed.
+        Provides automatic conversion between Python objects and PostgreSQL vector types.
+        Enables vector similarity operations and index support.
+        Set to False to disable pgvector support even when package is available.
+    json_serializer: Custom JSON serializer for StatementConfig parameter handling.
+    json_deserializer: Custom JSON deserializer reference stored alongside the serializer for parity with asyncpg.
+    """
+
+    enable_pgvector: NotRequired[bool]
+    json_serializer: NotRequired["Callable[[Any], str]"]
+    json_deserializer: NotRequired["Callable[[str], Any]"]
+```
+
+### Configuration and Defaults
+
+-   **pgvector Support (`enable_pgvector`)**: This feature is **auto-enabled** if the `pgvector` Python package is installed. If you have `pgvector` installed but need to disable this feature for a specific database configuration, you can explicitly set it to `False`.
+
+### Example Usage
+
+To explicitly disable `pgvector` support, even if the package is installed:
+
+```python
+from sqlspec.adapters.psycopg import PsycopgAsyncConfig
+
+config = PsycopgAsyncConfig(
+    pool_config={"conninfo": "postgresql://user:pass@host:port/db"},
+    driver_features={
+        "enable_pgvector": False,  # Explicitly disable pgvector
+    },
+)
+```
 
 ## MERGE Operations (PostgreSQL 15+)
 
