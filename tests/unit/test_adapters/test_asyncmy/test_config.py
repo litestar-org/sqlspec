@@ -13,10 +13,7 @@ def test_build_asyncmy_statement_config_custom_serializers() -> None:
     def deserializer(_: str) -> object:
         return {"value": "deserialized"}
 
-    statement_config = build_asyncmy_statement_config(
-        json_serializer=serializer,
-        json_deserializer=deserializer,
-    )
+    statement_config = build_asyncmy_statement_config(json_serializer=serializer, json_deserializer=deserializer)
 
     parameter_config = statement_config.parameter_config
     assert parameter_config.json_serializer is serializer

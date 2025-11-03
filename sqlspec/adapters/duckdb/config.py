@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -214,7 +214,9 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         processed_features.setdefault("enable_uuid_conversion", True)
         serializer = processed_features.setdefault("json_serializer", to_json)
 
-        base_statement_config = statement_config or build_duckdb_statement_config(json_serializer=serializer)
+        base_statement_config = statement_config or build_duckdb_statement_config(
+            json_serializer=cast("Callable[[Any], str]", serializer)
+        )
 
         super().__init__(
             bind_key=bind_key,

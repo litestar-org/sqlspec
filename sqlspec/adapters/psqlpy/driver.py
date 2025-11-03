@@ -4,8 +4,10 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
+import datetime
 import decimal
 import re
+import uuid
 from typing import TYPE_CHECKING, Any, Final
 
 import psqlpy.exceptions
@@ -62,6 +64,15 @@ logger = get_logger("adapters.psqlpy")
 _type_converter = PostgreSQLTypeConverter()
 
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+
+_JSON_CASTS: Final[frozenset[str]] = frozenset({"JSON", "JSONB"})
+_TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
+    "TIMESTAMP",
+    "TIMESTAMPTZ",
+    "TIMESTAMP WITH TIME ZONE",
+    "TIMESTAMP WITHOUT TIME ZONE",
+})
+_UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 
 
 class PsqlpyCursor:
@@ -283,17 +294,19 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """
         if isinstance(parameters, (list, tuple)):
             result: list[Any] = []
+            serializer = statement_config.parameter_config.json_serializer or to_json
+            type_map = statement_config.parameter_config.type_coercion_map
             for idx, param in enumerate(parameters, start=1):
-                cast_type = parameter_casts.get(idx, "").upper()
-                if cast_type in {"JSON", "JSONB"} and isinstance(param, list):
-                    result.append(JSONB(param))
-                else:
-                    if statement_config.parameter_config.type_coercion_map:
-                        for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
-                            if isinstance(param, type_check):
-                                param = converter(param)
-                                break
-                    result.append(param)
+                cast_type = parameter_casts.get(idx, "")
+                prepared_value = param
+                if type_map:
+                    for type_check, converter in type_map.items():
+                        if isinstance(prepared_value, type_check):
+                            prepared_value = converter(prepared_value)
+                            break
+                if cast_type:
+                    prepared_value = _coerce_parameter_for_cast(prepared_value, cast_type, serializer)
+                result.append(prepared_value)
             return tuple(result) if isinstance(parameters, tuple) else result
         return parameters
 
@@ -517,6 +530,113 @@ def _convert_decimals_in_structure(obj: Any) -> Any:
     if isinstance(obj, (list, tuple)):
         return [_convert_decimals_in_structure(item) for item in obj]
     return obj
+
+
+def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
+    """Serialize JSON parameters according to the detected cast type.
+
+    Args:
+        value: Parameter value supplied by the caller.
+        cast_type: Uppercase cast identifier detected in SQL.
+        serializer: JSON serialization callable from statement config.
+
+    Returns:
+        Serialized parameter suitable for driver execution.
+
+    Raises:
+        SQLSpecError: If serialization fails for JSON payloads.
+    """
+
+    if value is None:
+        return None
+    if cast_type == "JSONB":
+        if isinstance(value, JSONB):
+            return value
+        if isinstance(value, dict):
+            return JSONB(value)
+        if isinstance(value, (list, tuple)):
+            return JSONB(list(value))
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, (dict, list, str, JSONB)):
+        return value
+    try:
+        serialized_value = serializer(value)
+    except Exception as error:
+        msg = "Failed to serialize JSON parameter for psqlpy."
+        raise SQLSpecError(msg) from error
+    return serialized_value
+
+
+def _coerce_uuid_parameter(value: Any) -> Any:
+    """Convert UUID-compatible parameters to ``uuid.UUID`` instances.
+
+    Args:
+        value: Parameter value supplied by the caller.
+
+    Returns:
+        ``uuid.UUID`` instance when input is coercible, otherwise original value.
+
+    Raises:
+        SQLSpecError: If the value cannot be converted to ``uuid.UUID``.
+    """
+
+    if isinstance(value, uuid.UUID):
+        return value
+    if isinstance(value, str):
+        try:
+            return uuid.UUID(value)
+        except ValueError as error:
+            msg = "Invalid UUID parameter for psqlpy."
+            raise SQLSpecError(msg) from error
+    return value
+
+
+def _coerce_timestamp_parameter(value: Any) -> Any:
+    """Convert ISO-formatted timestamp strings to ``datetime.datetime``.
+
+    Args:
+        value: Parameter value supplied by the caller.
+
+    Returns:
+        ``datetime.datetime`` instance when conversion succeeds, otherwise original value.
+
+    Raises:
+        SQLSpecError: If the value cannot be parsed as an ISO timestamp.
+    """
+
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, str):
+        normalized_value = value[:-1] + "+00:00" if value.endswith("Z") else value
+        try:
+            return datetime.datetime.fromisoformat(normalized_value)
+        except ValueError as error:
+            msg = "Invalid ISO timestamp parameter for psqlpy."
+            raise SQLSpecError(msg) from error
+    return value
+
+
+def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
+    """Apply cast-aware coercion for psqlpy parameters.
+
+    Args:
+        value: Parameter value supplied by the caller.
+        cast_type: Uppercase cast identifier detected in SQL.
+        serializer: JSON serialization callable from statement config.
+
+    Returns:
+        Coerced value appropriate for the specified cast, or the original value.
+    """
+
+    upper_cast = cast_type.upper()
+    if upper_cast in _JSON_CASTS:
+        return _coerce_json_parameter(value, upper_cast, serializer)
+    if upper_cast in _UUID_CASTS:
+        return _coerce_uuid_parameter(value)
+    if upper_cast in _TIMESTAMP_CASTS:
+        return _coerce_timestamp_parameter(value)
+    return value
 
 
 def _prepare_dict_parameter(value: "dict[str, Any]") -> dict[str, Any]:

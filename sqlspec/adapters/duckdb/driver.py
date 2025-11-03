@@ -75,7 +75,7 @@ def _build_duckdb_profile() -> DriverParameterProfile:
         default_style=ParameterStyle.QMARK,
         supported_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
         default_execution_style=ParameterStyle.QMARK,
-        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
+        supported_execution_styles={ParameterStyle.QMARK},
         has_native_list_expansion=True,
         preserve_parameter_format=True,
         needs_static_script_compilation=False,
@@ -97,16 +97,12 @@ _DUCKDB_PROFILE = _build_duckdb_profile()
 register_driver_profile("duckdb", _DUCKDB_PROFILE)
 
 
-def build_duckdb_statement_config(
-    *, json_serializer: "typing.Callable[[Any], str] | None" = None
-) -> StatementConfig:
+def build_duckdb_statement_config(*, json_serializer: "typing.Callable[[Any], str] | None" = None) -> StatementConfig:
     """Construct the DuckDB statement configuration with optional JSON serializer."""
 
     serializer = json_serializer or to_json
     return build_statement_config_from_profile(
-        _DUCKDB_PROFILE,
-        statement_overrides={"dialect": "duckdb"},
-        json_serializer=serializer,
+        _DUCKDB_PROFILE, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
     )
 
 

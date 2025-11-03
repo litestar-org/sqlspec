@@ -253,16 +253,12 @@ _BIGQUERY_PROFILE = _build_bigquery_profile()
 register_driver_profile("bigquery", _BIGQUERY_PROFILE)
 
 
-def build_bigquery_statement_config(
-    *, json_serializer: "Callable[[Any], str] | None" = None
-) -> StatementConfig:
+def build_bigquery_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
     """Construct the BigQuery statement configuration with optional JSON serializer."""
 
     serializer = json_serializer or to_json
     return build_statement_config_from_profile(
-        _BIGQUERY_PROFILE,
-        statement_overrides={"dialect": "bigquery"},
-        json_serializer=serializer,
+        _BIGQUERY_PROFILE, statement_overrides={"dialect": "bigquery"}, json_serializer=serializer
     )
 
 

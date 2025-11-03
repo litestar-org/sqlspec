@@ -127,8 +127,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
 
         base_statement_config = statement_config or build_asyncmy_statement_config(
-            json_serializer=serializer,
-            json_deserializer=deserializer,
+            json_serializer=serializer, json_deserializer=deserializer
         )
 
         super().__init__(
