@@ -190,12 +190,13 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 - All adapter parameter defaults live in `DriverParameterProfile` entries inside `sqlspec/core/parameters.py`.
 - Use lowercase adapter keys (e.g., `"asyncpg"`, `"duckdb"`) and populate every required field: default style, supported styles, execution style, native list expansion flags, JSON strategy, and optional extras.
 - JSON behaviour is controlled through `json_serializer_strategy`:
-  - `"helper"`: call `ParameterStyleConfig.with_json_serializers()` (dict/list/tuple auto-encode)
-  - `"driver"`: defer to driver codecs while surfacing serializer references for later registration
-  - `"none"`: skip JSON helpers entirely (reserve for adapters that must not touch JSON)
+    - `"helper"`: call `ParameterStyleConfig.with_json_serializers()` (dict/list/tuple auto-encode)
+    - `"driver"`: defer to driver codecs while surfacing serializer references for later registration
+    - `"none"`: skip JSON helpers entirely (reserve for adapters that must not touch JSON)
 - Extras should encapsulate adapter-specific tweaks (e.g., `type_coercion_overrides`, `json_tuple_strategy`). Document new extras inline and keep them immutable.
 - Always build `StatementConfig` via `build_statement_config_from_profile()` and pass adapter-specific overrides through the helper instead of instantiating configs manually in drivers.
 - When introducing a new adapter, add its profile, update relevant guides, and extend unit coverage so each JSON strategy path is exercised.
+- Record the canonical adapter key, JSON strategy, and extras in the corresponding adapter guide so contributors can verify behaviour without reading the registry source.
 
 ### Protocol Abstract Methods Pattern
 
@@ -346,6 +347,13 @@ def test_starlette_autocommit_mode() -> None:
 - `CREATE TABLE IF NOT EXISTS` - Masks test isolation issues
 - Disabling pooling - Tests don't reflect production configuration
 - Running tests serially - Slows down CI significantly
+
+### CLI Config Loader Isolation Pattern
+
+- When exercising CLI migration commands, generate a unique module namespace for each test (for example `cli_test_config_<uuid>`).
+- Place temporary config modules inside `tmp_path` and register them via `sys.modules` within the test, then delete them during teardown to prevent bleed-through.
+- Always patch `Path.cwd()` or provide explicit path arguments so helper functions resolve the test-local module rather than cached global fixtures.
+- Add regression tests ensuring the helper cleaning logic runs even if CLI commands raise exceptions to avoid polluting later suites.
 
 ### Performance Optimizations
 
@@ -2679,6 +2687,7 @@ def _extract_starlette_settings(self, config):
 4. **Conditionally Skip DI Setup**:
 
 **Middleware-based (Starlette/FastAPI)**:
+
 ```python
 def init_app(self, app):
     # ... lifespan setup ...
@@ -2689,6 +2698,7 @@ def init_app(self, app):
 ```
 
 **Provider-based (Litestar)**:
+
 ```python
 def on_app_init(self, app_config):
     for state in self._plugin_configs:
@@ -2705,6 +2715,7 @@ def on_app_init(self, app_config):
 ```
 
 **Hook-based (Flask)**:
+
 ```python
 def init_app(self, app):
     # ... pool setup ...
