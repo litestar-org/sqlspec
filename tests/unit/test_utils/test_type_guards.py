@@ -794,6 +794,13 @@ def test_schema_dump_with_dict() -> None:
     assert result is data
 
 
+def test_schema_dump_with_primitives() -> None:
+    """Test schema_dump returns primitive payload unchanged."""
+    payload = "primary"
+    result = schema_dump(payload)
+    assert result == payload
+
+
 def test_schema_dump_with_dataclass() -> None:
     """Test schema_dump converts dataclass to dict."""
     instance = SampleDataclass(name="test", age=25)
@@ -839,6 +846,20 @@ def test_serializer_pipeline_reuses_entry() -> None:
 
     same_pipeline = get_collection_serializer(_SerializerRecord(identifier=2, name="second"))
     assert pipeline is same_pipeline
+
+
+def test_serializer_metrics_track_hits_and_misses(monkeypatch: pytest.MonkeyPatch) -> None:
+    reset_serializer_cache()
+    monkeypatch.setenv("SQLSPEC_DEBUG_PIPELINE_CACHE", "1")
+
+    sample = _SerializerRecord(identifier=1, name="instrumented")
+    get_collection_serializer(sample)
+    metrics = get_serializer_metrics()
+    assert metrics["misses"] == 1
+
+    get_collection_serializer(sample)
+    metrics = get_serializer_metrics()
+    assert metrics["hits"] == 1
 
 
 def test_serialize_collection_mixed_models() -> None:
