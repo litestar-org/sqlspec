@@ -23,6 +23,86 @@ This guide provides specific instructions for the `duckdb` adapter.
 -   **Extensions:** DuckDB has a rich ecosystem of extensions (e.g., for reading Parquet files, JSON, etc.). These can be loaded via the `sqlspec` configuration.
 -   **Vectorized Execution:** DuckDB is extremely fast for analytical queries due to its vectorized execution engine. Write queries that operate on columns rather than row-by-row.
 
+## Driver Features
+
+The `duckdb` adapter configuration is managed through a `TypedDict` for clarity and type safety, allowing you to configure extensions, secrets, and type handling behavior.
+
+### DuckDBDriverFeatures TypedDict
+
+```python
+class DuckDBDriverFeatures(TypedDict):
+    """TypedDict for DuckDB driver features configuration.
+
+    Attributes:
+        extensions: List of extensions to install/load on connection creation.
+        secrets: List of secrets to create for AI/API integrations.
+        on_connection_create: Callback executed when connection is created.
+        json_serializer: Custom JSON serializer for dict/list parameter conversion.
+            Defaults to sqlspec.utils.serializers.to_json if not provided.
+        enable_uuid_conversion: Enable automatic UUID string conversion.
+            When True (default), UUID strings are automatically converted to UUID objects.
+            When False, UUID strings are treated as regular strings.
+    """
+
+    extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
+    secrets: NotRequired[Sequence[DuckDBSecretConfig]]
+    on_connection_create: NotRequired["Callable[[DuckDBConnection], DuckDBConnection | None]"]
+    json_serializer: NotRequired["Callable[[Any], str]"]
+    enable_uuid_conversion: NotRequired[bool]
+```
+
+### Configuration and Defaults
+
+-   **UUID Conversion (`enable_uuid_conversion`)**: This feature is **enabled by default** (`True`). It automatically converts UUID strings from your query results into Python `UUID` objects.
+-   **JSON Serializer (`json_serializer`)**: Defaults to a standard JSON serializer. You can provide a custom function for performance or special encoding needs.
+
+### Example: Configuring Extensions and Secrets
+
+You can automatically install and load DuckDB extensions and configure secrets for services like OpenAI.
+
+```python
+from sqlspec.adapters.duckdb import DuckDBConfig
+
+config = DuckDBConfig(
+    pool_config={"database": ":memory:"},
+    driver_features={
+        "extensions": [
+            {"name": "httpfs"},
+            {"name": "json"},
+            {"name": "openai"},
+        ],
+        "secrets": [
+            {
+                "secret_type": "openai",
+                "name": "my_openai_secret",
+                "value": {"api_key": "sk-..."},
+            }
+        ],
+    },
+)
+```
+
+### Example: Custom Type Handling
+
+You can override the default JSON serializer or disable the automatic UUID conversion.
+
+```python
+import msgspec
+from sqlspec.adapters.duckdb import DuckDBConfig
+
+# A faster JSON serializer from an external library
+def custom_json_serializer(obj: Any) -> str:
+    return msgspec.json.encode(obj).decode("utf-8")
+
+config = DuckDBConfig(
+    pool_config={"database": "analytics.db"},
+    driver_features={
+        "json_serializer": custom_json_serializer,
+        "enable_uuid_conversion": False,  # Disable auto-conversion
+    },
+)
+```
+
 ## Arrow Support (Native)
 
 The DuckDB adapter provides **native Apache Arrow support** through `select_to_arrow()`, leveraging DuckDB's columnar format for optimal performance.
