@@ -56,8 +56,8 @@ docs-build
 !.claude/agents
 !.claude/AGENTS.md
 !.claude/README.md
-specs/active/*
-!specs/active/.gitkeep
+# specs/active/*
+# !specs/active/.gitkeep
 specs/archive/*
 !specs/archive/.gitkeep
 requirements/archive/*

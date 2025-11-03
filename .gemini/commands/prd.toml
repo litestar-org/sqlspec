@@ -25,7 +25,7 @@ Your entire first phase of work MUST be conducted within the `crash` tool. You w
 
 5.  **Step 1.5 (CRASH - Propose Specification)**: Based on your analysis, propose a detailed, unambiguous specification for the feature. This will be the foundation for the PRD.
 
-6.  **Step 1.6 (CRASH - Create `research/findings.md`)**: Consolidate all research, analysis, and the final proposed specification into a single, hyper-detailed `research/findings.md` document in the `specs/active/{slug}/research/` directory. This document is a primary deliverable and must be comprehensive enough to justify all subsequent planning decisions. It must be at least 2000 words.
+6.  **Step 1.6 (CRASH - Create `research/findings.md`)**: Consolidate all research, analysis, and the final proposed specification into a single, hyper-detailed `research/findings.md` document in the `specs/active/{slug}/research/` directory. This document is a primary deliverable and must be comprehensive enough to justify all subsequent planning decisions. It must be at least 5000 words.
 
 ---
 
