@@ -9,8 +9,15 @@ import duckdb
 
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBTypeConverter
-from sqlspec.core import SQL, ParameterStyle, StatementConfig, get_cache_config
-from sqlspec.core.parameters import DriverParameterProfile, build_statement_config_from_profile, register_driver_profile
+from sqlspec.core import (
+    SQL,
+    DriverParameterProfile,
+    ParameterStyle,
+    StatementConfig,
+    build_statement_config_from_profile,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -434,7 +441,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         import pyarrow as pa
 
-        from sqlspec.core.result import create_arrow_result
+        from sqlspec.core import create_arrow_result
 
         # Prepare statement
         config = statement_config or self.statement_config

@@ -7,7 +7,7 @@ from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.builder import SQLFactory
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
 
 pytestmark = pytest.mark.xdist_group("builder")

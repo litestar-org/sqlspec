@@ -6,7 +6,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 

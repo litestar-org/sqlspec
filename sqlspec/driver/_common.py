@@ -8,9 +8,18 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
-from sqlspec.core import SQL, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
-from sqlspec.core.cache import CachedStatement, get_cache, get_cache_config
-from sqlspec.core.splitter import split_sql_script
+from sqlspec.core import (
+    SQL,
+    CachedStatement,
+    ParameterStyle,
+    SQLResult,
+    Statement,
+    StatementConfig,
+    TypedParameter,
+    get_cache,
+    get_cache_config,
+    split_sql_script,
+)
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter
@@ -18,7 +27,7 @@ from sqlspec.utils.type_guards import is_statement_filter
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.core.filters import FilterTypeT, StatementFilter
+    from sqlspec.core import FilterTypeT, StatementFilter
     from sqlspec.typing import StatementParameters
 
 

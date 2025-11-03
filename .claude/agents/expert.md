@@ -109,7 +109,7 @@ from sqlspec.protocols import SupportsWhere
 from sqlspec.utils.type_guards import supports_where
 
 if TYPE_CHECKING:
-    from sqlspec.core.statement import Statement
+    from sqlspec.core import Statement
 
 def execute_query(stmt: "Statement", params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Execute SQL query with optional parameters.

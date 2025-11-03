@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import (
+from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
     build_statement_config_from_profile,
+    get_cache_config,
     register_driver_profile,
 )
 from sqlspec.driver import AsyncDriverAdapterBase
@@ -35,8 +35,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
 

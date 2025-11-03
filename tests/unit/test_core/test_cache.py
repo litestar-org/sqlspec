@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sqlspec.core.cache import (
+from sqlspec.core import (
     CacheConfig,
     CacheKey,
     CacheStats,

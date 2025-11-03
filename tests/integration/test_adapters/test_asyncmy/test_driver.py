@@ -12,8 +12,7 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL, SQLResult
 from sqlspec.utils.serializers import from_json, to_json
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]

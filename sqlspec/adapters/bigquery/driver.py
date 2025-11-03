@@ -16,11 +16,14 @@ from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.adapters.bigquery.type_converter import BigQueryTypeConverter
-from sqlspec.core import ParameterStyle, StatementConfig, create_arrow_result, get_cache_config
-from sqlspec.core.parameters import (
+from sqlspec.core import (
     DriverParameterProfile,
+    ParameterStyle,
+    StatementConfig,
     build_literal_inlining_transform,
     build_statement_config_from_profile,
+    create_arrow_result,
+    get_cache_config,
     register_driver_profile,
 )
 from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase

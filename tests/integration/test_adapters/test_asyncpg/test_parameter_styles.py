@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -157,7 +157,7 @@ async def test_asyncpg_parameter_with_any_array(asyncpg_parameters_session: Asyn
 
 async def test_asyncpg_parameter_with_sql_object(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with SQL object."""
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL
 
     sql_obj = SQL("SELECT * FROM test_parameters WHERE value > $1", [150])
     result = await asyncpg_parameters_session.execute(sql_obj)

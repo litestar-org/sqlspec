@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
     from asyncmy.pool import Pool  # pyright: ignore
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 
 __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", "AsyncmyPoolParams")

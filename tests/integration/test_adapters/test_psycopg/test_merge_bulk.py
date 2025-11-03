@@ -16,7 +16,7 @@ import pytest
 
 from sqlspec import sql
 from sqlspec.adapters.psycopg.driver import PsycopgSyncDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = [pytest.mark.psycopg, pytest.mark.integration, pytest.mark.xdist_group("postgres")]
 

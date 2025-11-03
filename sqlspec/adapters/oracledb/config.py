@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
     from oracledb import AuthMode
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 
 __all__ = (

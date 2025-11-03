@@ -62,7 +62,7 @@ The execution flow begins when you create a SQL object. SQLSpec accepts multiple
 
 .. code-block:: python
 
-   from sqlspec.core.statement import SQL
+   from sqlspec.core import SQL
 
    # Raw SQL string with positional parameters
    sql = SQL("SELECT * FROM users WHERE id = ?", 1)
@@ -332,8 +332,8 @@ Configuration-Driven Processing
 
 .. code-block:: python
 
-   from sqlspec.core.statement import StatementConfig
-   from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+   from sqlspec.core import StatementConfig
+   from sqlspec.core import ParameterStyle, ParameterStyleConfig
 
    config = StatementConfig(
        dialect="postgres",

@@ -5,7 +5,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.adapters.adbc import AdbcDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]

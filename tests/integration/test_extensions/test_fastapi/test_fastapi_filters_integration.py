@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.base import SQLSpec
-from sqlspec.core.filters import BeforeAfterFilter, FilterTypes, LimitOffsetFilter, OrderByFilter
+from sqlspec.core import BeforeAfterFilter, FilterTypes, LimitOffsetFilter, OrderByFilter
 from sqlspec.extensions.fastapi import SQLSpecPlugin
 from sqlspec.extensions.fastapi.providers import dep_cache
 

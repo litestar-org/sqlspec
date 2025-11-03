@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
     from collections.abc import AsyncGenerator, Awaitable
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 
 __all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgDriverFeatures", "AsyncpgPoolConfig")

@@ -24,9 +24,7 @@ from sqlspec.builder._parsing_utils import (
     parse_table_expression,
     to_expression,
 )
-from sqlspec.core.parameters import ParameterStyle, ParameterValidator
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL, ParameterStyle, ParameterValidator, SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,

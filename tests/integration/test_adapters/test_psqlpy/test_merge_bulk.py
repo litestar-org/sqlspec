@@ -15,7 +15,7 @@ import pytest
 
 from sqlspec import sql
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psqlpy, pytest.mark.integration]
 

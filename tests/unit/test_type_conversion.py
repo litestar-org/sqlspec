@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from sqlspec.core.type_conversion import (
+from sqlspec.core import (
     BaseTypeConverter,
     convert_decimal,
     convert_iso_date,

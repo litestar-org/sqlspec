@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
     from sqlspec._typing import AttrsInstanceStub, BaseModelStub, DTODataStub, StructStub
     from sqlspec.builder import Select
-    from sqlspec.core.filters import LimitOffsetFilter, StatementFilter
+    from sqlspec.core import LimitOffsetFilter, StatementFilter
     from sqlspec.protocols import (
         BytesConvertibleProtocol,
         DictProtocol,
@@ -154,7 +154,7 @@ def is_statement_filter(obj: Any) -> "TypeGuard[StatementFilter]":
     Returns:
         True if the object is a StatementFilter, False otherwise
     """
-    from sqlspec.core.filters import StatementFilter as FilterProtocol
+    from sqlspec.core import StatementFilter as FilterProtocol
 
     return isinstance(obj, FilterProtocol)
 
@@ -168,7 +168,7 @@ def is_limit_offset_filter(obj: Any) -> "TypeGuard[LimitOffsetFilter]":
     Returns:
         True if the object is a LimitOffsetFilter, False otherwise
     """
-    from sqlspec.core.filters import LimitOffsetFilter
+    from sqlspec.core import LimitOffsetFilter
 
     return isinstance(obj, LimitOffsetFilter)
 
@@ -1223,7 +1223,7 @@ def is_typed_parameter(obj: Any) -> "TypeGuard[Any]":
     Returns:
         True if the object is a TypedParameter, False otherwise
     """
-    from sqlspec.core.parameters import TypedParameter
+    from sqlspec.core import TypedParameter
 
     return isinstance(obj, TypedParameter)
 

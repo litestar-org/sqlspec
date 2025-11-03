@@ -6,7 +6,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]

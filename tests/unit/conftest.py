@@ -13,9 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from sqlspec.core.cache import UnifiedCache
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig, TypedParameter
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig, TypedParameter, UnifiedCache
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
@@ -189,7 +187,7 @@ def cache_config_disabled() -> dict[str, Any]:
 def mock_unified_cache() -> UnifiedCache:
     """Mock unified cache for testing cache behavior."""
 
-    from sqlspec.core.cache import get_default_cache
+    from sqlspec.core import get_default_cache
 
     return get_default_cache()
 
@@ -605,7 +603,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
         driver_features: dict[str, Any] | None = None,
     ) -> None:
         if statement_config is None:
-            from sqlspec.core.parameters import ParameterStyleConfig
+            from sqlspec.core import ParameterStyleConfig
 
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK,
@@ -713,7 +711,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         driver_features: dict[str, Any] | None = None,
     ) -> None:
         if statement_config is None:
-            from sqlspec.core.parameters import ParameterStyleConfig
+            from sqlspec.core import ParameterStyleConfig
 
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK,

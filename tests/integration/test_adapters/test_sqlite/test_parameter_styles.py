@@ -8,8 +8,7 @@ from uuid import uuid4
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL, SQLResult
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 

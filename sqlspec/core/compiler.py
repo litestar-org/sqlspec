@@ -26,6 +26,17 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import StatementConfig
 
 
+__all__ = (
+    "CompiledSQL",
+    "OperationProfile",
+    "OperationType",
+    "SQLProcessor",
+    "is_copy_from_operation",
+    "is_copy_operation",
+    "is_copy_to_operation",
+)
+
+logger: "logging.Logger" = get_logger("sqlspec.core.compiler")
 OperationType = Literal[
     "SELECT",
     "INSERT",
@@ -42,11 +53,6 @@ OperationType = Literal[
     "UNKNOWN",
 ]
 
-
-__all__ = ("CompiledSQL", "OperationProfile", "OperationType", "SQLProcessor")
-
-logger: "logging.Logger" = get_logger("sqlspec.core.compiler")
-
 OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
     exp.Select: "SELECT",
     exp.Insert: "INSERT",
@@ -59,6 +65,51 @@ OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
     exp.Alter: "DDL",
     exp.Merge: "MERGE",
 }
+
+COPY_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM", "COPY_TO")
+
+COPY_FROM_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM")
+
+COPY_TO_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY_TO",)
+
+
+def is_copy_operation(operation_type: "OperationType") -> bool:
+    """Determine if the operation corresponds to any PostgreSQL COPY variant.
+
+    Args:
+        operation_type: Operation type detected by the compiler.
+
+    Returns:
+        True when the operation type represents COPY, COPY FROM, or COPY TO.
+    """
+
+    return operation_type in COPY_OPERATION_TYPES
+
+
+def is_copy_from_operation(operation_type: "OperationType") -> bool:
+    """Check if the operation streams data into the database using COPY.
+
+    Args:
+        operation_type: Operation type detected by the compiler.
+
+    Returns:
+        True for COPY operations that read from client input (COPY FROM).
+    """
+
+    return operation_type in COPY_FROM_OPERATION_TYPES
+
+
+def is_copy_to_operation(operation_type: "OperationType") -> bool:
+    """Check if the operation streams data out from the database using COPY.
+
+    Args:
+        operation_type: Operation type detected by the compiler.
+
+    Returns:
+        True for COPY operations that write to client output (COPY TO).
+    """
+
+    return operation_type in COPY_TO_OPERATION_TYPES
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

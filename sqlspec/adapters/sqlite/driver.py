@@ -6,11 +6,11 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import (
+from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
     build_statement_config_from_profile,
+    get_cache_config,
     register_driver_profile,
 )
 from sqlspec.driver import SyncDriverAdapterBase
@@ -33,8 +33,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from sqlspec.adapters.sqlite._types import SqliteConnection
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
 

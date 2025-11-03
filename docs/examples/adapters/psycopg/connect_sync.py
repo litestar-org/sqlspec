@@ -3,7 +3,7 @@
 import os
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 
 __all__ = ("main",)
 

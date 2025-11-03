@@ -30,7 +30,7 @@ Refer to [AGENTS.md](../../AGENTS.md) for the full checklist when touching the r
 ```python
 import sqlspec.adapters.duckdb  # Triggers profile registration
 
-from sqlspec.core.parameters import get_driver_profile, build_statement_config_from_profile
+from sqlspec.core import get_driver_profile, build_statement_config_from_profile
 
 profile = get_driver_profile("duckdb")
 config = build_statement_config_from_profile(profile)

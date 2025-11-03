@@ -10,7 +10,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.adbc._types import AdbcConnection
 from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, get_adbc_statement_config
 from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.module_loader import import_string
 

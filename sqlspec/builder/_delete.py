@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder._dml import DeleteFromClauseMixin
 from sqlspec.builder._select import ReturningClauseMixin, WhereClauseMixin
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
 
 __all__ = ("Delete",)

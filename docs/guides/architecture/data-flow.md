@@ -361,8 +361,8 @@ To add support for a new database using the enhanced architecture:
 
 ```python
 from sqlspec.driver import SyncDriverAdapterBase  # or AsyncDriverAdapterBase
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import ParameterStyle, ParameterStyleConfig
+from sqlspec.core import StatementConfig
 
 class MyDatabaseDriver(SyncDriverAdapterBase):
     dialect = "mydatabase"

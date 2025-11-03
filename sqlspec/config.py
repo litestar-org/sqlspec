@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, cast
 
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.utils.logging import get_logger
 

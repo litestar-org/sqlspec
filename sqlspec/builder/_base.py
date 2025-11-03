@@ -15,16 +15,21 @@ from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
-from sqlspec.core.cache import get_cache, get_cache_config
-from sqlspec.core.hashing import hash_optimized_expression
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import (
+    SQL,
+    ParameterStyle,
+    ParameterStyleConfig,
+    StatementConfig,
+    get_cache,
+    get_cache_config,
+    hash_optimized_expression,
+)
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_with_method, is_expression
 
 if TYPE_CHECKING:
-    from sqlspec.core.result import SQLResult
+    from sqlspec.core import SQLResult
 
 __all__ = ("QueryBuilder", "SafeQuery")
 

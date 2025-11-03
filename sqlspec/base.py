@@ -13,7 +13,7 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
-from sqlspec.core.cache import (
+from sqlspec.core import (
     CacheConfig,
     get_cache_config,
     get_cache_statistics,
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from pathlib import Path
 
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL
     from sqlspec.loader import SQLFileLoader
     from sqlspec.typing import ConnectionT, PoolT
 

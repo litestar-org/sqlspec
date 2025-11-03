@@ -26,9 +26,18 @@ import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
-from sqlspec.core.compiler import CompiledSQL, OperationType, SQLProcessor
-from sqlspec.core.parameters import ParameterProcessor, ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import (
+    CompiledSQL,
+    OperationType,
+    ParameterProcessor,
+    ParameterStyle,
+    ParameterStyleConfig,
+    SQLProcessor,
+    StatementConfig,
+    is_copy_from_operation,
+    is_copy_operation,
+    is_copy_to_operation,
+)
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -351,6 +360,22 @@ def test_operation_type_detection_via_ast(
     except ParseError:
         detected_type = "EXECUTE"
         assert detected_type in ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "UNKNOWN"]
+
+
+def test_copy_operation_helpers() -> None:
+    """Ensure COPY helper predicates cover all variants."""
+
+    assert is_copy_operation("COPY")
+    assert is_copy_operation("COPY_FROM")
+    assert is_copy_operation("COPY_TO")
+    assert not is_copy_operation("SELECT")
+
+    assert is_copy_from_operation("COPY")
+    assert is_copy_from_operation("COPY_FROM")
+    assert not is_copy_from_operation("COPY_TO")
+
+    assert is_copy_to_operation("COPY_TO")
+    assert not is_copy_to_operation("COPY")
 
 
 def test_single_pass_processing(

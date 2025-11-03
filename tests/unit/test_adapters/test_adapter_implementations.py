@@ -7,9 +7,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.sqlite.driver import SqliteDriver
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import SQLSpecError
 
@@ -181,7 +179,7 @@ def test_sqlite_driver_real_implementation() -> None:
         connection.execute("INSERT INTO users (name) VALUES ('test_user')")
         connection.commit()
 
-        from sqlspec.core.parameters import ParameterStyleConfig
+        from sqlspec.core import ParameterStyleConfig
 
         simple_config = StatementConfig(
             dialect="sqlite",
@@ -241,7 +239,7 @@ def test_sqlite_driver_exception_handling() -> None:
     """Test SQLite driver exception handling."""
     connection = sqlite3.connect(":memory:")
 
-    from sqlspec.core.parameters import ParameterStyleConfig
+    from sqlspec.core import ParameterStyleConfig
 
     simple_config = StatementConfig(
         dialect="sqlite",
@@ -273,7 +271,7 @@ def test_sqlite_driver_cursor_management() -> None:
     """Test SQLite driver cursor management."""
     connection = sqlite3.connect(":memory:")
 
-    from sqlspec.core.parameters import ParameterStyleConfig
+    from sqlspec.core import ParameterStyleConfig
 
     simple_config = StatementConfig(
         dialect="sqlite",
@@ -352,7 +350,7 @@ def test_adapter_parameter_handling(
 
 def test_execution_result_creation() -> None:
     """Test ExecutionResult creation and properties."""
-    from sqlspec.core.parameters import ParameterStyleConfig
+    from sqlspec.core import ParameterStyleConfig
     from sqlspec.driver._common import CommonDriverAttributesMixin
 
     config = StatementConfig(
@@ -395,7 +393,7 @@ def test_execution_result_creation() -> None:
 
 def test_sql_result_building() -> None:
     """Test SQLResult building from ExecutionResult."""
-    from sqlspec.core.parameters import ParameterStyleConfig
+    from sqlspec.core import ParameterStyleConfig
     from sqlspec.driver._common import CommonDriverAttributesMixin
 
     config = StatementConfig(

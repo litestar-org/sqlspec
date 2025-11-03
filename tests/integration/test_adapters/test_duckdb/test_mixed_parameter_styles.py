@@ -5,7 +5,7 @@ from collections.abc import Generator
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from tests.integration.test_adapters.test_duckdb.utils import get_unique_table_name
 
 pytestmark = pytest.mark.xdist_group("duckdb")
