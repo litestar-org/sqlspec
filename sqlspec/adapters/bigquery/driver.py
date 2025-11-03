@@ -497,7 +497,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Inline literal values into a parsed SQLGlot expression."""
 
         if not parameters:
-            return cast("str", expression.sql(dialect="bigquery"))
+            return expression.sql(dialect="bigquery")
 
         transformed_expression, _ = self._literal_inliner(expression, parameters)
         return cast("str", transformed_expression.sql(dialect="bigquery"))
