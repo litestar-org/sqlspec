@@ -4,7 +4,6 @@
 -- name: get_user_by_id
 -- Get a single user by their ID
 SELECT
-
     id,
     username,
     email,
