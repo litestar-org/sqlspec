@@ -17,6 +17,61 @@ This guide provides specific instructions for the `adbc` adapter.
 - **JSON Strategy:** `helper` (shared serializers wrap dict/list/tuple values)
 - **Extras:** `type_coercion_overrides` ensure Arrow arrays map to Python lists; PostgreSQL dialects attach a NULL-handling AST transformer
 
+## Driver Features
+
+The `adbc` adapter's behavior can be customized through the `driver_features` configuration, which is defined by the `AdbcDriverFeatures` TypedDict.
+
+### AdbcDriverFeatures TypedDict
+
+```python
+class AdbcDriverFeatures(TypedDict):
+    """ADBC driver feature configuration.
+
+    Controls optional type handling and serialization behavior for the ADBC adapter.
+    These features configure how data is converted between Python and Arrow types.
+
+    Attributes:
+        json_serializer: JSON serialization function to use.
+            Callable that takes Any and returns str (JSON string).
+            Default: sqlspec.utils.serializers.to_json
+        enable_cast_detection: Enable cast-aware parameter processing.
+            When True, detects SQL casts (e.g., ::JSONB) and applies appropriate
+            serialization. Currently used for PostgreSQL JSONB handling.
+            Default: True
+        strict_type_coercion: Enforce strict type coercion rules.
+            When True, raises errors for unsupported type conversions.
+            When False, attempts best-effort conversion.
+            Default: False
+        arrow_extension_types: Enable PyArrow extension type support.
+            When True, preserves Arrow extension type metadata when reading data.
+            When False, falls back to storage types.
+            Default: True
+    """
+
+    json_serializer: "NotRequired[Callable[[Any], str]]"
+    enable_cast_detection: NotRequired[bool]
+    strict_type_coercion: NotRequired[bool]
+    arrow_extension_types: NotRequired[bool]
+```
+
+### Example: Custom JSON Serializer
+
+```python
+import orjson
+from sqlspec.adapters.adbc import AdbcConfig
+
+def orjson_serializer(obj: Any) -> str:
+    return orjson.dumps(obj).decode("utf-8")
+
+config = AdbcConfig(
+    driver="adbc_driver_postgresql",
+    pool_config={"uri": "postgresql://localhost/mydb"},
+    driver_features={
+        "json_serializer": orjson_serializer,
+    },
+)
+```
+
 ## Best Practices
 
 - **Arrow-Native:** The primary benefit of ADBC is its direct integration with Apache Arrow. Use it when you need to move large amounts of data efficiently between the database and data science tools like Pandas or Polars.
