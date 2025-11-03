@@ -462,6 +462,7 @@ ignore = [
   "PLR6301", # method could be static or class method
   "B903",    # class could be a dataclass or named tuple
   "PLW0603", # Using the global statement to update is discouraged
+  "PLW0108", # Replace lambda expression with a def
 ]
 select = ["ALL"]
 

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
+from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import (
     DriverParameterProfile,
@@ -49,6 +50,8 @@ SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
+_TIME_TO_ISO = build_time_iso_converter()
+_DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
 
 class AiosqliteCursor:
@@ -327,18 +330,6 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def _datetime_to_iso(value: datetime) -> str:
-    return value.isoformat()
-
-
-def _date_to_iso(value: date) -> str:
-    return value.isoformat()
-
-
-def _decimal_to_str(value: Decimal) -> str:
-    return str(value)
-
-
 def _build_aiosqlite_profile() -> DriverParameterProfile:
     """Create the AIOSQLite driver parameter profile."""
 
@@ -356,9 +347,9 @@ def _build_aiosqlite_profile() -> DriverParameterProfile:
         json_serializer_strategy="helper",
         custom_type_coercions={
             bool: _bool_to_int,
-            datetime: _datetime_to_iso,
-            date: _date_to_iso,
-            Decimal: _decimal_to_str,
+            datetime: _TIME_TO_ISO,
+            date: _TIME_TO_ISO,
+            Decimal: _DECIMAL_TO_STRING,
         },
         default_dialect="sqlite",
     )

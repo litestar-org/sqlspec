@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final
 import psqlpy.exceptions
 from psqlpy.extra_types import JSONB
 
+from sqlspec.utils.type_converters import build_nested_decimal_normalizer
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLTypeConverter
 from sqlspec.core.cache import get_cache_config
@@ -73,6 +74,7 @@ _TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
     "TIMESTAMP WITHOUT TIME ZONE",
 })
 _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
+_DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
 
 
 class PsqlpyCursor:
@@ -520,18 +522,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
 
-def _convert_decimals_in_structure(obj: Any) -> Any:
-    """Recursively convert Decimal values to float in nested structures."""
-
-    if isinstance(obj, decimal.Decimal):
-        return float(obj)
-    if isinstance(obj, dict):
-        return {k: _convert_decimals_in_structure(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_convert_decimals_in_structure(item) for item in obj]
-    return obj
-
-
 def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
     """Serialize JSON parameters according to the detected cast type.
 
@@ -640,16 +630,16 @@ def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable
 
 
 def _prepare_dict_parameter(value: "dict[str, Any]") -> dict[str, Any]:
-    normalized = _convert_decimals_in_structure(value)
+    normalized = _DECIMAL_NORMALIZER(value)
     return normalized if isinstance(normalized, dict) else value
 
 
 def _prepare_list_parameter(value: "list[Any]") -> list[Any]:
-    return [_convert_decimals_in_structure(item) for item in value]
+    return [_DECIMAL_NORMALIZER(item) for item in value]
 
 
 def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> tuple[Any, ...]:
-    return tuple(_convert_decimals_in_structure(item) for item in value)
+    return tuple(_DECIMAL_NORMALIZER(item) for item in value)
 
 
 def _normalize_scalar_parameter(value: Any) -> Any:

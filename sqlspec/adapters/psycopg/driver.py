@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import psycopg
 
+from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import (
@@ -822,57 +823,6 @@ def _identity(value: Any) -> Any:
     return value
 
 
-def _convert_list_to_postgres_array(value: Any) -> str:
-    """Convert a Python list to PostgreSQL array literal format."""
-
-    if not isinstance(value, list):
-        return str(value)
-
-    elements: list[str] = []
-    for item in value:
-        if isinstance(item, list):
-            elements.append(_convert_list_to_postgres_array(item))
-        elif isinstance(item, str):
-            escaped = item.replace("'", "''")
-            elements.append(f"'{escaped}'")
-        elif item is None:
-            elements.append("NULL")
-        else:
-            elements.append(str(item))
-
-    return "{" + ",".join(elements) + "}"
-
-
-def _should_serialize_list(value: "list[Any]") -> bool:
-    """Detect whether a list should be serialized to JSON."""
-
-    return any(isinstance(item, (dict, list, tuple)) for item in value)
-
-
-def _build_list_parameter_converter(serializer: "Callable[[Any], str]") -> "Callable[[list[Any]], Any]":
-    """Create converter that serializes nested lists while preserving arrays."""
-
-    def convert(value: "list[Any]") -> Any:
-        if not value:
-            return value
-        if _should_serialize_list(value):
-            return serializer(value)
-        return value
-
-    return convert
-
-
-def _build_tuple_parameter_converter(serializer: "Callable[[Any], str]") -> "Callable[[tuple[Any, ...]], Any]":
-    """Create converter mirroring list handling for tuple parameters."""
-
-    list_converter = _build_list_parameter_converter(serializer)
-
-    def convert(value: "tuple[Any, ...]") -> Any:
-        return list_converter(list(value))
-
-    return convert
-
-
 def _build_psycopg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]:
     """Return custom type coercions for psycopg."""
 
@@ -919,8 +869,8 @@ def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> Para
     base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=serializer).parameter_config
 
     updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[list] = _build_list_parameter_converter(serializer)
-    updated_type_map[tuple] = _build_tuple_parameter_converter(serializer)
+    updated_type_map[list] = build_json_list_converter(serializer)
+    updated_type_map[tuple] = build_json_tuple_converter(serializer)
 
     return base_config.replace(type_coercion_map=updated_type_map)
 

@@ -38,9 +38,9 @@ def get_driver_profile(adapter_key: str) -> "DriverParameterProfile":
     key = adapter_key.lower()
     try:
         return DRIVER_PARAMETER_PROFILES[key]
-    except KeyError as error:
+    except KeyError as exc:
         msg = f"No driver parameter profile registered for adapter '{adapter_key}'."
-        raise sqlspec.exceptions.ImproperConfigurationError(msg) from error
+        raise sqlspec.exceptions.ImproperConfigurationError(msg) from exc
 
 
 def register_driver_profile(

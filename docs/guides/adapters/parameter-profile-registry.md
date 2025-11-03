@@ -17,7 +17,7 @@ The table below summarizes the canonical `DriverParameterProfile` entries define
 
 ## Adding or Updating Profiles
 
-1. Define the profile in `_registry.py` using lowercase key naming.
+1. Define the profile in `_registry.py` using lowercase key naming. Ensure the adapter package (e.g., `sqlspec.adapters.duckdb.__init__`) imports the driver module so `register_driver_profile` executes during normal adapter imports; the registry does not perform lazy imports.
 2. Pick the JSON strategy that matches driver capabilities (`helper`, `driver`, or `none`).
 3. Declare extras as an immutable mapping; document each addition in this file and the relevant adapter guide.
 4. Add or update regression coverage (see `specs/archive/driver-quality-review/research/testing_deliverables.md`).
@@ -28,6 +28,8 @@ Refer to [AGENTS.md](../../AGENTS.md) for the full checklist when touching the r
 ## Example Usage
 
 ```python
+import sqlspec.adapters.duckdb  # Triggers profile registration
+
 from sqlspec.core.parameters import get_driver_profile, build_statement_config_from_profile
 
 profile = get_driver_profile("duckdb")
@@ -36,4 +38,4 @@ config = build_statement_config_from_profile(profile)
 print(config.parameter_config.default_parameter_style)
 ```
 
-The snippet above retrieves the DuckDB profile, builds a `StatementConfig`, and prints the default parameter style (`?`). Use the same pattern for new adapters after defining their profiles.
+The snippet above imports the DuckDB adapter package (which registers its profile), retrieves the profile, builds a `StatementConfig`, and prints the default parameter style (`?`). Use the same pattern for new adapters after defining their profiles.
