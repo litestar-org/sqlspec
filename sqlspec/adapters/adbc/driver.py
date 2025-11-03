@@ -7,7 +7,6 @@ database dialects, parameter style conversion, and transaction management.
 import contextlib
 import datetime
 import decimal
-from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
@@ -16,10 +15,10 @@ from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import (
     DriverParameterProfile,
     ParameterStyle,
+    build_null_pruning_transform,
     build_statement_config_from_profile,
     get_driver_profile,
     register_driver_profile,
-    replace_null_parameters_with_literals,
 )
 from sqlspec.core.result import create_arrow_result
 from sqlspec.core.statement import SQL, StatementConfig
@@ -758,7 +757,7 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
     }
 
     if detected_dialect in {"postgres", "postgresql"}:
-        parameter_overrides["ast_transformer"] = partial(replace_null_parameters_with_literals, dialect=sqlglot_dialect)
+        parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
 
     return build_statement_config_from_profile(
         get_driver_profile("adbc"),

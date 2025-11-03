@@ -6,6 +6,7 @@ type coercion, error handling, and query job management.
 
 import datetime
 import logging
+from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
@@ -18,9 +19,9 @@ from sqlspec.adapters.bigquery.type_converter import BigQueryTypeConverter
 from sqlspec.core import ParameterStyle, StatementConfig, create_arrow_result, get_cache_config
 from sqlspec.core.parameters import (
     DriverParameterProfile,
+    build_literal_inlining_transform,
     build_statement_config_from_profile,
     register_driver_profile,
-    replace_placeholders_with_literals,
 )
 from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import (
@@ -339,7 +340,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
     type coercion, error handling, and query job management.
     """
 
-    __slots__ = ("_data_dictionary", "_default_query_job_config", "_json_serializer", "_type_converter")
+    __slots__ = (
+        "_data_dictionary",
+        "_default_query_job_config",
+        "_json_serializer",
+        "_literal_inliner",
+        "_type_converter",
+    )
     dialect = "bigquery"
 
     def __init__(
@@ -362,6 +369,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             parameter_json_serializer = features.get("json_serializer", to_json)
 
         self._json_serializer: Callable[[Any], str] = parameter_json_serializer
+        self._literal_inliner = build_literal_inlining_transform(json_serializer=self._json_serializer)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
@@ -485,30 +493,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
         _ = (cursor, statement)
         return None
 
-    def _transform_ast_with_literals(self, sql: str, parameters: Any) -> str:
-        """Transform SQL AST by replacing placeholders with literal values.
+    def _inline_literals(self, expression: "sqlglot.Expression", parameters: Any) -> str:
+        """Inline literal values into a parsed SQLGlot expression."""
 
-        Used for BigQuery script execution and execute_many operations where
-        parameter binding is not supported. Safely embeds values as SQL literals.
-
-        Args:
-            sql: SQL string to transform.
-            parameters: Parameters to embed as literals.
-
-        Returns:
-            Transformed SQL string with literals embedded.
-        """
         if not parameters:
-            return sql
+            return expression.sql(dialect="bigquery")
 
-        try:
-            ast = sqlglot.parse_one(sql, dialect="bigquery")
-        except sqlglot.ParseError:
-            return sql
-
-        transformed_ast = replace_placeholders_with_literals(ast, parameters, json_serializer=self._json_serializer)
-
-        return cast("str", transformed_ast.sql(dialect="bigquery"))
+        transformed_expression, _ = self._literal_inliner(expression, parameters)
+        return cast("str", transformed_expression.sql(dialect="bigquery"))
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL script with statement splitting and parameter handling.
@@ -562,10 +554,19 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         base_sql = statement.sql
 
+        try:
+            parsed_expression = sqlglot.parse_one(base_sql, dialect="bigquery")
+        except sqlglot.ParseError:
+            parsed_expression = None
+
         script_statements = []
         for param_set in parameters_list:
-            transformed_sql = self._transform_ast_with_literals(base_sql, param_set)
-            script_statements.append(transformed_sql)
+            if parsed_expression is None:
+                script_statements.append(base_sql)
+                continue
+
+            expression_copy = parsed_expression.copy()
+            script_statements.append(self._inline_literals(expression_copy, param_set))
 
         script_sql = ";\n".join(script_statements)
 
