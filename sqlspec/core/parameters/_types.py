@@ -1,7 +1,6 @@
 """Core parameter data structures and utilities."""
 
 from collections.abc import Callable, Collection, Generator, Mapping, Sequence
-from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import Enum
@@ -131,6 +130,7 @@ class ParameterInfo:
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterStyleConfig:
     """Configuration describing parameter behaviour for a statement."""
 
@@ -276,36 +276,71 @@ class ParameterStyleConfig:
         )
 
 
-@dataclass(slots=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class DriverParameterProfile:
     """Immutable adapter profile describing parameter defaults."""
 
-    name: str
-    default_style: "ParameterStyle"
-    supported_styles: "Collection[ParameterStyle]"
-    default_execution_style: "ParameterStyle"
-    supported_execution_styles: "Collection[ParameterStyle] | None"
-    has_native_list_expansion: bool
-    preserve_parameter_format: bool
-    needs_static_script_compilation: bool
-    allow_mixed_parameter_styles: bool
-    preserve_original_params_for_many: bool
-    json_serializer_strategy: "Literal['driver', 'helper', 'none']"
-    custom_type_coercions: "Mapping[type, Callable[[Any], Any]]" = field(default_factory=dict)
-    default_output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None
-    default_ast_transformer: "Callable[[Any, Any], tuple[Any, Any]] | None" = None
-    extras: "Mapping[str, Any]" = field(default_factory=dict)
-    default_dialect: "str | None" = None
-    statement_kwargs: "Mapping[str, Any]" = field(default_factory=dict)
+    __slots__ = (
+        "allow_mixed_parameter_styles",
+        "custom_type_coercions",
+        "default_ast_transformer",
+        "default_dialect",
+        "default_execution_style",
+        "default_output_transformer",
+        "default_style",
+        "extras",
+        "has_native_list_expansion",
+        "json_serializer_strategy",
+        "name",
+        "needs_static_script_compilation",
+        "preserve_original_params_for_many",
+        "preserve_parameter_format",
+        "statement_kwargs",
+        "supported_execution_styles",
+        "supported_styles",
+    )
 
-    def __post_init__(self) -> None:
-        self.supported_styles = frozenset(self.supported_styles)
+    def __init__(
+        self,
+        name: str,
+        default_style: "ParameterStyle",
+        supported_styles: "Collection[ParameterStyle]",
+        default_execution_style: "ParameterStyle",
+        supported_execution_styles: "Collection[ParameterStyle] | None",
+        has_native_list_expansion: bool,
+        preserve_parameter_format: bool,
+        needs_static_script_compilation: bool,
+        allow_mixed_parameter_styles: bool,
+        preserve_original_params_for_many: bool,
+        json_serializer_strategy: "Literal['driver', 'helper', 'none']",
+        custom_type_coercions: "Mapping[type, Callable[[Any], Any]] | None" = None,
+        default_output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None,
+        default_ast_transformer: "Callable[[Any, Any], tuple[Any, Any]] | None" = None,
+        extras: "Mapping[str, Any] | None" = None,
+        default_dialect: "str | None" = None,
+        statement_kwargs: "Mapping[str, Any] | None" = None,
+    ) -> None:
+        self.name = name
+        self.default_style = default_style
+        self.supported_styles = frozenset(supported_styles)
+        self.default_execution_style = default_execution_style
         self.supported_execution_styles = (
-            frozenset(self.supported_execution_styles) if self.supported_execution_styles is not None else None
+            frozenset(supported_execution_styles) if supported_execution_styles is not None else None
         )
-        self.custom_type_coercions = MappingProxyType(dict(self.custom_type_coercions))
-        self.extras = MappingProxyType(dict(self.extras))
-        self.statement_kwargs = MappingProxyType(dict(self.statement_kwargs))
+        self.has_native_list_expansion = has_native_list_expansion
+        self.preserve_parameter_format = preserve_parameter_format
+        self.needs_static_script_compilation = needs_static_script_compilation
+        self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
+        self.preserve_original_params_for_many = preserve_original_params_for_many
+        self.json_serializer_strategy = json_serializer_strategy
+        self.custom_type_coercions = (
+            MappingProxyType(dict(custom_type_coercions)) if custom_type_coercions else MappingProxyType({})
+        )
+        self.default_output_transformer = default_output_transformer
+        self.default_ast_transformer = default_ast_transformer
+        self.extras = MappingProxyType(dict(extras)) if extras else MappingProxyType({})
+        self.default_dialect = default_dialect
+        self.statement_kwargs = MappingProxyType(dict(statement_kwargs)) if statement_kwargs else MappingProxyType({})
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
