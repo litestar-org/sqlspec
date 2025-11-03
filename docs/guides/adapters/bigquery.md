@@ -17,6 +17,55 @@ This guide provides specific instructions for the `bigquery` adapter.
 -   **JSON Strategy:** `helper` with `json_tuple_strategy="tuple"`
 -   **Extras:** `type_coercion_overrides` keep list values intact while converting tuples to lists during binding
 
+## Driver Features
+
+The `bigquery` adapter's behavior can be customized through the `driver_features` configuration, which is defined by the `BigQueryDriverFeatures` TypedDict.
+
+### BigQueryDriverFeatures TypedDict
+
+```python
+class BigQueryDriverFeatures(TypedDict):
+    """BigQuery driver-specific features configuration.
+
+    Only non-standard BigQuery client parameters that are SQLSpec-specific extensions.
+
+    Attributes:
+        connection_instance: Pre-existing BigQuery connection instance to use.
+        on_job_start: Callback invoked when a query job starts.
+        on_job_complete: Callback invoked when a query job completes.
+        on_connection_create: Callback invoked when connection is created.
+        json_serializer: Custom JSON serializer for dict/list parameter conversion.
+            Defaults to sqlspec.utils.serializers.to_json if not provided.
+        enable_uuid_conversion: Enable automatic UUID string conversion.
+            When True (default), UUID strings are automatically converted to UUID objects.
+            When False, UUID strings are treated as regular strings.
+    """
+
+    connection_instance: NotRequired["BigQueryConnection"]
+    on_job_start: NotRequired["Callable[[str], None]"]
+    on_job_complete: NotRequired["Callable[[str, Any], None]"]
+    on_connection_create: NotRequired["Callable[[Any], None]"]
+    json_serializer: NotRequired["Callable[[Any], str]"]
+    enable_uuid_conversion: NotRequired[bool]
+```
+
+### Example: Custom JSON Serializer
+
+```python
+import orjson
+from sqlspec.adapters.bigquery import BigQueryConfig
+
+def orjson_serializer(obj: Any) -> str:
+    return orjson.dumps(obj).decode("utf-8")
+
+config = BigQueryConfig(
+    connection_config={"project": "my-gcp-project"},
+    driver_features={
+        "json_serializer": orjson_serializer,
+    },
+)
+```
+
 ## Best Practices
 
 -   **Authentication:** BigQuery requires authentication with Google Cloud. For local development, the easiest way is to use the Google Cloud CLI and run `gcloud auth application-default login`.
