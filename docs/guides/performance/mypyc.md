@@ -862,7 +862,7 @@ def get_result_class():
 
 ```python
 # ✅ DO: Type exception handling properly
-def safe_divide(a: int, b: int) -> Optional[float]:
+def safe_divide(a: int, b: int) -> "float | None":
     try:
         return float(a) / float(b)
     except ZeroDivisionError:
@@ -956,13 +956,13 @@ class NativeClass:
 # ⚠️ DIFFERENCE: try/except has higher overhead in compiled code
 
 # ✅ DO: Check before exception
-def safe_divide(a: float, b: float) -> Optional[float]:
+def safe_divide(a: float, b: float) -> "float | None":
     if b == 0:
         return None
     return a / b
 
 # ❌ DON'T: Rely on exception for control flow
-def unsafe_divide(a: float, b: float) -> Optional[float]:
+def unsafe_divide(a: float, b: float) -> "float | None":
     try:
         return a / b
     except ZeroDivisionError:

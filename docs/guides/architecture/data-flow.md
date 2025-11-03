@@ -245,7 +245,7 @@ The current implementation uses an enhanced template method pattern that provide
 The enhanced `_perform_execute` method in the base class coordinates execution:
 
 ```python
-def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[int], Any]:
+def _perform_execute(self, cursor: Any, statement: SQL) -> "tuple[Any, int | None, Any]":
     """Enhanced execution with special handling and routing."""
 
     # 1. Try special handling first (COPY, bulk ops, etc.)

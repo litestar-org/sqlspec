@@ -64,7 +64,6 @@ Core architecture and design patterns:
 - [**Starlette Integration**](extensions/starlette.md) - Lifespan management and middleware patterns
 - [**FastAPI Integration**](extensions/fastapi.md) - Dependency injection and transaction handling
 - [**Flask Integration**](extensions/flask.md) - Request-scoped sessions for synchronous drivers
-- [**Sanic Integration**](extensions/sanic.md) - Listeners, middleware, and Sanic-Ext dependencies
 
 ## Quick Reference
 

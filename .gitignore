@@ -68,3 +68,9 @@ requirements/*
 !.claude/bootstrap.md
 .pre-commit-cache
 .gh-cache
+
+# LLM Context Files
+.llms-generator.json
+llms.txt
+llms-full.txt
+

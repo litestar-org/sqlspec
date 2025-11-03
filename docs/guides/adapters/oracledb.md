@@ -226,37 +226,35 @@ result = await session.execute(
 
 ## Column Name Normalization
 
-Oracle returns unquoted identifiers in uppercase (for example `ID`, `PRODUCT_NAME`). When those rows feed into schema libraries that expect snake_case fields, the uppercase keys can trigger validation errors. SQLSpec resolves this automatically through the `enable_lowercase_column_names` driver feature, which is **enabled by default**.
+Oracle returns unquoted identifiers in uppercase (e.g., `ID`, `PRODUCT_NAME`). When these rows are used to hydrate typed schemas (like msgspec or Pydantic) that expect lowercase, snake_case fields, the mismatch can cause validation errors.
+
+To prevent this, SQLSpec provides the `enable_lowercase_column_names` driver feature, which is **enabled by default**. This feature automatically normalizes implicitly uppercased column names to lowercase, ensuring seamless schema hydration without needing to alias every column in your SQL queries.
+
+### How It Works
+
+- **Normalization**: Identifiers matching Oracle's implicit uppercase pattern (e.g., `PRODUCT_ID`, `CUSTOMER_NAME`) are converted to lowercase (`product_id`, `customer_name`).
+- **Preservation**: Quoted or user-defined aliases that are not implicitly uppercased (e.g., `"ProductId"`, `customerName`) retain their original casing.
+
+### When to Disable It
+
+You only need to configure this feature if you want to **disable** it. Set `enable_lowercase_column_names=False` in the following scenarios:
+
+- You rely on two columns that differ only by case (e.g., `ID` and `Id`).
+- You intentionally alias all columns in uppercase and want to preserve that style.
+- You prefer to manage all column casing manually in SQL using quoted identifiers.
+
+To disable the feature:
 
 ```python
 from sqlspec.adapters.oracledb import OracleAsyncConfig
 
 config = OracleAsyncConfig(
     pool_config={"dsn": "oracle://..."},
-    driver_features={"enable_lowercase_column_names": True},
-)
-```
-
-### How normalization works
-
-- Identifiers matching Oracle's implicit uppercase pattern (`^(?!\d)(?:[A-Z0-9_]+)$`) are lowercased.
-- Quoted or user-defined aliases (mixed case, symbols, or names beginning with digits) retain their original casing.
-- Disabling the feature restores Oracle's native uppercase behaviour:
-
-```python
-config = OracleAsyncConfig(
-    pool_config={"dsn": "oracle://..."},
     driver_features={"enable_lowercase_column_names": False},
 )
 ```
 
-### When to opt out
-
-- You rely on two columns that differ only by case (for example `ID` and `Id`).
-- You intentionally alias everything in uppercase and want to preserve that style.
-- You prefer to manage casing entirely in SQL using quoted identifiers.
-
-In those scenarios set `enable_lowercase_column_names=False`. Otherwise, keep the default for seamless msgspec/pydantic hydration without extra SQL aliases.
+For most applications, the default behavior provides the best experience.
 
 ## NumPy Vector Support (Oracle 23ai+)
 
@@ -273,11 +271,14 @@ The VECTOR data type stores high-dimensional vectors efficiently and supports:
 
 ### Configuration
 
-Enable NumPy vector support via `driver_features`:
+NumPy vector support is **auto-enabled** when `sqlspec` detects that the `numpy` package is installed. You only need to explicitly configure this feature if you want to disable it when NumPy is present.
+
+To override the default behavior, use `driver_features`:
 
 ```python
 from sqlspec.adapters.oracledb import OracleAsyncConfig
 
+# Explicitly disable NumPy integration
 config = OracleAsyncConfig(
     pool_config={
         "dsn": "oracle://host:port/service_name",
@@ -285,7 +286,7 @@ config = OracleAsyncConfig(
         "password": "password",
     },
     driver_features={
-        "enable_numpy_vectors": True  # Enable automatic NumPy conversion
+        "enable_numpy_vectors": False  # Override auto-detection
     }
 )
 ```

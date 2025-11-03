@@ -23,12 +23,63 @@ This guide provides specific instructions and best practices for working with th
 
 ## Driver Features
 
-The `asyncpg` adapter supports the following driver features:
+The `asyncpg` adapter configuration is managed through a `TypedDict` for clarity and type safety.
 
--   `json_serializer`: A function to serialize Python objects to JSON. Defaults to `sqlspec.utils.serializers.to_json`.
--   `json_deserializer`: A function to deserialize JSON strings to Python objects. Defaults to `sqlspec.utils.serializers.from_json`.
--   `enable_json_codecs`: A boolean to enable or disable automatic JSON/JSONB codec registration. Defaults to `True`.
--   `enable_pgvector`: A boolean to enable or disable `pgvector` support. Defaults to `True` if `pgvector` is installed.
+### AsyncpgDriverFeatures TypedDict
+
+```python
+class AsyncpgDriverFeatures(TypedDict):
+    """AsyncPG driver feature flags.
+
+    json_serializer: Custom JSON serializer function for PostgreSQL JSON/JSONB types.
+        Defaults to sqlspec.utils.serializers.to_json.
+        Use for performance optimization (e.g., orjson) or custom encoding behavior.
+        Applied when enable_json_codecs is True.
+    json_deserializer: Custom JSON deserializer function for PostgreSQL JSON/JSONB types.
+        Defaults to sqlspec.utils.serializers.from_json.
+        Use for performance optimization (e.g., orjson) or custom decoding behavior.
+        Applied when enable_json_codecs is True.
+    enable_json_codecs: Enable automatic JSON/JSONB codec registration on connections.
+        Defaults to True for seamless Python dict/list to PostgreSQL JSON/JSONB conversion.
+        Set to False to disable automatic codec registration (manual handling required).
+    enable_pgvector: Enable pgvector extension support for vector similarity search.
+        Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
+        Defaults to True when pgvector-python is installed.
+        Provides automatic conversion between Python objects and PostgreSQL vector types.
+        Enables vector similarity operations and index support.
+    """
+
+    json_serializer: NotRequired[Callable[[Any], str]]
+    json_deserializer: NotRequired[Callable[[str], Any]]
+    enable_json_codecs: NotRequired[bool]
+    enable_pgvector: NotRequired[bool]
+```
+
+### Configuration and Defaults
+
+-   **JSON Codecs (`enable_json_codecs`)**: This feature is **enabled by default** (`True`). It automatically registers handlers to convert Python `dict` and `list` objects to PostgreSQL `JSONB` or `JSON` types, and vice-versa. You only need to configure this if you want to disable it.
+-   **pgvector Support (`enable_pgvector`)**: This feature is **auto-enabled** if the `pgvector` Python package is installed. If you have `pgvector` installed but need to disable this feature for a specific database configuration, you can explicitly set it to `False`.
+
+### Example Usage
+
+Here is how you would override the default JSON serializer and explicitly disable `pgvector` support:
+
+```python
+import orjson
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+# A faster JSON serializer from an external library
+def orjson_serializer(obj: Any) -> str:
+    return orjson.dumps(obj).decode("utf-8")
+
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://user:pass@host:port/db"},
+    driver_features={
+        "json_serializer": orjson_serializer,
+        "enable_pgvector": False,  # Explicitly disable pgvector
+    },
+)
+```
 
 ## MERGE Operations (PostgreSQL 15+)
 

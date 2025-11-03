@@ -681,7 +681,7 @@ sql, params = build_search_query(
 ```python
 from sqlglot import parse_one, ParseError
 
-def safe_parse(sql: str) -> Optional[exp.Expression]:
+def safe_parse(sql: str) -> "exp.Expression | None":
     """Parse SQL with error handling."""
     try:
         return parse_one(sql, error_level="raise")
@@ -701,7 +701,7 @@ if ast is None:
 from sqlglot import parse_one
 from sqlglot.errors import ParseError, TokenError
 
-def validate_sql(sql: str) -> tuple[bool, Optional[str]]:
+def validate_sql(sql: str) -> "tuple[bool, str | None]":
     """Validate SQL syntax."""
     try:
         parse_one(sql, error_level="raise")

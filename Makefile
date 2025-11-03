@@ -249,6 +249,12 @@ docs-linkcheck-full:                               ## Run full documentation lin
 # Development Infrastructure
 # =============================================================================
 
+.PHONY: llms-context
+llms-context: ## Generate context files for LLMs
+	@echo "$(INFO) Generating LLM context files..."
+	@uv run python tools/llms_generator/main.py
+	@echo "$(OK) LLM context files generated successfully"
+
 .PHONY: infra-up
 infra-up:                                              ## Start development infrastructure (databases, storage)
 	@echo "${INFO} Starting development infrastructure..."

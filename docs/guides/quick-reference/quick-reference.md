@@ -27,53 +27,168 @@ orphan: true
 
 ## Public API - Driver Execute Methods
 
-### Execute Method Overloads
+The public API is consistent for both `SyncDriverAdapterBase` and `AsyncDriverAdapterBase`.
+
+### `execute`
+
+Executes a single statement.
 
 ```python
-from typing import Union, Optional
-from sqlspec.core import StatementFilter
-from sqlspec.core import SQL, Statement, StatementConfig
-from sqlspec.builder import QueryBuilder
-from sqlspec.typing import StatementParameters, ModelDTOT
-
-# Execute without schema conversion
 def execute(
     self,
-    statement: Union[SQL, Statement, QueryBuilder],
+    statement: "SQL | Statement | QueryBuilder",
     /,
-    *parameters: Union[StatementParameters, StatementFilter],
-    statement_config: Optional[StatementConfig] = None,
+    *parameters: "StatementParameters | StatementFilter",
+    statement_config: "StatementConfig | None" = None,
     **kwargs: Any,
-) -> SQLResult:
-    """Execute SQL statement and return results."""
+) -> "SQLResult":
+    """Execute a statement with parameter handling."""
 ```
 
-### Execute Many
+### `execute_many`
+
+Executes a statement with multiple sets of parameters.
 
 ```python
 def execute_many(
     self,
-    statement: Union[SQL, Statement, QueryBuilder],
+    statement: "SQL | Statement | QueryBuilder",
     /,
-    *parameters: Union[StatementParameters, StatementFilter],
-    statement_config: Optional[StatementConfig] = None,
+    parameters: "Sequence[StatementParameters]",
+    *filters: "StatementParameters | StatementFilter",
+    statement_config: "StatementConfig | None" = None,
     **kwargs: Any,
-) -> SQLResult:
+) -> "SQLResult":
     """Execute statement multiple times with different parameters."""
 ```
 
-### Execute Script
+### `execute_script`
+
+Executes a multi-statement script.
 
 ```python
 def execute_script(
     self,
-    statement: Union[str, SQL],
+    statement: "str | SQL",
     /,
-    *parameters: Union[StatementParameters, StatementFilter],
-    statement_config: Optional[StatementConfig] = None,
+    *parameters: "StatementParameters | StatementFilter",
+    statement_config: "StatementConfig | None" = None,
     **kwargs: Any,
-) -> SQLResult:
-    """Execute multi-statement script."""
+) -> "SQLResult":
+    """Execute a multi-statement script."""
+```
+
+## Core Execution Architecture: The Template Method Pattern
+
+The core of the driver is the `dispatch_statement_execution` method, which acts as a template method. It orchestrates the execution flow, calling abstract methods that concrete drivers must implement.
+
+```mermaid
+graph TD
+    A[Public API Call (e.g., session.execute)] --> B[prepare_statement]
+    B --> C[dispatch_statement_execution]
+    C --> D{Handle Database Exceptions}
+    D --> E{Acquire Cursor}
+    E --> F{Try Special Handling?}
+    F -- Yes --> G[_try_special_handling]
+    F -- No --> H{Operation Type?}
+    H -- is_script --> I[_execute_script]
+    H -- is_many --> J[_execute_many]
+    H -- is_statement --> K[_execute_statement]
+    I --> L[ExecutionResult]
+    J --> L
+    K --> L
+    G --> M[SQLResult]
+    L --> N[build_statement_result]
+    N --> M
+    M --> O[Return to Caller]
+```
+
+### `ExecutionResult` Dataclass
+
+The abstract `_execute_*` methods do not return raw data. Instead, they return an `ExecutionResult` dataclass instance. This structured object carries all the necessary information about the execution outcome, which the base class then uses to build the final `SQLResult`.
+
+```python
+# A simplified representation
+@dataclass
+class ExecutionResult:
+    is_select_result: bool = False
+    selected_data: list[dict[str, Any]] | None = None
+    column_names: list[str] | None = None
+    data_row_count: int = 0
+    # ... and other fields for rowcount, etc.
+```
+
+## Driver Implementation Pattern (Current)
+
+A correct driver implementation inherits from `SyncDriverAdapterBase` or `AsyncDriverAdapterBase` and implements a specific set of abstract methods.
+
+```python
+from sqlspec.driver import SyncDriverAdapterBase, ExecutionResult
+from sqlspec.core import SQL, StatementConfig
+
+class MyDriver(SyncDriverAdapterBase):
+    """Example of a current, correct driver implementation."""
+
+    dialect = "mydialect"
+
+    def __init__(self, connection, statement_config=None, driver_features=None):
+        # ... configuration setup ...
+        super().__init__(connection, statement_config, driver_features)
+
+    # 1. Implement transaction methods
+    def begin(self) -> None: self.connection.begin()
+    def commit(self) -> None: self.connection.commit()
+    def rollback(self) -> None: self.connection.rollback()
+
+    # 2. Implement context managers
+    def with_cursor(self, connection: Any) -> Any:
+        return MyCursorContext(connection)
+
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+        return MyExceptionHandler()
+
+    # 3. Implement execution hooks
+    def _try_special_handling(self, cursor: Any, statement: SQL) -> "SQLResult | None":
+        """Hook for database-specific operations like COPY."""
+        return None  # Return None to proceed with standard execution
+
+    def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute a single statement and return an ExecutionResult."""
+        sql, params = self._get_compiled_sql(statement, self.statement_config)
+        cursor.execute(sql, params or ())
+
+        if statement.returns_rows():
+            data = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description or []]
+            selected_data = [dict(zip(columns, row)) for row in data]
+            return self.create_execution_result(
+                cursor,
+                selected_data=selected_data,
+                column_names=columns,
+                data_row_count=len(selected_data),
+                is_select_result=True
+            )
+        return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
+
+    def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute a statement with multiple parameter sets."""
+        sql, params = self._get_compiled_sql(statement, self.statement_config)
+        cursor.executemany(sql, params)
+        return self.create_execution_result(cursor, rowcount_override=len(params))
+
+    def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute a multi-statement script."""
+        sql, _ = self._get_compiled_sql(statement, self.statement_config)
+        # Note: Splitting and execution logic can be driver-specific
+        statements = self.split_script_statements(sql, self.statement_config)
+        for stmt in statements:
+            cursor.execute(stmt)
+        return self.create_execution_result(
+            cursor,
+            statement_count=len(statements),
+            successful_statements=len(statements),
+            is_script_result=True
+        )
 ```
 
 ## Enhanced Pipeline Processing Order
@@ -140,99 +255,80 @@ class SQLTransformContext:
     driver_adapter: Any                    # Current driver instance
 ```
 
-## Base Class Responsibilities
 
-| Base Class | Purpose | Key Methods |
-|------------|---------|-------------|
-| SyncDriverAdapterBase | Synchronous execution | `execute()`, `_dispatch_execution()`, `_perform_execute()` |
-| AsyncDriverAdapterBase | Asynchronous execution | `execute()`, `_dispatch_execution()`, `_perform_execute()` |
-| CommonDriverAttributesMixin | Shared utilities | `prepare_statement()`, `prepare_driver_parameters()` |
-| SQLTranslatorMixin | Dialect translation | `transpile_sql()` |
-| ToSchemaMixin | Result conversion | `to_schema()` |
 
-## Driver Implementation Pattern
+
+## Driver Implementation Pattern (Current)
+
+A correct driver implementation inherits from `SyncDriverAdapterBase` or `AsyncDriverAdapterBase` and implements a specific set of abstract methods.
 
 ```python
-from typing import Optional, Any
-from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.core import ParameterStyle, ParameterStyleConfig
+from sqlspec.driver import SyncDriverAdapterBase, ExecutionResult
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.core import SQLResult
 
 class MyDriver(SyncDriverAdapterBase):
-    """Example driver implementation."""
+    """Example of a current, correct driver implementation."""
 
     dialect = "mydialect"
 
-    def __init__(
-        self,
-        connection: Any,
-        statement_config: Optional[StatementConfig] = None,
-        driver_features: Optional[dict[str, Any]] = None,
-    ) -> None:
-        if statement_config is None:
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK,
-                supported_parameter_styles={ParameterStyle.QMARK},
-                type_coercion_map={},
-                has_native_list_expansion=False,
-                needs_static_script_compilation=True,
-            )
-            statement_config = StatementConfig(
-                dialect="mydialect",
-                parameter_config=parameter_config
-            )
-
+    def __init__(self, connection, statement_config=None, driver_features=None):
+        # ... configuration setup ...
         super().__init__(connection, statement_config, driver_features)
 
-    # Context manager for cursor
+    # 1. Implement transaction methods
+    def begin(self) -> None: self.connection.begin()
+    def commit(self) -> None: self.connection.commit()
+    def rollback(self) -> None: self.connection.rollback()
+
+    # 2. Implement context managers
     def with_cursor(self, connection: Any) -> Any:
-        """Return context manager for cursor acquisition."""
         return MyCursorContext(connection)
 
-    # Transaction methods
-    def begin(self) -> None:
-        """Begin transaction."""
-        self.connection.begin()
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+        return MyExceptionHandler()
 
-    def commit(self) -> None:
-        """Commit transaction."""
-        self.connection.commit()
+    # 3. Implement execution hooks
+    def _try_special_handling(self, cursor: Any, statement: SQL) -> "SQLResult | None":
+        """Hook for database-specific operations like COPY."""
+        return None  # Return None to proceed with standard execution
 
-    def rollback(self) -> None:
-        """Rollback transaction."""
-        self.connection.rollback()
+    def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute a single statement and return an ExecutionResult."""
+        sql, params = self._get_compiled_sql(statement, self.statement_config)
+        cursor.execute(sql, params or ())
 
-    # Special handling hook
-    def _try_special_handling(self, cursor: Any, statement: SQL) -> Optional[tuple[Any, Optional[int], Any]]:
-        """Hook for database-specific operations."""
-        return None  # Use standard execution
+        if statement.returns_rows():
+            data = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description or []]
+            selected_data = [dict(zip(columns, row)) for row in data]
+            return self.create_execution_result(
+                cursor,
+                selected_data=selected_data,
+                column_names=columns,
+                data_row_count=len(selected_data),
+                is_select_result=True
+            )
+        return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
 
-    # Abstract execution methods
-    def _execute_statement(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
-        """Execute single statement."""
-        cursor.execute(sql, prepared_parameters or ())
+    def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute a statement with multiple parameter sets."""
+        sql, params = self._get_compiled_sql(statement, self.statement_config)
+        cursor.executemany(sql, params)
+        return self.create_execution_result(cursor, rowcount_override=len(params))
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
-        """Execute with multiple parameter sets."""
-        cursor.executemany(sql, prepared_parameters)
-
-    def _execute_script(self, cursor: Any, sql: str, prepared_parameters: Any, statement_config: StatementConfig) -> Any:
-        """Execute script."""
-        statements = self.split_script_statements(sql, statement_config)
+    def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute a multi-statement script."""
+        sql, _ = self._get_compiled_sql(statement, self.statement_config)
+        # Note: Splitting and execution logic can be driver-specific
+        statements = self.split_script_statements(sql, self.statement_config)
         for stmt in statements:
-            cursor.execute(stmt, prepared_parameters or ())
-
-    # Data extraction methods (CURRENT SIGNATURES)
-    def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
-        """Extract SELECT results."""
-        data = cursor.fetchall()
-        columns = [desc[0] for desc in cursor.description or []]
-        return [dict(zip(columns, row)) for row in data], columns, len(data)
-
-    def _get_row_count(self, cursor: Any) -> int:
-        """Extract row count."""
-        return cursor.rowcount or 0
+            cursor.execute(stmt)
+        return self.create_execution_result(
+            cursor,
+            statement_count=len(statements),
+            successful_statements=len(statements),
+            is_script_result=True
+        )
 ```
 
 ## Type Coercion Configuration
@@ -325,7 +421,7 @@ def _execute(
     sql: str,
     parameters: Any,
     statement: SQL,
-    connection: Optional[ConnectionT] = None,
+    connection: "ConnectionT | None" = None,
     **kwargs: Any  # Driver-specific options
 ) -> SQLResult:
     # Extract known kwargs
@@ -443,91 +539,24 @@ from sqlspec.core import (
 )
 ```
 
-## File Organization
+## File Organization (Corrected)
 
 ```
 sqlspec/
-├── statement/          # Core SQL handling
-│   ├── sql.py         # SQL class
-│   ├── pipeline.py    # Transform pipeline
-│   └── parameters.py  # Parameter types
-├── driver/            # Shared driver code
-│   └── mixins/       # Mixin implementations
-├── adapters/         # Database adapters
+├── core/               # Core SQL handling (SQL, StatementConfig, etc.)
+│   ├── statement.py    # SQL class
+│   └── parameters/     # Parameter types and conversion
+├── driver/             # Shared driver code (base classes, mixins)
+│   ├── _sync.py        # SyncDriverAdapterBase
+│   └── _async.py       # AsyncDriverAdapterBase
+├── adapters/           # Database-specific adapters
 │   └── {db}/
-│       ├── driver.py  # Driver implementation
-│       └── config.py  # Configuration
-└── tests/
-    ├── .tmp/         # Debug scripts
-    ├── .bugs/        # Bug reports
-    └── .todos/       # Task tracking
+│       ├── driver.py   # The concrete driver implementation
+│       └── config.py   # Configuration classes
+└── ...
 ```
 
-## Current Execution Architecture
 
-### Enhanced _perform_execute Pattern (CURRENT IMPLEMENTATION)
-
-**✅ CURRENT APPROACH - Template Method Pattern:**
-
-```python
-def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[int], Any]:
-    """Enhanced execution with hooks and result tuples."""
-
-    # Step 1: Try special handling first
-    special_result = self._try_special_handling(cursor, statement)
-    if special_result is not None:
-        return special_result
-
-    # Step 2: Get compiled SQL with driver's parameter style
-    sql, parameters = self._get_compiled_sql(statement, self.statement_config)
-
-    # Step 3: Route to appropriate execution method
-    if statement.is_script:
-        if self.statement_config.parameter_config.needs_static_script_compilation:
-            static_sql = self._prepare_script_sql(statement)
-            result = self._execute_script(cursor, static_sql, None, self.statement_config)
-        else:
-            prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
-            result = self._execute_script(cursor, sql, prepared_parameters, self.statement_config)
-        return create_execution_result(result)
-
-    elif statement.is_many:
-        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=True)
-        result = self._execute_many(cursor, sql, prepared_parameters)
-        return create_execution_result(result)
-
-    else:
-        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
-        result = self._execute_statement(cursor, sql, prepared_parameters)
-        return create_execution_result(result)
-```
-
-### Abstract Methods Pattern (CURRENT IMPLEMENTATION)
-
-**Required Implementation Methods:**
-
-```python
-# Hook for special operations
-def _try_special_handling(self, cursor: Any, statement: SQL) -> Optional[tuple[Any, Optional[int], Any]]:
-    """Return None for standard execution or result tuple for special handling."""
-
-# Core execution methods (CURRENT SIGNATURES)
-def _execute_statement(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
-    """Execute single statement."""
-
-def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
-    """Execute with parameter batches."""
-
-def _execute_script(self, cursor: Any, sql: str, prepared_parameters: Any, statement_config: StatementConfig) -> Any:
-    """Execute multi-statement script."""
-
-# Data extraction methods (CURRENT SIGNATURES)
-def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
-    """Extract SELECT results: (data, columns, count)."""
-
-def _get_row_count(self, cursor: Any) -> int:
-    """Extract affected row count."""
-```
 
 ### Modern Configuration Pattern
 
