@@ -21,11 +21,10 @@ async def asyncpg_batch_session(asyncpg_async_driver: AsyncpgDriver) -> "AsyncGe
                 name TEXT NOT NULL,
                 value INTEGER DEFAULT 0,
                 category TEXT
-            )
+            );
+            TRUNCATE TABLE test_batch RESTART IDENTITY
         """
     )
-    await asyncpg_async_driver.execute_script("TRUNCATE TABLE test_batch RESTART IDENTITY")
-
     try:
         yield asyncpg_async_driver
     finally:

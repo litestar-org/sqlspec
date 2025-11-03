@@ -798,7 +798,7 @@ def test_schema_dump_with_primitives() -> None:
     """Test schema_dump returns primitive payload unchanged."""
     payload = "primary"
     result = schema_dump(payload)
-    assert result == payload
+    assert result == payload  # type: ignore[comparison-overlap]
 
 
 def test_schema_dump_with_dataclass() -> None:
