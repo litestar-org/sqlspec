@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any, Final
 import psqlpy.exceptions
 from psqlpy.extra_types import JSONB
 
-from sqlspec.utils.type_converters import build_nested_decimal_normalizer
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLTypeConverter
 from sqlspec.core.cache import get_cache_config
@@ -42,6 +41,7 @@ from sqlspec.exceptions import (
 from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_nested_decimal_normalizer
 
 if TYPE_CHECKING:
     from collections.abc import Callable

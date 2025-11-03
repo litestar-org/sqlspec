@@ -24,30 +24,23 @@ _AST_TRANSFORMER_VALIDATOR: "ParameterValidator" = ParameterValidator()
 
 
 def build_null_pruning_transform(
-    *,
-    dialect: str = "postgres",
-    validator: "ParameterValidator | None" = None,
+    *, dialect: str = "postgres", validator: "ParameterValidator | None" = None
 ) -> "Callable[[Any, Any], tuple[Any, Any]]":
     """Return a callable that prunes NULL placeholders from an expression."""
 
     def transform(expression: Any, parameters: Any) -> "tuple[Any, Any]":
-        return replace_null_parameters_with_literals(
-            expression, parameters, dialect=dialect, validator=validator
-        )
+        return replace_null_parameters_with_literals(expression, parameters, dialect=dialect, validator=validator)
 
     return transform
 
 
 def build_literal_inlining_transform(
-    *,
-    json_serializer: "Callable[[Any], str]",
+    *, json_serializer: "Callable[[Any], str]"
 ) -> "Callable[[Any, Any], tuple[Any, Any]]":
     """Return a callable that replaces placeholders with SQL literals."""
 
     def transform(expression: Any, parameters: Any) -> "tuple[Any, Any]":
-        literal_expression = replace_placeholders_with_literals(
-            expression, parameters, json_serializer=json_serializer
-        )
+        literal_expression = replace_placeholders_with_literals(expression, parameters, json_serializer=json_serializer)
         return literal_expression, parameters
 
     return transform

@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, Final
 
 import duckdb
 
-from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBTypeConverter
 from sqlspec.core import SQL, ParameterStyle, StatementConfig, get_cache_config
@@ -28,6 +27,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager

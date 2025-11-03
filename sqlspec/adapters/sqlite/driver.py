@@ -6,7 +6,6 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import (
     DriverParameterProfile,
@@ -28,6 +27,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager

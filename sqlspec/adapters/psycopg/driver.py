@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any
 
 import psycopg
 
-from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import (
@@ -48,6 +47,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
 
 if TYPE_CHECKING:
     from collections.abc import Callable

@@ -11,28 +11,12 @@ Tests the 2-Phase Parameter Conversion System:
 import json
 import math
 from datetime import date, datetime
-from importlib import import_module
 from decimal import Decimal
+from importlib import import_module
 from typing import Any
 
 import pytest
 import sqlglot
-
-_ADAPTER_MODULE_NAMES: "tuple[str, ...]" = (
-    "sqlspec.adapters.adbc",
-    "sqlspec.adapters.aiosqlite",
-    "sqlspec.adapters.asyncmy",
-    "sqlspec.adapters.asyncpg",
-    "sqlspec.adapters.bigquery",
-    "sqlspec.adapters.duckdb",
-    "sqlspec.adapters.oracledb",
-    "sqlspec.adapters.psqlpy",
-    "sqlspec.adapters.psycopg",
-    "sqlspec.adapters.sqlite",
-)
-
-for _module_name in _ADAPTER_MODULE_NAMES:
-    import_module(_module_name)
 
 from sqlspec.core.parameters import (
     DRIVER_PARAMETER_PROFILES,
@@ -54,6 +38,22 @@ from sqlspec.core.parameters import (
 )
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.serializers import from_json, to_json
+
+_ADAPTER_MODULE_NAMES: "tuple[str, ...]" = (
+    "sqlspec.adapters.adbc",
+    "sqlspec.adapters.aiosqlite",
+    "sqlspec.adapters.asyncmy",
+    "sqlspec.adapters.asyncpg",
+    "sqlspec.adapters.bigquery",
+    "sqlspec.adapters.duckdb",
+    "sqlspec.adapters.oracledb",
+    "sqlspec.adapters.psqlpy",
+    "sqlspec.adapters.psycopg",
+    "sqlspec.adapters.sqlite",
+)
+
+for _module_name in _ADAPTER_MODULE_NAMES:
+    import_module(_module_name)
 
 pytestmark = pytest.mark.xdist_group("core")
 
