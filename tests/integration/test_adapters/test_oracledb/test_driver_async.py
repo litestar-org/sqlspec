@@ -6,7 +6,7 @@ import msgspec
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.asyncio(loop_scope="function")]
 

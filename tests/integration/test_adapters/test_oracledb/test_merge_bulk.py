@@ -16,7 +16,7 @@ import pytest
 
 from sqlspec import sql
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = [pytest.mark.oracle, pytest.mark.integration, pytest.mark.xdist_group("oracle")]
 

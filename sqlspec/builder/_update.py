@@ -13,7 +13,7 @@ from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder._dml import UpdateFromClauseMixin, UpdateSetClauseMixin, UpdateTableClauseMixin
 from sqlspec.builder._join import build_join_clause
 from sqlspec.builder._select import ReturningClauseMixin, WhereClauseMixin
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:

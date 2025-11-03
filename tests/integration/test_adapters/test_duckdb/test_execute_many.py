@@ -5,7 +5,7 @@ from collections.abc import Generator
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 
@@ -165,7 +165,7 @@ def test_duckdb_execute_many_large_batch(duckdb_batch_session: DuckDBDriver) -> 
 
 def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDBDriver) -> None:
     """Test execute_many with SQL object on DuckDB."""
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL
 
     parameters = [(10, "SQL Obj 1", 111, "SOB"), (20, "SQL Obj 2", 222, "SOB"), (30, "SQL Obj 3", 333, "SOB")]
 

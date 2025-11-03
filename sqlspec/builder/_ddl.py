@@ -11,15 +11,14 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder._select import Select
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL, SQLResult
 from sqlspec.utils.type_guards import has_sqlglot_expression, has_with_method
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.builder._column import ColumnExpression
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 __all__ = (
     "AlterOperation",

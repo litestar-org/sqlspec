@@ -64,7 +64,7 @@ Read("docs/guides/testing/testing.md")
 # tests/unit/test_core/test_statement.py
 
 import pytest
-from sqlspec.core.statement import Statement
+from sqlspec.core import Statement
 
 
 def test_statement_creation():

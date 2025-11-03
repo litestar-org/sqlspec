@@ -11,8 +11,16 @@ from oracledb import AsyncCursor, Cursor
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.data_dictionary import OracleAsyncDataDictionary, OracleSyncDataDictionary
 from sqlspec.adapters.oracledb.type_converter import OracleTypeConverter
-from sqlspec.core import SQL, ParameterStyle, StatementConfig, create_arrow_result, get_cache_config
-from sqlspec.core.parameters import DriverParameterProfile, build_statement_config_from_profile, register_driver_profile
+from sqlspec.core import (
+    SQL,
+    DriverParameterProfile,
+    ParameterStyle,
+    StatementConfig,
+    build_statement_config_from_profile,
+    create_arrow_result,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,

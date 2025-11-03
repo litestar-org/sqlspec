@@ -11,6 +11,8 @@ from sqlspec.core import (
     ParameterStyle,
     build_statement_config_from_profile,
     get_cache_config,
+    is_copy_from_operation,
+    is_copy_operation,
     register_driver_profile,
 )
 from sqlspec.driver import AsyncDriverAdapterBase
@@ -216,7 +218,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         Returns:
             SQLResult if special operation was handled, None for standard execution
         """
-        if statement.operation_type == "COPY":
+        if is_copy_operation(statement.operation_type):
             await self._handle_copy_operation(cursor, statement)
             return self.build_statement_result(statement, self.create_execution_result(cursor))
 
@@ -234,10 +236,10 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         metadata: dict[str, Any] = getattr(statement, "metadata", {})
         sql_text = statement.sql
-
+        sql_upper = sql_text.upper()
         copy_data = metadata.get("postgres_copy_data")
 
-        if copy_data:
+        if copy_data and is_copy_from_operation(statement.operation_type) and "FROM STDIN" in sql_upper:
             if isinstance(copy_data, dict):
                 data_str = (
                     str(next(iter(copy_data.values())))
@@ -249,15 +251,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             else:
                 data_str = str(copy_data)
 
-            if "FROM STDIN" in sql_text.upper():
-                from io import BytesIO
+            from io import BytesIO
 
-                data_io = BytesIO(data_str.encode("utf-8"))
-                await cursor.copy_from_query(sql_text, output=data_io)
-            else:
-                await cursor.execute(sql_text)
-        else:
-            await cursor.execute(sql_text)
+            data_io = BytesIO(data_str.encode("utf-8"))
+            await cursor.copy_from_query(sql_text, output=data_io)
+            return
+
+        await cursor.execute(sql_text)
 
     async def _execute_script(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.

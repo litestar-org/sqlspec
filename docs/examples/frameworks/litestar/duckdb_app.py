@@ -7,7 +7,7 @@ from litestar import Litestar, get
 from docs.examples.shared.configs import duckdb_registry
 from docs.examples.shared.data import ARTICLES, CREATE_ARTICLES
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
 registry = duckdb_registry()

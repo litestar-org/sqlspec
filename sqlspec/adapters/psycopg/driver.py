@@ -21,16 +21,20 @@ from typing import TYPE_CHECKING, Any
 import psycopg
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import (
+from sqlspec.core import (
+    SQL,
     DriverParameterProfile,
     ParameterStyle,
     ParameterStyleConfig,
+    SQLResult,
+    StatementConfig,
     build_statement_config_from_profile,
+    get_cache_config,
+    is_copy_from_operation,
+    is_copy_operation,
+    is_copy_to_operation,
     register_driver_profile,
 )
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -289,7 +293,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
         statement.compile()
 
-        if statement.operation_type in {"COPY_FROM", "COPY_TO"}:
+        if is_copy_operation(statement.operation_type):
             return self._handle_copy_operation(cursor, statement)
 
         return None
@@ -306,12 +310,12 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         """
 
         sql = statement.sql
-
+        operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
             copy_data = copy_data[0]
 
-        if statement.operation_type == "COPY_FROM":
+        if is_copy_from_operation(operation_type):
             if isinstance(copy_data, (str, bytes)):
                 data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
             elif hasattr(copy_data, "read"):
@@ -331,7 +335,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                 data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FROM_STDIN"}
             )
 
-        if statement.operation_type == "COPY_TO":
+        if is_copy_to_operation(operation_type):
             output_data: list[str] = []
             with cursor.copy(sql) as copy_ctx:
                 output_data.extend(row.decode() if isinstance(row, bytes) else str(row) for row in copy_ctx)
@@ -657,8 +661,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             SQLResult if special handling was applied, None otherwise
         """
 
-        sql_upper = statement.sql.strip().upper()
-        if sql_upper.startswith("COPY ") and ("FROM STDIN" in sql_upper or "TO STDOUT" in sql_upper):
+        statement.compile()
+
+        if is_copy_operation(statement.operation_type):
             return await self._handle_copy_operation_async(cursor, statement)
 
         return None
@@ -675,16 +680,13 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         """
 
         sql = statement.sql
-
+        sql_upper = sql.upper()
+        operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
             copy_data = copy_data[0]
 
-        sql_upper = sql.upper()
-        is_stdin = "FROM STDIN" in sql_upper
-        is_stdout = "TO STDOUT" in sql_upper
-
-        if is_stdin:
+        if is_copy_from_operation(operation_type) and "FROM STDIN" in sql_upper:
             if isinstance(copy_data, (str, bytes)):
                 data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
             elif hasattr(copy_data, "read"):
@@ -704,7 +706,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                 data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FROM_STDIN"}
             )
 
-        if is_stdout:
+        if is_copy_to_operation(operation_type) and "TO STDOUT" in sql_upper:
             output_data: list[str] = []
             async with cursor.copy(sql) as copy_ctx:
                 output_data.extend([row.decode() if isinstance(row, bytes) else str(row) async for row in copy_ctx])

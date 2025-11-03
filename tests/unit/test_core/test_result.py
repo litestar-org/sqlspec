@@ -4,8 +4,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.core.result import SQLResult, create_sql_result
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL, SQLResult, create_sql_result
 
 pytestmark = pytest.mark.xdist_group("core")
 

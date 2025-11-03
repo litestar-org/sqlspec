@@ -9,7 +9,7 @@ from typing import Any, Final, cast
 
 from sqlglot import exp, maybe_parse
 
-from sqlspec.core.parameters import ParameterStyle, ParameterValidator
+from sqlspec.core import ParameterStyle, ParameterValidator
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
     has_expression_and_sql,

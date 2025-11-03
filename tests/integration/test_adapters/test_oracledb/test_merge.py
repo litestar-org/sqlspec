@@ -7,7 +7,7 @@ from pytest_databases.docker.oracle import OracleService
 
 from sqlspec import sql
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver, OracleSyncConfig, OracleSyncDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("oracle")
 

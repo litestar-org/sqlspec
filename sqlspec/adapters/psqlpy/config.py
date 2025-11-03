@@ -11,7 +11,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.psqlpy._types import PsqlpyConnection
 from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, build_psqlpy_statement_config
 from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import StatementConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import to_json
 

@@ -1310,7 +1310,7 @@ SQLSpec implements Apache Arrow support through a dual-path architecture: native
 Override `select_to_arrow()` in adapter's driver class:
 
 ```python
-from sqlspec.core.result import create_arrow_result
+from sqlspec.core import create_arrow_result
 from sqlspec.utils.module_loader import ensure_pyarrow
 
 class NativeArrowDriver(AsyncDriverAdapterBase):
@@ -1416,7 +1416,7 @@ UUID → utf8 (converted to string)
 Use `create_arrow_result()` for consistent result wrapping:
 
 ```python
-from sqlspec.core.result import create_arrow_result
+from sqlspec.core import create_arrow_result
 
 # Create ArrowResult from Arrow Table
 result = create_arrow_result(arrow_table, rows_affected=arrow_table.num_rows)

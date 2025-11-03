@@ -13,7 +13,7 @@ from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._dml import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder._select import ReturningClauseMixin
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_sql
 

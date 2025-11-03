@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
-    from sqlspec.core.filters import FilterTypes
+    from sqlspec.core import FilterTypes
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.extensions.fastapi.providers import DependencyDefaults, FilterConfig
 

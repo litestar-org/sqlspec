@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from sqlspec.base import SQLSpec
-from sqlspec.core.cache import CacheConfig
+from sqlspec.core import CacheConfig
 
 pytestmark = pytest.mark.xdist_group("base")
 

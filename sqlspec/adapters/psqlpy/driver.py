@@ -15,15 +15,16 @@ from psqlpy.extra_types import JSONB
 
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLTypeConverter
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import (
+from sqlspec.core import (
+    SQL,
     DriverParameterProfile,
     ParameterStyle,
     ParameterStyleConfig,
+    StatementConfig,
     build_statement_config_from_profile,
+    get_cache_config,
     register_driver_profile,
 )
-from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -48,7 +49,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.psqlpy._types import PsqlpyConnection
-    from sqlspec.core.result import SQLResult
+    from sqlspec.core import SQLResult
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
 

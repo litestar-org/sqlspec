@@ -8,8 +8,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteDriver
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL, SQLResult
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -366,7 +365,7 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     except Exception:
         pass
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
     non_strict_config = StatementConfig(enable_parsing=False, enable_validation=False)
 

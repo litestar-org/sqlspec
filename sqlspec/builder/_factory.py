@@ -42,7 +42,7 @@ from sqlspec.builder._merge import Merge
 from sqlspec.builder._parsing_utils import extract_expression, to_expression
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.builder._update import Update
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:

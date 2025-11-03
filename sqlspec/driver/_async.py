@@ -3,8 +3,7 @@
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
-from sqlspec.core import SQL, Statement
-from sqlspec.core.result import create_arrow_result
+from sqlspec.core import SQL, Statement, create_arrow_result
 from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
     DataDictionaryMixin,

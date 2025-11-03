@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 import sqlglot
 
-from sqlspec.core.parameters import (
+from sqlspec.core import (
     DRIVER_PARAMETER_PROFILES,
     DriverParameterProfile,
     ParameterConverter,

@@ -10,8 +10,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.adapters.psqlpy import PsqlpyDriver
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL, SQLResult
 
 pytestmark = pytest.mark.xdist_group("postgres")
 

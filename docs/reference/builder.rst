@@ -521,7 +521,7 @@ The builder integrates with SQLSpec's filter system:
 
 .. code-block:: python
 
-   from sqlspec.core.filters import LimitOffsetFilter, SearchFilter, OrderByFilter
+   from sqlspec.core import LimitOffsetFilter, SearchFilter, OrderByFilter
 
    # Base query
    query = sql.select("*").from_("users")
@@ -543,7 +543,7 @@ Convert builder to executable SQL:
 
 .. code-block:: python
 
-   from sqlspec.core.statement import SQL
+   from sqlspec.core import SQL
 
    # Build query
    query = sql.select("*").from_("users").limit(10)

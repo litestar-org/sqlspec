@@ -42,7 +42,7 @@ SQL Statement
 
    .. code-block:: python
 
-      from sqlspec.core.statement import SQL
+      from sqlspec.core import SQL
 
       # Simple SQL
       stmt = SQL("SELECT * FROM users")
@@ -213,8 +213,8 @@ SQL Compilation
 
    .. code-block:: python
 
-      from sqlspec.core.statement import StatementConfig
-      from sqlspec.core.compiler import SQLProcessor
+      from sqlspec.core import StatementConfig
+      from sqlspec.core import SQLProcessor
 
       config = StatementConfig(dialect="postgres")
       processor = SQLProcessor(config)
@@ -307,7 +307,7 @@ Built-in Filters
 
    .. code-block:: python
 
-      from sqlspec.core.filters import LimitOffsetFilter
+      from sqlspec.core import LimitOffsetFilter
 
       filter = LimitOffsetFilter(limit=10, offset=20)
       filtered_sql = filter.append_to_statement(base_sql)
@@ -322,7 +322,7 @@ Built-in Filters
 
    .. code-block:: python
 
-      from sqlspec.core.filters import OrderByFilter
+      from sqlspec.core import OrderByFilter
 
       filter = OrderByFilter(field_name="created_at", sort_order="desc")
       filtered_sql = filter.append_to_statement(base_sql)
@@ -337,7 +337,7 @@ Built-in Filters
 
    .. code-block:: python
 
-      from sqlspec.core.filters import SearchFilter
+      from sqlspec.core import SearchFilter
 
       filter = SearchFilter(field_name="name", value="John", operator="ILIKE")
       filtered_sql = filter.append_to_statement(base_sql)
@@ -350,12 +350,12 @@ Filters can be composed and chained:
 
 .. code-block:: python
 
-   from sqlspec.core.filters import (
+   from sqlspec.core import (
        LimitOffsetFilter,
        OrderByFilter,
        SearchFilter
    )
-   from sqlspec.core.statement import SQL
+   from sqlspec.core import SQL
 
    base_sql = SQL("SELECT * FROM users")
 
@@ -393,9 +393,9 @@ Statement Analysis
 
 .. code-block:: python
 
-   from sqlspec.core.compiler import SQLCompiler
+   from sqlspec.core import SQLProcessor
 
-   compiler = SQLCompiler(dialect="postgres")
+   compiler = SQLProcessor(dialect="postgres")
 
    analysis = compiler.analyze("""
        SELECT u.name, COUNT(o.id) as order_count
@@ -421,10 +421,10 @@ Create custom filters for specific needs:
 
 .. code-block:: python
 
-   from sqlspec.core.filters import SQLFilter
-   from sqlspec.core.statement import SQL
+   from sqlspec.core import StatementFilter
+   from sqlspec.core import SQL
 
-   class TenantFilter(SQLFilter):
+   class TenantFilter(StatementFilter):
        def __init__(self, tenant_id: int):
            self.tenant_id = tenant_id
 

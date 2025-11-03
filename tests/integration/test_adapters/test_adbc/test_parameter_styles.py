@@ -13,7 +13,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLSpecError
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
@@ -579,7 +579,7 @@ def test_adbc_ast_transformer_validation_fixed(adbc_postgresql_session: AdbcDriv
     """
     from sqlglot import parse_one
 
-    from sqlspec.core.parameters import replace_null_parameters_with_literals
+    from sqlspec.core import replace_null_parameters_with_literals
 
     # Create a test case with parameter count mismatch
     original_sql = "INSERT INTO bug_test (id, col1) VALUES ($1, $2)"

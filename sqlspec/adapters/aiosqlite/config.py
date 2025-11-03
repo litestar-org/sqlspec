@@ -20,7 +20,7 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteDriverFeatures", "AiosqlitePoolParams")
 
