@@ -18,6 +18,50 @@ This guide provides specific instructions for the `psqlpy` adapter for PostgreSQ
 -   **JSON Strategy:** `helper` (shared JSON serializer applied before Rust-side codecs)
 -   **Extras:** Decimal writes coerce through `_decimal_to_float` to match Rust numeric expectations
 
+## Driver Features
+
+The `psqlpy` adapter's behavior can be customized through the `driver_features` configuration, which is defined by the `PsqlpyDriverFeatures` TypedDict.
+
+### PsqlpyDriverFeatures TypedDict
+
+```python
+class PsqlpyDriverFeatures(TypedDict):
+    """Psqlpy driver feature flags.
+
+    enable_pgvector: Enable automatic pgvector extension support for vector similarity search.
+        Requires pgvector-python package installed.
+        Defaults to True when pgvector is installed.
+        Provides automatic conversion between NumPy arrays and PostgreSQL vector types.
+    json_serializer: Custom JSON serializer applied to the statement configuration.
+    json_deserializer: Custom JSON deserializer retained alongside the serializer for parity with asyncpg.
+    """
+
+    enable_pgvector: NotRequired[bool]
+    json_serializer: NotRequired["Callable[[Any], str]"]
+    json_deserializer: NotRequired["Callable[[str], Any]"]
+```
+
+### Configuration and Defaults
+
+-   **pgvector Support (`enable_pgvector`)**: This feature is **auto-enabled** if the `pgvector` Python package is installed.
+
+### Example: Custom JSON Serializer
+
+```python
+import orjson
+from sqlspec.adapters.psqlpy import PsqlpyConfig
+
+def orjson_serializer(obj: Any) -> str:
+    return orjson.dumps(obj).decode("utf-8")
+
+config = PsqlpyConfig(
+    pool_config={"dsn": "postgresql://user:pass@host:port/db"},
+    driver_features={
+        "json_serializer": orjson_serializer,
+    },
+)
+```
+
 ## Architecture
 
 Psqlpy handles type conversion differently than other PostgreSQL drivers:
