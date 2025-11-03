@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.storage import storage_registry
 from sqlspec.utils.serializers import from_json as decode_json
+from sqlspec.utils.serializers import schema_dump
 from sqlspec.utils.serializers import to_json as encode_json
 from sqlspec.utils.sync_tools import async_
-from sqlspec.utils.type_guards import schema_dump
 
 if TYPE_CHECKING:
     from sqlspec.typing import SupportedSchemaModel
@@ -146,14 +146,17 @@ def _serialize_data(data: Any) -> str:
     """
     if isinstance(data, (list, tuple)):
         serialized_items: list[Any] = []
+
         for item in data:
             if isinstance(item, (str, int, float, bool, type(None))):
                 serialized_items.append(item)
             else:
                 serialized_items.append(schema_dump(item))
+
         return encode_json(serialized_items)
     if isinstance(data, (str, int, float, bool, type(None))):
         return encode_json(data)
+
     return encode_json(schema_dump(data))
 
 

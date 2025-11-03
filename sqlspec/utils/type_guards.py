@@ -20,7 +20,6 @@ from sqlspec.typing import (
     DataclassProtocol,
     DTOData,
     Struct,
-    attrs_asdict,
     attrs_has,
 )
 
@@ -123,7 +122,6 @@ __all__ = (
     "is_string_literal",
     "is_typed_dict",
     "is_typed_parameter",
-    "schema_dump",
     "supports_arrow_native",
     "supports_arrow_results",
     "supports_limit",
@@ -826,36 +824,6 @@ def dataclass_to_dict(
         else:
             ret[field.name] = getattr(obj, field.name)
     return cast("dict[str, Any]", ret)
-
-
-def schema_dump(data: Any, exclude_unset: bool = True) -> "dict[str, Any]":
-    """Dump a data object to a dictionary.
-
-    Args:
-        data:  :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`AttrsInstance`
-        exclude_unset: :type:`bool` Whether to exclude unset values.
-
-    Returns:
-        :type:`dict[str, Any]`
-    """
-    from sqlspec._typing import UNSET
-
-    if is_dict(data):
-        return data
-    if is_dataclass(data):
-        return dataclass_to_dict(data, exclude_empty=exclude_unset)
-    if is_pydantic_model(data):
-        return data.model_dump(exclude_unset=exclude_unset)  # type: ignore[no-any-return]
-    if is_msgspec_struct(data):
-        if exclude_unset:
-            return {f: val for f in data.__struct_fields__ if (val := getattr(data, f, None)) != UNSET}
-        return {f: getattr(data, f, None) for f in data.__struct_fields__}
-    if is_attrs_instance(data):
-        return attrs_asdict(data)
-
-    if has_dict_attribute(data):
-        return data.__dict__
-    return cast("dict[str, Any]", data)
 
 
 def can_extract_parameters(obj: Any) -> "TypeGuard[FilterParameterProtocol]":

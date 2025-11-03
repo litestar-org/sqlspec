@@ -128,7 +128,7 @@ def test_from_json_basic_types() -> None:
     assert from_json('"hello"') == "hello"
 
     assert from_json("42") == 42
-    assert from_json("3.14") == 3.14
+    assert from_json("3.14") == pytest.approx(3.14)
 
     assert from_json("true") is True
     assert from_json("false") is False
@@ -192,7 +192,7 @@ def test_from_json_numeric_edge_cases() -> None:
     assert from_json("9223372036854775807") == 9223372036854775807
 
     assert from_json("-42") == -42
-    assert from_json("-3.14") == -3.14
+    assert from_json("-3.14") == pytest.approx(-3.14)
 
     assert from_json("0") == 0
     assert from_json("0.0") == 0.0
@@ -450,12 +450,21 @@ def test_module_all_exports() -> None:
     """Test that __all__ contains the expected exports."""
     from sqlspec.utils.serializers import __all__
 
-    assert "from_json" in __all__
-    assert "to_json" in __all__
-    assert "numpy_array_enc_hook" in __all__
-    assert "numpy_array_dec_hook" in __all__
-    assert "numpy_array_predicate" in __all__
-    assert len(__all__) == 5
+    expected = {
+        "SchemaSerializer",
+        "from_json",
+        "get_collection_serializer",
+        "get_serializer_metrics",
+        "numpy_array_dec_hook",
+        "numpy_array_enc_hook",
+        "numpy_array_predicate",
+        "reset_serializer_cache",
+        "schema_dump",
+        "serialize_collection",
+        "to_json",
+    }
+
+    assert set(__all__) == expected
 
 
 def test_error_messages_are_helpful() -> None:
