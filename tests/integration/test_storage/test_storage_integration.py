@@ -561,6 +561,7 @@ def test_local_backend_error_handling(tmp_path: Path) -> None:
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
 def test_fsspec_s3_error_handling(minio_service: "MinioService", minio_default_bucket_name: str) -> None:
     """Test FSSpec S3 backend error handling."""
+    from sqlspec.exceptions import FileNotFoundInStorageError
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     backend = FSSpecBackend.from_config({
@@ -574,7 +575,7 @@ def test_fsspec_s3_error_handling(minio_service: "MinioService", minio_default_b
     })
 
     # Test reading nonexistent file
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FileNotFoundInStorageError):
         backend.read_text("nonexistent.txt")
 
 
