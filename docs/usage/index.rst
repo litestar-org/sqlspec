@@ -54,14 +54,14 @@ Quick Reference
 .. literalinclude:: /examples/usage/test_index_1.py
    :language: python
    :caption: ``basic query execution``
-   :lines: 14-16
+   :lines: 1-5,14-17
 
 **Using the Query Builder**
 
 .. literalinclude:: /examples/usage/test_index_2.py
    :language: python
    :caption: ``using the query builder``
-   :lines: 19-21
+   :lines: 1-5,19-22
 
 **Loading from SQL Files**
 
