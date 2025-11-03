@@ -12,7 +12,7 @@ from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.storage._utils import import_pyarrow_parquet
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -233,19 +233,15 @@ class LocalStore:
 
     def read_arrow(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from file."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
-
-        return pq.read_table(str(self._resolve_path(path)))  # pyright: ignore
+        pq = import_pyarrow_parquet()
+        return pq.read_table(str(self._resolve_path(path)), **kwargs)  # pyright: ignore
 
     def write_arrow(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to file."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
-
+        pq = import_pyarrow_parquet()
         resolved = self._resolve_path(path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        pq.write_table(table, str(resolved))  # pyright: ignore
+        pq.write_table(table, str(resolved), **kwargs)  # pyright: ignore
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from files matching pattern.
@@ -253,9 +249,7 @@ class LocalStore:
         Yields:
             Arrow record batches from matching files.
         """
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
-
+        pq = import_pyarrow_parquet()
         files = self.glob(pattern)
         for file_path in files:
             resolved = self._resolve_path(file_path)
@@ -264,8 +258,6 @@ class LocalStore:
 
     def sign(self, path: "str | Path", expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL (returns file:// URI for local files)."""
-        # For local files, just return a file:// URI
-        # No actual signing needed for local files
         return self._resolve_path(path).as_uri()
 
     # Async methods using sync_tools.async_

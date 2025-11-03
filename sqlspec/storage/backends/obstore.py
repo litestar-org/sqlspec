@@ -7,6 +7,7 @@ and local file storage.
 import fnmatch
 import io
 import logging
+import re
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, cast
@@ -15,9 +16,9 @@ from urllib.parse import urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageOperationFailedError
-from sqlspec.storage._utils import resolve_storage_path
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, resolve_storage_path
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
-from sqlspec.utils.module_loader import ensure_obstore, ensure_pyarrow
+from sqlspec.utils.module_loader import ensure_obstore
 from sqlspec.utils.sync_tools import async_
 
 __all__ = ("ObStoreBackend",)
@@ -46,7 +47,7 @@ class _AsyncArrowIterator:
         return self
 
     async def __anext__(self) -> ArrowRecordBatch:
-        import pyarrow.parquet as pq
+        pq = import_pyarrow_parquet()
 
         if self._files_iterator is None:
             files = self.backend.glob(self.pattern, **self.kwargs)
@@ -338,19 +339,15 @@ class ObStoreBackend:
 
     def read_arrow(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
         """Read Arrow table using obstore."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
-
+        pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
         data = self.read_bytes(resolved_path)
         return pq.read_table(io.BytesIO(data), **kwargs)
 
     def write_arrow(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table using obstore."""
-        ensure_pyarrow()
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-
+        pa = import_pyarrow()
+        pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         schema = table.schema
@@ -358,8 +355,6 @@ class ObStoreBackend:
             new_fields = []
             for field in schema:
                 if str(field.type).startswith("decimal64"):
-                    import re
-
                     match = re.match(r"decimal64\((\d+),\s*(\d+)\)", str(field.type))
                     if match:
                         precision, scale = int(match.group(1)), int(match.group(2))
@@ -381,9 +376,7 @@ class ObStoreBackend:
         Yields:
             Iterator of Arrow record batches from matching objects.
         """
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
-
+        pq = import_pyarrow_parquet()
         for obj_path in self.glob(pattern, **kwargs):
             resolved_path = resolve_storage_path(obj_path, self.base_path, self.protocol, strip_file_scheme=True)
             result = self.store.get(resolved_path)
@@ -518,18 +511,14 @@ class ObStoreBackend:
 
     async def read_arrow_async(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
         """Read Arrow table from storage asynchronously."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
-
+        pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
         data = await self.read_bytes_async(resolved_path)
         return pq.read_table(io.BytesIO(data), **kwargs)
 
     async def write_arrow_async(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
-
+        pq = import_pyarrow_parquet()
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
         buffer = io.BytesIO()
         pq.write_table(table, buffer, **kwargs)

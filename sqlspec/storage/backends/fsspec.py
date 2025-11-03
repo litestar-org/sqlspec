@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.storage._utils import resolve_storage_path
-from sqlspec.utils.module_loader import ensure_fsspec, ensure_pyarrow
+from sqlspec.storage._utils import import_pyarrow_parquet, resolve_storage_path
+from sqlspec.utils.module_loader import ensure_fsspec
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -205,8 +205,7 @@ class FSSpecBackend:
 
     def read_arrow(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
         """Read an Arrow table from storage."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
+        pq = import_pyarrow_parquet()
 
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
@@ -214,8 +213,7 @@ class FSSpecBackend:
 
     def write_arrow(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
         """Write an Arrow table to storage."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
+        pq = import_pyarrow_parquet()
 
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
         with self.fs.open(resolved_path, mode="wb") as f:
@@ -273,15 +271,14 @@ class FSSpecBackend:
         return f"{self._fs_uri}{resolved_path}"
 
     def _stream_file_batches(self, obj_path: str | Path) -> "Iterator[ArrowRecordBatch]":
-        import pyarrow.parquet as pq
+        pq = import_pyarrow_parquet()
 
         with self.fs.open(obj_path, mode="rb") as f:
             parquet_file = pq.ParquetFile(f)  # pyright: ignore[reportArgumentType]
             yield from parquet_file.iter_batches()
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
-        ensure_pyarrow()
-
+        import_pyarrow_parquet()
         for obj_path in self.glob(pattern, **kwargs):
             yield from self._stream_file_batches(obj_path)
 
@@ -303,8 +300,6 @@ class FSSpecBackend:
         Returns:
             AsyncIterator of Arrow record batches
         """
-        ensure_pyarrow()
-
         return _ArrowStreamer(self, pattern, **kwargs)
 
     async def read_text_async(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
