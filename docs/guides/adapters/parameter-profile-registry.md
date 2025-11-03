@@ -1,6 +1,6 @@
 # Driver Parameter Profile Registry
 
-The table below summarizes the canonical `DriverParameterProfile` entries defined in `sqlspec/core/parameters/profile_registry.py`. Use it as a quick reference when updating adapters or adding new ones.
+The table below summarizes the canonical `DriverParameterProfile` entries defined in `sqlspec/core/parameters/_registry.py`. Use it as a quick reference when updating adapters or adding new ones.
 
 | Adapter | Registry Key | JSON Strategy | Extras | Default Dialect | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -17,10 +17,10 @@ The table below summarizes the canonical `DriverParameterProfile` entries define
 
 ## Adding or Updating Profiles
 
-1. Define the profile in `profile_registry.py` using lowercase key naming.
+1. Define the profile in `_registry.py` using lowercase key naming.
 2. Pick the JSON strategy that matches driver capabilities (`helper`, `driver`, or `none`).
 3. Declare extras as an immutable mapping; document each addition in this file and the relevant adapter guide.
-4. Add or update regression coverage (see `specs/active/driver-quality-review/research/testing_deliverables.md`).
+4. Add or update regression coverage (see `specs/archive/driver-quality-review/research/testing_deliverables.md`).
 5. If behaviour changes, update changelog entries and adapter guides accordingly.
 
 Refer to [AGENTS.md](../../AGENTS.md) for the full checklist when touching the registry.
