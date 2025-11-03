@@ -5,6 +5,7 @@ type coercion, error handling, and transaction management.
 """
 
 import logging
+import typing
 from typing import TYPE_CHECKING, Any, Final
 
 import asyncmy.errors  # pyright: ignore
@@ -31,7 +32,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -41,7 +42,13 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
-__all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "asyncmy_statement_config")
+__all__ = (
+    "AsyncmyCursor",
+    "AsyncmyDriver",
+    "AsyncmyExceptionHandler",
+    "asyncmy_statement_config",
+    "build_asyncmy_statement_config",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,27 +65,49 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-_ASYNCMY_PROFILE = DriverParameterProfile(
-    name="AsyncMy",
-    default_style=ParameterStyle.QMARK,
-    supported_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
-    default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
-    supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT},
-    has_native_list_expansion=False,
-    preserve_parameter_format=True,
-    needs_static_script_compilation=True,
-    allow_mixed_parameter_styles=False,
-    preserve_original_params_for_many=False,
-    json_serializer_strategy="helper",
-    custom_type_coercions={bool: _bool_to_int},
-    default_dialect="mysql",
-)
+def _build_asyncmy_profile() -> DriverParameterProfile:
+    """Create the AsyncMy driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="AsyncMy",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
+        default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=True,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={bool: _bool_to_int},
+        default_dialect="mysql",
+    )
+
+
+_ASYNCMY_PROFILE = _build_asyncmy_profile()
 
 register_driver_profile("asyncmy", _ASYNCMY_PROFILE)
 
-asyncmy_statement_config = build_statement_config_from_profile(
-    _ASYNCMY_PROFILE, statement_overrides={"dialect": "mysql"}, json_serializer=to_json
-)
+
+def build_asyncmy_statement_config(
+    *,
+    json_serializer: "typing.Callable[[Any], str] | None" = None,
+    json_deserializer: "typing.Callable[[str], Any] | None" = None,
+) -> "StatementConfig":
+    """Construct the AsyncMy statement configuration with optional JSON codecs."""
+
+    serializer = json_serializer or to_json
+    deserializer = json_deserializer or from_json
+    return build_statement_config_from_profile(
+        _ASYNCMY_PROFILE,
+        statement_overrides={"dialect": "mysql"},
+        json_serializer=serializer,
+        json_deserializer=deserializer,
+    )
+
+
+asyncmy_statement_config = build_asyncmy_statement_config()
 
 
 class AsyncmyCursor:

@@ -1,5 +1,6 @@
 """DuckDB driver implementation."""
 
+import typing
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
@@ -37,7 +38,13 @@ if TYPE_CHECKING:
     from sqlspec.driver._sync import SyncDataDictionaryBase
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
-__all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "duckdb_statement_config")
+__all__ = (
+    "DuckDBCursor",
+    "DuckDBDriver",
+    "DuckDBExceptionHandler",
+    "build_duckdb_statement_config",
+    "duckdb_statement_config",
+)
 
 logger = get_logger("adapters.duckdb")
 
@@ -60,32 +67,50 @@ def _decimal_to_str(value: Decimal) -> str:
     return str(value)
 
 
-_DUCKDB_PROFILE = DriverParameterProfile(
-    name="DuckDB",
-    default_style=ParameterStyle.QMARK,
-    supported_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
-    default_execution_style=ParameterStyle.QMARK,
-    supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
-    has_native_list_expansion=True,
-    preserve_parameter_format=True,
-    needs_static_script_compilation=False,
-    allow_mixed_parameter_styles=False,
-    preserve_original_params_for_many=False,
-    json_serializer_strategy="helper",
-    custom_type_coercions={
-        bool: _bool_to_int,
-        datetime: _datetime_to_iso,
-        date: _date_to_iso,
-        Decimal: _decimal_to_str,
-    },
-    default_dialect="duckdb",
-)
+def _build_duckdb_profile() -> DriverParameterProfile:
+    """Create the DuckDB driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="DuckDB",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            bool: _bool_to_int,
+            datetime: _datetime_to_iso,
+            date: _date_to_iso,
+            Decimal: _decimal_to_str,
+        },
+        default_dialect="duckdb",
+    )
+
+
+_DUCKDB_PROFILE = _build_duckdb_profile()
 
 register_driver_profile("duckdb", _DUCKDB_PROFILE)
 
-duckdb_statement_config = build_statement_config_from_profile(
-    _DUCKDB_PROFILE, statement_overrides={"dialect": "duckdb"}, json_serializer=to_json
-)
+
+def build_duckdb_statement_config(
+    *, json_serializer: "typing.Callable[[Any], str] | None" = None
+) -> StatementConfig:
+    """Construct the DuckDB statement configuration with optional JSON serializer."""
+
+    serializer = json_serializer or to_json
+    return build_statement_config_from_profile(
+        _DUCKDB_PROFILE,
+        statement_overrides={"dialect": "duckdb"},
+        json_serializer=serializer,
+    )
+
+
+duckdb_statement_config = build_duckdb_statement_config()
 
 
 MODIFYING_OPERATIONS: Final[tuple[str, ...]] = ("INSERT", "UPDATE", "DELETE")

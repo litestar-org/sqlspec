@@ -45,7 +45,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "bigquery_statement_config")
+__all__ = (
+    "BigQueryCursor",
+    "BigQueryDriver",
+    "BigQueryExceptionHandler",
+    "bigquery_statement_config",
+    "build_bigquery_statement_config",
+)
 
 HTTP_CONFLICT = 409
 HTTP_NOT_FOUND = 404
@@ -210,39 +216,57 @@ def _create_bq_parameters(
     return bq_parameters
 
 
-_BIGQUERY_PROFILE = DriverParameterProfile(
-    name="BigQuery",
-    default_style=ParameterStyle.NAMED_AT,
-    supported_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
-    default_execution_style=ParameterStyle.NAMED_AT,
-    supported_execution_styles={ParameterStyle.NAMED_AT},
-    has_native_list_expansion=True,
-    preserve_parameter_format=True,
-    needs_static_script_compilation=False,
-    allow_mixed_parameter_styles=False,
-    preserve_original_params_for_many=True,
-    json_serializer_strategy="helper",
-    custom_type_coercions={
-        int: _identity,
-        float: _identity,
-        bytes: _identity,
-        datetime.datetime: _identity,
-        datetime.date: _identity,
-        datetime.time: _identity,
-        Decimal: _identity,
-        dict: _identity,
-        list: _identity,
-        type(None): lambda _: None,
-    },
-    extras={"json_tuple_strategy": "tuple", "type_coercion_overrides": {list: _identity, tuple: _tuple_to_list}},
-    default_dialect="bigquery",
-)
+def _build_bigquery_profile() -> DriverParameterProfile:
+    """Create the BigQuery driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="BigQuery",
+        default_style=ParameterStyle.NAMED_AT,
+        supported_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.NAMED_AT,
+        supported_execution_styles={ParameterStyle.NAMED_AT},
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=True,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            int: _identity,
+            float: _identity,
+            bytes: _identity,
+            datetime.datetime: _identity,
+            datetime.date: _identity,
+            datetime.time: _identity,
+            Decimal: _identity,
+            dict: _identity,
+            list: _identity,
+            type(None): lambda _: None,
+        },
+        extras={"json_tuple_strategy": "tuple", "type_coercion_overrides": {list: _identity, tuple: _tuple_to_list}},
+        default_dialect="bigquery",
+    )
+
+
+_BIGQUERY_PROFILE = _build_bigquery_profile()
 
 register_driver_profile("bigquery", _BIGQUERY_PROFILE)
 
-bigquery_statement_config = build_statement_config_from_profile(
-    _BIGQUERY_PROFILE, statement_overrides={"dialect": "bigquery"}, json_serializer=to_json
-)
+
+def build_bigquery_statement_config(
+    *, json_serializer: "Callable[[Any], str] | None" = None
+) -> StatementConfig:
+    """Construct the BigQuery statement configuration with optional JSON serializer."""
+
+    serializer = json_serializer or to_json
+    return build_statement_config_from_profile(
+        _BIGQUERY_PROFILE,
+        statement_overrides={"dialect": "bigquery"},
+        json_serializer=serializer,
+    )
+
+
+bigquery_statement_config = build_bigquery_statement_config()
 
 
 class BigQueryCursor:

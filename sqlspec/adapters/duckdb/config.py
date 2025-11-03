@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb._types import DuckDBConnection
-from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, duckdb_statement_config
+from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, build_duckdb_statement_config
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig, SyncDatabaseConfig
 from sqlspec.utils.serializers import to_json
@@ -211,17 +211,10 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             pool_config["database"] = ":memory:shared_db"
 
         processed_features = dict(driver_features) if driver_features else {}
-        if "enable_uuid_conversion" not in processed_features:
-            processed_features["enable_uuid_conversion"] = True
-        if "json_serializer" not in processed_features:
-            processed_features["json_serializer"] = to_json
+        processed_features.setdefault("enable_uuid_conversion", True)
+        serializer = processed_features.setdefault("json_serializer", to_json)
 
-        base_statement_config = statement_config or duckdb_statement_config
-
-        json_serializer = processed_features.get("json_serializer")
-        if json_serializer is not None:
-            parameter_config = base_statement_config.parameter_config.with_json_serializers(json_serializer)
-            base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
+        base_statement_config = statement_config or build_duckdb_statement_config(json_serializer=serializer)
 
         super().__init__(
             bind_key=bind_key,
