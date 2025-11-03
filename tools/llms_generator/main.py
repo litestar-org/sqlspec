@@ -1,4 +1,5 @@
 """A tool to generate context files for LLMs."""
+
 from __future__ import annotations
 
 import argparse
