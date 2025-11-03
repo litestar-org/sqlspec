@@ -1,8 +1,4 @@
-"""AsyncPG PostgreSQL driver implementation for async PostgreSQL operations.
-
-Provides async PostgreSQL connectivity with parameter processing, resource management,
-PostgreSQL COPY operation support, and transaction management.
-"""
+"""AsyncPG PostgreSQL driver implementation for async PostgreSQL operations."""
 
 import datetime
 import re
@@ -10,9 +6,13 @@ from typing import TYPE_CHECKING, Any, Final
 
 import asyncpg
 
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import (
+    DriverParameterProfile,
+    ParameterStyle,
+    build_statement_config_from_profile,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -28,84 +28,26 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.asyncpg._types import AsyncpgConnection
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import SQL
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._async import AsyncDataDictionaryBase
+    from sqlspec.core import SQL, ParameterStyleConfig, SQLResult, StatementConfig
+    from sqlspec.driver import AsyncDataDictionaryBase, ExecutionResult
 
-__all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "asyncpg_statement_config")
+__all__ = (
+    "AsyncpgCursor",
+    "AsyncpgDriver",
+    "AsyncpgExceptionHandler",
+    "_configure_asyncpg_parameter_serializers",
+    "asyncpg_statement_config",
+    "build_asyncpg_statement_config",
+)
 
 logger = get_logger("adapters.asyncpg")
-
-
-def _convert_datetime_param(value: Any) -> Any:
-    """Convert datetime parameter, handling ISO strings.
-
-    Args:
-        value: datetime object or ISO format string
-
-    Returns:
-        datetime object for asyncpg
-    """
-    if isinstance(value, str):
-        return datetime.datetime.fromisoformat(value)
-    return value
-
-
-def _convert_date_param(value: Any) -> Any:
-    """Convert date parameter, handling ISO strings.
-
-    Args:
-        value: date object or ISO format string
-
-    Returns:
-        date object for asyncpg
-    """
-    if isinstance(value, str):
-        return datetime.date.fromisoformat(value)
-    return value
-
-
-def _convert_time_param(value: Any) -> Any:
-    """Convert time parameter, handling ISO strings.
-
-    Args:
-        value: time object or ISO format string
-
-    Returns:
-        time object for asyncpg
-    """
-    if isinstance(value, str):
-        return datetime.time.fromisoformat(value)
-    return value
-
-
-asyncpg_statement_config = StatementConfig(
-    dialect="postgres",
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.NUMERIC,
-        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT},
-        default_execution_parameter_style=ParameterStyle.NUMERIC,
-        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={
-            datetime.datetime: _convert_datetime_param,
-            datetime.date: _convert_date_param,
-            datetime.time: _convert_time_param,
-        },
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-    ),
-    enable_parsing=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-)
 
 
 ASYNC_PG_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
@@ -456,3 +398,99 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
+
+
+def _convert_datetime_param(value: Any) -> Any:
+    """Convert datetime parameter, handling ISO strings."""
+
+    if isinstance(value, str):
+        return datetime.datetime.fromisoformat(value)
+    return value
+
+
+def _convert_date_param(value: Any) -> Any:
+    """Convert date parameter, handling ISO strings."""
+
+    if isinstance(value, str):
+        return datetime.date.fromisoformat(value)
+    return value
+
+
+def _convert_time_param(value: Any) -> Any:
+    """Convert time parameter, handling ISO strings."""
+
+    if isinstance(value, str):
+        return datetime.time.fromisoformat(value)
+    return value
+
+
+def _build_asyncpg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]:
+    """Return custom type coercions for AsyncPG."""
+
+    return {
+        datetime.datetime: _convert_datetime_param,
+        datetime.date: _convert_date_param,
+        datetime.time: _convert_time_param,
+    }
+
+
+def _build_asyncpg_profile() -> DriverParameterProfile:
+    """Create the AsyncPG driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="AsyncPG",
+        default_style=ParameterStyle.NUMERIC,
+        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT},
+        default_execution_style=ParameterStyle.NUMERIC,
+        supported_execution_styles={ParameterStyle.NUMERIC},
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="driver",
+        custom_type_coercions=_build_asyncpg_custom_type_coercions(),
+        default_dialect="postgres",
+    )
+
+
+_ASYNC_PG_PROFILE = _build_asyncpg_profile()
+
+register_driver_profile("asyncpg", _ASYNC_PG_PROFILE)
+
+
+def _configure_asyncpg_parameter_serializers(
+    parameter_config: "ParameterStyleConfig",
+    serializer: "Callable[[Any], str]",
+    *,
+    deserializer: "Callable[[str], Any] | None" = None,
+) -> "ParameterStyleConfig":
+    """Return a parameter configuration updated with AsyncPG JSON codecs."""
+
+    effective_deserializer = deserializer or parameter_config.json_deserializer or from_json
+    return parameter_config.replace(json_serializer=serializer, json_deserializer=effective_deserializer)
+
+
+def build_asyncpg_statement_config(
+    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
+) -> "StatementConfig":
+    """Construct the AsyncPG statement configuration with optional JSON codecs."""
+
+    effective_serializer = json_serializer or to_json
+    effective_deserializer = json_deserializer or from_json
+
+    base_config = build_statement_config_from_profile(
+        _ASYNC_PG_PROFILE,
+        statement_overrides={"dialect": "postgres"},
+        json_serializer=effective_serializer,
+        json_deserializer=effective_deserializer,
+    )
+
+    parameter_config = _configure_asyncpg_parameter_serializers(
+        base_config.parameter_config, effective_serializer, deserializer=effective_deserializer
+    )
+
+    return base_config.replace(parameter_config=parameter_config)
+
+
+asyncpg_statement_config = build_asyncpg_statement_config()

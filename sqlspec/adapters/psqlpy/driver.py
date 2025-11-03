@@ -4,8 +4,10 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
+import datetime
 import decimal
 import re
+import uuid
 from typing import TYPE_CHECKING, Any, Final
 
 import psqlpy.exceptions
@@ -14,7 +16,13 @@ from psqlpy.extra_types import JSONB
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyAsyncDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLTypeConverter
 from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters import (
+    DriverParameterProfile,
+    ParameterStyle,
+    ParameterStyleConfig,
+    build_statement_config_from_profile,
+    register_driver_profile,
+)
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
@@ -32,8 +40,10 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.psqlpy._types import PsqlpyConnection
@@ -41,99 +51,28 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
 
-__all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "psqlpy_statement_config")
+__all__ = (
+    "PsqlpyCursor",
+    "PsqlpyDriver",
+    "PsqlpyExceptionHandler",
+    "build_psqlpy_statement_config",
+    "psqlpy_statement_config",
+)
 
 logger = get_logger("adapters.psqlpy")
 
 _type_converter = PostgreSQLTypeConverter()
 
-
-def _convert_decimals_in_structure(obj: Any) -> Any:
-    """Recursively convert Decimal values to float in nested structures.
-
-    Psqlpy's Rust layer expects native Python dict/list for JSONB parameters
-    (when using CAST(... AS JSONB) in SQL), but cannot handle Decimal objects.
-    This function walks through dict/list structures and converts any Decimal
-    values to float while preserving the native Python structure.
-
-    Args:
-        obj: Object to process (dict, list, or scalar value).
-
-    Returns:
-        Object with all Decimal values converted to float, preserving structure.
-    """
-    if isinstance(obj, decimal.Decimal):
-        return float(obj)
-    if isinstance(obj, dict):
-        return {k: _convert_decimals_in_structure(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_convert_decimals_in_structure(item) for item in obj]
-    return obj
-
-
-def _prepare_dict_parameter(value: "dict[str, Any]") -> dict[str, Any]:
-    """Normalize dict parameters while preserving native structures."""
-    normalized = _convert_decimals_in_structure(value)
-    return normalized if isinstance(normalized, dict) else value
-
-
-def _prepare_list_parameter(value: "list[Any]") -> list[Any]:
-    """Normalize list parameters while preserving native list semantics."""
-    return [_convert_decimals_in_structure(item) for item in value]
-
-
-def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> tuple[Any, ...]:
-    """Normalize tuple parameters by deferring to list handling."""
-    return tuple(_convert_decimals_in_structure(item) for item in value)
-
-
-def _normalize_scalar_parameter(value: Any) -> Any:
-    """Return scalar value without additional coercion."""
-    return value
-
-
-def _coerce_numeric_for_write(value: Any) -> Any:
-    """Convert write parameters to driver-compatible numeric types."""
-    if isinstance(value, float):
-        return decimal.Decimal(str(value))
-    if isinstance(value, decimal.Decimal):
-        return value
-    if isinstance(value, list):
-        return [_coerce_numeric_for_write(item) for item in value]
-    if isinstance(value, tuple):
-        coerced = [_coerce_numeric_for_write(item) for item in value]
-        return tuple(coerced)
-    if isinstance(value, dict):
-        return {key: _coerce_numeric_for_write(item) for key, item in value.items()}
-    return value
-
-
-psqlpy_statement_config = StatementConfig(
-    dialect="postgres",
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.NUMERIC,
-        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.NUMERIC,
-        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={
-            dict: _prepare_dict_parameter,
-            list: _prepare_list_parameter,
-            tuple: _prepare_tuple_parameter,
-            decimal.Decimal: float,
-            str: _type_converter.convert_if_detected,
-        },
-        has_native_list_expansion=False,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_parameter_format=True,
-    ),
-    enable_parsing=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-)
-
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+
+_JSON_CASTS: Final[frozenset[str]] = frozenset({"JSON", "JSONB"})
+_TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
+    "TIMESTAMP",
+    "TIMESTAMPTZ",
+    "TIMESTAMP WITH TIME ZONE",
+    "TIMESTAMP WITHOUT TIME ZONE",
+})
+_UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 
 
 class PsqlpyCursor:
@@ -355,17 +294,19 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """
         if isinstance(parameters, (list, tuple)):
             result: list[Any] = []
+            serializer = statement_config.parameter_config.json_serializer or to_json
+            type_map = statement_config.parameter_config.type_coercion_map
             for idx, param in enumerate(parameters, start=1):
-                cast_type = parameter_casts.get(idx, "").upper()
-                if cast_type in {"JSON", "JSONB"} and isinstance(param, list):
-                    result.append(JSONB(param))
-                else:
-                    if statement_config.parameter_config.type_coercion_map:
-                        for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
-                            if isinstance(param, type_check):
-                                param = converter(param)
-                                break
-                    result.append(param)
+                cast_type = parameter_casts.get(idx, "")
+                prepared_value = param
+                if type_map:
+                    for type_check, converter in type_map.items():
+                        if isinstance(prepared_value, type_check):
+                            prepared_value = converter(prepared_value)
+                            break
+                if cast_type:
+                    prepared_value = _coerce_parameter_for_cast(prepared_value, cast_type, serializer)
+                result.append(prepared_value)
             return tuple(result) if isinstance(parameters, tuple) else result
         return parameters
 
@@ -577,3 +518,205 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = PsqlpyAsyncDataDictionary()
         return self._data_dictionary
+
+
+def _convert_decimals_in_structure(obj: Any) -> Any:
+    """Recursively convert Decimal values to float in nested structures."""
+
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: _convert_decimals_in_structure(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_convert_decimals_in_structure(item) for item in obj]
+    return obj
+
+
+def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
+    """Serialize JSON parameters according to the detected cast type.
+
+    Args:
+        value: Parameter value supplied by the caller.
+        cast_type: Uppercase cast identifier detected in SQL.
+        serializer: JSON serialization callable from statement config.
+
+    Returns:
+        Serialized parameter suitable for driver execution.
+
+    Raises:
+        SQLSpecError: If serialization fails for JSON payloads.
+    """
+
+    if value is None:
+        return None
+    if cast_type == "JSONB":
+        if isinstance(value, JSONB):
+            return value
+        if isinstance(value, dict):
+            return JSONB(value)
+        if isinstance(value, (list, tuple)):
+            return JSONB(list(value))
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, (dict, list, str, JSONB)):
+        return value
+    try:
+        serialized_value = serializer(value)
+    except Exception as error:
+        msg = "Failed to serialize JSON parameter for psqlpy."
+        raise SQLSpecError(msg) from error
+    return serialized_value
+
+
+def _coerce_uuid_parameter(value: Any) -> Any:
+    """Convert UUID-compatible parameters to ``uuid.UUID`` instances.
+
+    Args:
+        value: Parameter value supplied by the caller.
+
+    Returns:
+        ``uuid.UUID`` instance when input is coercible, otherwise original value.
+
+    Raises:
+        SQLSpecError: If the value cannot be converted to ``uuid.UUID``.
+    """
+
+    if isinstance(value, uuid.UUID):
+        return value
+    if isinstance(value, str):
+        try:
+            return uuid.UUID(value)
+        except ValueError as error:
+            msg = "Invalid UUID parameter for psqlpy."
+            raise SQLSpecError(msg) from error
+    return value
+
+
+def _coerce_timestamp_parameter(value: Any) -> Any:
+    """Convert ISO-formatted timestamp strings to ``datetime.datetime``.
+
+    Args:
+        value: Parameter value supplied by the caller.
+
+    Returns:
+        ``datetime.datetime`` instance when conversion succeeds, otherwise original value.
+
+    Raises:
+        SQLSpecError: If the value cannot be parsed as an ISO timestamp.
+    """
+
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, str):
+        normalized_value = value[:-1] + "+00:00" if value.endswith("Z") else value
+        try:
+            return datetime.datetime.fromisoformat(normalized_value)
+        except ValueError as error:
+            msg = "Invalid ISO timestamp parameter for psqlpy."
+            raise SQLSpecError(msg) from error
+    return value
+
+
+def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
+    """Apply cast-aware coercion for psqlpy parameters.
+
+    Args:
+        value: Parameter value supplied by the caller.
+        cast_type: Uppercase cast identifier detected in SQL.
+        serializer: JSON serialization callable from statement config.
+
+    Returns:
+        Coerced value appropriate for the specified cast, or the original value.
+    """
+
+    upper_cast = cast_type.upper()
+    if upper_cast in _JSON_CASTS:
+        return _coerce_json_parameter(value, upper_cast, serializer)
+    if upper_cast in _UUID_CASTS:
+        return _coerce_uuid_parameter(value)
+    if upper_cast in _TIMESTAMP_CASTS:
+        return _coerce_timestamp_parameter(value)
+    return value
+
+
+def _prepare_dict_parameter(value: "dict[str, Any]") -> dict[str, Any]:
+    normalized = _convert_decimals_in_structure(value)
+    return normalized if isinstance(normalized, dict) else value
+
+
+def _prepare_list_parameter(value: "list[Any]") -> list[Any]:
+    return [_convert_decimals_in_structure(item) for item in value]
+
+
+def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> tuple[Any, ...]:
+    return tuple(_convert_decimals_in_structure(item) for item in value)
+
+
+def _normalize_scalar_parameter(value: Any) -> Any:
+    return value
+
+
+def _coerce_numeric_for_write(value: Any) -> Any:
+    if isinstance(value, float):
+        return decimal.Decimal(str(value))
+    if isinstance(value, decimal.Decimal):
+        return value
+    if isinstance(value, list):
+        return [_coerce_numeric_for_write(item) for item in value]
+    if isinstance(value, tuple):
+        coerced = [_coerce_numeric_for_write(item) for item in value]
+        return tuple(coerced)
+    if isinstance(value, dict):
+        return {key: _coerce_numeric_for_write(item) for key, item in value.items()}
+    return value
+
+
+def _build_psqlpy_profile() -> DriverParameterProfile:
+    """Create the psqlpy driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="Psqlpy",
+        default_style=ParameterStyle.NUMERIC,
+        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.NUMERIC,
+        supported_execution_styles={ParameterStyle.NUMERIC},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={decimal.Decimal: float},
+        default_dialect="postgres",
+    )
+
+
+_PSQLPY_PROFILE = _build_psqlpy_profile()
+
+register_driver_profile("psqlpy", _PSQLPY_PROFILE)
+
+
+def _create_psqlpy_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
+    base_config = build_statement_config_from_profile(_PSQLPY_PROFILE, json_serializer=serializer).parameter_config
+
+    updated_type_map = dict(base_config.type_coercion_map)
+    updated_type_map[dict] = _prepare_dict_parameter
+    updated_type_map[list] = _prepare_list_parameter
+    updated_type_map[tuple] = _prepare_tuple_parameter
+
+    return base_config.replace(type_coercion_map=updated_type_map)
+
+
+def build_psqlpy_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> StatementConfig:
+    parameter_config = _create_psqlpy_parameter_config(json_serializer)
+    return StatementConfig(
+        dialect="postgres",
+        parameter_config=parameter_config,
+        enable_parsing=True,
+        enable_validation=True,
+        enable_caching=True,
+        enable_parameter_type_wrapping=True,
+    )
+
+
+psqlpy_statement_config = build_psqlpy_statement_config()

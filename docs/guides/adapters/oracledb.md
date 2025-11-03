@@ -11,6 +11,12 @@ This guide provides specific instructions and best practices for working with th
 - **Driver:** `oracledb`
 - **Parameter Style:** `named` (e.g., `:name`)
 
+## Parameter Profile
+
+- **Registry Key:** `"oracledb"`
+- **JSON Strategy:** `helper` (shared JSON serializer applied through the profile)
+- **Extras:** None (uses defaults with native list expansion disabled)
+
 ## Thick vs. Thin Client
 
 The `oracledb` driver supports two modes:

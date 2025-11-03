@@ -12,7 +12,12 @@ from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg._types import AsyncpgConnection
-from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver, asyncpg_statement_config
+from sqlspec.adapters.asyncpg.driver import (
+    AsyncpgCursor,
+    AsyncpgDriver,
+    asyncpg_statement_config,
+    build_asyncpg_statement_config,
+)
 from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import from_json, to_json
@@ -122,20 +127,20 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         features_dict: dict[str, Any] = dict(driver_features) if driver_features else {}
 
-        if "json_serializer" not in features_dict:
-            features_dict["json_serializer"] = to_json
-        if "json_deserializer" not in features_dict:
-            features_dict["json_deserializer"] = from_json
-        if "enable_json_codecs" not in features_dict:
-            features_dict["enable_json_codecs"] = True
-        if "enable_pgvector" not in features_dict:
-            features_dict["enable_pgvector"] = PGVECTOR_INSTALLED
+        serializer = features_dict.setdefault("json_serializer", to_json)
+        deserializer = features_dict.setdefault("json_deserializer", from_json)
+        features_dict.setdefault("enable_json_codecs", True)
+        features_dict.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+
+        base_statement_config = statement_config or build_asyncpg_statement_config(
+            json_serializer=serializer, json_deserializer=deserializer
+        )
 
         super().__init__(
             pool_config=dict(pool_config) if pool_config else {},
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or asyncpg_statement_config,
+            statement_config=base_statement_config,
             driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,

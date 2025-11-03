@@ -8,14 +8,18 @@ Tests the 2-Phase Parameter Conversion System:
 - Performance and edge cases
 """
 
+import json
 import math
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 import pytest
+import sqlglot
 
 from sqlspec.core.parameters import (
+    DRIVER_PARAMETER_PROFILES,
+    DriverParameterProfile,
     ParameterConverter,
     ParameterInfo,
     ParameterProcessor,
@@ -23,9 +27,16 @@ from sqlspec.core.parameters import (
     ParameterStyleConfig,
     ParameterValidator,
     TypedParameter,
+    build_statement_config_from_profile,
+    get_driver_profile,
     is_iterable_parameters,
+    register_driver_profile,
+    replace_null_parameters_with_literals,
+    replace_placeholders_with_literals,
     wrap_with_type,
 )
+from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.utils.serializers import from_json, to_json
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -198,7 +209,224 @@ def test_mixed_named_and_numeric_parameters() -> None:
 
     assert converted_sql == "SELECT $1::text as name, $2::int as age"
     assert converted_params == ("Mixed", 25)
-    assert len(converted_params) == 2
+
+
+def test_build_statement_config_helper_strategy_applies_serializer() -> None:
+    """Helper strategy profiles should inject JSON serializers and tuple adapters."""
+
+    calls: list[Any] = []
+
+    def custom_serializer(value: Any) -> str:
+        calls.append(value)
+        return f"encoded:{value}"
+
+    profile = get_driver_profile("sqlite")
+    config = build_statement_config_from_profile(profile, json_serializer=custom_serializer)
+
+    parameter_config = config.parameter_config
+    assert parameter_config.json_serializer is custom_serializer
+
+    dict_encoder = parameter_config.type_coercion_map[dict]
+    encoded_dict = dict_encoder({"a": 1})
+    assert encoded_dict == "encoded:{'a': 1}"
+
+    tuple_encoder = parameter_config.type_coercion_map[tuple]
+    encoded_tuple = tuple_encoder((1, 2))
+    assert encoded_tuple == "encoded:[1, 2]"
+    assert calls == [{"a": 1}, [1, 2]]
+
+
+def test_build_statement_config_helper_strategy_defaults_to_json() -> None:
+    """Helper strategy should fall back to module JSON helpers when none provided."""
+
+    profile = get_driver_profile("sqlite")
+    config = build_statement_config_from_profile(profile)
+
+    parameter_config = config.parameter_config
+    assert parameter_config.json_serializer is to_json
+
+    dict_encoder = parameter_config.type_coercion_map[dict]
+    encoded_dict = dict_encoder({"a": 1})
+    assert isinstance(encoded_dict, str)
+    assert json.loads(encoded_dict) == {"a": 1}
+
+    tuple_encoder = parameter_config.type_coercion_map[tuple]
+    encoded_tuple = tuple_encoder((1, 2))
+    assert isinstance(encoded_tuple, str)
+    assert json.loads(encoded_tuple) == [1, 2]
+
+
+def test_build_statement_config_driver_strategy_preserves_type_map() -> None:
+    """Driver strategy should leave type coercion map unmodified except JSON slots."""
+
+    def dummy_serializer(value: Any) -> str:
+        return f"json:{value}"
+
+    profile = get_driver_profile("asyncpg")
+    config = build_statement_config_from_profile(profile, json_serializer=dummy_serializer)
+
+    parameter_config = config.parameter_config
+    assert parameter_config.json_serializer is dummy_serializer
+    assert dict not in parameter_config.type_coercion_map
+    assert tuple not in parameter_config.type_coercion_map
+
+
+def test_build_statement_config_driver_strategy_defaults_to_json() -> None:
+    """Driver strategy should wire default JSON helpers when overrides absent."""
+
+    profile = get_driver_profile("asyncpg")
+    config = build_statement_config_from_profile(profile)
+
+    parameter_config = config.parameter_config
+    assert parameter_config.json_serializer is to_json
+    assert parameter_config.json_deserializer is from_json
+    assert parameter_config.type_coercion_map == dict(profile.custom_type_coercions)
+
+
+def test_build_statement_config_helper_tuple_strategy_override() -> None:
+    """Overriding tuple strategy to tuple should preserve tuple payload."""
+
+    captured: list[Any] = []
+
+    def recorder(value: Any) -> str:
+        captured.append(value)
+        return f"encoded:{value}"
+
+    profile = get_driver_profile("sqlite")
+    config = build_statement_config_from_profile(
+        profile, parameter_overrides={"json_tuple_strategy": "tuple"}, json_serializer=recorder
+    )
+
+    tuple_encoder = config.parameter_config.type_coercion_map[tuple]
+    encoded_value = tuple_encoder((1, 2))
+
+    assert encoded_value == "encoded:(1, 2)"
+    assert captured[-1] == (1, 2)
+
+
+def test_replace_null_parameters_with_literals_numeric_dialect() -> None:
+    """Null parameters should render as literals and shrink parameter list."""
+
+    expression = sqlglot.parse_one("INSERT INTO test VALUES ($1, $2)", dialect="postgres")
+    modified_expression, cleaned_params = replace_null_parameters_with_literals(
+        expression, (42, None), dialect="postgres"
+    )
+
+    assert modified_expression.sql(dialect="postgres") == "INSERT INTO test VALUES ($1, NULL)"
+    assert cleaned_params == [42]
+
+
+def test_replace_placeholders_with_literals_basic_sequence() -> None:
+    """Placeholders are replaced by literals when provided with positional parameters."""
+
+    expression = sqlglot.parse_one("SELECT ? AS value", dialect="bigquery")
+    transformed = replace_placeholders_with_literals(expression, [123], json_serializer=json.dumps)
+
+    assert transformed.sql(dialect="bigquery") == "SELECT 123 AS value"
+
+
+def test_replace_placeholders_with_literals_named_mapping() -> None:
+    """Named parameters in mappings are embedded as string literals."""
+
+    expression = sqlglot.parse_one("SELECT @name AS user", dialect="bigquery")
+    transformed = replace_placeholders_with_literals(expression, {"@name": "bob"}, json_serializer=json.dumps)
+
+    assert transformed.sql(dialect="bigquery") == "SELECT 'bob' AS user"
+
+
+def test_build_statement_config_applies_overrides_and_extras() -> None:
+    """Overrides and extras should both be reflected in the resulting config."""
+
+    def uppercase(value: str) -> str:
+        return value.upper()
+
+    overrides = {"type_coercion_map": {str: uppercase}, "supported_parameter_styles": {ParameterStyle.NAMED_AT}}
+
+    profile = get_driver_profile("bigquery")
+    config = build_statement_config_from_profile(profile, parameter_overrides=overrides)
+
+    parameter_config = config.parameter_config
+    assert parameter_config.supported_parameter_styles == {ParameterStyle.NAMED_AT}
+    assert parameter_config.type_coercion_map[str]("value") == "VALUE"
+    assert parameter_config.type_coercion_map[tuple]([1, 2]) == [1, 2]
+
+
+def test_get_driver_profile_missing_raises() -> None:
+    """Unknown adapter keys should raise ImproperConfigurationError."""
+
+    with pytest.raises(ImproperConfigurationError):
+        get_driver_profile("does-not-exist")
+
+
+def test_register_driver_profile_duplicate_guard() -> None:
+    """Registering the same adapter twice without override should fail."""
+
+    profile = DriverParameterProfile(
+        name="TestAdapter",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+    )
+
+    key = "test-duplicate"
+    DRIVER_PARAMETER_PROFILES.pop(key, None)
+    register_driver_profile(key, profile)
+    try:
+        with pytest.raises(ImproperConfigurationError):
+            register_driver_profile(key, profile)
+    finally:
+        DRIVER_PARAMETER_PROFILES.pop(key, None)
+
+
+def test_register_driver_profile_allows_override() -> None:
+    """allow_override should replace an existing driver profile."""
+
+    base_profile = DriverParameterProfile(
+        name="TestAdapter",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+    )
+    replacement_profile = DriverParameterProfile(
+        name="TestAdapterReplacement",
+        default_style=ParameterStyle.NUMERIC,
+        supported_styles={ParameterStyle.NUMERIC},
+        default_execution_style=ParameterStyle.NUMERIC,
+        supported_execution_styles={ParameterStyle.NUMERIC},
+        has_native_list_expansion=True,
+        preserve_parameter_format=False,
+        needs_static_script_compilation=True,
+        allow_mixed_parameter_styles=True,
+        preserve_original_params_for_many=True,
+        json_serializer_strategy="driver",
+    )
+
+    key = "test-override"
+    DRIVER_PARAMETER_PROFILES.pop(key, None)
+    register_driver_profile(key, base_profile)
+    try:
+        register_driver_profile(key, replacement_profile, allow_override=True)
+        resolved_profile = get_driver_profile(key)
+
+        assert resolved_profile is replacement_profile
+        assert resolved_profile.default_style is ParameterStyle.NUMERIC
+        assert resolved_profile.has_native_list_expansion is True
+    finally:
+        DRIVER_PARAMETER_PROFILES.pop(key, None)
 
 
 def test_mixed_parameter_style_with_processor() -> None:
@@ -354,7 +582,7 @@ def test_parameter_style_config_advanced() -> None:
 
     assert config.default_parameter_style == ParameterStyle.NAMED_COLON
     assert config.supported_parameter_styles == {ParameterStyle.NAMED_COLON, ParameterStyle.QMARK}
-    assert config.supported_execution_parameter_styles == {ParameterStyle.QMARK}
+    assert config.supported_execution_parameter_styles == {ParameterStyle.QMARK}  # type: ignore[comparison-overlap]
     assert config.default_execution_parameter_style == ParameterStyle.QMARK
     assert config.type_coercion_map == coercion_map
     assert config.has_native_list_expansion is True

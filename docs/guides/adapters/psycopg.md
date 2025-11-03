@@ -11,6 +11,12 @@ This guide provides specific instructions and best practices for working with th
 -   **Driver:** `psycopg`
 -   **Parameter Style:** `pyformat` (e.g., `%s`)
 
+## Parameter Profile
+
+-   **Registry Key:** `"psycopg"`
+-   **JSON Strategy:** `helper` (shared JSON serializer wraps dict/list/tuple values before psycopg adapters run)
+-   **Extras:** None (adapter-specific list/tuple converters remain in driver to preserve array semantics)
+
 ## Best Practices
 
 -   **General Purpose:** `psycopg` is a robust, general-purpose PostgreSQL adapter. It has excellent type handling and is a good choice for a wide variety of applications.

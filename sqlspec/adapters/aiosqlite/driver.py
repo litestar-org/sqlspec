@@ -2,15 +2,19 @@
 
 import asyncio
 import contextlib
-import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
 from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core.parameters import (
+    DriverParameterProfile,
+    ParameterStyle,
+    build_statement_config_from_profile,
+    register_driver_profile,
+)
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -31,7 +35,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
     from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import SQL
+    from sqlspec.core.statement import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
 
@@ -45,33 +49,6 @@ SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
-
-
-aiosqlite_statement_config = StatementConfig(
-    dialect="sqlite",
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK},
-        type_coercion_map={
-            bool: int,
-            datetime.datetime: lambda v: v.isoformat(),
-            datetime.date: lambda v: v.isoformat(),
-            Decimal: str,
-            dict: to_json,
-            list: to_json,
-            tuple: lambda v: to_json(list(v)),
-        },
-        has_native_list_expansion=False,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-    ),
-    enable_parsing=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-)
 
 
 class AiosqliteCursor:
@@ -344,3 +321,53 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = AiosqliteAsyncDataDictionary()
         return self._data_dictionary
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _datetime_to_iso(value: datetime) -> str:
+    return value.isoformat()
+
+
+def _date_to_iso(value: date) -> str:
+    return value.isoformat()
+
+
+def _decimal_to_str(value: Decimal) -> str:
+    return str(value)
+
+
+def _build_aiosqlite_profile() -> DriverParameterProfile:
+    """Create the AIOSQLite driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="AIOSQLite",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            bool: _bool_to_int,
+            datetime: _datetime_to_iso,
+            date: _date_to_iso,
+            Decimal: _decimal_to_str,
+        },
+        default_dialect="sqlite",
+    )
+
+
+_AIOSQLITE_PROFILE = _build_aiosqlite_profile()
+
+register_driver_profile("aiosqlite", _AIOSQLITE_PROFILE)
+
+aiosqlite_statement_config = build_statement_config_from_profile(
+    _AIOSQLITE_PROFILE, statement_overrides={"dialect": "sqlite"}, json_serializer=to_json
+)

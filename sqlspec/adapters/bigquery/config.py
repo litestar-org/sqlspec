@@ -8,10 +8,11 @@ from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
-from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver, bigquery_statement_config
+from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver, build_bigquery_statement_config
 from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -132,23 +133,19 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if "enable_uuid_conversion" not in self.driver_features:
             self.driver_features["enable_uuid_conversion"] = True
 
-        if "json_serializer" not in self.driver_features:
-            from sqlspec.utils.serializers import to_json
-
-            self.driver_features["json_serializer"] = to_json
+        serializer = self.driver_features.setdefault("json_serializer", to_json)
 
         self._connection_instance: BigQueryConnection | None = self.driver_features.get("connection_instance")
 
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
 
-        if statement_config is None:
-            statement_config = bigquery_statement_config
+        base_statement_config = statement_config or build_bigquery_statement_config(json_serializer=serializer)
 
         super().__init__(
             connection_config=self.connection_config,
             migration_config=migration_config,
-            statement_config=statement_config,
+            statement_config=base_statement_config,
             driver_features=self.driver_features,
             bind_key=bind_key,
             extension_config=extension_config,

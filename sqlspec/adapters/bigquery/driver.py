@@ -7,16 +7,21 @@ type coercion, error handling, and query job management.
 import datetime
 import logging
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import sqlglot
-import sqlglot.expressions as exp
 from google.cloud.bigquery import ArrayQueryParameter, QueryJob, QueryJobConfig, ScalarQueryParameter
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.adapters.bigquery.type_converter import BigQueryTypeConverter
-from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig, create_arrow_result, get_cache_config
+from sqlspec.core import ParameterStyle, StatementConfig, create_arrow_result, get_cache_config
+from sqlspec.core.parameters import (
+    DriverParameterProfile,
+    build_statement_config_from_profile,
+    register_driver_profile,
+    replace_placeholders_with_literals,
+)
 from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     DatabaseConnectionError,
@@ -40,7 +45,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "bigquery_statement_config")
+__all__ = (
+    "BigQueryCursor",
+    "BigQueryDriver",
+    "BigQueryExceptionHandler",
+    "bigquery_statement_config",
+    "build_bigquery_statement_config",
+)
 
 HTTP_CONFLICT = 409
 HTTP_NOT_FOUND = 404
@@ -49,7 +60,12 @@ HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 
 
-_default_type_converter = BigQueryTypeConverter()
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _tuple_to_list(value: tuple[Any, ...]) -> list[Any]:
+    return list(value)
 
 
 _BQ_TYPE_MAP: dict[type, tuple[str, str | None]] = {
@@ -105,91 +121,6 @@ def _create_scalar_parameter(name: str, value: Any, param_type: str) -> ScalarQu
         ScalarQueryParameter instance.
     """
     return ScalarQueryParameter(name, param_type, value)
-
-
-def _create_literal_node(value: Any, json_serializer: "Callable[[Any], str]") -> "exp.Expression":
-    """Create a SQLGlot literal expression from a Python value.
-
-    Args:
-        value: Python value to convert to SQLGlot literal.
-        json_serializer: Function to serialize dict/list to JSON string.
-
-    Returns:
-        SQLGlot expression representing the literal value.
-    """
-    if value is None:
-        return exp.Null()
-    if isinstance(value, bool):
-        return exp.Boolean(this=value)
-    if isinstance(value, (int, float)):
-        return exp.Literal.number(str(value))
-    if isinstance(value, str):
-        return exp.Literal.string(value)
-    if isinstance(value, (list, tuple)):
-        items = [_create_literal_node(item, json_serializer) for item in value]
-        return exp.Array(expressions=items)
-    if isinstance(value, dict):
-        json_str = json_serializer(value)
-        return exp.Literal.string(json_str)
-
-    return exp.Literal.string(str(value))
-
-
-def _replace_placeholder_node(
-    node: "exp.Expression",
-    parameters: Any,
-    placeholder_counter: dict[str, int],
-    json_serializer: "Callable[[Any], str]",
-) -> "exp.Expression":
-    """Replace placeholder or parameter nodes with literal values.
-
-    Handles both positional placeholders (?) and named parameters (@name, :name).
-    Converts values to SQLGlot literal expressions for safe embedding in SQL.
-
-    Args:
-        node: SQLGlot expression node to check and potentially replace.
-        parameters: Parameter values (dict, list, or tuple).
-        placeholder_counter: Mutable counter dict for positional placeholders.
-        json_serializer: Function to serialize dict/list to JSON string.
-
-    Returns:
-        Literal expression if replacement made, otherwise original node.
-    """
-    if isinstance(node, exp.Placeholder):
-        if isinstance(parameters, (list, tuple)):
-            current_index = placeholder_counter["index"]
-            placeholder_counter["index"] += 1
-            if current_index < len(parameters):
-                return _create_literal_node(parameters[current_index], json_serializer)
-        return node
-
-    if isinstance(node, exp.Parameter):
-        param_name = str(node.this) if hasattr(node.this, "__str__") else node.this
-
-        if isinstance(parameters, dict):
-            possible_names = [param_name, f"@{param_name}", f":{param_name}", f"param_{param_name}"]
-            for name in possible_names:
-                if name in parameters:
-                    actual_value = getattr(parameters[name], "value", parameters[name])
-                    return _create_literal_node(actual_value, json_serializer)
-            return node
-
-        if isinstance(parameters, (list, tuple)):
-            try:
-                if param_name.startswith("param_"):
-                    param_index = int(param_name[6:])
-                    if param_index < len(parameters):
-                        return _create_literal_node(parameters[param_index], json_serializer)
-
-                if param_name.isdigit():
-                    param_index = int(param_name)
-                    if param_index < len(parameters):
-                        return _create_literal_node(parameters[param_index], json_serializer)
-            except (ValueError, IndexError, AttributeError):
-                pass
-        return node
-
-    return node
 
 
 def _get_bq_param_type(value: Any) -> tuple[str | None, str | None]:
@@ -283,53 +214,6 @@ def _create_bq_parameters(
         raise SQLSpecError(msg)
 
     return bq_parameters
-
-
-def _get_bigquery_type_coercion_map(type_converter: BigQueryTypeConverter) -> dict[type, Any]:
-    """Get BigQuery type coercion map with configurable type converter.
-
-    Args:
-        type_converter: BigQuery type converter instance
-
-    Returns:
-        Type coercion map for BigQuery
-    """
-    return {
-        tuple: list,
-        bool: lambda x: x,
-        int: lambda x: x,
-        float: lambda x: x,
-        bytes: lambda x: x,
-        datetime.datetime: lambda x: x,
-        datetime.date: lambda x: x,
-        datetime.time: lambda x: x,
-        Decimal: lambda x: x,
-        dict: lambda x: x,
-        list: lambda x: x,
-        type(None): lambda _: None,
-    }
-
-
-bigquery_type_coercion_map = _get_bigquery_type_coercion_map(_default_type_converter)
-
-
-bigquery_statement_config = StatementConfig(
-    dialect="bigquery",
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.NAMED_AT,
-        supported_parameter_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.NAMED_AT,
-        supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
-        type_coercion_map=bigquery_type_coercion_map,
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_original_params_for_many=True,
-    ),
-    enable_parsing=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-)
 
 
 class BigQueryCursor:
@@ -466,18 +350,18 @@ class BigQueryDriver(SyncDriverAdapterBase):
     ) -> None:
         features = driver_features or {}
 
-        json_serializer = features.get("json_serializer")
-        if json_serializer is None:
-            json_serializer = to_json
-
-        self._json_serializer: Callable[[Any], str] = json_serializer
-
         enable_uuid_conversion = features.get("enable_uuid_conversion", True)
         self._type_converter = BigQueryTypeConverter(enable_uuid_conversion=enable_uuid_conversion)
 
         if statement_config is None:
             cache_config = get_cache_config()
             statement_config = bigquery_statement_config.replace(cache_config=cache_config)
+
+        parameter_json_serializer = statement_config.parameter_config.json_serializer
+        if parameter_json_serializer is None:
+            parameter_json_serializer = features.get("json_serializer", to_json)
+
+        self._json_serializer: Callable[[Any], str] = parameter_json_serializer
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
@@ -622,13 +506,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         except sqlglot.ParseError:
             return sql
 
-        placeholder_counter = {"index": 0}
+        transformed_ast = replace_placeholders_with_literals(ast, parameters, json_serializer=self._json_serializer)
 
-        transformed_ast = ast.transform(
-            lambda node: _replace_placeholder_node(node, parameters, placeholder_counter, self._json_serializer)
-        )
-
-        return transformed_ast.sql(dialect="bigquery")
+        return cast("str", transformed_ast.sql(dialect="bigquery"))
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL script with statement splitting and parameter handling.
@@ -870,3 +750,52 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         # Create ArrowResult
         return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_data.num_rows)
+
+
+def _build_bigquery_profile() -> DriverParameterProfile:
+    """Create the BigQuery driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="BigQuery",
+        default_style=ParameterStyle.NAMED_AT,
+        supported_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.NAMED_AT,
+        supported_execution_styles={ParameterStyle.NAMED_AT},
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=True,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            int: _identity,
+            float: _identity,
+            bytes: _identity,
+            datetime.datetime: _identity,
+            datetime.date: _identity,
+            datetime.time: _identity,
+            Decimal: _identity,
+            dict: _identity,
+            list: _identity,
+            type(None): lambda _: None,
+        },
+        extras={"json_tuple_strategy": "tuple", "type_coercion_overrides": {list: _identity, tuple: _tuple_to_list}},
+        default_dialect="bigquery",
+    )
+
+
+_BIGQUERY_PROFILE = _build_bigquery_profile()
+
+register_driver_profile("bigquery", _BIGQUERY_PROFILE)
+
+
+def build_bigquery_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
+    """Construct the BigQuery statement configuration with optional JSON serializer."""
+
+    serializer = json_serializer or to_json
+    return build_statement_config_from_profile(
+        _BIGQUERY_PROFILE, statement_overrides={"dialect": "bigquery"}, json_serializer=serializer
+    )
+
+
+bigquery_statement_config = build_bigquery_statement_config()

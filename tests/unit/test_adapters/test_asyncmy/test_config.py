@@ -1,10 +1,10 @@
-"""AsyncPG configuration tests covering statement config builders."""
+"""Asyncmy configuration tests covering statement config builders."""
 
-from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.adapters.asyncpg.driver import build_asyncpg_statement_config
+from sqlspec.adapters.asyncmy.config import AsyncmyConfig
+from sqlspec.adapters.asyncmy.driver import build_asyncmy_statement_config
 
 
-def test_build_asyncpg_statement_config_custom_serializers() -> None:
+def test_build_asyncmy_statement_config_custom_serializers() -> None:
     """Custom serializers should propagate into the parameter configuration."""
 
     def serializer(_: object) -> str:
@@ -13,15 +13,15 @@ def test_build_asyncpg_statement_config_custom_serializers() -> None:
     def deserializer(_: str) -> object:
         return {"value": "deserialized"}
 
-    statement_config = build_asyncpg_statement_config(json_serializer=serializer, json_deserializer=deserializer)
+    statement_config = build_asyncmy_statement_config(json_serializer=serializer, json_deserializer=deserializer)
 
     parameter_config = statement_config.parameter_config
     assert parameter_config.json_serializer is serializer
     assert parameter_config.json_deserializer is deserializer
 
 
-def test_asyncpg_config_applies_driver_feature_serializers() -> None:
-    """Driver features should mutate the AsyncPG statement configuration."""
+def test_asyncmy_config_applies_driver_feature_serializers() -> None:
+    """Driver features should mutate the Asyncmy statement configuration."""
 
     def serializer(_: object) -> str:
         return "feature"
@@ -29,7 +29,7 @@ def test_asyncpg_config_applies_driver_feature_serializers() -> None:
     def deserializer(_: str) -> object:
         return {"feature": True}
 
-    config = AsyncpgConfig(driver_features={"json_serializer": serializer, "json_deserializer": deserializer})
+    config = AsyncmyConfig(driver_features={"json_serializer": serializer, "json_deserializer": deserializer})
 
     parameter_config = config.statement_config.parameter_config
     assert parameter_config.json_serializer is serializer

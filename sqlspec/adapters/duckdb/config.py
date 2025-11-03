@@ -2,14 +2,15 @@
 
 from collections.abc import Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb._types import DuckDBConnection
-from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, duckdb_statement_config
+from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, build_duckdb_statement_config
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig, SyncDatabaseConfig
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -210,15 +211,19 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             pool_config["database"] = ":memory:shared_db"
 
         processed_features = dict(driver_features) if driver_features else {}
-        if "enable_uuid_conversion" not in processed_features:
-            processed_features["enable_uuid_conversion"] = True
+        processed_features.setdefault("enable_uuid_conversion", True)
+        serializer = processed_features.setdefault("json_serializer", to_json)
+
+        base_statement_config = statement_config or build_duckdb_statement_config(
+            json_serializer=cast("Callable[[Any], str]", serializer)
+        )
 
         super().__init__(
             bind_key=bind_key,
             pool_config=dict(pool_config),
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or duckdb_statement_config,
+            statement_config=base_statement_config,
             driver_features=processed_features,
             extension_config=extension_config,
         )

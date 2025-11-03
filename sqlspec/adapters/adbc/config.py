@@ -148,6 +148,21 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         if "arrow_extension_types" not in driver_features:
             driver_features["arrow_extension_types"] = True
 
+        json_serializer = driver_features.get("json_serializer")
+        if json_serializer is not None:
+            parameter_config = statement_config.parameter_config
+            previous_list_converter = parameter_config.type_coercion_map.get(list)
+            previous_tuple_converter = parameter_config.type_coercion_map.get(tuple)
+            updated_parameter_config = parameter_config.with_json_serializers(json_serializer)
+            updated_map = dict(updated_parameter_config.type_coercion_map)
+            if previous_list_converter is not None:
+                updated_map[list] = previous_list_converter
+            if previous_tuple_converter is not None:
+                updated_map[tuple] = previous_tuple_converter
+            statement_config = statement_config.replace(
+                parameter_config=updated_parameter_config.replace(type_coercion_map=updated_map)
+            )
+
         super().__init__(
             connection_config=self.connection_config,
             migration_config=migration_config,

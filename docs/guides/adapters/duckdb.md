@@ -11,6 +11,12 @@ This guide provides specific instructions for the `duckdb` adapter.
 -   **Driver:** `duckdb`
 -   **Parameter Style:** `qmark` (e.g., `?`)
 
+## Parameter Profile
+
+-   **Registry Key:** `"duckdb"`
+-   **JSON Strategy:** `helper` (shared serializer covers dict/list/tuple)
+-   **Extras:** None (profile preserves existing `allow_mixed_parameter_styles=False`)
+
 ## Best Practices
 
 -   **In-Memory vs. File:** DuckDB can run entirely in-memory (`:memory:`) or with a file-based database. In-memory is great for fast, temporary analytics. File-based is for persistence.

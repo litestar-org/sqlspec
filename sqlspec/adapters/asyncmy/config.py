@@ -11,7 +11,12 @@ from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncmy._types import AsyncmyConnection
-from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, asyncmy_statement_config
+from sqlspec.adapters.asyncmy.driver import (
+    AsyncmyCursor,
+    AsyncmyDriver,
+    asyncmy_statement_config,
+    build_asyncmy_statement_config,
+)
 from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -117,30 +122,19 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         if "port" not in processed_pool_config:
             processed_pool_config["port"] = 3306
 
-        using_default_statement_config = statement_config is None
-        if using_default_statement_config:
-            statement_config = asyncmy_statement_config
-
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        serializer = processed_driver_features.setdefault("json_serializer", to_json)
+        deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
 
-        if "json_serializer" not in processed_driver_features:
-            processed_driver_features["json_serializer"] = to_json
-        if "json_deserializer" not in processed_driver_features:
-            processed_driver_features["json_deserializer"] = from_json
-
-        if statement_config is None:
-            statement_config = asyncmy_statement_config
-
-        json_serializer = processed_driver_features.get("json_serializer")
-        if json_serializer is not None and using_default_statement_config:
-            parameter_config = statement_config.parameter_config.with_json_serializers(json_serializer)
-            statement_config = statement_config.replace(parameter_config=parameter_config)
+        base_statement_config = statement_config or build_asyncmy_statement_config(
+            json_serializer=serializer, json_deserializer=deserializer
+        )
 
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config,
+            statement_config=base_statement_config,
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,

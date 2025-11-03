@@ -11,6 +11,12 @@ This guide covers `asyncmy`.
 -   **Driver:** `asyncmy`
 -   **Parameter Style:** `pyformat` (e.g., `%s`)
 
+## Parameter Profile
+
+-   **Registry Key:** `"asyncmy"`
+-   **JSON Strategy:** `helper` (uses shared JSON serializers for dict/list/tuple)
+-   **Extras:** None (native list expansion remains disabled)
+
 ## Best Practices
 
 -   **Character Set:** Always ensure the connection character set is `utf8mb4` to support a full range of Unicode characters, including emojis.

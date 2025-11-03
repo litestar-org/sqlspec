@@ -112,12 +112,22 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         if "json_deserializer" not in processed_driver_features:
             processed_driver_features["json_deserializer"] = from_json
 
+        base_statement_config = statement_config or sqlite_statement_config
+
+        json_serializer = processed_driver_features.get("json_serializer")
+        json_deserializer = processed_driver_features.get("json_deserializer")
+        if json_serializer is not None:
+            parameter_config = base_statement_config.parameter_config.with_json_serializers(
+                json_serializer, deserializer=json_deserializer
+            )
+            base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
+
         super().__init__(
             bind_key=bind_key,
             pool_instance=pool_instance,
             pool_config=cast("dict[str, Any]", pool_config),
             migration_config=migration_config,
-            statement_config=statement_config or sqlite_statement_config,
+            statement_config=base_statement_config,
             driver_features=processed_driver_features,
             extension_config=extension_config,
         )
