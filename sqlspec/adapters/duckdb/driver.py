@@ -51,67 +51,6 @@ logger = get_logger("adapters.duckdb")
 _type_converter = DuckDBTypeConverter()
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
-def _datetime_to_iso(value: datetime) -> str:
-    return value.isoformat()
-
-
-def _date_to_iso(value: date) -> str:
-    return value.isoformat()
-
-
-def _decimal_to_str(value: Decimal) -> str:
-    return str(value)
-
-
-def _build_duckdb_profile() -> DriverParameterProfile:
-    """Create the DuckDB driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="DuckDB",
-        default_style=ParameterStyle.QMARK,
-        supported_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
-        default_execution_style=ParameterStyle.QMARK,
-        supported_execution_styles={ParameterStyle.QMARK},
-        has_native_list_expansion=True,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions={
-            bool: _bool_to_int,
-            datetime: _datetime_to_iso,
-            date: _date_to_iso,
-            Decimal: _decimal_to_str,
-        },
-        default_dialect="duckdb",
-    )
-
-
-_DUCKDB_PROFILE = _build_duckdb_profile()
-
-register_driver_profile("duckdb", _DUCKDB_PROFILE)
-
-
-def build_duckdb_statement_config(*, json_serializer: "typing.Callable[[Any], str] | None" = None) -> StatementConfig:
-    """Construct the DuckDB statement configuration with optional JSON serializer."""
-
-    serializer = json_serializer or to_json
-    return build_statement_config_from_profile(
-        _DUCKDB_PROFILE, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
-    )
-
-
-duckdb_statement_config = build_duckdb_statement_config()
-
-
-MODIFYING_OPERATIONS: Final[tuple[str, ...]] = ("INSERT", "UPDATE", "DELETE")
-
-
 class DuckDBCursor:
     """Context manager for DuckDB cursor management."""
 
@@ -479,11 +418,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         Returns:
             ArrowResult with native Arrow data
-
-        Raises:
-            MissingDependencyError: If pyarrow not installed
-            SQLExecutionError: If query execution fails
-
         Example:
             >>> result = driver.select_to_arrow(
             ...     "SELECT * FROM users WHERE age > ?", 18
@@ -531,3 +465,64 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         # Create ArrowResult
         return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_data.num_rows)
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _datetime_to_iso(value: datetime) -> str:
+    return value.isoformat()
+
+
+def _date_to_iso(value: date) -> str:
+    return value.isoformat()
+
+
+def _decimal_to_str(value: Decimal) -> str:
+    return str(value)
+
+
+def _build_duckdb_profile() -> DriverParameterProfile:
+    """Create the DuckDB driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="DuckDB",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK},
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            bool: _bool_to_int,
+            datetime: _datetime_to_iso,
+            date: _date_to_iso,
+            Decimal: _decimal_to_str,
+        },
+        default_dialect="duckdb",
+    )
+
+
+_DUCKDB_PROFILE = _build_duckdb_profile()
+
+register_driver_profile("duckdb", _DUCKDB_PROFILE)
+
+
+def build_duckdb_statement_config(*, json_serializer: "typing.Callable[[Any], str] | None" = None) -> StatementConfig:
+    """Construct the DuckDB statement configuration with optional JSON serializer."""
+
+    serializer = json_serializer or to_json
+    return build_statement_config_from_profile(
+        _DUCKDB_PROFILE, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
+    )
+
+
+duckdb_statement_config = build_duckdb_statement_config()
+
+
+MODIFYING_OPERATIONS: Final[tuple[str, ...]] = ("INSERT", "UPDATE", "DELETE")

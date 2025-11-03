@@ -89,86 +89,6 @@ def _convert_array_for_postgres_adbc(value: Any) -> Any:
     return value
 
 
-def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
-    """Get type coercion map for Arrow type handling with dialect-aware type conversion."""
-
-    return {
-        datetime.datetime: lambda x: x,
-        datetime.date: lambda x: x,
-        datetime.time: lambda x: x,
-        decimal.Decimal: float,
-        bool: lambda x: x,
-        int: lambda x: x,
-        float: lambda x: x,
-        bytes: lambda x: x,
-        tuple: _convert_array_for_postgres_adbc,
-        list: _convert_array_for_postgres_adbc,
-        dict: lambda x: x,
-    }
-
-
-_ADBC_PROFILE = DriverParameterProfile(
-    name="ADBC",
-    default_style=ParameterStyle.QMARK,
-    supported_styles={ParameterStyle.QMARK},
-    default_execution_style=ParameterStyle.QMARK,
-    supported_execution_styles={ParameterStyle.QMARK},
-    has_native_list_expansion=True,
-    preserve_parameter_format=True,
-    needs_static_script_compilation=False,
-    allow_mixed_parameter_styles=False,
-    preserve_original_params_for_many=False,
-    json_serializer_strategy="helper",
-    custom_type_coercions={
-        datetime.datetime: _identity,
-        datetime.date: _identity,
-        datetime.time: _identity,
-        decimal.Decimal: float,
-        bool: _identity,
-        int: _identity,
-        float: _identity,
-        bytes: _identity,
-        tuple: _convert_array_for_postgres_adbc,
-        list: _convert_array_for_postgres_adbc,
-        dict: _identity,
-    },
-    extras={
-        "type_coercion_overrides": {list: _convert_array_for_postgres_adbc, tuple: _convert_array_for_postgres_adbc}
-    },
-)
-
-register_driver_profile("adbc", _ADBC_PROFILE)
-
-
-def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
-    """Create statement configuration for the specified dialect."""
-    default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
-        detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
-    )
-
-    type_map = get_type_coercion_map(detected_dialect)
-
-    sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
-
-    parameter_overrides: dict[str, Any] = {
-        "default_parameter_style": default_style,
-        "supported_parameter_styles": set(supported_styles),
-        "default_execution_parameter_style": default_style,
-        "supported_execution_parameter_styles": set(supported_styles),
-        "type_coercion_map": type_map,
-    }
-
-    if detected_dialect in {"postgres", "postgresql"}:
-        parameter_overrides["ast_transformer"] = partial(replace_null_parameters_with_literals, dialect=sqlglot_dialect)
-
-    return build_statement_config_from_profile(
-        get_driver_profile("adbc"),
-        parameter_overrides=parameter_overrides,
-        statement_overrides={"dialect": sqlglot_dialect},
-        json_serializer=to_json,
-    )
-
-
 class AdbcCursor:
     """Context manager for cursor management."""
 
@@ -718,10 +638,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             ArrowResult with native Arrow data
 
-        Raises:
-            MissingDependencyError: If pyarrow not installed
-            SQLExecutionError: If query execution fails
-
         Example:
             >>> result = driver.select_to_arrow(
             ...     "SELECT * FROM users WHERE age > $1", 18
@@ -764,3 +680,89 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         # Create ArrowResult
         return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_data.num_rows)
+
+
+def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
+    """Return dialect-aware type coercion mapping for Arrow parameter handling."""
+
+    return {
+        datetime.datetime: lambda x: x,
+        datetime.date: lambda x: x,
+        datetime.time: lambda x: x,
+        decimal.Decimal: float,
+        bool: lambda x: x,
+        int: lambda x: x,
+        float: lambda x: x,
+        bytes: lambda x: x,
+        tuple: _convert_array_for_postgres_adbc,
+        list: _convert_array_for_postgres_adbc,
+        dict: lambda x: x,
+    }
+
+
+def _build_adbc_profile() -> DriverParameterProfile:
+    """Create the ADBC driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="ADBC",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK},
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            datetime.datetime: _identity,
+            datetime.date: _identity,
+            datetime.time: _identity,
+            decimal.Decimal: float,
+            bool: _identity,
+            int: _identity,
+            float: _identity,
+            bytes: _identity,
+            tuple: _convert_array_for_postgres_adbc,
+            list: _convert_array_for_postgres_adbc,
+            dict: _identity,
+        },
+        extras={
+            "type_coercion_overrides": {list: _convert_array_for_postgres_adbc, tuple: _convert_array_for_postgres_adbc}
+        },
+    )
+
+
+_ADBC_PROFILE = _build_adbc_profile()
+
+register_driver_profile("adbc", _ADBC_PROFILE)
+
+
+def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
+    """Create statement configuration for the specified dialect."""
+    default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
+        detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
+    )
+
+    type_map = get_type_coercion_map(detected_dialect)
+
+    sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
+
+    parameter_overrides: dict[str, Any] = {
+        "default_parameter_style": default_style,
+        "supported_parameter_styles": set(supported_styles),
+        "default_execution_parameter_style": default_style,
+        "supported_execution_parameter_styles": set(supported_styles),
+        "type_coercion_map": type_map,
+    }
+
+    if detected_dialect in {"postgres", "postgresql"}:
+        parameter_overrides["ast_transformer"] = partial(replace_null_parameters_with_literals, dialect=sqlglot_dialect)
+
+    return build_statement_config_from_profile(
+        get_driver_profile("adbc"),
+        parameter_overrides=parameter_overrides,
+        statement_overrides={"dialect": sqlglot_dialect},
+        json_serializer=to_json,
+    )

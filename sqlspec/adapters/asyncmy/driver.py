@@ -5,7 +5,6 @@ type coercion, error handling, and transaction management.
 """
 
 import logging
-import typing
 from typing import TYPE_CHECKING, Any, Final
 
 import asyncmy.errors  # pyright: ignore
@@ -35,6 +34,7 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.asyncmy._types import AsyncmyConnection
@@ -59,55 +59,6 @@ ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value 
 MYSQL_ER_DUP_ENTRY = 1062
 MYSQL_ER_NO_DEFAULT_FOR_FIELD = 1364
 MYSQL_ER_CHECK_CONSTRAINT_VIOLATED = 3819
-
-
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
-def _build_asyncmy_profile() -> DriverParameterProfile:
-    """Create the AsyncMy driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="AsyncMy",
-        default_style=ParameterStyle.QMARK,
-        supported_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
-        default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT},
-        has_native_list_expansion=False,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=True,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions={bool: _bool_to_int},
-        default_dialect="mysql",
-    )
-
-
-_ASYNCMY_PROFILE = _build_asyncmy_profile()
-
-register_driver_profile("asyncmy", _ASYNCMY_PROFILE)
-
-
-def build_asyncmy_statement_config(
-    *,
-    json_serializer: "typing.Callable[[Any], str] | None" = None,
-    json_deserializer: "typing.Callable[[str], Any] | None" = None,
-) -> "StatementConfig":
-    """Construct the AsyncMy statement configuration with optional JSON codecs."""
-
-    serializer = json_serializer or to_json
-    deserializer = json_deserializer or from_json
-    return build_statement_config_from_profile(
-        _ASYNCMY_PROFILE,
-        statement_overrides={"dialect": "mysql"},
-        json_serializer=serializer,
-        json_deserializer=deserializer,
-    )
-
-
-asyncmy_statement_config = build_asyncmy_statement_config()
 
 
 class AsyncmyCursor:
@@ -533,3 +484,50 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = MySQLAsyncDataDictionary()
         return self._data_dictionary
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _build_asyncmy_profile() -> DriverParameterProfile:
+    """Create the AsyncMy driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="AsyncMy",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
+        default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=True,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={bool: _bool_to_int},
+        default_dialect="mysql",
+    )
+
+
+_ASYNCMY_PROFILE = _build_asyncmy_profile()
+
+register_driver_profile("asyncmy", _ASYNCMY_PROFILE)
+
+
+def build_asyncmy_statement_config(
+    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
+) -> "StatementConfig":
+    """Construct the AsyncMy statement configuration with optional JSON codecs."""
+
+    serializer = json_serializer or to_json
+    deserializer = json_deserializer or from_json
+    return build_statement_config_from_profile(
+        _ASYNCMY_PROFILE,
+        statement_overrides={"dialect": "mysql"},
+        json_serializer=serializer,
+        json_deserializer=deserializer,
+    )
+
+
+asyncmy_statement_config = build_asyncmy_statement_config()

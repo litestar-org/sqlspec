@@ -49,50 +49,6 @@ SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
-def _datetime_to_iso(value: datetime) -> str:
-    return value.isoformat()
-
-
-def _date_to_iso(value: date) -> str:
-    return value.isoformat()
-
-
-def _decimal_to_str(value: Decimal) -> str:
-    return str(value)
-
-
-_SQLITE_PROFILE = DriverParameterProfile(
-    name="SQLite",
-    default_style=ParameterStyle.QMARK,
-    supported_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-    default_execution_style=ParameterStyle.QMARK,
-    supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-    has_native_list_expansion=False,
-    preserve_parameter_format=True,
-    needs_static_script_compilation=False,
-    allow_mixed_parameter_styles=False,
-    preserve_original_params_for_many=False,
-    json_serializer_strategy="helper",
-    custom_type_coercions={
-        bool: _bool_to_int,
-        datetime: _datetime_to_iso,
-        date: _date_to_iso,
-        Decimal: _decimal_to_str,
-    },
-    default_dialect="sqlite",
-)
-
-register_driver_profile("sqlite", _SQLITE_PROFILE)
-
-sqlite_statement_config = build_statement_config_from_profile(
-    _SQLITE_PROFILE, statement_overrides={"dialect": "sqlite"}, json_serializer=to_json
-)
-
-
 class SqliteCursor:
     """Context manager for SQLite cursor management.
 
@@ -431,3 +387,53 @@ class SqliteDriver(SyncDriverAdapterBase):
 
             self._data_dictionary = SqliteSyncDataDictionary()
         return self._data_dictionary
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _datetime_to_iso(value: datetime) -> str:
+    return value.isoformat()
+
+
+def _date_to_iso(value: date) -> str:
+    return value.isoformat()
+
+
+def _decimal_to_str(value: Decimal) -> str:
+    return str(value)
+
+
+def _build_sqlite_profile() -> DriverParameterProfile:
+    """Create the SQLite driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="SQLite",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            bool: _bool_to_int,
+            datetime: _datetime_to_iso,
+            date: _date_to_iso,
+            Decimal: _decimal_to_str,
+        },
+        default_dialect="sqlite",
+    )
+
+
+_SQLITE_PROFILE = _build_sqlite_profile()
+
+register_driver_profile("sqlite", _SQLITE_PROFILE)
+
+sqlite_statement_config = build_statement_config_from_profile(
+    _SQLITE_PROFILE, statement_overrides={"dialect": "sqlite"}, json_serializer=to_json
+)

@@ -139,28 +139,6 @@ ORA_PARSING_RANGE_END = 1000
 ORA_TABLESPACE_FULL = 1652
 
 
-_ORACLE_PROFILE = DriverParameterProfile(
-    name="OracleDB",
-    default_style=ParameterStyle.POSITIONAL_COLON,
-    supported_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK},
-    default_execution_style=ParameterStyle.NAMED_COLON,
-    supported_execution_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
-    has_native_list_expansion=False,
-    preserve_parameter_format=True,
-    needs_static_script_compilation=False,
-    allow_mixed_parameter_styles=False,
-    preserve_original_params_for_many=False,
-    json_serializer_strategy="helper",
-    default_dialect="oracle",
-)
-
-register_driver_profile("oracledb", _ORACLE_PROFILE)
-
-oracledb_statement_config = build_statement_config_from_profile(
-    _ORACLE_PROFILE, statement_overrides={"dialect": "oracle"}, json_serializer=to_json
-)
-
-
 class OracleSyncCursor:
     """Sync context manager for Oracle cursor management."""
 
@@ -901,3 +879,31 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = OracleAsyncDataDictionary()
         return self._data_dictionary
+
+
+def _build_oracledb_profile() -> DriverParameterProfile:
+    """Create the OracleDB driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="OracleDB",
+        default_style=ParameterStyle.POSITIONAL_COLON,
+        supported_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.NAMED_COLON,
+        supported_execution_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        default_dialect="oracle",
+    )
+
+
+_ORACLE_PROFILE = _build_oracledb_profile()
+
+register_driver_profile("oracledb", _ORACLE_PROFILE)
+
+oracledb_statement_config = build_statement_config_from_profile(
+    _ORACLE_PROFILE, statement_overrides={"dialect": "oracle"}, json_serializer=to_json
+)
