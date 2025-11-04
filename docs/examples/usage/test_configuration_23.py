@@ -6,10 +6,35 @@ from unittest.mock import patch
 import pytest
 
 
+def test_extension_config() -> None:
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+    config = AsyncpgConfig(
+        pool_config={"dsn": "postgresql://localhost/db"},
+        extension_config={
+            "litestar": {
+                "connection_key": "db_connection",
+                "session_key": "db_session",
+                "pool_key": "db_pool",
+                "commit_mode": "autocommit",
+                "enable_correlation_middleware": True,
+            }
+        },
+    )
+    assert config.extension_config == {
+        "litestar": {
+            "connection_key": "db_connection",
+            "session_key": "db_session",
+            "pool_key": "db_pool",
+            "commit_mode": "autocommit",
+            "enable_correlation_middleware": True,
+        }
+    }
+
+
 @pytest.mark.skipif(os.getenv("TEST_ASYNCPG", "0") != "1", reason="AsyncPG integration tests disabled")
 def test_environment_based_configuration() -> None:
     """Test environment-based configuration pattern."""
-    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
     # Mock environment variables
     env_vars = {
@@ -21,6 +46,8 @@ def test_environment_based_configuration() -> None:
     }
 
     with patch.dict(os.environ, env_vars, clear=False):
+        from sqlspec.adapters.asyncpg import AsyncpgConfig
+
         config = AsyncpgConfig(
             pool_config={
                 "host": os.getenv("DB_HOST", "localhost"),

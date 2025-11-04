@@ -251,9 +251,17 @@ Basic Migration Config
 
 **Migration CLI**
 
-.. literalinclude:: /examples/usage/test_configuration_22.txt
-   :language: text
-   :caption: `migration CLI`
+.. code-block:: bash
+
+    # Create migration
+    sqlspec --config myapp.config create-migration -m "Add users table"
+
+    # Apply migrations
+    sqlspec --config myapp.config upgrade
+
+    # Rollback
+    sqlspec --config myapp.config downgrade -1
+
 
 
 Extension Migration Versioning
@@ -281,42 +289,22 @@ Framework integrations can be configured via ``extension_config``.
 Litestar Plugin Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/db"},
-       extension_config={
-           "litestar": {
-               "connection_key": "db_connection",
-               "session_key": "db_session",
-               "pool_key": "db_pool",
-               "commit_mode": "autocommit",
-               "enable_correlation_middleware": True,
-           }
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_23.py
+   :language: python
+   :caption: `litestar plugin configuration`
+   :lines: 10-31
+   :dedent: 2
 
 Environment-Based Configuration
 -------------------------------
 
 Use environment variables for configuration:
 
-.. code-block:: python
-
-   import os
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   config = AsyncpgConfig(
-       pool_config={
-           "host": os.getenv("DB_HOST", "localhost"),
-           "port": int(os.getenv("DB_PORT", "5432")),
-           "user": os.getenv("DB_USER"),
-           "password": os.getenv("DB_PASSWORD"),
-           "database": os.getenv("DB_NAME"),
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_23.py
+   :language: python
+   :caption: `environnment-based configuration`
+   :lines: 49-59
+   :dedent: 4
 
 Configuration Best Practices
 -----------------------------
@@ -325,59 +313,52 @@ Configuration Best Practices
 
 Always use pooling in production:
 
-.. code-block:: python
-
-   config = AsyncpgConfig(
-       pool_config={
-           "dsn": "postgresql://localhost/db",
-           "min_size": 10,
-           "max_size": 20,
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_24.py
+   :language: python
+   :caption: `connection pooling`
+   :lines: 11-13
+   :dedent: 2
 
 **2. Enable Caching**
 
 Enable caching to avoid recompiling SQL statements:
 
-.. code-block:: python
-
-   statement_config = StatementConfig(
-       dialect="postgres",
-       enable_caching=True
-   )
+.. literalinclude:: /examples/usage/test_configuration_25.py
+   :language: python
+   :caption: `enable caching`
+   :lines: 6-8
+   :dedent: 2
 
 **3. Tune Pool Sizes**
 
 Size pools based on your workload:
 
-.. code-block:: python
-
-   # CPU-bound workload
-   pool_config = {"min_size": 5, "max_size": 10}
-
-   # I/O-bound workload
-   pool_config = {"min_size": 20, "max_size": 50}
+.. literalinclude:: /examples/usage/test_configuration_26.py
+   :language: python
+   :caption: `tune pool sizes`
+   :lines: 6-14
+   :dedent: 2
 
 **4. Disable Validation in Production**
 
 For trusted, performance-critical queries:
 
-.. code-block:: python
+.. literalinclude:: /examples/usage/test_configuration_26.py
+   :language: python
+   :caption: `no validation`
+   :lines: 19-25
+   :dedent: 2
 
-   statement_config = StatementConfig(
-       dialect="postgres",
-       enable_validation=False,  # Skip security checks
-   )
 
 **5. Clean Up Resources**
 
 Always close pools on shutdown:
 
-.. code-block:: python
-
-   # Synchronous cleanup (automatic with atexit)
-   # Asynchronous cleanup (manual)
-   await spec.close_all_pools()
+.. literalinclude:: /examples/usage/test_configuration_27.py
+   :language: python
+   :caption: `cleanup resources`
+   :lines: 10-27
+   :dedent: 2
 
 Next Steps
 ----------

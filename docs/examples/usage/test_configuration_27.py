@@ -1,6 +1,5 @@
 """Test configuration example: Best practice - Clean up resources."""
 
-import tempfile
 
 import pytest
 
@@ -8,6 +7,8 @@ import pytest
 @pytest.mark.asyncio
 async def test_cleanup_resources_best_practice() -> None:
     """Test resource cleanup best practice."""
+    import tempfile
+
     from sqlspec import SQLSpec
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
