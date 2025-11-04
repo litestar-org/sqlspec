@@ -1,6 +1,5 @@
-from sqlspec.adapters.sqlite import SqliteConfig
-
-def test_sqlite_config_setup():
+def test_sqlite_config_setup()-> None:
+    from sqlspec.adapters.sqlite import SqliteConfig
     config = SqliteConfig(
         pool_config={
             "database": "myapp.db",           # Database file path

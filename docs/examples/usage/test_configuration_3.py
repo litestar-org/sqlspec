@@ -1,6 +1,5 @@
-from sqlspec.adapters.sqlite import SqliteConfig
-
-def test_memory_databases():
+def test_memory_databases() -> None:
+    from sqlspec.adapters.sqlite import SqliteConfig
     # In-memory database (isolated per connection)
     config = SqliteConfig(pool_config={"database": ":memory:"})
     assert config.pool_config["database"] == ":memory:"

@@ -35,12 +35,16 @@ SQLite Configuration
 .. literalinclude:: /examples/usage/test_configuration_2.py
    :language: python
    :caption: `sqlite configuration`
+   :lines: 2-11
+   :dedent: 2
 
 **Memory Databases**
 
 .. literalinclude:: /examples/usage/test_configuration_3.py
    :language: python
    :caption: `memory sqlite configuration`
+   :lines: 2-13
+   :dedent: 2
 
 PostgreSQL Configuration (asyncpg)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -48,6 +52,7 @@ PostgreSQL Configuration (asyncpg)
 .. literalinclude:: /examples/usage/test_configuration_4.py
    :language: python
    :caption: `postgres asyncpg configuration`
+   :lines: 2-15
 
 PostgreSQL Configuration (psycopg)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -59,6 +64,7 @@ PostgreSQL Configuration (psycopg)
 .. literalinclude:: /examples/usage/test_configuration_5.py
    :language: python
    :caption: `postgres psycopg configuration`
+   :lines: 1-6
 
 MySQL Configuration (asyncmy)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -66,6 +72,7 @@ MySQL Configuration (asyncmy)
 .. literalinclude:: /examples/usage/test_configuration_6.py
    :language: python
    :caption: `mysql asyncmy configuration`
+   :lines: 1-19
 
 DuckDB Configuration
 ^^^^^^^^^^^^^^^^^^^^
@@ -73,6 +80,7 @@ DuckDB Configuration
 .. literalinclude:: /examples/usage/test_configuration_7.py
    :language: python
    :caption: `duckdb configuration`
+   :lines: 1-15
 
 Connection Pooling
 ------------------
@@ -85,12 +93,14 @@ Pool Configuration
 .. literalinclude:: /examples/usage/test_configuration_8.py
    :language: python
    :caption: `pool configuration`
+   :lines: 1-15
 
 **Pool Lifecycle Management**
 
 .. literalinclude:: /examples/usage/test_configuration_9.py
    :language: python
    :caption: `pool lifecycle management`
+   :lines: 1-8
 
 Using Pre-Created Pools
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -98,6 +108,7 @@ Using Pre-Created Pools
 .. literalinclude:: /examples/usage/test_configuration_10.py
    :language: python
    :caption: `using pre-created pools`
+   :lines: 1-12
 
 No-Pooling Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -105,6 +116,7 @@ No-Pooling Configuration
 .. literalinclude:: /examples/usage/test_configuration_11.py
    :language: python
    :caption: `no-pooling configuration`
+   :lines: 1-6
 
 Statement Configuration
 -----------------------
@@ -117,6 +129,7 @@ Basic Statement Config
 .. literalinclude:: /examples/usage/test_configuration_12.py
    :language: python
    :caption: `basic statement config`
+   :lines: 1-21
 
 Parameter Style Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -124,6 +137,7 @@ Parameter Style Configuration
 .. literalinclude:: /examples/usage/test_configuration_13.py
    :language: python
    :caption: `parameter style configuration`
+   :lines: 1-21
 
 **Parameter Styles**
 
@@ -132,6 +146,7 @@ SQLSpec supports multiple parameter placeholder styles:
 .. literalinclude:: /examples/usage/test_configuration_14.py
    :language: python
    :caption: `parameter styles`
+   :lines: 1-24
 
 Validation Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -143,6 +158,7 @@ Disable validation for performance-critical paths where input is trusted:
 .. literalinclude:: /examples/usage/test_configuration_15.py
    :language: python
    :caption: `validation configuration`
+   :lines: 1-22
 
 Cache Configuration
 -------------------
@@ -155,6 +171,7 @@ Global Cache Configuration
 .. literalinclude:: /examples/usage/test_configuration_16.py
    :language: python
    :caption: `global cache configuration`
+   :lines: 1-29
 
 Per-Instance Cache Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -162,6 +179,7 @@ Per-Instance Cache Configuration
 .. literalinclude:: /examples/usage/test_configuration_17.py
    :language: python
    :caption: `per-instance cache configuration`
+   :lines: 1-28
 
 Cache Statistics
 ^^^^^^^^^^^^^^^^
@@ -171,6 +189,7 @@ Monitor cache statistics:
 .. literalinclude:: /examples/usage/test_configuration_18.py
    :language: python
    :caption: `cache statistics`
+   :lines: 1-19
 
 Clear Cache
 ^^^^^^^^^^^
@@ -178,6 +197,7 @@ Clear Cache
 .. literalinclude:: /examples/usage/test_configuration_19.py
    :language: python
    :caption: `clear cache`
+   :lines: 1-27
 
 Multiple Database Configurations
 ---------------------------------
@@ -190,6 +210,7 @@ Binding Multiple Configs
 .. literalinclude:: /examples/usage/test_configuration_20.py
    :language: python
    :caption: `binding multiple configurations`
+   :lines: 1-30
 
 Named Bindings
 ^^^^^^^^^^^^^^
@@ -199,6 +220,7 @@ Use bind keys for clearer configuration management:
 .. literalinclude:: /examples/usage/test_configuration_21.py
    :language: python
    :caption: `named bindings`
+   :lines: 1-29
 
 Migration Configuration
 -----------------------

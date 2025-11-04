@@ -1,6 +1,5 @@
-from sqlspec.adapters.asyncpg import AsyncpgConfig
-
 def test_asyncpg_config_setup():
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
     config = AsyncpgConfig(
         pool_config={
             "dsn": "postgresql://user:pass@localhost:5432/dbname",
