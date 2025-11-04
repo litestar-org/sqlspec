@@ -3,7 +3,7 @@
 import typing
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import duckdb
 
@@ -44,6 +44,13 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
+    from sqlspec.storage import (
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = (
@@ -476,6 +483,32 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         # Create ArrowResult
         return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_data.num_rows)
+
+    def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Persist DuckDB query output to a storage backend using Arrow fast paths."""
+
+        _ = kwargs
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = arrow_result.write_to_storage_sync(
+            destination,
+            format_hint=format_hint,
+            pipeline=sync_pipeline,
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
 
 
 def _bool_to_int(value: bool) -> int:

@@ -11,7 +11,7 @@ from sqlspec.driver._common import (
     VersionInfo,
     handle_single_row_error,
 )
-from sqlspec.driver.mixins import SQLTranslatorMixin
+from sqlspec.driver.mixins import SQLTranslatorMixin, StorageDriverMixin
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.logging import get_logger
@@ -36,7 +36,7 @@ EMPTY_FILTERS: Final["list[StatementFilter]"] = []
 SyncDriverT = TypeVar("SyncDriverT", bound="SyncDriverAdapterBase")
 
 
-class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
+class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, StorageDriverMixin):
     """Base class for synchronous database drivers."""
 
     __slots__ = ()

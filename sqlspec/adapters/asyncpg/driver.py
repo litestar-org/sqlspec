@@ -2,7 +2,7 @@
 
 import datetime
 import re
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncpg
 
@@ -39,6 +39,13 @@ if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg._types import AsyncpgConnection
     from sqlspec.core import SQL, ParameterStyleConfig, SQLResult, StatementConfig
     from sqlspec.driver import AsyncDataDictionaryBase, ExecutionResult
+    from sqlspec.storage import (
+        AsyncStoragePipeline,
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+    )
 
 __all__ = (
     "AsyncpgCursor",
@@ -334,6 +341,32 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         affected_rows = self._parse_asyncpg_status(result) if isinstance(result, str) else 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+    async def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and persist results to storage once native COPY is available."""
+
+        _ = kwargs
+        self._require_capability("arrow_export_enabled")
+        result = await self.execute(statement, *parameters, statement_config=statement_config)
+        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = await result.write_to_storage_async(
+            destination,
+            format_hint=format_hint,
+            pipeline=async_pipeline,
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
 
     @staticmethod
     def _parse_asyncpg_status(status: str) -> int:

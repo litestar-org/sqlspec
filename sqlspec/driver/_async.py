@@ -11,7 +11,7 @@ from sqlspec.driver._common import (
     VersionInfo,
     handle_single_row_error,
 )
-from sqlspec.driver.mixins import SQLTranslatorMixin
+from sqlspec.driver.mixins import SQLTranslatorMixin, StorageDriverMixin
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.logging import get_logger
@@ -25,18 +25,18 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig, StatementFilter
     from sqlspec.typing import ArrowReturnFormat, SchemaT, StatementParameters
 
-_LOGGER_NAME: Final[str] = "sqlspec"
-logger = get_logger(_LOGGER_NAME)
 
 __all__ = ("AsyncDataDictionaryBase", "AsyncDriverAdapterBase", "AsyncDriverT")
 
 
 EMPTY_FILTERS: Final["list[StatementFilter]"] = []
+_LOGGER_NAME: Final[str] = "sqlspec"
+logger = get_logger(_LOGGER_NAME)
 
 AsyncDriverT = TypeVar("AsyncDriverT", bound="AsyncDriverAdapterBase")
 
 
-class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin):
+class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, StorageDriverMixin):
     """Base class for asynchronous database drivers."""
 
     __slots__ = ()

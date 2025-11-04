@@ -6,8 +6,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, cast
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -16,6 +18,7 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.loader import SQLFileLoader
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+    from sqlspec.storage import StorageCapabilities
 
 
 __all__ = (
@@ -389,6 +392,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     __slots__ = (
         "_migration_commands",
         "_migration_loader",
+        "_storage_capabilities",
         "bind_key",
         "driver_features",
         "migration_config",
@@ -407,11 +411,16 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_native_arrow_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
+    requires_staging_for_load: "ClassVar[bool]" = False
+    staging_protocols: "ClassVar[tuple[str, ...]]" = ()
+    default_storage_profile: "ClassVar[str | None]" = None
+    storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed",)
     bind_key: "str | None"
     statement_config: "StatementConfig"
     pool_instance: "PoolT | None"
     migration_config: "dict[str, Any] | MigrationConfig"
     driver_features: "dict[str, Any]"
+    _storage_capabilities: "StorageCapabilities | None"
 
     def __hash__(self) -> int:
         return id(self)
@@ -424,6 +433,46 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     def __repr__(self) -> str:
         parts = ", ".join([f"pool_instance={self.pool_instance!r}", f"migration_config={self.migration_config!r}"])
         return f"{type(self).__name__}({parts})"
+
+    def storage_capabilities(self) -> "StorageCapabilities":
+        """Return cached storage capabilities for this configuration."""
+
+        if self._storage_capabilities is None:
+            self._storage_capabilities = self._build_storage_capabilities()
+        return cast("StorageCapabilities", dict(self._storage_capabilities))
+
+    def reset_storage_capabilities_cache(self) -> None:
+        """Clear the cached capability snapshot."""
+
+        self._storage_capabilities = None
+
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        arrow_dependency_needed = self.supports_native_arrow_export or self.supports_native_arrow_import
+        parquet_dependency_needed = self.supports_native_parquet_export or self.supports_native_parquet_import
+
+        arrow_dependency_ready = self._dependency_available(ensure_pyarrow) if arrow_dependency_needed else False
+        parquet_dependency_ready = self._dependency_available(ensure_pyarrow) if parquet_dependency_needed else False
+
+        capabilities: StorageCapabilities = {
+            "arrow_export_enabled": bool(self.supports_native_arrow_export and arrow_dependency_ready),
+            "arrow_import_enabled": bool(self.supports_native_arrow_import and arrow_dependency_ready),
+            "parquet_export_enabled": bool(self.supports_native_parquet_export and parquet_dependency_ready),
+            "parquet_import_enabled": bool(self.supports_native_parquet_import and parquet_dependency_ready),
+            "requires_staging_for_load": self.requires_staging_for_load,
+            "staging_protocols": list(self.staging_protocols),
+            "partition_strategies": list(self.storage_partition_strategies),
+        }
+        if self.default_storage_profile is not None:
+            capabilities["default_storage_profile"] = self.default_storage_profile
+        return capabilities
+
+    @staticmethod
+    def _dependency_available(checker: "Callable[[], None]") -> bool:
+        try:
+            checker()
+        except MissingDependencyError:
+            return False
+        return True
 
     @abstractmethod
     def create_connection(self) -> "ConnectionT | Awaitable[ConnectionT]":
@@ -660,6 +709,12 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
+        self._storage_capabilities = None
+        self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self._storage_capabilities = None
+        self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self._storage_capabilities = None
+        self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
 
     def create_connection(self) -> ConnectionT:
         """Create a database connection."""
@@ -1103,6 +1158,8 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
+        self._storage_capabilities = None
+        self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
 
     async def create_pool(self) -> PoolT:
         """Create and return the connection pool.
