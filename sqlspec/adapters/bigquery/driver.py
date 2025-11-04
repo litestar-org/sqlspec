@@ -5,13 +5,21 @@ type coercion, error handling, and query job management.
 """
 
 import datetime
+import io
 import logging
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlglot
-from google.cloud.bigquery import ArrayQueryParameter, QueryJob, QueryJobConfig, ScalarQueryParameter
+from google.cloud.bigquery import (
+    ArrayQueryParameter,
+    LoadJobConfig,
+    QueryJob,
+    QueryJobConfig,
+    ScalarQueryParameter,
+    SourceFormat,
+)
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
@@ -34,6 +42,7 @@ from sqlspec.exceptions import (
     OperationalError,
     SQLParsingError,
     SQLSpecError,
+    StorageCapabilityError,
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import to_json
@@ -442,6 +451,45 @@ class BigQueryDriver(SyncDriverAdapterBase):
             except (AttributeError, TypeError):
                 continue
 
+    def _map_source_format(self, file_format: "StorageFormat") -> SourceFormat:
+        if file_format == "parquet":
+            return SourceFormat.PARQUET
+        if file_format in {"json", "jsonl"}:
+            return SourceFormat.NEWLINE_DELIMITED_JSON
+        if file_format == "arrow-ipc":
+            return SourceFormat.ARROW
+        msg = f"BigQuery does not support loading '{file_format}' artifacts via the storage bridge"
+        raise StorageCapabilityError(msg, capability="parquet_import_enabled")
+
+    def _build_load_job_config(self, file_format: "StorageFormat", overwrite: bool) -> LoadJobConfig:
+        job_config = LoadJobConfig()
+        job_config.source_format = self._map_source_format(file_format)
+        job_config.write_disposition = "WRITE_TRUNCATE" if overwrite else "WRITE_APPEND"
+        return job_config
+
+    def _build_load_job_telemetry(
+        self,
+        job: QueryJob,
+        table: str,
+        *,
+        format_label: str,
+    ) -> "StorageTelemetry":
+        properties = getattr(job, "_properties", {})
+        load_stats = properties.get("statistics", {}).get("load", {})
+        rows_processed = int(load_stats.get("outputRows") or getattr(job, "output_rows", 0) or 0)
+        bytes_processed = int(load_stats.get("outputBytes") or load_stats.get("inputFileBytes", 0) or 0)
+        duration = 0.0
+        if job.ended and job.started:
+            duration = (job.ended - job.started).total_seconds()
+        telemetry: StorageTelemetry = {
+            "destination": table,
+            "rows_processed": rows_processed,
+            "bytes_processed": bytes_processed,
+            "duration_s": duration,
+            "format": format_label,
+        }
+        return telemetry
+
     def _run_query_job(
         self,
         sql_str: str,
@@ -791,6 +839,59 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data by uploading a temporary Parquet payload to BigQuery."""
+
+        self._require_capability("parquet_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        from sqlspec.utils.module_loader import ensure_pyarrow
+
+        ensure_pyarrow()
+
+        import pyarrow.parquet as pq
+
+        buffer = io.BytesIO()
+        pq.write_table(arrow_table, buffer)
+        buffer.seek(0)
+        job_config = self._build_load_job_config("parquet", overwrite)
+        job = self.connection.load_table_from_file(buffer, table, job_config=job_config)
+        job.result()
+        telemetry_payload = self._build_load_job_telemetry(job, table, format_label="parquet")
+        if telemetry:
+            telemetry_payload.setdefault("extra", {})
+            telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage into BigQuery."""
+
+        if file_format != "parquet":
+            msg = "BigQuery storage bridge currently supports Parquet ingest only"
+            raise StorageCapabilityError(msg, capability="parquet_import_enabled")
+        job_config = self._build_load_job_config(file_format, overwrite)
+        job = self.connection.load_table_from_uri(source, table, job_config=job_config)
+        job.result()
+        telemetry_payload = self._build_load_job_telemetry(job, table, format_label=file_format)
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload)
 
 
 def _build_bigquery_profile() -> DriverParameterProfile:

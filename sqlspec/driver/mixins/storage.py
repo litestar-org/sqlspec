@@ -162,7 +162,12 @@ class StorageDriverMixin:
     ) -> StorageBridgeJob:
         merged = cast("StorageTelemetry", dict(produced))
         if provided:
-            merged.update(provided)
+            source_bytes = provided.get("bytes_processed")
+            if source_bytes is not None:
+                merged["bytes_processed"] = int(merged.get("bytes_processed", 0)) + int(source_bytes)
+            extra = dict(merged.get("extra", {}))
+            extra["source"] = provided
+            merged["extra"] = extra
         return create_storage_bridge_job(status, merged)
 
     def _read_arrow_from_storage_sync(

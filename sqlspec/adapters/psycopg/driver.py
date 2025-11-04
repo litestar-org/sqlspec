@@ -19,6 +19,7 @@ import io
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
+from psycopg import sql as psycopg_sql
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.core import (
@@ -88,6 +89,24 @@ TRANSACTION_STATUS_ACTIVE = 1
 TRANSACTION_STATUS_INTRANS = 2
 TRANSACTION_STATUS_INERROR = 3
 TRANSACTION_STATUS_UNKNOWN = 4
+
+
+def _compose_table_identifier(table: str) -> "psycopg_sql.Composed":
+    parts = [part for part in table.split(".") if part]
+    if not parts:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    return psycopg_sql.Identifier(*parts)
+
+
+def _build_copy_from_command(table: str, columns: "list[str]") -> "psycopg_sql.Composed":
+    table_identifier = _compose_table_identifier(table)
+    column_sql = psycopg_sql.SQL(", ").join(psycopg_sql.Identifier(column) for column in columns)
+    return psycopg_sql.SQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)
+
+
+def _build_truncate_command(table: str) -> "psycopg_sql.Composed":
+    return psycopg_sql.SQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
 
 
 class PsycopgSyncCursor:
@@ -474,6 +493,53 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
 
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into PostgreSQL using COPY."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            self._truncate_table_sync(table)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            copy_sql = _build_copy_from_command(table, columns)
+            with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+                with cursor.copy(copy_sql) as copy_ctx:
+                    for record in records:
+                        copy_ctx.write_row(record)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts into PostgreSQL via COPY."""
+
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(
+            table,
+            arrow_table,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=inbound,
+        )
+
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -486,6 +552,11 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
             self._data_dictionary = PostgresSyncDataDictionary()
         return self._data_dictionary
+
+    def _truncate_table_sync(self, table: str) -> None:
+        truncate_sql = _build_truncate_command(table)
+        with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            cursor.execute(truncate_sql)
 
 
 class PsycopgAsyncCursor:
@@ -875,6 +946,53 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
 
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into PostgreSQL asynchronously via COPY."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            await self._truncate_table_async(table)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            copy_sql = _build_copy_from_command(table, columns)
+            async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+                async with cursor.copy(copy_sql) as copy_ctx:
+                    for record in records:
+                        await copy_ctx.write_row(record)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts asynchronously."""
+
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table,
+            arrow_table,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=inbound,
+        )
+
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -887,6 +1005,11 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
+
+    async def _truncate_table_async(self, table: str) -> None:
+        truncate_sql = _build_truncate_command(table)
+        async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            await cursor.execute(truncate_sql)
 
 
 def _identity(value: Any) -> Any:

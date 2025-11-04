@@ -714,6 +714,47 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
 
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Ingest an Arrow payload directly through the ADBC cursor."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        ingest_mode = "replace" if overwrite else "create_append"
+        with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            cursor.adbc_ingest(table, arrow_table, mode=ingest_mode)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Read an artifact from storage and ingest it via ADBC."""
+
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(
+            table,
+            arrow_table,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=inbound,
+        )
+
 
 def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     """Return dialect-aware type coercion mapping for Arrow parameter handling."""
