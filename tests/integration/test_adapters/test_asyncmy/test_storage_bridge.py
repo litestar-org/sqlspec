@@ -32,10 +32,7 @@ async def test_asyncmy_load_from_arrow(asyncmy_driver: AsyncmyDriver) -> None:
     assert job.telemetry["destination"] == table_name
 
     rows = await _fetch_rows(asyncmy_driver, table_name)
-    assert rows == [
-        {"id": 1, "name": "alpha"},
-        {"id": 2, "name": "beta"},
-    ]
+    assert rows == [{"id": 1, "name": "alpha"}, {"id": 2, "name": "beta"}]
 
     await asyncmy_driver.execute(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -49,10 +46,7 @@ async def test_asyncmy_load_from_storage(tmp_path: Path, asyncmy_driver: Asyncmy
     pq.write_table(arrow_table, destination)
 
     job = await asyncmy_driver.load_from_storage(
-        "storage_bridge_scores",
-        str(destination),
-        file_format="parquet",
-        overwrite=True,
+        "storage_bridge_scores", str(destination), file_format="parquet", overwrite=True
     )
 
     assert job.telemetry["destination"] == "storage_bridge_scores"

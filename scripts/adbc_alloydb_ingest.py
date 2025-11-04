@@ -19,6 +19,8 @@ from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.storage import StorageTelemetry
 from sqlspec.utils.serializers import to_json
 
+__all__ = ("main",)
+
 
 def _build_partitioner(args: argparse.Namespace) -> "dict[str, Any] | None":
     if args.rows_per_chunk:
@@ -46,25 +48,16 @@ def main() -> None:
     parser.add_argument("--source-sql", required=True, help="SELECT statement to export")
     parser.add_argument("--target-table", required=True, help="Destination table name")
     parser.add_argument(
-        "--destination",
-        default="./tmp/alloydb_export.parquet",
-        help="Local path for the staged artifact",
+        "--destination", default="./tmp/alloydb_export.parquet", help="Local path for the staged artifact"
     )
     parser.add_argument(
-        "--format",
-        choices=["parquet", "arrow-ipc"],
-        default="parquet",
-        help="Storage format for the staged artifact",
+        "--format", choices=["parquet", "arrow-ipc"], default="parquet", help="Storage format for the staged artifact"
     )
     parser.add_argument("--rows-per-chunk", type=int, help="Rows per partition chunk")
     parser.add_argument("--partitions", type=int, help="Fixed partition count")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite destination table before load")
     parser.add_argument("--skip-load", action="store_true", help="Export only and skip the load step")
-    parser.add_argument(
-        "--output-telemetry",
-        type=Path,
-        help="Optional path to write telemetry JSON",
-    )
+    parser.add_argument("--output-telemetry", type=Path, help="Optional path to write telemetry JSON")
     args = parser.parse_args()
 
     console = Console()
@@ -83,10 +76,7 @@ def main() -> None:
 
     with sql.provide_session(config) as session:
         export_job = session.select_to_storage(
-            args.source_sql,
-            str(destination_path),
-            format_hint=args.format,
-            partitioner=partitioner,
+            args.source_sql, str(destination_path), format_hint=args.format, partitioner=partitioner
         )
         console.print(_format_job("export", export_job.telemetry))
         telemetry_records.append({"stage": "export", "metrics": export_job.telemetry})

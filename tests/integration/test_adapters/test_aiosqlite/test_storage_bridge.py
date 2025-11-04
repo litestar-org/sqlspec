@@ -24,10 +24,7 @@ async def test_aiosqlite_load_from_arrow(aiosqlite_session: AiosqliteDriver) -> 
     assert job.telemetry["rows_processed"] == arrow_table.num_rows
 
     result = await aiosqlite_session.execute("SELECT id, label FROM storage_bridge_aiosqlite ORDER BY id")
-    assert result.data == [
-        {"id": 1, "label": "north"},
-        {"id": 2, "label": "south"},
-    ]
+    assert result.data == [{"id": 1, "label": "north"}, {"id": 2, "label": "south"}]
 
 
 async def test_aiosqlite_load_from_storage(aiosqlite_session: AiosqliteDriver, tmp_path: Path) -> None:
@@ -39,17 +36,11 @@ async def test_aiosqlite_load_from_storage(aiosqlite_session: AiosqliteDriver, t
     pq.write_table(arrow_table, destination)
 
     job = await aiosqlite_session.load_from_storage(
-        "storage_bridge_aiosqlite",
-        str(destination),
-        file_format="parquet",
-        overwrite=True,
+        "storage_bridge_aiosqlite", str(destination), file_format="parquet", overwrite=True
     )
 
     assert job.telemetry["extra"]["source"]["destination"].endswith("aiosqlite-bridge.parquet")
     assert job.telemetry["extra"]["source"]["backend"]
 
     result = await aiosqlite_session.execute("SELECT id, label FROM storage_bridge_aiosqlite ORDER BY id")
-    assert result.data == [
-        {"id": 3, "label": "east"},
-        {"id": 4, "label": "west"},
-    ]
+    assert result.data == [{"id": 3, "label": "east"}, {"id": 4, "label": "west"}]

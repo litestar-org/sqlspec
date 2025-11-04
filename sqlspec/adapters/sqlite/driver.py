@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import (
+    ArrowResult,
     DriverParameterProfile,
     ParameterStyle,
     build_statement_config_from_profile,

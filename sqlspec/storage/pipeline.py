@@ -9,6 +9,7 @@ from uuid import uuid4
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired, TypedDict
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
@@ -348,9 +349,30 @@ class SyncStoragePipeline:
         self, destination: StorageDestination, **backend_options: Any
     ) -> "tuple[ObjectStoreProtocol, str]":
         destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
+        alias_resolution = self._resolve_alias_destination(destination_str, backend_options)
+        if alias_resolution is not None:
+            return alias_resolution
         backend = self.registry.get(destination_str, **backend_options)
         normalized_path = self._normalize_path_for_backend(destination_str)
         return backend, normalized_path
+
+    def _resolve_alias_destination(
+        self, destination: str, backend_options: "dict[str, Any]"
+    ) -> "tuple[ObjectStoreProtocol, str] | None":
+        if not destination.startswith("alias://"):
+            return None
+        payload = destination.removeprefix("alias://")
+        alias_name, _, relative_path = payload.partition("/")
+        alias = alias_name.strip()
+        if not alias:
+            msg = "Alias destinations must include a registry alias before the path component"
+            raise ImproperConfigurationError(msg)
+        path_segment = relative_path.strip()
+        if not path_segment:
+            msg = "Alias destinations must include an object path after the alias name"
+            raise ImproperConfigurationError(msg)
+        backend = self.registry.get(alias, **backend_options)
+        return backend, path_segment.lstrip("/")
 
     def _normalize_path_for_backend(self, destination: str) -> str:
         if destination.startswith("file://"):
@@ -518,9 +540,30 @@ class AsyncStoragePipeline:
         self, destination: StorageDestination, **backend_options: Any
     ) -> "tuple[ObjectStoreProtocol, str]":
         destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
+        alias_resolution = self._resolve_alias_destination(destination_str, backend_options)
+        if alias_resolution is not None:
+            return alias_resolution
         backend = self.registry.get(destination_str, **backend_options)
         normalized_path = self._normalize_path_for_backend(destination_str)
         return backend, normalized_path
+
+    def _resolve_alias_destination(
+        self, destination: str, backend_options: "dict[str, Any]"
+    ) -> "tuple[ObjectStoreProtocol, str] | None":
+        if not destination.startswith("alias://"):
+            return None
+        payload = destination.removeprefix("alias://")
+        alias_name, _, relative_path = payload.partition("/")
+        alias = alias_name.strip()
+        if not alias:
+            msg = "Alias destinations must include a registry alias before the path component"
+            raise ImproperConfigurationError(msg)
+        path_segment = relative_path.strip()
+        if not path_segment:
+            msg = "Alias destinations must include an object path after the alias name"
+            raise ImproperConfigurationError(msg)
+        backend = self.registry.get(alias, **backend_options)
+        return backend, path_segment.lstrip("/")
 
     def _normalize_path_for_backend(self, destination: str) -> str:
         if destination.startswith("file://"):

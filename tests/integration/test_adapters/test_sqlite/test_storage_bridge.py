@@ -25,10 +25,7 @@ def test_sqlite_load_from_arrow(sqlite_session: SqliteDriver) -> None:
     assert job.telemetry["rows_processed"] == arrow_table.num_rows
 
     result = sqlite_session.execute("SELECT id, label FROM storage_bridge_sqlite ORDER BY id")
-    assert result.data == [
-        {"id": 1, "label": "alpha"},
-        {"id": 2, "label": "beta"},
-    ]
+    assert result.data == [{"id": 1, "label": "alpha"}, {"id": 2, "label": "beta"}]
 
 
 def test_sqlite_load_from_storage(sqlite_session: SqliteDriver, tmp_path: Path) -> None:
@@ -40,17 +37,11 @@ def test_sqlite_load_from_storage(sqlite_session: SqliteDriver, tmp_path: Path) 
     pq.write_table(arrow_table, destination)
 
     job = sqlite_session.load_from_storage(
-        "storage_bridge_sqlite",
-        str(destination),
-        file_format="parquet",
-        overwrite=True,
+        "storage_bridge_sqlite", str(destination), file_format="parquet", overwrite=True
     )
 
     assert job.telemetry["extra"]["source"]["destination"].endswith("sqlite-bridge.parquet")
     assert job.telemetry["extra"]["source"]["backend"]
 
     result = sqlite_session.execute("SELECT id, label FROM storage_bridge_sqlite ORDER BY id")
-    assert result.data == [
-        {"id": 10, "label": "gamma"},
-        {"id": 11, "label": "delta"},
-    ]
+    assert result.data == [{"id": 10, "label": "gamma"}, {"id": 11, "label": "delta"}]

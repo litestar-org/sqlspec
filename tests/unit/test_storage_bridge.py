@@ -1,6 +1,7 @@
 """Unit tests for storage bridge ingestion helpers."""
 
 import sqlite3
+from pathlib import Path
 from typing import Any, cast
 
 import aiosqlite
@@ -16,6 +17,7 @@ from sqlspec.adapters.psqlpy import PsqlpyConnection, PsqlpyDriver, psqlpy_state
 from sqlspec.adapters.sqlite import SqliteConnection, SqliteDriver, sqlite_statement_config
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
 from sqlspec.storage.pipeline import StorageDestination
+from sqlspec.storage.registry import storage_registry
 from sqlspec.utils.serializers import reset_serializer_cache, serialize_collection
 
 CAPABILITIES = {
@@ -335,6 +337,18 @@ def test_sync_pipeline_write_rows_includes_backend(monkeypatch: pytest.MonkeyPat
 
     telemetry = pipeline.write_rows([{"id": 1}], "alias://data")
     assert telemetry["backend"] == "test-backend"
+
+
+def test_sync_pipeline_supports_alias_destinations(tmp_path: "Path") -> None:
+    storage_registry.clear()
+    alias_name = "storage_bridge_unit_tests"
+    storage_registry.register_alias(alias_name, f"file://{tmp_path}", backend="local")
+    pipeline = SyncStoragePipeline()
+
+    telemetry = pipeline.write_rows([{"id": 1}], f"alias://{alias_name}/payload.jsonl")
+
+    assert telemetry["destination"].endswith("payload.jsonl")
+    storage_registry.clear()
 
 
 def test_storage_bridge_diagnostics_include_serializer_metrics() -> None:
