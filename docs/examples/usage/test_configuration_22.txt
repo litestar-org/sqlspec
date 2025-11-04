@@ -1,0 +1,9 @@
+# Create migration
+sqlspec --config myapp.config create-migration -m "Add users table"
+
+# Apply migrations
+sqlspec --config myapp.config upgrade
+
+# Rollback
+sqlspec --config myapp.config downgrade -1
+

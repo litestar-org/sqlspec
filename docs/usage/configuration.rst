@@ -18,20 +18,11 @@ Basic Configuration
 
 The simplest way to use SQLSpec is with default configuration:
 
-.. code-block:: python
-
-   from sqlspec import SQLSpec
-   from sqlspec.adapters.sqlite import SqliteConfig
-
-   # Create SQLSpec instance
-   spec = SQLSpec()
-
-   # Add database configuration
-   db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
-
-   # Use the database
-   with spec.provide_session(db) as session:
-       result = session.execute("SELECT 1")
+.. literalinclude:: /examples/usage/test_configuration_1.py
+   :language: python
+   :caption: `basic configuration`
+   :lines: 2-12
+   :dedent: 2
 
 Database Configurations
 -----------------------
@@ -41,122 +32,47 @@ Each database adapter has its own configuration class with adapter-specific sett
 SQLite Configuration
 ^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec.adapters.sqlite import SqliteConfig
-
-   config = SqliteConfig(
-       pool_config={
-           "database": "myapp.db",           # Database file path
-           "timeout": 5.0,                    # Lock timeout in seconds
-           "check_same_thread": False,        # Allow multi-thread access
-           "cached_statements": 100,          # Statement cache size
-           "uri": False,                      # Enable URI mode
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_2.py
+   :language: python
+   :caption: `sqlite configuration`
 
 **Memory Databases**
 
-.. code-block:: python
-
-   # In-memory database (isolated per connection)
-   config = SqliteConfig(pool_config={"database": ":memory:"})
-
-   # Shared memory database
-   config = SqliteConfig(
-       pool_config={
-           "database": "file:memdb1?mode=memory&cache=shared",
-           "uri": True
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_3.py
+   :language: python
+   :caption: `memory sqlite configuration`
 
 PostgreSQL Configuration (asyncpg)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   config = AsyncpgConfig(
-       pool_config={
-           "dsn": "postgresql://user:pass@localhost:5432/dbname",
-           # Or individual parameters:
-           "host": "localhost",
-           "port": 5432,
-           "user": "myuser",
-           "password": "mypassword",
-           "database": "mydb",
-           # Pool settings
-           "min_size": 10,
-           "max_size": 20,
-           "max_queries": 50000,
-           "max_inactive_connection_lifetime": 300.0,
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_4.py
+   :language: python
+   :caption: `postgres asyncpg configuration`
 
 PostgreSQL Configuration (psycopg)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+.. note::
 
-   from sqlspec.adapters.psycopg import PsycopgConfig
+   The `PsycopgConfig` class referenced here is for documentation purposes only and may not be present in the codebase. Future releases may include this feature if demand warrants.
 
-   # Async version
-   config = PsycopgConfig(
-       pool_config={
-           "conninfo": "postgresql://user:pass@localhost/db",
-           # Or keyword arguments:
-           "host": "localhost",
-           "port": 5432,
-           "dbname": "mydb",
-           "user": "myuser",
-           "password": "mypassword",
-           # Pool settings
-           "min_size": 5,
-           "max_size": 10,
-           "timeout": 30.0,
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_5.py
+   :language: python
+   :caption: `postgres psycopg configuration`
 
 MySQL Configuration (asyncmy)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec.adapters.asyncmy import AsyncmyConfig
-
-   config = AsyncmyConfig(
-       pool_config={
-           "host": "localhost",
-           "port": 3306,
-           "user": "myuser",
-           "password": "mypassword",
-           "database": "mydb",
-           "charset": "utf8mb4",
-           # Pool settings
-           "minsize": 1,
-           "maxsize": 10,
-           "pool_recycle": 3600,
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_6.py
+   :language: python
+   :caption: `mysql asyncmy configuration`
 
 DuckDB Configuration
 ^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec.adapters.duckdb import DuckDBConfig
-
-   # In-memory database
-   config = DuckDBConfig()
-
-   # Persistent database
-   config = DuckDBConfig(
-       pool_config={
-           "database": "analytics.duckdb",
-           "read_only": False,
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_7.py
+   :language: python
+   :caption: `duckdb configuration`
 
 Connection Pooling
 ------------------
@@ -166,65 +82,29 @@ Connection pooling improves performance by reusing database connections. SQLSpec
 Pool Configuration
 ^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   config = AsyncpgConfig(
-       pool_config={
-           "dsn": "postgresql://localhost/db",
-           "min_size": 10,        # Minimum connections to maintain
-           "max_size": 20,        # Maximum connections allowed
-           "max_queries": 50000,  # Max queries per connection before recycling
-           "max_inactive_connection_lifetime": 300.0,  # Idle timeout
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_8.py
+   :language: python
+   :caption: `pool configuration`
 
 **Pool Lifecycle Management**
 
-.. code-block:: python
-
-   # SQLSpec manages pool lifecycle automatically
-   spec = SQLSpec()
-   db = spec.add_config(AsyncpgConfig(pool_config={...}))
-
-   # Pool is created on first use
-   async with spec.provide_session(db) as session:
-       await session.execute("SELECT 1")
-
-   # Clean up all pools on shutdown
-   await spec.close_all_pools()
+.. literalinclude:: /examples/usage/test_configuration_9.py
+   :language: python
+   :caption: `pool lifecycle management`
 
 Using Pre-Created Pools
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-You can create and manage pools manually:
-
-.. code-block:: python
-
-   import asyncpg
-
-   # Create pool manually
-   pool = await asyncpg.create_pool(
-       dsn="postgresql://localhost/db",
-       min_size=10,
-       max_size=20
-   )
-
-   # Pass to config and add to SQLSpec
-   db = spec.add_config(AsyncpgConfig(pool_instance=pool))
+.. literalinclude:: /examples/usage/test_configuration_10.py
+   :language: python
+   :caption: `using pre-created pools`
 
 No-Pooling Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-For simple use cases or testing, disable pooling:
-
-.. code-block:: python
-
-   from sqlspec.adapters.sqlite import SqliteConfig
-
-   # SQLite uses thread-local connections (no traditional pooling)
-   config = SqliteConfig(pool_config={"database": "test.db"})
+.. literalinclude:: /examples/usage/test_configuration_11.py
+   :language: python
+   :caption: `no-pooling configuration`
 
 Statement Configuration
 -----------------------
@@ -234,72 +114,24 @@ Statement configuration controls SQL processing pipeline behavior.
 Basic Statement Config
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec.core.statement import StatementConfig
-   from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-
-   statement_config = StatementConfig(
-       dialect="postgres",                # SQLGlot dialect
-       enable_parsing=True,               # Parse SQL into AST
-       enable_validation=True,            # Run security/performance validators
-       enable_transformations=True,       # Apply AST transformations
-       enable_caching=True,               # Enable multi-tier caching
-   )
-
-   # Apply to adapter
-   config = AsyncpgConfig(
-       pool_config={...},
-       statement_config=statement_config
-   )
+.. literalinclude:: /examples/usage/test_configuration_12.py
+   :language: python
+   :caption: `basic statement config`
 
 Parameter Style Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Control how parameters are handled:
-
-.. code-block:: python
-
-   from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-
-   param_config = ParameterStyleConfig(
-       default_parameter_style=ParameterStyle.NUMERIC,  # $1, $2, ...
-       supported_parameter_styles={
-           ParameterStyle.NUMERIC,
-           ParameterStyle.NAMED_COLON,  # :name
-       },
-       has_native_list_expansion=False,
-       needs_static_script_compilation=False,
-          )
-
-   statement_config = StatementConfig(
-       dialect="postgres",
-       parameter_config=param_config
-   )
+.. literalinclude:: /examples/usage/test_configuration_13.py
+   :language: python
+   :caption: `parameter style configuration`
 
 **Parameter Styles**
 
 SQLSpec supports multiple parameter placeholder styles:
 
-.. code-block:: python
-
-   from sqlspec.core.parameters import ParameterStyle
-
-   # Question mark (SQLite, DuckDB)
-   ParameterStyle.QMARK          # WHERE id = ?
-
-   # Numeric (PostgreSQL, asyncpg)
-   ParameterStyle.NUMERIC        # WHERE id = $1
-
-   # Named colon (Oracle, SQLite)
-   ParameterStyle.NAMED_COLON    # WHERE id = :id
-
-   # Named at (BigQuery)
-   ParameterStyle.NAMED_AT       # WHERE id = @id
-
-   # Format/pyformat (psycopg, MySQL)
-   ParameterStyle.POSITIONAL_PYFORMAT         # WHERE id = %s
-   ParameterStyle.NAMED_PYFORMAT       # WHERE id = %(id)s
+.. literalinclude:: /examples/usage/test_configuration_14.py
+   :language: python
+   :caption: `parameter styles`
 
 Validation Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -308,13 +140,9 @@ Configure security and performance validation.
 
 Disable validation for performance-critical paths where input is trusted:
 
-.. code-block:: python
-
-   statement_config = StatementConfig(
-       dialect="postgres",
-       enable_validation=False,  # Skip validation
-       enable_transformations=False,  # Skip transformations
-   )
+.. literalinclude:: /examples/usage/test_configuration_15.py
+   :language: python
+   :caption: `validation configuration`
 
 Cache Configuration
 -------------------
@@ -324,61 +152,32 @@ SQLSpec uses multi-tier caching to avoid recompiling SQL statements.
 Global Cache Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec.core.cache import CacheConfig, update_cache_config
-
-   cache_config = CacheConfig(
-       enable_sql_cache=True,          # Cache compiled SQL strings
-       enable_optimized_cache=True,    # Cache optimized AST
-       enable_builder_cache=True,      # Cache QueryBuilder state
-       enable_file_cache=True,         # Cache loaded SQL files
-       max_cache_size=1000,            # Maximum cached items
-   )
-
-   # Update global cache configuration
-   update_cache_config(cache_config)
+.. literalinclude:: /examples/usage/test_configuration_16.py
+   :language: python
+   :caption: `global cache configuration`
 
 Per-Instance Cache Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   # Configure cache for specific SQLSpec instance
-   spec = SQLSpec()
-   spec.update_cache_config(
-       CacheConfig(
-           enable_sql_cache=True,
-           max_cache_size=500
-       )
-   )
+.. literalinclude:: /examples/usage/test_configuration_17.py
+   :language: python
+   :caption: `per-instance cache configuration`
 
 Cache Statistics
 ^^^^^^^^^^^^^^^^
 
 Monitor cache statistics:
 
-.. code-block:: python
-
-   from sqlspec.core.cache import get_cache_statistics, log_cache_stats
-
-   # Get statistics
-   stats = get_cache_statistics()
-   print(f"SQL Cache hits: {stats['sql_cache_hits']}")
-   print(f"File Cache hits: {stats['file_cache_hits']}")
-
-   # Log statistics
-   log_cache_stats()  # Logs to configured logger
+.. literalinclude:: /examples/usage/test_configuration_18.py
+   :language: python
+   :caption: `cache statistics`
 
 Clear Cache
 ^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec.core.cache import reset_cache_stats
-
-   # Clear all caches and reset statistics
-   reset_cache_stats()
+.. literalinclude:: /examples/usage/test_configuration_19.py
+   :language: python
+   :caption: `clear cache`
 
 Multiple Database Configurations
 ---------------------------------
@@ -388,39 +187,18 @@ SQLSpec supports multiple database configurations in a single application.
 Binding Multiple Configs
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec import SQLSpec
-   from sqlspec.adapters.sqlite import SqliteConfig
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   spec = SQLSpec()
-
-   # Add multiple configurations
-   sqlite_db = spec.add_config(SqliteConfig(pool_config={"database": "cache.db"}))
-   postgres_db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}))
-
-   # Use specific configuration
-   with spec.provide_session(sqlite_db) as session:
-       session.execute("SELECT * FROM cache")
-
-   async with spec.provide_session(postgres_db) as session:
-       await session.execute("SELECT * FROM users")
+.. literalinclude:: /examples/usage/test_configuration_20.py
+   :language: python
+   :caption: `binding multiple configurations`
 
 Named Bindings
 ^^^^^^^^^^^^^^
 
 Use bind keys for clearer configuration management:
 
-.. code-block:: python
-
-   # Add with bind keys
-   cache_db = spec.add_config(SqliteConfig(pool_config={"database": "cache.db"}), bind_key="cache_db")
-   main_db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}), bind_key="main_db")
-
-   # Access by bind key
-   with spec.provide_session("cache_db") as session:
-       session.execute("SELECT 1")
+.. literalinclude:: /examples/usage/test_configuration_21.py
+   :language: python
+   :caption: `named bindings`
 
 Migration Configuration
 -----------------------
@@ -430,34 +208,18 @@ SQLSpec includes a migration system for schema management.
 Basic Migration Config
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/db"},
-       extension_config={
-           "litestar": {"session_table": "custom_sessions"}  # Extension settings
-       },
-       migration_config={
-           "script_location": "migrations",     # Migration directory
-           "version_table": "alembic_version",  # Version tracking table
-           "include_extensions": ["litestar"],  # Simple string list only
-       }
-   )
+.. literalinclude:: /examples/usage/test_configuration_22.py
+   :language: python
+   :caption: `basic migration config`
+   :lines: 12-24
+   :dedent: 4
 
 **Migration CLI**
 
-.. code-block:: bash
+.. literalinclude:: /examples/usage/test_configuration_22.txt
+   :language: text
+   :caption: `migration CLI`
 
-   # Create migration
-   sqlspec --config myapp.config create-migration -m "Add users table"
-
-   # Apply migrations
-   sqlspec --config myapp.config upgrade
-
-   # Rollback
-   sqlspec --config myapp.config downgrade -1
 
 Extension Migration Versioning
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
