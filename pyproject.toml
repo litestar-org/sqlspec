@@ -295,6 +295,7 @@ filterwarnings = [
   "ignore:`use_rich_markup=` will be deprecated:PendingDeprecationWarning",
   "ignore:`show_metavars_column=` will be deprecated:PendingDeprecationWarning",
   "ignore:`append_metavars_help=` will be deprecated:PendingDeprecationWarning",
+  "ignore:You are using a Python version.*:FutureWarning:google.api_core.*",
 ]
 markers = [
   "integration: marks tests that require an external database",
