@@ -6,6 +6,7 @@ and transaction management.
 
 import datetime
 import decimal
+import inspect
 import re
 import uuid
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.psqlpy._types import PsqlpyConnection
-    from sqlspec.core import SQLResult
+    from sqlspec.core import ArrowResult, SQLResult
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.storage import (
@@ -509,20 +510,61 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """Execute a query and stream Arrow results to a storage backend."""
 
         self._require_capability("arrow_export_enabled")
-        arrow_result = await self.select_to_arrow(
-            statement,
-            *parameters,
-            statement_config=statement_config,
-            **kwargs,
-        )
+        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
         telemetry_payload = await arrow_result.write_to_storage_async(
-            destination,
-            format_hint=format_hint,
-            pipeline=async_pipeline,
+            destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow-formatted data into PostgreSQL via psqlpy binary COPY."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            await self._truncate_table_async(table)
+
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            schema_name, table_name = _split_schema_and_table(table)
+            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+                copy_kwargs: dict[str, Any] = {"columns": columns}
+                if schema_name:
+                    copy_kwargs["schema_name"] = schema_name
+                copy_operation = cursor.binary_copy_to_table(records, table_name, **copy_kwargs)
+                if inspect.isawaitable(copy_operation):
+                    await copy_operation
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage using the storage bridge pipeline."""
+
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
 
     async def begin(self) -> None:
         """Begin a database transaction."""
@@ -547,6 +589,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         except psqlpy.exceptions.DatabaseError as e:
             msg = f"Failed to commit psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    async def _truncate_table_async(self, table: str) -> None:
+        qualified = _format_table_identifier(table)
+        async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            await cursor.execute(f"TRUNCATE TABLE {qualified}")
 
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
@@ -697,6 +744,36 @@ def _coerce_numeric_for_write(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _coerce_numeric_for_write(item) for key, item in value.items()}
     return value
+
+
+def _split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
+    cleaned = identifier.strip()
+    if not cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    if "." not in cleaned:
+        return None, cleaned.strip('"')
+    parts = [part for part in cleaned.split(".") if part]
+    if len(parts) == 1:
+        return None, parts[0].strip('"')
+    schema_name = ".".join(parts[:-1]).strip('"')
+    table_name = parts[-1].strip('"')
+    if not table_name:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    return schema_name or None, table_name
+
+
+def _quote_identifier(identifier: str) -> str:
+    normalized = identifier.replace('"', '""')
+    return f'"{normalized}"'
+
+
+def _format_table_identifier(identifier: str) -> str:
+    schema_name, table_name = _split_schema_and_table(identifier)
+    if schema_name:
+        return f"{_quote_identifier(schema_name)}.{_quote_identifier(table_name)}"
+    return _quote_identifier(table_name)
 
 
 def _build_psqlpy_profile() -> DriverParameterProfile:

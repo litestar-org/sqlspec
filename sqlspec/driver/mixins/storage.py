@@ -171,21 +171,13 @@ class StorageDriverMixin:
         return create_storage_bridge_job(status, merged)
 
     def _read_arrow_from_storage_sync(
-        self,
-        source: StorageDestination,
-        *,
-        file_format: StorageFormat,
-        storage_options: "dict[str, Any] | None" = None,
+        self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
         pipeline = cast("SyncStoragePipeline", self._storage_pipeline())
         return pipeline.read_arrow(source, file_format=file_format, storage_options=storage_options)
 
     async def _read_arrow_from_storage_async(
-        self,
-        source: StorageDestination,
-        *,
-        file_format: StorageFormat,
-        storage_options: "dict[str, Any] | None" = None,
+        self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
         pipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
         return await pipeline.read_arrow_async(source, file_format=file_format, storage_options=storage_options)
@@ -194,11 +186,7 @@ class StorageDriverMixin:
     def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> StorageTelemetry:
         rows = int(getattr(table, "num_rows", 0))
         bytes_processed = int(getattr(table, "nbytes", 0))
-        return {
-            "rows_processed": rows,
-            "bytes_processed": bytes_processed,
-            "format": format_label,
-        }
+        return {"rows_processed": rows, "bytes_processed": bytes_processed, "format": format_label}
 
     def _coerce_arrow_table(self, source: "ArrowResult | Any") -> "ArrowTable":
         ensure_pyarrow()

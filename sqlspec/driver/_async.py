@@ -40,6 +40,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
     """Base class for asynchronous database drivers."""
 
     __slots__ = ()
+    is_async: bool = True
 
     @property
     @abstractmethod

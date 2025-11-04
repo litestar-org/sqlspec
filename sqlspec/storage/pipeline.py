@@ -12,7 +12,7 @@ from typing_extensions import NotRequired, TypedDict
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
-from sqlspec.utils.serializers import from_json, serialize_collection, to_json
+from sqlspec.utils.serializers import from_json, get_serializer_metrics, serialize_collection, to_json
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -32,6 +32,7 @@ __all__ = (
     "StorageTelemetry",
     "SyncStoragePipeline",
     "create_storage_bridge_job",
+    "get_storage_bridge_diagnostics",
     "get_storage_bridge_metrics",
     "reset_storage_bridge_metrics",
 )
@@ -93,6 +94,7 @@ class StorageTelemetry(TypedDict, total=False):
     duration_s: float
     format: str
     extra: "dict[str, Any]"
+    backend: str
 
 
 class StorageBridgeJob(NamedTuple):
@@ -146,6 +148,16 @@ def create_storage_bridge_job(status: str, telemetry: StorageTelemetry) -> Stora
     """Create a storage bridge job handle with a unique identifier."""
 
     return StorageBridgeJob(job_id=str(uuid4()), status=status, telemetry=telemetry)
+
+
+def get_storage_bridge_diagnostics() -> "dict[str, int]":
+    """Return aggregated storage bridge + serializer cache metrics."""
+
+    diagnostics = dict(get_storage_bridge_metrics())
+    serializer_metrics = get_serializer_metrics()
+    for key, value in serializer_metrics.items():
+        diagnostics[f"serializer.{key}"] = value
+    return diagnostics
 
 
 def _encode_row_payload(rows: "list[Any]", format_hint: StorageFormat) -> bytes:
@@ -248,20 +260,14 @@ class SyncStoragePipeline:
         )
 
     def read_arrow(
-        self,
-        source: StorageDestination,
-        *,
-        file_format: StorageFormat,
-        storage_options: "dict[str, Any] | None" = None,
+        self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
         """Read an artifact from storage and decode it into an Arrow table."""
 
         backend, path = self._resolve_backend(source, **(storage_options or {}))
+        backend_name = getattr(backend, "backend_type", "storage")
         payload = execute_sync_storage_operation(
-            partial(backend.read_bytes, path),
-            backend=getattr(backend, "backend_type", "storage"),
-            operation="read_bytes",
-            path=path,
+            partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
         )
         table = _decode_arrow_payload(payload, file_format)
         telemetry: StorageTelemetry = {
@@ -269,6 +275,7 @@ class SyncStoragePipeline:
             "bytes_processed": len(payload),
             "rows_processed": int(getattr(table, "num_rows", 0)),
             "format": file_format,
+            "backend": backend_name,
         }
         return table, telemetry
 
@@ -319,12 +326,10 @@ class SyncStoragePipeline:
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
         backend, path = self._resolve_backend(destination, **storage_options)
+        backend_name = getattr(backend, "backend_type", "storage")
         start = perf_counter()
         execute_sync_storage_operation(
-            partial(backend.write_bytes, path, payload),
-            backend=getattr(backend, "backend_type", "storage"),
-            operation="write_bytes",
-            path=path,
+            partial(backend.write_bytes, path, payload), backend=backend_name, operation="write_bytes", path=path
         )
         elapsed = perf_counter() - start
         bytes_written = len(payload)
@@ -335,6 +340,7 @@ class SyncStoragePipeline:
             "rows_processed": rows,
             "duration_s": elapsed,
             "format": format_label,
+            "backend": backend_name,
         }
         return telemetry
 
@@ -410,10 +416,7 @@ class AsyncStoragePipeline:
             if delete_async is not None:
                 try:
                     await execute_async_storage_operation(
-                        partial(delete_async, path),
-                        backend=backend_name,
-                        operation="delete",
-                        path=path,
+                        partial(delete_async, path), backend=backend_name, operation="delete", path=path
                     )
                 except Exception:
                     if not ignore_errors:
@@ -421,15 +424,10 @@ class AsyncStoragePipeline:
                 continue
 
             def _delete_sync(
-                backend: "ObjectStoreProtocol" = backend,
-                path: str = path,
-                backend_name: str = backend_name,
+                backend: "ObjectStoreProtocol" = backend, path: str = path, backend_name: str = backend_name
             ) -> None:
                 execute_sync_storage_operation(
-                    partial(backend.delete, path),
-                    backend=backend_name,
-                    operation="delete",
-                    path=path,
+                    partial(backend.delete, path), backend=backend_name, operation="delete", path=path
                 )
 
             try:
@@ -453,10 +451,7 @@ class AsyncStoragePipeline:
         start = perf_counter()
         if writer is not None:
             await execute_async_storage_operation(
-                partial(writer, path, payload),
-                backend=backend_name,
-                operation="write_bytes",
-                path=path,
+                partial(writer, path, payload), backend=backend_name, operation="write_bytes", path=path
             )
         else:
 
@@ -484,37 +479,27 @@ class AsyncStoragePipeline:
             "rows_processed": rows,
             "duration_s": elapsed,
             "format": format_label,
+            "backend": backend_name,
         }
         return telemetry
 
     async def read_arrow_async(
-        self,
-        source: StorageDestination,
-        *,
-        file_format: StorageFormat,
-        storage_options: "dict[str, Any] | None" = None,
+        self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
         backend, path = self._resolve_backend(source, **(storage_options or {}))
         backend_name = getattr(backend, "backend_type", "storage")
         reader = getattr(backend, "read_bytes_async", None)
         if reader is not None:
             payload = await execute_async_storage_operation(
-                partial(reader, path),
-                backend=backend_name,
-                operation="read_bytes",
-                path=path,
+                partial(reader, path), backend=backend_name, operation="read_bytes", path=path
             )
         else:
+
             def _read_sync(
-                backend: "ObjectStoreProtocol" = backend,
-                path: str = path,
-                backend_name: str = backend_name,
+                backend: "ObjectStoreProtocol" = backend, path: str = path, backend_name: str = backend_name
             ) -> bytes:
                 return execute_sync_storage_operation(
-                    partial(backend.read_bytes, path),
-                    backend=backend_name,
-                    operation="read_bytes",
-                    path=path,
+                    partial(backend.read_bytes, path), backend=backend_name, operation="read_bytes", path=path
                 )
 
             payload = await async_(_read_sync)()
@@ -525,6 +510,7 @@ class AsyncStoragePipeline:
             "bytes_processed": len(payload),
             "rows_processed": int(getattr(table, "num_rows", 0)),
             "format": file_format,
+            "backend": backend_name,
         }
         return table, telemetry
 

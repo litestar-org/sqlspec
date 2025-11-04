@@ -505,9 +505,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
         telemetry_payload = arrow_result.write_to_storage_sync(
-            destination,
-            format_hint=format_hint,
-            pipeline=sync_pipeline,
+            destination, format_hint=format_hint, pipeline=sync_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
@@ -552,13 +550,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Read an artifact from storage and load it into DuckDB."""
 
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
-        return self.load_from_arrow(
-            table,
-            arrow_table,
-            partitioner=partitioner,
-            overwrite=overwrite,
-            telemetry=inbound,
-        )
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
 
 def _bool_to_int(value: bool) -> int:

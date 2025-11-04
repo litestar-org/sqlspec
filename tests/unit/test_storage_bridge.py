@@ -1,14 +1,22 @@
 """Unit tests for storage bridge ingestion helpers."""
 
-from typing import cast
+import sqlite3
+from typing import Any, cast
 
+import aiosqlite
 import duckdb
 import pyarrow as pa
 import pytest
 
-from sqlspec.adapters.asyncpg._types import AsyncpgConnection
-from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, asyncpg_statement_config
-from sqlspec.adapters.duckdb.driver import DuckDBDriver, duckdb_statement_config
+from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver, aiosqlite_statement_config
+from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver, asyncmy_statement_config
+from sqlspec.adapters.asyncpg import AsyncpgConnection, AsyncpgDriver, asyncpg_statement_config
+from sqlspec.adapters.duckdb import DuckDBDriver, duckdb_statement_config
+from sqlspec.adapters.psqlpy import PsqlpyConnection, PsqlpyDriver, psqlpy_statement_config
+from sqlspec.adapters.sqlite import SqliteConnection, SqliteDriver, sqlite_statement_config
+from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
+from sqlspec.storage.pipeline import StorageDestination
+from sqlspec.utils.serializers import reset_serializer_cache, serialize_collection
 
 CAPABILITIES = {
     "arrow_export_enabled": True,
@@ -25,17 +33,62 @@ class DummyAsyncpgConnection:
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[tuple[object, ...]], list[str]]] = []
 
-    async def copy_records_to_table(
-        self, table: str, *, records: list[tuple[object, ...]], columns: list[str]
-    ) -> None:
+    async def copy_records_to_table(self, table: str, *, records: list[tuple[object, ...]], columns: list[str]) -> None:
         self.calls.append((table, records, columns))
+
+
+class DummyPsqlpyConnection:
+    def __init__(self) -> None:
+        self.copy_calls: list[dict[str, Any]] = []
+        self.statements: list[str] = []
+
+    async def binary_copy_to_table(
+        self,
+        source: list[tuple[object, ...]],
+        table_name: str,
+        *,
+        columns: list[str] | None = None,
+        schema_name: str | None = None,
+    ) -> None:
+        self.copy_calls.append({
+            "table": table_name,
+            "schema": schema_name,
+            "columns": columns or [],
+            "records": source,
+        })
+
+    async def execute(self, sql: str, params: "list[Any] | None" = None) -> None:
+        _ = params
+        self.statements.append(sql)
+
+
+class DummyAsyncmyCursorImpl:
+    def __init__(self, operations: "list[tuple[str, Any, Any | None]]") -> None:
+        self.operations = operations
+
+    async def executemany(self, sql: str, params: Any) -> None:
+        self.operations.append(("executemany", sql, params))
+
+    async def execute(self, sql: str, params: Any | None = None) -> None:
+        self.operations.append(("execute", sql, params))
+
+    async def close(self) -> None:
+        return None
+
+
+class DummyAsyncmyConnection:
+    def __init__(self) -> None:
+        self.operations: list[tuple[str, Any, Any | None]] = []
+
+    def cursor(self) -> DummyAsyncmyCursorImpl:
+        return DummyAsyncmyCursorImpl(self.operations)
 
 
 @pytest.mark.asyncio
 async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     arrow_table = pa.table({"id": [1, 2], "name": ["alpha", "beta"]})
 
-    async def _fake_read(*_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
+    async def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
         return arrow_table, {"destination": "file://tmp/part-0.parquet", "bytes_processed": 128}
 
     driver = AsyncpgDriver(
@@ -43,7 +96,7 @@ async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> Non
         statement_config=asyncpg_statement_config,
         driver_features={"storage_capabilities": CAPABILITIES},
     )
-    monkeypatch.setattr(driver, "_read_arrow_from_storage_async", _fake_read)
+    monkeypatch.setattr(AsyncpgDriver, "_read_arrow_from_storage_async", _fake_read)
 
     job = await driver.load_from_storage("public.ingest_target", "file://tmp/part-0.parquet", file_format="parquet")
 
@@ -56,7 +109,7 @@ async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_duckdb_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     arrow_table = pa.table({"id": [10, 11], "label": ["east", "west"]})
 
-    def _fake_read(*_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
+    def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
         return arrow_table, {"destination": "file://tmp/part-1.parquet", "bytes_processed": 256}
 
     connection = duckdb.connect(database=":memory:")
@@ -68,16 +121,225 @@ def test_duckdb_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
         driver_features={"storage_capabilities": CAPABILITIES},
     )
 
-    monkeypatch.setattr(driver, "_read_arrow_from_storage_sync", _fake_read)
+    monkeypatch.setattr(DuckDBDriver, "_read_arrow_from_storage_sync", _fake_read)
 
-    job = driver.load_from_storage(
-        "ingest_target",
-        "file://tmp/part-1.parquet",
-        file_format="parquet",
-        overwrite=True,
-    )
+    job = driver.load_from_storage("ingest_target", "file://tmp/part-1.parquet", file_format="parquet", overwrite=True)
 
     rows = connection.execute("SELECT id, label FROM ingest_target ORDER BY id").fetchall()
     assert rows == [(10, "east"), (11, "west")]
     assert job.telemetry["rows_processed"] == arrow_table.num_rows
     assert job.telemetry["destination"] == "ingest_target"
+
+
+@pytest.mark.asyncio
+async def test_psqlpy_load_from_arrow_overwrite() -> None:
+    arrow_table = pa.table({"id": [7, 8], "name": ["east", "west"]})
+    dummy_connection = DummyPsqlpyConnection()
+    driver = PsqlpyDriver(
+        connection=cast(PsqlpyConnection, dummy_connection),
+        statement_config=psqlpy_statement_config,
+        driver_features={"storage_capabilities": CAPABILITIES},
+    )
+
+    job = await driver.load_from_arrow("analytics.ingest_target", arrow_table, overwrite=True)
+
+    assert dummy_connection.statements == ['TRUNCATE TABLE "analytics"."ingest_target"']
+    assert dummy_connection.copy_calls[0]["table"] == "ingest_target"
+    assert dummy_connection.copy_calls[0]["schema"] == "analytics"
+    assert dummy_connection.copy_calls[0]["records"] == [(7, "east"), (8, "west")]
+    assert job.telemetry["destination"] == "analytics.ingest_target"
+    assert job.telemetry["rows_processed"] == arrow_table.num_rows
+
+
+@pytest.mark.asyncio
+async def test_psqlpy_load_from_storage_merges_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
+    arrow_table = pa.table({"id": [1, 2], "name": ["north", "south"]})
+    dummy_connection = DummyPsqlpyConnection()
+    driver = PsqlpyDriver(
+        connection=cast(PsqlpyConnection, dummy_connection),
+        statement_config=psqlpy_statement_config,
+        driver_features={"storage_capabilities": CAPABILITIES},
+    )
+
+    async def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
+        return arrow_table, {"destination": "s3://bucket/part-2.parquet", "bytes_processed": 512}
+
+    monkeypatch.setattr(PsqlpyDriver, "_read_arrow_from_storage_async", _fake_read)
+
+    job = await driver.load_from_storage("public.delta_load", "s3://bucket/part-2.parquet", file_format="parquet")
+
+    assert dummy_connection.copy_calls[0]["table"] == "delta_load"
+    assert dummy_connection.copy_calls[0]["columns"] == ["id", "name"]
+    assert job.telemetry["destination"] == "public.delta_load"
+    assert job.telemetry["extra"]["source"]["destination"] == "s3://bucket/part-2.parquet"
+
+
+@pytest.mark.asyncio
+async def test_aiosqlite_load_from_arrow_overwrite() -> None:
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        await connection.execute("CREATE TABLE ingest (id INTEGER, name TEXT)")
+        await connection.execute("INSERT INTO ingest (id, name) VALUES (99, 'stale')")
+        await connection.commit()
+
+        driver = AiosqliteDriver(
+            connection=cast(AiosqliteConnection, connection),
+            statement_config=aiosqlite_statement_config,
+            driver_features={"storage_capabilities": CAPABILITIES},
+        )
+        arrow_table = pa.table({"id": [1, 2], "name": ["alpha", "beta"]})
+
+        job = await driver.load_from_arrow("ingest", arrow_table, overwrite=True)
+
+        async with connection.execute("SELECT id, name FROM ingest ORDER BY id") as cursor:
+            rows = await cursor.fetchall()
+        assert rows == [(1, "alpha"), (2, "beta")]
+        assert job.telemetry["destination"] == "ingest"
+        assert job.telemetry["rows_processed"] == arrow_table.num_rows
+    finally:
+        await connection.close()
+
+
+@pytest.mark.asyncio
+async def test_aiosqlite_load_from_storage_includes_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        await connection.execute("CREATE TABLE raw_data (id INTEGER, label TEXT)")
+        await connection.commit()
+
+        driver = AiosqliteDriver(
+            connection=cast(AiosqliteConnection, connection),
+            statement_config=aiosqlite_statement_config,
+            driver_features={"storage_capabilities": CAPABILITIES},
+        )
+        arrow_table = pa.table({"id": [5], "label": ["gamma"]})
+
+        async def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
+            return arrow_table, {"destination": "file:///tmp/chunk.parquet", "bytes_processed": 64}
+
+        monkeypatch.setattr(AiosqliteDriver, "_read_arrow_from_storage_async", _fake_read)
+
+        job = await driver.load_from_storage("raw_data", "file:///tmp/chunk.parquet", file_format="parquet")
+
+        async with connection.execute("SELECT id, label FROM raw_data") as cursor:
+            rows = await cursor.fetchall()
+        assert rows == [(5, "gamma")]
+        assert job.telemetry["extra"]["source"]["destination"] == "file:///tmp/chunk.parquet"
+    finally:
+        await connection.close()
+
+
+def test_sqlite_load_from_arrow_overwrite() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE staging (id INTEGER, description TEXT)")
+        connection.execute("INSERT INTO staging (id, description) VALUES (42, 'legacy')")
+
+        driver = SqliteDriver(
+            connection=cast(SqliteConnection, connection),
+            statement_config=sqlite_statement_config,
+            driver_features={"storage_capabilities": CAPABILITIES},
+        )
+        arrow_table = pa.table({"id": [10, 11], "description": ["north", "south"]})
+
+        job = driver.load_from_arrow("staging", arrow_table, overwrite=True)
+
+        rows = connection.execute("SELECT id, description FROM staging ORDER BY id").fetchall()
+        assert rows == [(10, "north"), (11, "south")]
+        assert job.telemetry["rows_processed"] == arrow_table.num_rows
+    finally:
+        connection.close()
+
+
+def test_sqlite_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE metrics (val INTEGER)")
+
+        driver = SqliteDriver(
+            connection=cast(SqliteConnection, connection),
+            statement_config=sqlite_statement_config,
+            driver_features={"storage_capabilities": CAPABILITIES},
+        )
+        arrow_table = pa.table({"val": [99]})
+
+        def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
+            return arrow_table, {"destination": "s3://bucket/segment.parquet", "bytes_processed": 32}
+
+        monkeypatch.setattr(SqliteDriver, "_read_arrow_from_storage_sync", _fake_read)
+
+        job = driver.load_from_storage("metrics", "s3://bucket/segment.parquet", file_format="parquet")
+
+        rows = connection.execute("SELECT val FROM metrics").fetchall()
+        assert rows == [(99,)]
+        assert job.telemetry["extra"]["source"]["destination"] == "s3://bucket/segment.parquet"
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_asyncmy_load_from_arrow_overwrite() -> None:
+    connection = DummyAsyncmyConnection()
+    driver = AsyncmyDriver(
+        connection=cast(AsyncmyConnection, connection),
+        statement_config=asyncmy_statement_config,
+        driver_features={"storage_capabilities": CAPABILITIES},
+    )
+    arrow_table = pa.table({"id": [3], "score": [9.5]})
+
+    job = await driver.load_from_arrow("analytics.scores", arrow_table, overwrite=True)
+
+    assert connection.operations[0][1].startswith("TRUNCATE TABLE `analytics`.`scores`")
+    assert connection.operations[1][0] == "executemany"
+    assert job.telemetry["destination"] == "analytics.scores"
+
+
+@pytest.mark.asyncio
+async def test_asyncmy_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = DummyAsyncmyConnection()
+    driver = AsyncmyDriver(
+        connection=cast(AsyncmyConnection, connection),
+        statement_config=asyncmy_statement_config,
+        driver_features={"storage_capabilities": CAPABILITIES},
+    )
+    arrow_table = pa.table({"id": [11], "score": [8.2]})
+
+    async def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
+        return arrow_table, {"destination": "s3://bucket/segment.parquet", "bytes_processed": 48, "backend": "fsspec"}
+
+    monkeypatch.setattr(AsyncmyDriver, "_read_arrow_from_storage_async", _fake_read)
+
+    job = await driver.load_from_storage("analytics.scores", "s3://bucket/segment.parquet", file_format="parquet")
+
+    assert job.telemetry["extra"]["source"]["backend"] == "fsspec"
+
+
+def test_sync_pipeline_write_rows_includes_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipeline = SyncStoragePipeline()
+
+    class _Backend:
+        backend_type = "test-backend"
+
+        def __init__(self) -> None:
+            self.payloads: list[tuple[str, bytes]] = []
+
+        def write_bytes(self, path: str, payload: bytes) -> None:
+            self.payloads.append((path, payload))
+
+    backend = _Backend()
+
+    def _fake_resolve(self: SyncStoragePipeline, destination: "StorageDestination", **_: Any) -> tuple[_Backend, str]:
+        return backend, "objects/data.jsonl"
+
+    monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
+
+    telemetry = pipeline.write_rows([{"id": 1}], "alias://data")
+    assert telemetry["backend"] == "test-backend"
+
+
+def test_storage_bridge_diagnostics_include_serializer_metrics() -> None:
+    reset_storage_bridge_metrics()
+    reset_serializer_cache()
+    serialize_collection([{"id": 1}])
+    diagnostics = get_storage_bridge_diagnostics()
+    assert "serializer.size" in diagnostics

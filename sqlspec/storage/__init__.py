@@ -20,6 +20,7 @@ from sqlspec.storage.pipeline import (
     StorageTelemetry,
     SyncStoragePipeline,
     create_storage_bridge_job,
+    get_storage_bridge_diagnostics,
     get_storage_bridge_metrics,
     reset_storage_bridge_metrics,
 )
@@ -38,6 +39,7 @@ __all__ = (
     "StorageTelemetry",
     "SyncStoragePipeline",
     "create_storage_bridge_job",
+    "get_storage_bridge_diagnostics",
     "get_storage_bridge_metrics",
     "reset_storage_bridge_metrics",
     "storage_registry",

@@ -458,13 +458,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         job_config.write_disposition = "WRITE_TRUNCATE" if overwrite else "WRITE_APPEND"
         return job_config
 
-    def _build_load_job_telemetry(
-        self,
-        job: QueryJob,
-        table: str,
-        *,
-        format_label: str,
-    ) -> "StorageTelemetry":
+    def _build_load_job_telemetry(self, job: QueryJob, table: str, *, format_label: str) -> "StorageTelemetry":
         properties = getattr(job, "_properties", {})
         load_stats = properties.get("statistics", {}).get("load", {})
         rows_processed = int(load_stats.get("outputRows") or getattr(job, "output_rows", 0) or 0)
@@ -816,17 +810,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Execute a query and persist Arrow results to a storage backend."""
 
         self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(
-            statement,
-            *parameters,
-            statement_config=statement_config,
-            **kwargs,
-        )
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
         telemetry_payload = arrow_result.write_to_storage_sync(
-            destination,
-            format_hint=format_hint,
-            pipeline=sync_pipeline,
+            destination, format_hint=format_hint, pipeline=sync_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)

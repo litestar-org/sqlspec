@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 import aiosqlite
 
 from sqlspec.core import (
+    ArrowResult,
     DriverParameterProfile,
     ParameterStyle,
     build_statement_config_from_profile,
@@ -295,20 +296,56 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Execute a query and stream Arrow results into storage."""
 
         self._require_capability("arrow_export_enabled")
-        arrow_result = await self.select_to_arrow(
-            statement,
-            *parameters,
-            statement_config=statement_config,
-            **kwargs,
-        )
+        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
         telemetry_payload = await arrow_result.write_to_storage_async(
-            destination,
-            format_hint=format_hint,
-            pipeline=async_pipeline,
+            destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into SQLite using batched inserts."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            await self._truncate_table_async(table)
+
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            insert_sql = _build_sqlite_insert_statement(table, columns)
+            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+                await cursor.executemany(insert_sql, records)
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage into SQLite."""
+
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
 
     async def begin(self) -> None:
         """Begin a database transaction."""
@@ -348,6 +385,11 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
+    async def _truncate_table_async(self, table: str) -> None:
+        statement = f"DELETE FROM {_format_sqlite_identifier(table)}"
+        async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            await cursor.execute(statement)
+
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -364,6 +406,27 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
 def _bool_to_int(value: bool) -> int:
     return int(value)
+
+
+def _quote_sqlite_identifier(identifier: str) -> str:
+    normalized = identifier.replace('"', '""')
+    return f'"{normalized}"'
+
+
+def _format_sqlite_identifier(identifier: str) -> str:
+    cleaned = identifier.strip()
+    if not cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    parts = [part for part in cleaned.split(".") if part]
+    formatted = ".".join(_quote_sqlite_identifier(part) for part in parts)
+    return formatted or _quote_sqlite_identifier(cleaned)
+
+
+def _build_sqlite_insert_statement(table: str, columns: "list[str]") -> str:
+    column_clause = ", ".join(_quote_sqlite_identifier(column) for column in columns)
+    placeholders = ", ".join("?" for _ in columns)
+    return f"INSERT INTO {_format_sqlite_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
 def _build_aiosqlite_profile() -> DriverParameterProfile:

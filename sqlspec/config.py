@@ -529,7 +529,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         at runtime when needed.
         """
         from sqlspec.loader import SQLFileLoader
-        from sqlspec.migrations.commands import create_migration_commands
+        from sqlspec.migrations import create_migration_commands
 
         self._migration_loader = SQLFileLoader()
         self._migration_commands = create_migration_commands(self)  # pyright: ignore
@@ -709,10 +709,6 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
-        self._storage_capabilities = None
-        self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
-        self._storage_capabilities = None
-        self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
 
@@ -994,6 +990,8 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
+        self._storage_capabilities = None
+        self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
 
     def create_pool(self) -> PoolT:
         """Create and return the connection pool.

@@ -481,17 +481,10 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         """Execute a query and stream Arrow results to storage (sync)."""
 
         self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(
-            statement,
-            *parameters,
-            statement_config=statement_config,
-            **kwargs,
-        )
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
         telemetry_payload = arrow_result.write_to_storage_sync(
-            destination,
-            format_hint=format_hint,
-            pipeline=sync_pipeline,
+            destination, format_hint=format_hint, pipeline=sync_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
@@ -537,13 +530,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         """Load staged artifacts into PostgreSQL via COPY."""
 
         arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
-        return self.load_from_arrow(
-            table,
-            arrow_table,
-            partitioner=partitioner,
-            overwrite=overwrite,
-            telemetry=inbound,
-        )
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
@@ -936,17 +923,10 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         """Execute a query and stream Arrow data to storage asynchronously."""
 
         self._require_capability("arrow_export_enabled")
-        arrow_result = await self.select_to_arrow(
-            statement,
-            *parameters,
-            statement_config=statement_config,
-            **kwargs,
-        )
+        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
         telemetry_payload = await arrow_result.write_to_storage_async(
-            destination,
-            format_hint=format_hint,
-            pipeline=async_pipeline,
+            destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
@@ -993,11 +973,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
         arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
         return await self.load_from_arrow(
-            table,
-            arrow_table,
-            partitioner=partitioner,
-            overwrite=overwrite,
-            telemetry=inbound,
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
     @property
