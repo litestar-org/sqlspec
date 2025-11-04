@@ -25,4 +25,3 @@ def test_cache_statistics() -> None:
 
         # Log statistics (logs to configured logger)
         log_cache_stats()
-

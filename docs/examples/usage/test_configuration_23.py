@@ -6,10 +6,7 @@ from unittest.mock import patch
 import pytest
 
 
-@pytest.mark.skipif(
-    not os.getenv("TEST_ASYNCPG", "0") == "1",
-    reason="AsyncPG integration tests disabled",
-)
+@pytest.mark.skipif(os.getenv("TEST_ASYNCPG", "0") != "1", reason="AsyncPG integration tests disabled")
 def test_environment_based_configuration() -> None:
     """Test environment-based configuration pattern."""
     from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -39,4 +36,3 @@ def test_environment_based_configuration() -> None:
         assert config.pool_config["user"] == "testuser"
         assert config.pool_config["password"] == "testpass"
         assert config.pool_config["database"] == "testdb"
-

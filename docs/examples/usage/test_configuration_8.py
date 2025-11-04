@@ -1,6 +1,6 @@
-from sqlspec.adapters.asyncpg import AsyncpgConfig
+def test_asyncpg_pool_setup() -> None:
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-def test_asyncpg_pool_setup():
     config = AsyncpgConfig(
         pool_config={
             "dsn": "postgresql://localhost/db",
@@ -11,4 +11,3 @@ def test_asyncpg_pool_setup():
         }
     )
     assert config.pool_config["min_size"] == 10
-

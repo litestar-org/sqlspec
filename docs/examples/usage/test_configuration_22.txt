@@ -6,4 +6,3 @@ sqlspec --config myapp.config upgrade
 
 # Rollback
 sqlspec --config myapp.config downgrade -1
-

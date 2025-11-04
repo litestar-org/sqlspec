@@ -4,8 +4,7 @@ import pytest
 
 
 @pytest.mark.skipif(
-    not pytest.importorskip("asyncpg", reason="AsyncPG not installed"),
-    reason="AsyncPG integration tests disabled",
+    not pytest.importorskip("asyncpg", reason="AsyncPG not installed"), reason="AsyncPG integration tests disabled"
 )
 def test_basic_migration_config() -> None:
     """Test basic migration configuration."""
@@ -17,7 +16,7 @@ def test_basic_migration_config() -> None:
             "litestar": {"session_table": "custom_sessions"}  # Extension settings
         },
         migration_config={
-            "script_location": "migrations",     # Migration directory
+            "script_location": "migrations",  # Migration directory
             "version_table": "alembic_version",  # Version tracking table
             "include_extensions": ["litestar"],  # Simple string list only
         },
@@ -25,4 +24,3 @@ def test_basic_migration_config() -> None:
 
     assert config.migration_config["script_location"] == "migrations"
     assert "litestar" in config.migration_config["include_extensions"]
-

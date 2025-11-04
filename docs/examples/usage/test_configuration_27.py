@@ -13,9 +13,7 @@ async def test_cleanup_resources_best_practice() -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         spec = SQLSpec()
-        db = spec.add_config(
-            AiosqliteConfig(pool_config={"database": tmp.name})
-        )
+        db = spec.add_config(AiosqliteConfig(pool_config={"database": tmp.name}))
 
         # Use the connection
         async with spec.provide_session(db) as session:
@@ -26,4 +24,3 @@ async def test_cleanup_resources_best_practice() -> None:
 
         # Verify pools are closed
         assert db.pool_instance is None or not hasattr(db.pool_instance, "_pool")
-

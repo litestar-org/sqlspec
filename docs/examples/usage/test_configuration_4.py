@@ -1,5 +1,6 @@
-def test_asyncpg_config_setup():
+def test_asyncpg_config_setup() -> None:
     from sqlspec.adapters.asyncpg import AsyncpgConfig
+
     config = AsyncpgConfig(
         pool_config={
             "dsn": "postgresql://user:pass@localhost:5432/dbname",
@@ -14,4 +15,3 @@ def test_asyncpg_config_setup():
         }
     )
     assert config.pool_config["host"] == "localhost"
-

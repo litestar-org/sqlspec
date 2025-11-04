@@ -52,7 +52,8 @@ PostgreSQL Configuration (asyncpg)
 .. literalinclude:: /examples/usage/test_configuration_4.py
    :language: python
    :caption: `postgres asyncpg configuration`
-   :lines: 2-15
+   :lines: 2-16
+   :dedent: 2
 
 PostgreSQL Configuration (psycopg)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -65,6 +66,7 @@ PostgreSQL Configuration (psycopg)
    :language: python
    :caption: `postgres psycopg configuration`
    :lines: 1-6
+   :dedent: 2
 
 MySQL Configuration (asyncmy)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -72,7 +74,8 @@ MySQL Configuration (asyncmy)
 .. literalinclude:: /examples/usage/test_configuration_6.py
    :language: python
    :caption: `mysql asyncmy configuration`
-   :lines: 1-19
+   :lines: 2-15
+   :dedent: 2
 
 DuckDB Configuration
 ^^^^^^^^^^^^^^^^^^^^
@@ -80,7 +83,8 @@ DuckDB Configuration
 .. literalinclude:: /examples/usage/test_configuration_7.py
    :language: python
    :caption: `duckdb configuration`
-   :lines: 1-15
+   :lines: 2-11
+   :dedent: 2
 
 Connection Pooling
 ------------------
@@ -93,14 +97,16 @@ Pool Configuration
 .. literalinclude:: /examples/usage/test_configuration_8.py
    :language: python
    :caption: `pool configuration`
-   :lines: 1-15
+   :lines: 2-11
+   :dedent: 2
 
 **Pool Lifecycle Management**
 
 .. literalinclude:: /examples/usage/test_configuration_9.py
    :language: python
    :caption: `pool lifecycle management`
-   :lines: 1-8
+   :lines: 2-7
+   :dedent: 2
 
 Using Pre-Created Pools
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -108,7 +114,8 @@ Using Pre-Created Pools
 .. literalinclude:: /examples/usage/test_configuration_10.py
    :language: python
    :caption: `using pre-created pools`
-   :lines: 1-12
+   :lines: 2-9
+   :dedent: 2
 
 No-Pooling Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -116,7 +123,8 @@ No-Pooling Configuration
 .. literalinclude:: /examples/usage/test_configuration_11.py
    :language: python
    :caption: `no-pooling configuration`
-   :lines: 1-6
+   :lines: 2-4
+   :dedent: 2
 
 Statement Configuration
 -----------------------
@@ -129,7 +137,8 @@ Basic Statement Config
 .. literalinclude:: /examples/usage/test_configuration_12.py
    :language: python
    :caption: `basic statement config`
-   :lines: 1-21
+   :lines: 2-16
+   :dedent: 2
 
 Parameter Style Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -137,7 +146,8 @@ Parameter Style Configuration
 .. literalinclude:: /examples/usage/test_configuration_13.py
    :language: python
    :caption: `parameter style configuration`
-   :lines: 1-21
+   :lines: 2-17
+   :dedent: 2
 
 **Parameter Styles**
 
@@ -146,7 +156,8 @@ SQLSpec supports multiple parameter placeholder styles:
 .. literalinclude:: /examples/usage/test_configuration_14.py
    :language: python
    :caption: `parameter styles`
-   :lines: 1-24
+   :lines: 2-21
+   :dedent: 2
 
 Validation Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -158,7 +169,8 @@ Disable validation for performance-critical paths where input is trusted:
 .. literalinclude:: /examples/usage/test_configuration_15.py
    :language: python
    :caption: `validation configuration`
-   :lines: 1-22
+   :lines: 5-17
+   :dedent: 2
 
 Cache Configuration
 -------------------
@@ -171,7 +183,8 @@ Global Cache Configuration
 .. literalinclude:: /examples/usage/test_configuration_16.py
    :language: python
    :caption: `global cache configuration`
-   :lines: 1-29
+   :lines: 6-28
+   :dedent: 2
 
 Per-Instance Cache Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -180,6 +193,7 @@ Per-Instance Cache Configuration
    :language: python
    :caption: `per-instance cache configuration`
    :lines: 1-28
+   :dedent: 2
 
 Cache Statistics
 ^^^^^^^^^^^^^^^^
@@ -190,6 +204,7 @@ Monitor cache statistics:
    :language: python
    :caption: `cache statistics`
    :lines: 1-19
+   :dedent: 2
 
 Clear Cache
 ^^^^^^^^^^^
@@ -198,6 +213,7 @@ Clear Cache
    :language: python
    :caption: `clear cache`
    :lines: 1-27
+   :dedent: 2
 
 Multiple Database Configurations
 ---------------------------------
@@ -211,6 +227,7 @@ Binding Multiple Configs
    :language: python
    :caption: `binding multiple configurations`
    :lines: 1-30
+   :dedent: 2
 
 Named Bindings
 ^^^^^^^^^^^^^^
@@ -221,6 +238,7 @@ Use bind keys for clearer configuration management:
    :language: python
    :caption: `named bindings`
    :lines: 1-29
+   :dedent: 2
 
 Migration Configuration
 -----------------------
@@ -241,6 +259,7 @@ Basic Migration Config
 .. literalinclude:: /examples/usage/test_configuration_22.txt
    :language: text
    :caption: `migration CLI`
+   :dedent: 2
 
 
 Extension Migration Versioning
