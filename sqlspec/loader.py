@@ -12,9 +12,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import unquote, urlparse
 
-from sqlspec.core.cache import get_cache, get_cache_config
-from sqlspec.core.statement import SQL
-from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, StorageOperationFailedError
+from sqlspec.core import SQL, get_cache, get_cache_config
+from sqlspec.exceptions import (
+    FileNotFoundInStorageError,
+    SQLFileNotFoundError,
+    SQLFileParseError,
+    StorageOperationFailedError,
+)
 from sqlspec.storage.registry import storage_registry as default_storage_registry
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
@@ -260,9 +264,11 @@ class SQLFileLoader:
             return backend.read_text(path_str, encoding=self.encoding)
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e
+        except FileNotFoundInStorageError as e:
+            raise SQLFileNotFoundError(path_str) from e
+        except FileNotFoundError as e:
+            raise SQLFileNotFoundError(path_str) from e
         except StorageOperationFailedError as e:
-            if "not found" in str(e).lower() or "no such file" in str(e).lower():
-                raise SQLFileNotFoundError(path_str) from e
             raise SQLFileParseError(path_str, path_str, e) from e
         except Exception as e:
             raise SQLFileParseError(path_str, path_str, e) from e
@@ -284,24 +290,27 @@ class SQLFileLoader:
     def _parse_sql_content(content: str, file_path: str) -> "dict[str, NamedStatement]":
         """Parse SQL content and extract named statements with dialect specifications.
 
+        Files without any named statement markers are gracefully skipped by returning
+        an empty dictionary. The caller is responsible for handling empty results
+        appropriately.
+
         Args:
             content: Raw SQL file content to parse.
             file_path: File path for error reporting.
 
         Returns:
             Dictionary mapping normalized statement names to NamedStatement objects.
+            Empty dict if no named statement markers found in the content.
 
         Raises:
-            SQLFileParseError: If no named statements found, duplicate names exist,
-                              or invalid dialect names are specified.
+            SQLFileParseError: If named statements are malformed (duplicate names or
+                              invalid content after parsing).
         """
         statements: dict[str, NamedStatement] = {}
 
         name_matches = list(QUERY_NAME_PATTERN.finditer(content))
         if not name_matches:
-            raise SQLFileParseError(
-                file_path, file_path, ValueError("No named SQL statements found (-- name: statement_name)")
-            )
+            return {}
 
         for i, match in enumerate(name_matches):
             raw_statement_name = match.group(1).strip()
@@ -467,10 +476,19 @@ class SQLFileLoader:
         path_str = str(file_path)
 
         content = self._read_file_content(file_path)
+        statements = self._parse_sql_content(content, path_str)
+
+        if not statements:
+            logger.debug(
+                "Skipping SQL file without named statements: %s",
+                path_str,
+                extra={"file_path": path_str, "correlation_id": CorrelationContext.get()},
+            )
+            return
+
         sql_file = SQLFile(content=content, path=path_str)
         self._files[path_str] = sql_file
 
-        statements = self._parse_sql_content(content, path_str)
         for name, statement in statements.items():
             namespaced_name = f"{namespace}.{name}" if namespace else name
             if namespaced_name in self._queries:

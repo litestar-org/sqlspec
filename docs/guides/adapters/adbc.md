@@ -11,6 +11,12 @@ This guide provides specific instructions for the `adbc` adapter.
 - **Driver:** Arrow Database Connectivity (ADBC) drivers (e.g., `adbc_driver_postgresql`, `adbc_driver_sqlite`).
 - **Parameter Style:** Varies by underlying database (e.g., `numeric` for PostgreSQL, `qmark` for SQLite).
 
+## Parameter Profile
+
+- **Registry Key:** `"adbc"`
+- **JSON Strategy:** `helper` (shared serializers wrap dict/list/tuple values)
+- **Extras:** `type_coercion_overrides` ensure Arrow arrays map to Python lists; PostgreSQL dialects attach a NULL-handling AST transformer
+
 ## Best Practices
 
 - **Arrow-Native:** The primary benefit of ADBC is its direct integration with Apache Arrow. Use it when you need to move large amounts of data efficiently between the database and data science tools like Pandas or Polars.

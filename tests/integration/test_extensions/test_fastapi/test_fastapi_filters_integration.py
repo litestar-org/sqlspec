@@ -10,9 +10,11 @@ from fastapi.testclient import TestClient
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.base import SQLSpec
-from sqlspec.core.filters import BeforeAfterFilter, FilterTypes, LimitOffsetFilter, OrderByFilter
+from sqlspec.core import BeforeAfterFilter, FilterTypes, LimitOffsetFilter, OrderByFilter
 from sqlspec.extensions.fastapi import SQLSpecPlugin
 from sqlspec.extensions.fastapi.providers import dep_cache
+
+pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 @pytest.fixture(autouse=True)
@@ -249,9 +251,12 @@ def test_fastapi_multiple_filters_combined() -> None:
         filters: Annotated[
             list[FilterTypes],
             Depends(
-                db_ext.provide_filters(
-                    {"id_filter": UUID, "search": "name", "pagination_type": "limit_offset", "sort_field": "created_at"}
-                )
+                db_ext.provide_filters({
+                    "id_filter": UUID,
+                    "search": "name",
+                    "pagination_type": "limit_offset",
+                    "sort_field": "created_at",
+                })
             ),
         ],
     ) -> dict[str, Any]:

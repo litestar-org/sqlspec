@@ -183,6 +183,107 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 - **Parameter Style Abstraction**: Automatically converts between different parameter styles (?, :name, $1, %s)
 - **Type Safety**: Supports mapping results to Pydantic, msgspec, attrs, and other typed models
 - **Single-Pass Processing**: Parse once → transform once → validate once - SQL object is single source of truth
+- **Abstract Methods with Concrete Implementations**: Protocol defines abstract methods, base classes provide concrete sync/async implementations
+
+### Driver Parameter Profile Registry
+
+- All adapter parameter defaults live in `DriverParameterProfile` entries inside `sqlspec/core/parameters.py`.
+- Use lowercase adapter keys (e.g., `"asyncpg"`, `"duckdb"`) and populate every required field: default style, supported styles, execution style, native list expansion flags, JSON strategy, and optional extras.
+- JSON behaviour is controlled through `json_serializer_strategy`:
+    - `"helper"`: call `ParameterStyleConfig.with_json_serializers()` (dict/list/tuple auto-encode)
+    - `"driver"`: defer to driver codecs while surfacing serializer references for later registration
+    - `"none"`: skip JSON helpers entirely (reserve for adapters that must not touch JSON)
+- Extras should encapsulate adapter-specific tweaks (e.g., `type_coercion_overrides`, `json_tuple_strategy`). Document new extras inline and keep them immutable.
+- Always build `StatementConfig` via `build_statement_config_from_profile()` and pass adapter-specific overrides through the helper instead of instantiating configs manually in drivers.
+- When introducing a new adapter, add its profile, update relevant guides, and extend unit coverage so each JSON strategy path is exercised.
+- Record the canonical adapter key, JSON strategy, and extras in the corresponding adapter guide so contributors can verify behaviour without reading the registry source.
+
+### Protocol Abstract Methods Pattern
+
+When adding methods that need to support both sync and async configurations, use this pattern:
+
+**Step 1: Define abstract method in protocol**
+
+```python
+from abc import abstractmethod
+from typing import Awaitable
+
+class DatabaseConfigProtocol(Protocol):
+    is_async: ClassVar[bool]  # Set by base classes
+
+    @abstractmethod
+    def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> "Awaitable[None] | None":
+        """Apply database migrations up to specified revision.
+
+        Args:
+            revision: Target revision or "head" for latest.
+            allow_missing: Allow out-of-order migrations.
+            auto_sync: Auto-reconcile renamed migrations.
+            dry_run: Show what would be done without applying.
+        """
+        raise NotImplementedError
+```
+
+**Step 2: Implement in sync base class (no async/await)**
+
+```python
+class NoPoolSyncConfig(DatabaseConfigProtocol):
+    is_async: ClassVar[bool] = False
+
+    def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
+        """Apply database migrations up to specified revision."""
+        commands = self._ensure_migration_commands()
+        commands.upgrade(revision, allow_missing, auto_sync, dry_run)
+```
+
+**Step 3: Implement in async base class (with async/await)**
+
+```python
+class NoPoolAsyncConfig(DatabaseConfigProtocol):
+    is_async: ClassVar[bool] = True
+
+    async def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
+        """Apply database migrations up to specified revision."""
+        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        await commands.upgrade(revision, allow_missing, auto_sync, dry_run)
+```
+
+**Key principles:**
+
+- Protocol defines the interface with union return type (`Awaitable[T] | T`)
+- Sync base classes implement without `async def` or `await`
+- Async base classes implement with `async def` and `await`
+- Each base class has concrete implementation - no need for child classes to override
+- Use `cast()` to narrow types when delegating to command objects
+- All 4 base classes (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig) implement the same way
+
+**Benefits:**
+
+- Single source of truth (protocol) for API contract
+- Each base class provides complete implementation
+- Child adapter classes (AsyncpgConfig, SqliteConfig, etc.) inherit working methods automatically
+- Type checkers understand sync vs async based on `is_async` class variable
+- No code duplication across adapters
+
+**When to use:**
+
+- Adding convenience methods that delegate to external command objects
+- Methods that need identical behavior across all adapters
+- Operations that differ only in sync vs async execution
+- Any protocol method where behavior is determined by sync/async mode
+
+**Anti-patterns to avoid:**
+
+- Don't use runtime `if self.is_async:` checks in a single implementation
+- Don't make protocol methods concrete (always use `@abstractmethod`)
+- Don't duplicate logic across the 4 base classes
+- Don't forget to update all 4 base classes when adding new methods
 
 ### Database Connection Flow
 
@@ -246,6 +347,13 @@ def test_starlette_autocommit_mode() -> None:
 - `CREATE TABLE IF NOT EXISTS` - Masks test isolation issues
 - Disabling pooling - Tests don't reflect production configuration
 - Running tests serially - Slows down CI significantly
+
+### CLI Config Loader Isolation Pattern
+
+- When exercising CLI migration commands, generate a unique module namespace for each test (for example `cli_test_config_<uuid>`).
+- Place temporary config modules inside `tmp_path` and register them via `sys.modules` within the test, then delete them during teardown to prevent bleed-through.
+- Always patch `Path.cwd()` or provide explicit path arguments so helper functions resolve the test-local module rather than cached global fixtures.
+- Add regression tests ensuring the helper cleaning logic runs even if CLI commands raise exceptions to avoid polluting later suites.
 
 ### Performance Optimizations
 
@@ -379,11 +487,156 @@ def _raise_data_required(self):
 - Abstract raise statements to inner functions in try blocks
 - Remove unnecessary try/catch blocks that will be caught higher in the execution
 
+#### Two-Tier Error Handling Pattern
+
+When processing user input that may be incomplete or malformed, use a two-tier approach:
+
+**Tier 1: Graceful Skip (Expected Incomplete Input)**
+
+- Condition: Input lacks required markers but is otherwise valid
+- Action: Return empty result (empty dict, None, etc.)
+- Log level: DEBUG
+- Example: SQL file without `-- name:` markers
+
+**Tier 2: Hard Error (Malformed Input)**
+
+- Condition: Input has required markers but is malformed
+- Action: Raise specific exception with clear message
+- Log level: ERROR (via exception handler)
+- Example: Duplicate statement names, empty names
+
+**Implementation Pattern:**
+
+```python
+def parse_user_input(content: str, source: str) -> "dict[str, Result]":
+    """Parse user input with two-tier error handling.
+
+    Files without required markers are gracefully skipped by returning
+    an empty dictionary. The caller is responsible for handling empty results.
+
+    Args:
+        content: Raw input content to parse.
+        source: Source identifier for error reporting.
+
+    Returns:
+        Dictionary of parsed results. Empty dict if no required markers found.
+
+    Raises:
+        ParseError: If required markers are present but malformed.
+    """
+    # Check for required markers
+    markers = list(MARKER_PATTERN.finditer(content))
+    if not markers:
+        return {}  # Tier 1: Graceful skip
+
+    results = {}
+    for marker in markers:
+        # Parse marker
+        if malformed_marker(marker):
+            raise ParseError(source, "Malformed marker")  # Tier 2: Hard error
+
+        # Process and add result
+        results[marker.name] = process(marker)
+
+    return results
+
+
+def caller_function(file_path: str) -> None:
+    """Caller handles empty results from graceful skip."""
+    results = parse_user_input(content, str(file_path))
+
+    if not results:
+        logger.debug(
+            "Skipping file without required markers: %s",
+            str(file_path),
+            extra={"file_path": str(file_path), "correlation_id": get_correlation_id()},
+        )
+        return  # Early return - don't process empty results
+
+    # Process non-empty results
+    for name, result in results.items():
+        store_result(name, result)
+```
+
+**Key Benefits:**
+
+1. **Clear Intent**: Distinguishes "no markers" from "bad markers"
+2. **User-Friendly**: Doesn't break batch processing for missing markers
+3. **Debuggable**: DEBUG logs show what was skipped
+4. **Fail-Fast**: Malformed input still raises clear errors
+
+**When to Use:**
+
+- File/directory loading with optional markers
+- Batch processing where some inputs may lack required data
+- Migration systems processing mixed file types
+- Configuration loading with optional sections
+
+**When NOT to Use:**
+
+- Required input validation (use strict validation)
+- Single-file processing where empty result is an error
+- API endpoints expecting specific data format
+
+**Real-World Example:**
+
+See `sqlspec/loader.py:_parse_sql_content()` for the reference implementation in SQL file loading.
+
 ### Logging Standards
 
 - Use `logging` module, NEVER `print()`
 - NO f-strings in log messages - use lazy formatting
 - Provide meaningful context in all log messages
+
+#### DEBUG Level for Expected Skip Behavior
+
+Use DEBUG level (not INFO or WARNING) when gracefully skipping expected conditions:
+
+```python
+# GOOD - DEBUG for expected skip
+if not statements:
+    logger.debug(
+        "Skipping SQL file without named statements: %s",
+        path_str,
+        extra={
+            "file_path": path_str,
+            "correlation_id": CorrelationContext.get(),
+        },
+    )
+    return
+
+# BAD - INFO suggests important information
+logger.info("Skipping file %s", path_str)  # Too high level
+
+# BAD - WARNING suggests potential problem
+logger.warning("No statements found in %s", path_str)  # Misleading
+```
+
+**DEBUG vs INFO vs WARNING Guidelines:**
+
+- **DEBUG**: Expected behavior that aids troubleshooting
+    - Files gracefully skipped during batch processing
+    - Optional features not enabled (dependencies missing)
+    - Cache hits/misses
+    - Internal state transitions
+
+- **INFO**: Significant events during normal operation
+    - Connection pool created
+    - Migration applied successfully
+    - Background task started
+
+- **WARNING**: Unexpected but recoverable conditions
+    - Retrying after transient failure
+    - Falling back to alternative implementation
+    - Configuration using deprecated options
+
+**Context Requirements:**
+
+Always include `extra` dict with:
+
+- Primary identifier (file_path, query_name, etc.)
+- Correlation ID via `CorrelationContext.get()`
+- Additional relevant context (size, duration, etc.)
 
 ### Documentation Standards
 
@@ -394,6 +647,43 @@ def _raise_data_required(self):
 - Don't document return if `None`
 - Sphinx-compatible format
 - Focus on WHY not WHAT
+
+**Documenting Graceful Degradation:**
+
+When functions implement graceful skip behavior, document it clearly in the docstring:
+
+```python
+def parse_content(content: str, source: str) -> "dict[str, Result]":
+    """Parse content and extract structured data.
+
+    Files without required markers are gracefully skipped by returning
+    an empty dictionary. The caller is responsible for handling empty results
+    appropriately.
+
+    Args:
+        content: Raw content to parse.
+        source: Source identifier for error reporting.
+
+    Returns:
+        Dictionary mapping names to results.
+        Empty dict if no required markers found in the content.
+
+    Raises:
+        ParseError: If required markers are present but malformed
+                   (duplicate names, empty names, invalid content).
+    """
+```
+
+**Key elements:**
+
+1. **First paragraph after summary**: Explain graceful skip behavior
+2. **Caller responsibility**: Note that caller must handle empty results
+3. **Returns section**: Explicitly document empty dict case
+4. **Raises section**: Only document hard errors, not graceful skips
+
+**Example from codebase:**
+
+See `sqlspec/loader.py:_parse_sql_content()` for reference implementation.
 
 **Project Documentation**:
 
@@ -995,17 +1285,20 @@ SQLSpec implements Apache Arrow support through a dual-path architecture: native
 ### When to Implement Arrow Support
 
 **Implement select_to_arrow() when**:
+
 - Adapter supports high-throughput analytical queries
 - Users need integration with pandas, Polars, or data science tools
 - Data interchange with Arrow ecosystem (Parquet, Spark, etc.) is common
 - Large result sets are typical for the adapter's use cases
 
 **Use native Arrow path when**:
+
 - Database driver provides direct Arrow output (e.g., ADBC `fetch_arrow_table()`)
 - Zero-copy data transfer available
 - Performance is critical for large datasets
 
 **Use conversion path when**:
+
 - Database driver returns dict/row results
 - Native Arrow support not available
 - Conversion overhead acceptable for use case
@@ -1017,7 +1310,7 @@ SQLSpec implements Apache Arrow support through a dual-path architecture: native
 Override `select_to_arrow()` in adapter's driver class:
 
 ```python
-from sqlspec.core.result import create_arrow_result
+from sqlspec.core import create_arrow_result
 from sqlspec.utils.module_loader import ensure_pyarrow
 
 class NativeArrowDriver(AsyncDriverAdapterBase):
@@ -1057,6 +1350,7 @@ class NativeArrowDriver(AsyncDriverAdapterBase):
 ```
 
 **Key principles**:
+
 - Use `ensure_pyarrow()` for dependency validation
 - Validate `native_only` flag if adapter doesn't support native path
 - Preserve Arrow schema metadata from database
@@ -1087,6 +1381,7 @@ async def select_to_arrow(self, statement, /, *parameters, **kwargs):
 ```
 
 **When to use**:
+
 - Adapter has no native Arrow support
 - Conversion overhead acceptable (&lt;20% for most cases)
 - Provides Arrow compatibility for all adapters
@@ -1109,6 +1404,7 @@ UUID → utf8 (converted to string)
 ```
 
 **Complex type handling**:
+
 - Arrays: Preserve as Arrow list types when possible
 - JSON: Convert to utf8 (text) for portability
 - UUIDs: Convert to strings for cross-platform compatibility
@@ -1120,7 +1416,7 @@ UUID → utf8 (converted to string)
 Use `create_arrow_result()` for consistent result wrapping:
 
 ```python
-from sqlspec.core.result import create_arrow_result
+from sqlspec.core import create_arrow_result
 
 # Create ArrowResult from Arrow Table
 result = create_arrow_result(arrow_table, rows_affected=arrow_table.num_rows)
@@ -1130,6 +1426,7 @@ result = create_arrow_result(record_batch, rows_affected=record_batch.num_rows)
 ```
 
 **Benefits**:
+
 - Consistent API across all adapters
 - Automatic to_pandas(), to_polars(), to_dict() support
 - Iteration and length operations
@@ -1138,12 +1435,14 @@ result = create_arrow_result(record_batch, rows_affected=record_batch.num_rows)
 ### Testing Requirements
 
 **Unit tests** for Arrow helpers:
+
 - Test `convert_dict_to_arrow()` with various data types
 - Test empty result handling
 - Test NULL value preservation
 - Test schema inference
 
 **Integration tests** per adapter:
+
 - Test native Arrow path (if supported)
 - Test table and batch return formats
 - Test pandas/Polars conversion
@@ -1153,6 +1452,7 @@ result = create_arrow_result(record_batch, rows_affected=record_batch.num_rows)
 - Test empty results
 
 **Performance benchmarks** (for native paths):
+
 - Measure native vs conversion speedup
 - Validate zero-copy behavior
 - Benchmark memory usage
@@ -1233,6 +1533,7 @@ When implementing Arrow support:
 ### Common Pitfalls
 
 **Avoid**:
+
 - Returning raw Arrow objects instead of ArrowResult
 - Missing `ensure_pyarrow()` dependency check
 - Not supporting both "table" and "batch" return formats
@@ -1240,6 +1541,7 @@ When implementing Arrow support:
 - Breaking existing `execute()` behavior
 
 **Do**:
+
 - Use `create_arrow_result()` for consistent wrapping
 - Support all standard type mappings
 - Test with large datasets
@@ -1249,16 +1551,19 @@ When implementing Arrow support:
 ### Performance Guidelines
 
 **Native path targets**:
+
 - Overhead &lt;5% vs direct driver Arrow fetch
 - Zero-copy data transfer
 - 5-10x faster than dict conversion for datasets >10K rows
 
 **Conversion path targets**:
+
 - Overhead &lt;20% vs standard `execute()` for datasets &lt;1K rows
 - Overhead &lt;15% for datasets 1K-100K rows
 - Overhead &lt;10% for datasets >100K rows (columnar efficiency)
 
 **Memory targets**:
+
 - Peak memory &lt;2x dict representation
 - Arrow columnar format more efficient for large datasets
 
@@ -2330,6 +2635,141 @@ class StarletteConfig(TypedDict):
     extra_commit_statuses: NotRequired[set[int]]
     extra_rollback_statuses: NotRequired[set[int]]
 ```
+
+### Disabling Built-in Dependency Injection (disable_di Pattern)
+
+**When to Use**: When users want to integrate SQLSpec with their own dependency injection solution (e.g., Dishka, dependency-injector) and need full control over database lifecycle management.
+
+**Pattern**: Add a `disable_di` boolean flag to framework extension configuration that conditionally skips the built-in DI setup.
+
+**Implementation Steps**:
+
+1. **Add to TypedDict in `sqlspec/config.py`**:
+
+```python
+class StarletteConfig(TypedDict):
+    # ... existing fields ...
+
+    disable_di: NotRequired[bool]
+    """Disable built-in dependency injection. Default: False.
+    When True, the Starlette/FastAPI extension will not add middleware for managing
+    database connections and sessions. Users are responsible for managing the
+    database lifecycle manually via their own DI solution.
+    """
+```
+
+2. **Add to Configuration State Dataclass**:
+
+```python
+@dataclass
+class SQLSpecConfigState:
+    config: "DatabaseConfigProtocol[Any, Any, Any]"
+    connection_key: str
+    pool_key: str
+    session_key: str
+    commit_mode: CommitMode
+    extra_commit_statuses: "set[int] | None"
+    extra_rollback_statuses: "set[int] | None"
+    disable_di: bool  # Add this field
+```
+
+3. **Extract from Config and Default to False**:
+
+```python
+def _extract_starlette_settings(self, config):
+    starlette_config = config.extension_config.get("starlette", {})
+    return {
+        # ... existing keys ...
+        "disable_di": starlette_config.get("disable_di", False),  # Default False
+    }
+```
+
+4. **Conditionally Skip DI Setup**:
+
+**Middleware-based (Starlette/FastAPI)**:
+
+```python
+def init_app(self, app):
+    # ... lifespan setup ...
+
+    for config_state in self._config_states:
+        if not config_state.disable_di:  # Only add if DI enabled
+            self._add_middleware(app, config_state)
+```
+
+**Provider-based (Litestar)**:
+
+```python
+def on_app_init(self, app_config):
+    for state in self._plugin_configs:
+        # ... signature namespace ...
+
+        if not state.disable_di:  # Only register if DI enabled
+            app_config.before_send.append(state.before_send_handler)
+            app_config.lifespan.append(state.lifespan_handler)
+            app_config.dependencies.update({
+                state.connection_key: Provide(state.connection_provider),
+                state.pool_key: Provide(state.pool_provider),
+                state.session_key: Provide(state.session_provider),
+            })
+```
+
+**Hook-based (Flask)**:
+
+```python
+def init_app(self, app):
+    # ... pool setup ...
+
+    # Only register hooks if at least one config has DI enabled
+    if any(not state.disable_di for state in self._config_states):
+        app.before_request(self._before_request_handler)
+        app.after_request(self._after_request_handler)
+        app.teardown_appcontext(self._teardown_appcontext_handler)
+
+def _before_request_handler(self):
+    for config_state in self._config_states:
+        if config_state.disable_di:  # Skip if DI disabled
+            continue
+        # ... connection setup ...
+```
+
+**Testing Requirements**:
+
+1. **Test with `disable_di=True`**: Verify DI mechanisms are not active
+2. **Test default behavior**: Verify `disable_di=False` preserves existing functionality
+3. **Integration tests**: Demonstrate manual DI setup works correctly
+
+**Example Usage**:
+
+```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.base import SQLSpec
+from sqlspec.extensions.starlette import SQLSpecPlugin
+
+sql = SQLSpec()
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/db"},
+    extension_config={"starlette": {"disable_di": True}}  # Disable built-in DI
+)
+sql.add_config(config)
+plugin = SQLSpecPlugin(sql)
+
+# User is now responsible for manual lifecycle management
+async def my_route(request):
+    pool = await config.create_pool()
+    async with config.provide_connection(pool) as connection:
+        session = config.driver_type(connection=connection, statement_config=config.statement_config)
+        result = await session.execute("SELECT 1")
+        await config.close_pool()
+        return result
+```
+
+**Key Principles**:
+
+- **Backward Compatible**: Default `False` preserves existing behavior
+- **Consistent Naming**: Use `disable_di` across all frameworks
+- **Clear Documentation**: Warn users they are responsible for lifecycle management
+- **Complete Control**: When disabled, extension does zero automatic DI
 
 ### Multi-Database Support
 

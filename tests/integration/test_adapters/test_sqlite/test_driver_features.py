@@ -9,6 +9,8 @@ import pytest
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
+pytestmark = pytest.mark.xdist_group("sqlite")
+
 
 @pytest.mark.sqlite
 def test_driver_features_enabled_by_default() -> None:

@@ -15,20 +15,24 @@ Key Test Coverage:
 8. Edge cases - Complex queries, comments, string literals
 """
 
+import os
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlglot import expressions as exp
 
-from sqlspec.core.compiler import OperationType
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import (
+from sqlspec.core import (
     SQL,
+    OperationType,
+    ParameterStyle,
+    ParameterStyleConfig,
     ProcessedState,
     StatementConfig,
     get_default_config,
     get_default_parameter_config,
+    get_pipeline_metrics,
+    reset_pipeline_registry,
 )
 from sqlspec.typing import Empty
 
@@ -244,11 +248,8 @@ def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
     """Test accessing .sql property returns raw SQL without processing."""
     stmt = SQL("SELECT * FROM users")
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
-        from sqlspec.core.compiler import CompiledSQL
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
@@ -256,19 +257,18 @@ def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
             operation_type="SELECT",
             expression=exp.select("*").from_("users"),
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         sql_result = stmt.sql
 
-        mock_processor_class.assert_not_called()
+        mock_compile.assert_not_called()
         assert sql_result == "SELECT * FROM users"
 
         assert stmt._processed_state is Empty
 
         compiled_sql, params = stmt.compile()
 
-        mock_processor_class.assert_called_once_with(stmt._statement_config)
-        mock_processor.compile.assert_called_once_with(stmt._raw_sql, [], is_many=False)
+        mock_compile.assert_called_once_with(stmt._statement_config, stmt._raw_sql, [], is_many=False)
         assert compiled_sql == "SELECT * FROM users"
         assert params == []
 
@@ -277,11 +277,8 @@ def test_sql_single_pass_processing_triggered_by_parameters_property() -> None:
     """Test accessing .parameters property returns original parameters."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
-        from sqlspec.core.compiler import CompiledSQL
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
@@ -289,11 +286,11 @@ def test_sql_single_pass_processing_triggered_by_parameters_property() -> None:
             operation_type="SELECT",
             expression=exp.select("*").from_("users"),
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         params = stmt.parameters
 
-        mock_processor_class.assert_not_called()
+        mock_compile.assert_not_called()
         assert params == [1]
         assert stmt._processed_state is Empty
 
@@ -302,11 +299,8 @@ def test_sql_single_pass_processing_triggered_by_operation_type_property() -> No
     """Test accessing .operation_type property returns UNKNOWN without processing."""
     stmt = SQL("INSERT INTO users (name) VALUES ('john')")
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
-        from sqlspec.core.compiler import CompiledSQL
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="INSERT INTO users (name) VALUES ('john')",
@@ -314,11 +308,11 @@ def test_sql_single_pass_processing_triggered_by_operation_type_property() -> No
             operation_type="INSERT",
             expression=MagicMock(),
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         op_type = stmt.operation_type
 
-        mock_processor_class.assert_not_called()
+        mock_compile.assert_not_called()
         assert op_type == "UNKNOWN"
         assert stmt._processed_state is Empty
 
@@ -327,10 +321,8 @@ def test_sql_processing_fallback_on_error() -> None:
     """Test SQL processing fallback when SQLProcessor fails."""
     stmt = SQL("INVALID SQL SYNTAX")
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-        mock_processor.compile.side_effect = Exception("Processing failed")
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        mock_compile.side_effect = Exception("Processing failed")
 
         sql_result = stmt.sql
         assert sql_result == "INVALID SQL SYNTAX"
@@ -349,17 +341,14 @@ def test_sql_expression_caching_enabled() -> None:
     config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_caching=True)
     stmt = SQL("SELECT * FROM users", statement_config=config)
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
         expr = exp.select("*").from_("users")
-        from sqlspec.core.compiler import CompiledSQL
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users", execution_parameters={}, operation_type="SELECT", expression=expr
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         assert stmt.expression is None
 
@@ -371,7 +360,7 @@ def test_sql_expression_caching_enabled() -> None:
 
         assert expr1 is expr2
 
-        assert mock_processor.compile.call_count == 1
+        assert mock_compile.call_count == 1
 
 
 def test_sql_expression_caching_disabled() -> None:
@@ -379,17 +368,14 @@ def test_sql_expression_caching_disabled() -> None:
     config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_caching=False)
     stmt = SQL("SELECT * FROM users", statement_config=config)
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
         expr = exp.select("*").from_("users")
-        from sqlspec.core.compiler import CompiledSQL
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users", execution_parameters={}, operation_type="SELECT", expression=expr
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         expr1 = stmt.expression
         expr2 = stmt.expression
@@ -453,11 +439,8 @@ def test_sql_parameters_property_returns_processed_parameters() -> None:
     """Test SQL.parameters property returns processed parameters."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
-        from sqlspec.core.compiler import CompiledSQL
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
@@ -465,7 +448,7 @@ def test_sql_parameters_property_returns_processed_parameters() -> None:
             operation_type="SELECT",
             expression=exp.select("*").from_("users"),
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         params = stmt.parameters
         assert params == [1]
@@ -499,11 +482,8 @@ def test_sql_operation_type_detection(sql_statement: str, expected_operation_typ
     """Test SQL operation type detection for various statement types."""
     stmt = SQL(sql_statement)
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
-        from sqlspec.core.compiler import CompiledSQL
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql=sql_statement,
@@ -511,7 +491,7 @@ def test_sql_operation_type_detection(sql_statement: str, expected_operation_typ
             operation_type=expected_operation_type,
             expression=MagicMock(),
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         stmt.compile()
         assert stmt.operation_type == expected_operation_type
@@ -520,7 +500,7 @@ def test_sql_operation_type_detection(sql_statement: str, expected_operation_typ
 def test_sql_returns_rows_detection() -> None:
     """Test SQL.returns_rows() method for different operation types."""
 
-    from sqlspec.core.statement import ProcessedState
+    from sqlspec.core import ProcessedState
 
     select_stmt = SQL("SELECT * FROM users")
     select_stmt._processed_state = ProcessedState(
@@ -533,6 +513,11 @@ def test_sql_returns_rows_detection() -> None:
         compiled_sql="INSERT INTO users (name) VALUES ('john')", execution_parameters=[], operation_type="INSERT"
     )
     assert insert_stmt.returns_rows() is False
+
+    returning_stmt = SQL("INSERT INTO users (name) VALUES (:name) RETURNING id", name="alice")
+    returning_stmt.compile()
+    assert returning_stmt.returns_rows() is True
+    assert returning_stmt.is_modifying_operation() is True
 
     with_stmt = SQL("WITH cte AS (SELECT * FROM users) SELECT * FROM cte")
     with_stmt._processed_state = ProcessedState(
@@ -619,11 +604,8 @@ def test_sql_compile_method_compatibility() -> None:
     """Test SQL.compile() method returns same format as old API."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
-        from sqlspec.core.compiler import CompiledSQL
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
@@ -631,7 +613,7 @@ def test_sql_compile_method_compatibility() -> None:
             operation_type="SELECT",
             expression=exp.select("*").from_("users"),
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         sql, params = stmt.compile()
 
@@ -678,11 +660,8 @@ def test_sql_validation_errors_property_compatibility() -> None:
     """Test SQL.validation_errors property compatibility."""
     stmt = SQL("SELECT * FROM users")
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
-        from sqlspec.core.compiler import CompiledSQL
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
@@ -697,7 +676,7 @@ def test_sql_validation_errors_property_compatibility() -> None:
             operation_type="SELECT",
             validation_errors=["Warning: Missing index"],
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
         stmt._processed_state = state
 
         errors = stmt.validation_errors
@@ -729,11 +708,8 @@ def test_sql_single_parse_guarantee() -> None:
     """Test SQL guarantees single parse operation."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
-        from sqlspec.core.compiler import CompiledSQL
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
@@ -741,7 +717,7 @@ def test_sql_single_parse_guarantee() -> None:
             operation_type="SELECT",
             expression=exp.select("*").from_("users"),
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         _ = stmt.sql
         _ = stmt.operation_type
@@ -749,7 +725,7 @@ def test_sql_single_parse_guarantee() -> None:
         _ = stmt.parameters
         _ = stmt.compile()
 
-        assert mock_processor.compile.call_count == 1
+        assert mock_compile.call_count == 1
 
 
 def test_sql_lazy_evaluation_performance() -> None:
@@ -770,11 +746,8 @@ def test_sql_processing_caching_performance() -> None:
     """Test SQL processing result caching for performance."""
     stmt = SQL("SELECT * FROM users")
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
-        from sqlspec.core.compiler import CompiledSQL
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
@@ -782,7 +755,7 @@ def test_sql_processing_caching_performance() -> None:
             operation_type="SELECT",
             expression=exp.select("*").from_("users"),
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         stmt.compile()
         assert stmt._processed_state is not Empty
@@ -792,7 +765,7 @@ def test_sql_processing_caching_performance() -> None:
 
         assert result1 == result2
 
-        assert mock_processor.compile.call_count == 1
+        assert mock_compile.call_count == 1
 
 
 @pytest.mark.parametrize(
@@ -869,10 +842,8 @@ def test_sql_invalid_syntax_handling() -> None:
     invalid_stmt = SQL("INVALID SQL SYNTAX !@#$%")
     assert "INVALID" in invalid_stmt._raw_sql
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-        mock_processor.compile.side_effect = Exception("Parse error")
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        mock_compile.side_effect = Exception("Parse error")
 
         sql_result = invalid_stmt.sql
         op_type = invalid_stmt.operation_type
@@ -997,11 +968,8 @@ def test_sql_processing_state_stability() -> None:
     """Test SQL processing state remains stable after first access."""
     stmt = SQL("SELECT * FROM users")
 
-    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
-        mock_processor = MagicMock()
-        mock_processor_class.return_value = mock_processor
-
-        from sqlspec.core.compiler import CompiledSQL
+    with patch("sqlspec.core.statement.compile_with_shared_pipeline") as mock_compile:
+        from sqlspec.core import CompiledSQL
 
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
@@ -1009,7 +977,7 @@ def test_sql_processing_state_stability() -> None:
             operation_type="SELECT",
             expression=exp.select("*").from_("users"),
         )
-        mock_processor.compile.return_value = mock_compiled
+        mock_compile.return_value = mock_compiled
 
         _ = stmt.sql
         first_state = stmt._processed_state
@@ -1018,3 +986,39 @@ def test_sql_processing_state_stability() -> None:
         _ = stmt.expression
 
         assert stmt._processed_state is first_state
+
+
+def test_processed_state_parameter_profile_exposed() -> None:
+    """Processed state exposes parameter metadata for downstream adapters."""
+
+    sql_instance = SQL("SELECT :id::int", {"id": 7})
+    sql_instance.compile()
+
+    processed_state = sql_instance.get_processed_state()
+    profile = processed_state.parameter_profile
+
+    assert profile.total_count == 1
+    assert profile.styles == (ParameterStyle.QMARK.value,)
+    assert profile.placeholder_count("?") == 1
+
+
+def test_shared_pipeline_metrics_respects_debug_flag() -> None:
+    """Shared pipeline metrics emit data only when debug flag is enabled."""
+
+    previous = os.environ.get("SQLSPEC_DEBUG_PIPELINE_CACHE")
+    os.environ["SQLSPEC_DEBUG_PIPELINE_CACHE"] = "1"
+    try:
+        reset_pipeline_registry()
+
+        SQL("SELECT 1").compile()
+        SQL("SELECT 1").compile()
+
+        metrics = get_pipeline_metrics()
+        total_hits = sum(entry.get("hits", 0) for entry in metrics)
+        assert total_hits >= 1
+    finally:
+        if previous is None:
+            os.environ.pop("SQLSPEC_DEBUG_PIPELINE_CACHE", None)
+        else:
+            os.environ["SQLSPEC_DEBUG_PIPELINE_CACHE"] = previous
+        reset_pipeline_registry()

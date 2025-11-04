@@ -9,7 +9,7 @@ import pytest
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.litestar.store import AiosqliteStore
 
-pytestmark = [pytest.mark.aiosqlite, pytest.mark.integration]
+pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.aiosqlite, pytest.mark.integration]
 
 
 @pytest.fixture

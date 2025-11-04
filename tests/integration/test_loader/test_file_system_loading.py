@@ -17,7 +17,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import SQLFileLoader
 
@@ -294,28 +294,25 @@ SELECT 'restricted' as access;
 
 
 def test_corrupted_file_handling(temp_workspace: Path) -> None:
-    """Test handling of corrupted or invalid SQL files.
+    """Test handling of SQL files without named statements.
 
     Args:
         temp_workspace: Temporary directory for test files.
-
-    Raises:
-        SQLFileParseError: When file contains invalid SQL format.
     """
     corrupted_file = temp_workspace / "corrupted.sql"
 
     corrupted_file.write_text("""
 This is not a valid SQL file with named queries.
 It has no proper -- name: declarations.
-Just random text that should cause parsing to fail.
+Just random text that should be gracefully skipped.
 """)
 
     loader = SQLFileLoader()
 
-    with pytest.raises(SQLFileParseError) as exc_info:
-        loader.load_sql(corrupted_file)
+    loader.load_sql(corrupted_file)
 
-    assert "No named SQL statements found" in str(exc_info.value)
+    assert len(loader.list_queries()) == 0
+    assert str(corrupted_file) not in loader._files  # pyright: ignore
 
 
 def test_empty_file_handling(temp_workspace: Path) -> None:
@@ -323,19 +320,16 @@ def test_empty_file_handling(temp_workspace: Path) -> None:
 
     Args:
         temp_workspace: Temporary directory for test files.
-
-    Raises:
-        SQLFileParseError: When file is empty or contains no SQL statements.
     """
     empty_file = temp_workspace / "empty.sql"
     empty_file.write_text("")
 
     loader = SQLFileLoader()
 
-    with pytest.raises(SQLFileParseError) as exc_info:
-        loader.load_sql(empty_file)
+    loader.load_sql(empty_file)
 
-    assert "No named SQL statements found" in str(exc_info.value)
+    assert len(loader.list_queries()) == 0
+    assert str(empty_file) not in loader._files  # pyright: ignore
 
 
 def test_binary_file_handling(temp_workspace: Path) -> None:
@@ -345,14 +339,13 @@ def test_binary_file_handling(temp_workspace: Path) -> None:
         temp_workspace: Temporary directory for test files.
 
     Raises:
-        SQLFileParseError: When file contains binary data instead of text.
+        SQLFileParseError: When file contains binary data that can't be decoded.
     """
     binary_file = temp_workspace / "binary.sql"
 
-    with open(binary_file, "wb") as f:
-        f.write(b"\x00\x01\x02\x03\x04\x05")
+    Path(binary_file).write_bytes(b"\xff\xfe\xfd\xfc")
 
-    loader = SQLFileLoader()
+    loader = SQLFileLoader(encoding="utf-8")
 
     with pytest.raises(SQLFileParseError):
         loader.load_sql(binary_file)

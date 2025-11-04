@@ -6,6 +6,8 @@ import pytest
 
 dishka = pytest.importorskip("dishka")
 
+pytestmark = pytest.mark.xdist_group("dishka")
+
 if TYPE_CHECKING:
     from dishka import Provider  # type: ignore[import-not-found]
 

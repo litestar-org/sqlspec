@@ -21,10 +21,20 @@ from typing import TYPE_CHECKING, Any
 import psycopg
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import (
+    SQL,
+    DriverParameterProfile,
+    ParameterStyle,
+    ParameterStyleConfig,
+    SQLResult,
+    StatementConfig,
+    build_statement_config_from_profile,
+    get_cache_config,
+    is_copy_from_operation,
+    is_copy_operation,
+    is_copy_to_operation,
+    register_driver_profile,
+)
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -41,13 +51,26 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
+
+__all__ = (
+    "PsycopgAsyncCursor",
+    "PsycopgAsyncDriver",
+    "PsycopgAsyncExceptionHandler",
+    "PsycopgSyncCursor",
+    "PsycopgSyncDriver",
+    "PsycopgSyncExceptionHandler",
+    "build_psycopg_statement_config",
+    "psycopg_statement_config",
+)
 
 logger = get_logger("adapters.psycopg")
 
@@ -57,79 +80,6 @@ TRANSACTION_STATUS_ACTIVE = 1
 TRANSACTION_STATUS_INTRANS = 2
 TRANSACTION_STATUS_INERROR = 3
 TRANSACTION_STATUS_UNKNOWN = 4
-
-
-def _convert_list_to_postgres_array(value: Any) -> str:
-    """Convert Python list to PostgreSQL array literal format.
-
-    Args:
-        value: Python list to convert
-
-    Returns:
-        PostgreSQL array literal string
-    """
-    if not isinstance(value, list):
-        return str(value)
-
-    elements = []
-    for item in value:
-        if isinstance(item, list):
-            elements.append(_convert_list_to_postgres_array(item))
-        elif isinstance(item, str):
-            escaped = item.replace("'", "''")
-            elements.append(f"'{escaped}'")
-        elif item is None:
-            elements.append("NULL")
-        else:
-            elements.append(str(item))
-
-    return f"{{{','.join(elements)}}}"
-
-
-psycopg_statement_config = StatementConfig(
-    dialect="postgres",
-    pre_process_steps=None,
-    post_process_steps=None,
-    enable_parsing=True,
-    enable_transformations=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_parameter_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-            ParameterStyle.QMARK,
-        },
-        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_parameter_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-        },
-        type_coercion_map={
-            dict: to_json,
-            datetime.datetime: lambda x: x,
-            datetime.date: lambda x: x,
-            datetime.time: lambda x: x,
-        },
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-    ),
-)
-
-__all__ = (
-    "PsycopgAsyncCursor",
-    "PsycopgAsyncDriver",
-    "PsycopgAsyncExceptionHandler",
-    "PsycopgSyncCursor",
-    "PsycopgSyncDriver",
-    "PsycopgSyncExceptionHandler",
-    "psycopg_statement_config",
-)
 
 
 class PsycopgSyncCursor:
@@ -343,7 +293,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
         statement.compile()
 
-        if statement.operation_type in {"COPY_FROM", "COPY_TO"}:
+        if is_copy_operation(statement.operation_type):
             return self._handle_copy_operation(cursor, statement)
 
         return None
@@ -360,12 +310,12 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         """
 
         sql = statement.sql
-
+        operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
             copy_data = copy_data[0]
 
-        if statement.operation_type == "COPY_FROM":
+        if is_copy_from_operation(operation_type):
             if isinstance(copy_data, (str, bytes)):
                 data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
             elif hasattr(copy_data, "read"):
@@ -385,7 +335,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                 data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FROM_STDIN"}
             )
 
-        if statement.operation_type == "COPY_TO":
+        if is_copy_to_operation(operation_type):
             output_data: list[str] = []
             with cursor.copy(sql) as copy_ctx:
                 output_data.extend(row.decode() if isinstance(row, bytes) else str(row) for row in copy_ctx)
@@ -711,8 +661,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             SQLResult if special handling was applied, None otherwise
         """
 
-        sql_upper = statement.sql.strip().upper()
-        if sql_upper.startswith("COPY ") and ("FROM STDIN" in sql_upper or "TO STDOUT" in sql_upper):
+        statement.compile()
+
+        if is_copy_operation(statement.operation_type):
             return await self._handle_copy_operation_async(cursor, statement)
 
         return None
@@ -729,16 +680,13 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         """
 
         sql = statement.sql
-
+        sql_upper = sql.upper()
+        operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
             copy_data = copy_data[0]
 
-        sql_upper = sql.upper()
-        is_stdin = "FROM STDIN" in sql_upper
-        is_stdout = "TO STDOUT" in sql_upper
-
-        if is_stdin:
+        if is_copy_from_operation(operation_type) and "FROM STDIN" in sql_upper:
             if isinstance(copy_data, (str, bytes)):
                 data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
             elif hasattr(copy_data, "read"):
@@ -758,7 +706,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                 data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FROM_STDIN"}
             )
 
-        if is_stdout:
+        if is_copy_to_operation(operation_type) and "TO STDOUT" in sql_upper:
             output_data: list[str] = []
             async with cursor.copy(sql) as copy_ctx:
                 output_data.extend([row.decode() if isinstance(row, bytes) else str(row) async for row in copy_ctx])
@@ -871,3 +819,79 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
+
+
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _build_psycopg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]:
+    """Return custom type coercions for psycopg."""
+
+    return {datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity}
+
+
+def _build_psycopg_profile() -> DriverParameterProfile:
+    """Create the psycopg driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="Psycopg",
+        default_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_styles={
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            ParameterStyle.NAMED_PYFORMAT,
+            ParameterStyle.NUMERIC,
+            ParameterStyle.QMARK,
+        },
+        default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_execution_styles={
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            ParameterStyle.NAMED_PYFORMAT,
+            ParameterStyle.NUMERIC,
+        },
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions=_build_psycopg_custom_type_coercions(),
+        default_dialect="postgres",
+    )
+
+
+_PSYCOPG_PROFILE = _build_psycopg_profile()
+
+register_driver_profile("psycopg", _PSYCOPG_PROFILE)
+
+
+def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
+    """Construct parameter configuration with shared JSON serializer support."""
+
+    base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=serializer).parameter_config
+
+    updated_type_map = dict(base_config.type_coercion_map)
+    updated_type_map[list] = build_json_list_converter(serializer)
+    updated_type_map[tuple] = build_json_tuple_converter(serializer)
+
+    return base_config.replace(type_coercion_map=updated_type_map)
+
+
+def build_psycopg_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> StatementConfig:
+    """Construct the psycopg statement configuration with optional JSON codecs."""
+
+    parameter_config = _create_psycopg_parameter_config(json_serializer)
+    return StatementConfig(
+        dialect="postgres",
+        pre_process_steps=None,
+        post_process_steps=None,
+        enable_parsing=True,
+        enable_transformations=True,
+        enable_validation=True,
+        enable_caching=True,
+        enable_parameter_type_wrapping=True,
+        parameter_config=parameter_config,
+    )
+
+
+psycopg_statement_config = build_psycopg_statement_config()

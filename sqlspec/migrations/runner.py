@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Union, cast, overload
 
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.utils.logging import get_logger

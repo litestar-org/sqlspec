@@ -1,15 +1,44 @@
 """Shared utilities for storage backends."""
 
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import Any, Final
 
-if TYPE_CHECKING:
-    from pathlib import Path
+from sqlspec.utils.module_loader import ensure_pyarrow
 
-__all__ = ("resolve_storage_path",)
+FILE_PROTOCOL: Final[str] = "file"
+FILE_SCHEME_PREFIX: Final[str] = "file://"
+
+__all__ = ("FILE_PROTOCOL", "FILE_SCHEME_PREFIX", "import_pyarrow", "import_pyarrow_parquet", "resolve_storage_path")
+
+
+def import_pyarrow() -> "Any":
+    """Import PyArrow with optional dependency guard.
+
+    Returns:
+        PyArrow module.
+    """
+
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    return pa
+
+
+def import_pyarrow_parquet() -> "Any":
+    """Import PyArrow parquet module with optional dependency guard.
+
+    Returns:
+        PyArrow parquet module.
+    """
+
+    ensure_pyarrow()
+    import pyarrow.parquet as pq
+
+    return pq
 
 
 def resolve_storage_path(
-    path: "str | Path", base_path: str = "", protocol: str = "file", strip_file_scheme: bool = True
+    path: "str | Path", base_path: str = "", protocol: str = FILE_PROTOCOL, strip_file_scheme: bool = True
 ) -> str:
     """Resolve path relative to base_path with protocol-specific handling.
 
@@ -43,40 +72,30 @@ def resolve_storage_path(
         ... )
         'subdir/file.txt'
     """
-    from pathlib import Path as PathlibPath
 
     path_str = str(path)
 
-    if strip_file_scheme and path_str.startswith("file://"):
-        path_str = path_str.removeprefix("file://")
+    if strip_file_scheme and path_str.startswith(FILE_SCHEME_PREFIX):
+        path_str = path_str.removeprefix(FILE_SCHEME_PREFIX)
 
-    # For local file protocol
-    if protocol == "file":
-        path_obj = PathlibPath(path_str)
+    if protocol == FILE_PROTOCOL:
+        path_obj = Path(path_str)
 
-        # Absolute path handling
         if path_obj.is_absolute():
             if base_path:
-                base_obj = PathlibPath(base_path)
-                # Try to make path relative to base_path
+                base_obj = Path(base_path)
                 try:
                     relative = path_obj.relative_to(base_obj)
-                    # Return joined path for FSSpec-style backends
                     return f"{base_path.rstrip('/')}/{relative}"
                 except ValueError:
-                    # Path is outside base_path
                     return path_str.lstrip("/")
-            # No base_path - strip leading /
             return path_str.lstrip("/")
 
-        # Relative path with base_path - join them
         if base_path:
             return f"{base_path.rstrip('/')}/{path_str}"
 
-        # Relative path without base_path
         return path_str
 
-    # For cloud storage protocols (s3, gs, etc.), join with base_path
     if not base_path:
         return path_str
 

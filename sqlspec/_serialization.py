@@ -12,6 +12,7 @@ import datetime
 import enum
 import json
 from abc import ABC, abstractmethod
+from decimal import Decimal
 from typing import Any, Final, Literal, Protocol, overload
 
 from sqlspec._typing import NUMPY_INSTALLED
@@ -21,7 +22,7 @@ from sqlspec.typing import MSGSPEC_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALL
 def _type_to_string(value: Any) -> Any:  # pragma: no cover
     """Convert special types to strings for JSON serialization.
 
-    Handles datetime, date, enums, Pydantic models, and numpy arrays.
+    Handles datetime, date, enums, Decimal, Pydantic models, and numpy arrays.
 
     Args:
         value: Value to convert.
@@ -36,6 +37,8 @@ def _type_to_string(value: Any) -> Any:  # pragma: no cover
         return convert_datetime_to_gmt_iso(value)
     if isinstance(value, datetime.date):
         return convert_date_to_iso(value)
+    if isinstance(value, Decimal):
+        return float(value)
     if isinstance(value, enum.Enum):
         return str(value.value)
     if PYDANTIC_INSTALLED and isinstance(value, BaseModel):

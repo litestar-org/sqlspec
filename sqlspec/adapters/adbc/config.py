@@ -9,8 +9,8 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.adbc._types import AdbcConnection
 from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, get_adbc_statement_config
-from sqlspec.config import NoPoolSyncConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
+from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.module_loader import import_string
 
@@ -110,7 +110,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         statement_config: StatementConfig | None = None,
         driver_features: "AdbcDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize configuration.
 
@@ -147,6 +147,21 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             driver_features["strict_type_coercion"] = False
         if "arrow_extension_types" not in driver_features:
             driver_features["arrow_extension_types"] = True
+
+        json_serializer = driver_features.get("json_serializer")
+        if json_serializer is not None:
+            parameter_config = statement_config.parameter_config
+            previous_list_converter = parameter_config.type_coercion_map.get(list)
+            previous_tuple_converter = parameter_config.type_coercion_map.get(tuple)
+            updated_parameter_config = parameter_config.with_json_serializers(json_serializer)
+            updated_map = dict(updated_parameter_config.type_coercion_map)
+            if previous_list_converter is not None:
+                updated_map[list] = previous_list_converter
+            if previous_tuple_converter is not None:
+                updated_map[tuple] = previous_tuple_converter
+            statement_config = statement_config.replace(
+                parameter_config=updated_parameter_config.replace(type_coercion_map=updated_map)
+            )
 
         super().__init__(
             connection_config=self.connection_config,

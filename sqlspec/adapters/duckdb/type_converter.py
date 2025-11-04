@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Any, Final
 from uuid import UUID
 
-from sqlspec.core.type_conversion import BaseTypeConverter, convert_uuid, format_datetime_rfc3339
+from sqlspec.core import BaseTypeConverter, convert_uuid, format_datetime_rfc3339
 
 DUCKDB_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"-", ":", "T", ".", "[", "{"})
 

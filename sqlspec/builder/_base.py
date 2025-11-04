@@ -15,16 +15,21 @@ from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
-from sqlspec.core.cache import get_cache, get_cache_config
-from sqlspec.core.hashing import hash_optimized_expression
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import (
+    SQL,
+    ParameterStyle,
+    ParameterStyleConfig,
+    StatementConfig,
+    get_cache,
+    get_cache_config,
+    hash_optimized_expression,
+)
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_expression_and_parameters, has_sql_method, has_with_method, is_expression
+from sqlspec.utils.type_guards import has_expression_and_parameters, has_with_method, is_expression
 
 if TYPE_CHECKING:
-    from sqlspec.core.result import SQLResult
+    from sqlspec.core import SQLResult
 
 __all__ = ("QueryBuilder", "SafeQuery")
 
@@ -446,20 +451,35 @@ class QueryBuilder(ABC):
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
 
-    def build(self) -> "SafeQuery":
+    def build(self, dialect: DialectType = None) -> "SafeQuery":
         """Builds the SQL query string and parameters.
+
+        Args:
+            dialect: Optional dialect override. If provided, generates SQL for this dialect
+                    instead of the builder's default dialect.
 
         Returns:
             SafeQuery: A dataclass containing the SQL string and parameters.
+
+        Examples:
+            # Use builder's default dialect
+            query = sql.select("*").from_("products")
+            result = query.build()
+
+            # Override dialect at build time
+            postgres_sql = query.build(dialect="postgres")
+            mysql_sql = query.build(dialect="mysql")
         """
         final_expression = self._build_final_expression()
 
         if self.enable_optimization and isinstance(final_expression, exp.Expression):
             final_expression = self._optimize_expression(final_expression)
 
+        target_dialect = str(dialect) if dialect else self.dialect_name
+
         try:
-            if has_sql_method(final_expression):
-                sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
+            if isinstance(final_expression, exp.Expression):
+                sql_string = final_expression.sql(dialect=target_dialect, pretty=True)
             else:
                 sql_string = str(final_expression)
         except Exception as e:
@@ -467,7 +487,59 @@ class QueryBuilder(ABC):
             logger.exception("SQL generation failed")
             self._raise_sql_builder_error(err_msg, e)
 
-        return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=self.dialect)
+        return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=dialect or self.dialect)
+
+    def to_sql(self, show_parameters: bool = False, dialect: DialectType = None) -> str:
+        """Return SQL string with optional parameter substitution.
+
+        Args:
+            show_parameters: If True, replace parameter placeholders with actual values (for debugging).
+                           If False (default), return SQL with parameter placeholders.
+            dialect: Optional dialect override. If provided, generates SQL for this dialect
+                    instead of the builder's default dialect.
+
+        Returns:
+            SQL string with or without parameter values filled in
+
+        Examples:
+            Get SQL with placeholders (for execution):
+                sql_str = query.to_sql()
+                # "SELECT * FROM products WHERE id = :id"
+
+            Get SQL with values (for debugging):
+                sql_str = query.to_sql(show_parameters=True)
+                # "SELECT * FROM products WHERE id = 123"
+
+            Override dialect at output time:
+                postgres_sql = query.to_sql(dialect="postgres")
+                mysql_sql = query.to_sql(dialect="mysql")
+
+        Warning:
+            SQL with show_parameters=True is for debugging ONLY.
+            Never execute SQL with interpolated parameters directly - use parameterized queries.
+        """
+        safe_query = self.build(dialect=dialect)
+
+        if not show_parameters:
+            return safe_query.sql
+
+        sql = safe_query.sql
+        parameters = safe_query.parameters
+
+        for param_name, param_value in parameters.items():
+            placeholder = f":{param_name}"
+            if isinstance(param_value, str):
+                replacement = f"'{param_value}'"
+            elif param_value is None:
+                replacement = "NULL"
+            elif isinstance(param_value, bool):
+                replacement = "TRUE" if param_value else "FALSE"
+            else:
+                replacement = str(param_value)
+
+            sql = sql.replace(placeholder, replacement)
+
+        return sql
 
     def _optimize_expression(self, expression: exp.Expression) -> exp.Expression:
         """Apply SQLGlot optimizations to the expression.
@@ -558,8 +630,7 @@ class QueryBuilder(ABC):
         if (
             config.dialect is not None
             and config.dialect != safe_query.dialect
-            and self._expression is not None
-            and has_sql_method(self._expression)
+            and isinstance(self._expression, exp.Expression)
         ):
             try:
                 sql_string = self._expression.sql(dialect=config.dialect, pretty=True)

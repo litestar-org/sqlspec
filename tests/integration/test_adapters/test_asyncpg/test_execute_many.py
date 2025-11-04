@@ -3,46 +3,32 @@
 from collections.abc import AsyncGenerator
 
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.adapters.asyncpg import AsyncpgDriver
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-async def asyncpg_batch_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
+async def asyncpg_batch_session(asyncpg_async_driver: AsyncpgDriver) -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an AsyncPG session for batch operation testing."""
-    config = AsyncpgConfig(
-        pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        }
+
+    await asyncpg_async_driver.execute_script(
+        """
+            CREATE TABLE IF NOT EXISTS test_batch (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                value INTEGER DEFAULT 0,
+                category TEXT
+            );
+            TRUNCATE TABLE test_batch RESTART IDENTITY
+        """
     )
-
     try:
-        async with config.provide_session() as session:
-            await session.execute_script("""
-                CREATE TABLE IF NOT EXISTS test_batch (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    value INTEGER DEFAULT 0,
-                    category TEXT
-                )
-            """)
-
-            await session.execute_script("TRUNCATE TABLE test_batch RESTART IDENTITY")
-
-            yield session
-
-            await session.execute_script("DROP TABLE IF EXISTS test_batch")
+        yield asyncpg_async_driver
     finally:
-        if config.pool_instance:
-            await config.close_pool()
+        await asyncpg_async_driver.execute_script("DROP TABLE IF EXISTS test_batch")
 
 
 async def test_asyncpg_execute_many_basic(asyncpg_batch_session: AsyncpgDriver) -> None:
@@ -178,7 +164,7 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
 
 async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with SQL object on AsyncPG."""
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL
 
     parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 

@@ -12,12 +12,12 @@ from unittest.mock import Mock
 import pytest
 from sqlglot import exp, parse_one
 
-from sqlspec.core.filters import StatementFilter
+from sqlspec.core import StatementFilter
+from sqlspec.core.hashing import _hash_value
 
 if TYPE_CHECKING:
-    from sqlspec.core.statement import SQL
-from sqlspec.core.hashing import (
-    _hash_value,
+    from sqlspec.core import SQL
+from sqlspec.core import (
     hash_expression,
     hash_expression_node,
     hash_filters,
@@ -171,7 +171,7 @@ def test_hash_parameters_mixed() -> None:
 
 def test_hash_parameters_with_typed_parameters() -> None:
     """Test hash_parameters with TypedParameter objects."""
-    from sqlspec.core.parameters import TypedParameter
+    from sqlspec.core import TypedParameter
 
     typed_param = TypedParameter("test_value", str, "test_semantic")
     params = [typed_param, "regular_param"]
@@ -556,7 +556,7 @@ def test_hash_expression_node_dialects(dialect: str) -> None:
 
 def test_hash_parameters_edge_cases() -> None:
     """Test hash_parameters with various edge cases."""
-    from sqlspec.core.parameters import TypedParameter
+    from sqlspec.core import TypedParameter
 
     typed_param_with_list = TypedParameter([1, 2, 3], list, "list_param")
     typed_param_with_dict = TypedParameter({"key": "value"}, dict, "dict_param")

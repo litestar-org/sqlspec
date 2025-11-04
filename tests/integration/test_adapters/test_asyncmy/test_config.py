@@ -10,7 +10,7 @@ from sqlspec.adapters.asyncmy import (
     AsyncmyDriverFeatures,
     AsyncmyPoolParams,
 )
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import StatementConfig
 
 pytestmark = pytest.mark.xdist_group("mysql")
 

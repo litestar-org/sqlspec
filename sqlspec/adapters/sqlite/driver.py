@@ -1,14 +1,18 @@
 """SQLite driver implementation."""
 
 import contextlib
-import datetime
 import sqlite3
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import (
+    DriverParameterProfile,
+    ParameterStyle,
+    build_statement_config_from_profile,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -23,13 +27,13 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from sqlspec.adapters.sqlite._types import SqliteConnection
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
 
@@ -43,31 +47,8 @@ SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
-
-sqlite_statement_config = StatementConfig(
-    dialect="sqlite",
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-        default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-        type_coercion_map={
-            bool: int,
-            datetime.datetime: lambda v: v.isoformat(),
-            datetime.date: lambda v: v.isoformat(),
-            Decimal: str,
-            dict: to_json,
-            list: to_json,
-        },
-        has_native_list_expansion=False,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-    ),
-    enable_parsing=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-)
+_TIME_TO_ISO = build_time_iso_converter()
+_DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
 
 class SqliteCursor:
@@ -408,3 +389,41 @@ class SqliteDriver(SyncDriverAdapterBase):
 
             self._data_dictionary = SqliteSyncDataDictionary()
         return self._data_dictionary
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _build_sqlite_profile() -> DriverParameterProfile:
+    """Create the SQLite driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="SQLite",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            bool: _bool_to_int,
+            datetime: _TIME_TO_ISO,
+            date: _TIME_TO_ISO,
+            Decimal: _DECIMAL_TO_STRING,
+        },
+        default_dialect="sqlite",
+    )
+
+
+_SQLITE_PROFILE = _build_sqlite_profile()
+
+register_driver_profile("sqlite", _SQLITE_PROFILE)
+
+sqlite_statement_config = build_statement_config_from_profile(
+    _SQLITE_PROFILE, statement_overrides={"dialect": "sqlite"}, json_serializer=to_json
+)

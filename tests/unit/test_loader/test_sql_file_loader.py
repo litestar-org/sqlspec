@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import CachedSQLFile, NamedStatement, SQLFile, SQLFileLoader
 
@@ -206,14 +206,14 @@ UPDATE users SET email = ? WHERE id = ?;
     assert "update_user_email" in statements
 
 
-def test_parse_error_no_named_statements() -> None:
-    """Test error when no named statements found."""
+def test_parse_skips_files_without_named_statements() -> None:
+    """Test that files without named statements return empty dict."""
     content = "SELECT * FROM users;"
 
-    with pytest.raises(SQLFileParseError) as exc_info:
-        SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
 
-    assert "No named SQL statements found" in str(exc_info.value)
+    assert statements == {}
+    assert len(statements) == 0
 
 
 def test_parse_error_duplicate_names() -> None:
@@ -244,6 +244,59 @@ SELECT * FROM users;
 
     assert len(statements) == 1
     assert statements["test_query"].dialect == "invalid_dialect"
+
+
+def test_parse_empty_file() -> None:
+    """Test parsing empty file returns empty dict."""
+    statements = SQLFileLoader._parse_sql_content("", "empty.sql")
+    assert statements == {}
+
+
+def test_parse_comments_only_file() -> None:
+    """Test parsing file with only comments returns empty dict."""
+    content = "-- This is a comment\n-- Another comment"
+    statements = SQLFileLoader._parse_sql_content(content, "comments.sql")
+    assert statements == {}
+
+
+def test_load_directory_with_mixed_files(tmp_path: Path) -> None:
+    """Test loading directory with named queries and raw DDL."""
+    named_file = tmp_path / "queries.sql"
+    named_file.write_text("""
+-- name: get_user
+SELECT * FROM users WHERE id = ?;
+""")
+
+    ddl_file = tmp_path / "schema.sql"
+    ddl_file.write_text("""
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL
+);
+""")
+
+    loader = SQLFileLoader()
+    loader.load_sql(tmp_path)
+
+    assert loader.has_query("get_user")
+    assert str(ddl_file) not in loader._files
+    assert len(loader.list_queries()) == 1
+
+
+def test_skipped_file_logging(tmp_path: Path, caplog) -> None:
+    """Test that skipped files are logged at DEBUG level."""
+    import logging
+
+    ddl_file = tmp_path / "schema.sql"
+    ddl_file.write_text("CREATE TABLE users (id INTEGER);")
+
+    loader = SQLFileLoader()
+
+    with caplog.at_level(logging.DEBUG):
+        loader.load_sql(ddl_file)
+
+    assert "Skipping SQL file without named statements" in caplog.text
+    assert str(ddl_file) in caplog.text
 
 
 def test_strip_leading_comments() -> None:
@@ -598,15 +651,15 @@ def test_query_name_normalization_edge_cases() -> None:
         assert result == expected, f"Failed for {input_name}: got {result}, expected {expected}"
 
 
-def test_parse_error_propagation() -> None:
-    """Test that parsing errors are properly propagated."""
+def test_parse_empty_name_marker() -> None:
+    """Test that empty name markers are skipped gracefully."""
     content = """
 -- name:
 SELECT * FROM users;
 """
 
-    with pytest.raises(SQLFileParseError):
-        SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    assert statements == {}
 
 
 def test_file_read_error_handling() -> None:
@@ -892,7 +945,7 @@ def fixture_integration_path() -> Path:
 
 def test_load_and_execute_fixture_queries(fixture_integration_path: Path) -> None:
     """Test loading and creating SQL objects from fixture queries."""
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL
     from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_integration_path / "init.sql"
@@ -930,7 +983,7 @@ def test_fixture_query_metadata_preservation(fixture_integration_path: Path) -> 
 
 def test_fixture_parameter_extraction(fixture_integration_path: Path) -> None:
     """Test parameter extraction from fixture queries."""
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL
     from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_integration_path / "postgres" / "collection-database_details.sql"

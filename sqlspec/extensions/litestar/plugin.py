@@ -25,8 +25,9 @@ from sqlspec.extensions.litestar.handlers import (
     pool_provider_maker,
     session_provider_maker,
 )
-from sqlspec.typing import ConnectionT, PoolT
+from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import numpy_array_dec_hook, numpy_array_enc_hook, numpy_array_predicate
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -71,6 +72,7 @@ class _PluginConfigState:
     extra_commit_statuses: "set[int] | None"
     extra_rollback_statuses: "set[int] | None"
     enable_correlation_middleware: bool
+    disable_di: bool
     connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]]" = field(init=False)
     pool_provider: "Callable[[State, Scope], Any]" = field(init=False)
     session_provider: "Callable[..., AsyncGenerator[Any, None]]" = field(init=False)
@@ -81,6 +83,10 @@ class _PluginConfigState:
 
 class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     """Litestar plugin for SQLSpec database integration.
+
+    Automatically configures NumPy array serialization when NumPy is installed,
+    enabling seamless bidirectional conversion between NumPy arrays and JSON
+    for vector embedding workflows.
 
     Session Table Migrations:
         The Litestar extension includes migrations for creating session storage tables.
@@ -152,6 +158,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "extra_commit_statuses": litestar_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": litestar_config.get("extra_rollback_statuses"),
             "enable_correlation_middleware": litestar_config.get("enable_correlation_middleware", True),
+            "disable_di": litestar_config.get("disable_di", False),
         }
 
     def _create_config_state(
@@ -169,9 +176,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             extra_commit_statuses=settings.get("extra_commit_statuses"),
             extra_rollback_statuses=settings.get("extra_rollback_statuses"),
             enable_correlation_middleware=settings["enable_correlation_middleware"],
+            disable_di=settings["disable_di"],
         )
 
-        self._setup_handlers(state)
+        if not state.disable_di:
+            self._setup_handlers(state)
         return state
 
     def _setup_handlers(self, state: _PluginConfigState) -> None:
@@ -225,6 +234,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     def on_app_init(self, app_config: "AppConfig") -> "AppConfig":
         """Configure Litestar application with SQLSpec database integration.
 
+        Automatically registers NumPy array serialization when NumPy is installed.
+
         Args:
             app_config: The Litestar application configuration instance.
 
@@ -239,7 +250,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         app_config.on_startup.append(store_sqlspec_in_state)
         app_config.signature_types.extend([SQLSpec, DatabaseConfigProtocol, SyncConfigT, AsyncConfigT])
 
-        signature_namespace = {"ConnectionT": ConnectionT, "PoolT": PoolT, "DriverT": DriverT}
+        signature_namespace = {"ConnectionT": ConnectionT, "PoolT": PoolT, "DriverT": DriverT, "SchemaT": SchemaT}
 
         for state in self._plugin_configs:
             state.annotation = type(state.config)
@@ -249,18 +260,34 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
             signature_namespace.update(state.config.get_signature_namespace())  # type: ignore[arg-type]
 
-            app_config.before_send.append(state.before_send_handler)
-            app_config.lifespan.append(state.lifespan_handler)
-            app_config.dependencies.update(
-                {
+            if not state.disable_di:
+                app_config.before_send.append(state.before_send_handler)
+                app_config.lifespan.append(state.lifespan_handler)
+                app_config.dependencies.update({
                     state.connection_key: Provide(state.connection_provider),
                     state.pool_key: Provide(state.pool_provider),
                     state.session_key: Provide(state.session_provider),
-                }
-            )
+                })
 
         if signature_namespace:
             app_config.signature_namespace.update(signature_namespace)
+
+        if NUMPY_INSTALLED:
+            import numpy as np
+
+            if app_config.type_encoders is None:
+                app_config.type_encoders = {np.ndarray: numpy_array_enc_hook}
+            else:
+                encoders_dict = dict(app_config.type_encoders)
+                encoders_dict[np.ndarray] = numpy_array_enc_hook
+                app_config.type_encoders = encoders_dict
+
+            if app_config.type_decoders is None:
+                app_config.type_decoders = [(numpy_array_predicate, numpy_array_dec_hook)]  # type: ignore[list-item]
+            else:
+                decoders_list = list(app_config.type_decoders)
+                decoders_list.append((numpy_array_predicate, numpy_array_dec_hook))  # type: ignore[arg-type]
+                app_config.type_decoders = decoders_list
 
         return app_config
 

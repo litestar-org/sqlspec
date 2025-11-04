@@ -3,16 +3,17 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy._types import PsqlpyConnection
-from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, psqlpy_statement_config
-from sqlspec.config import AsyncDatabaseConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, build_psqlpy_statement_config
+from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
+from sqlspec.core import StatementConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -81,9 +82,13 @@ class PsqlpyDriverFeatures(TypedDict):
         Requires pgvector-python package installed.
         Defaults to True when pgvector is installed.
         Provides automatic conversion between NumPy arrays and PostgreSQL vector types.
+    json_serializer: Custom JSON serializer applied to the statement configuration.
+    json_deserializer: Custom JSON deserializer retained alongside the serializer for parity with asyncpg.
     """
 
     enable_pgvector: NotRequired[bool]
+    json_serializer: NotRequired["Callable[[Any], str]"]
+    json_deserializer: NotRequired["Callable[[str], Any]"]
 
 
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
@@ -105,7 +110,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         statement_config: StatementConfig | None = None,
         driver_features: "PsqlpyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize Psqlpy configuration.
 
@@ -124,14 +129,16 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             processed_pool_config.update(extras)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        if "enable_pgvector" not in processed_driver_features:
-            processed_driver_features["enable_pgvector"] = PGVECTOR_INSTALLED
+        serializer = processed_driver_features.get("json_serializer")
+        serializer_callable = to_json if serializer is None else cast("Callable[[Any], str]", serializer)
+        processed_driver_features.setdefault("json_serializer", serializer_callable)
+        processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or psqlpy_statement_config,
+            statement_config=statement_config or build_psqlpy_statement_config(json_serializer=serializer_callable),
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,

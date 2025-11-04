@@ -259,6 +259,47 @@ The loader implements intelligent caching with 12x+ performance improvements:
 - Automatic invalidation on file changes (in development)
 - Configurable cache size limits
 
+Loading Directories with Mixed Files
+-------------------------------------
+
+The loader gracefully handles directories containing both named query files and raw DDL/DML scripts:
+
+.. code-block:: text
+
+   migrations/
+      schema.sql        # Raw DDL (no -- name:) → skipped
+      queries.sql       # Named queries → loaded
+      seed-data.sql     # Raw DML (no -- name:) → skipped
+
+.. code-block:: python
+
+   loader = SQLFileLoader()
+   loader.load_sql("migrations/")  # Only loads queries.sql
+
+   # Check what was loaded
+   queries = loader.list_queries()  # Only returns named queries
+
+**How it works:**
+
+- Files without ``-- name:`` markers are gracefully skipped
+- Skipped files are logged at DEBUG level
+- Directory loading continues without errors
+- Only named query files are tracked and cached
+
+**When files are skipped:**
+
+- Empty files
+- Files with only comments
+- Raw DDL scripts (CREATE TABLE, etc.)
+- Raw DML scripts without named markers
+- Files with ``-- dialect:`` but no ``-- name:``
+
+**When files raise errors:**
+
+- Duplicate query names within the same file
+- Malformed ``-- name:`` markers
+- Files with ``-- name:`` but no SQL content after parsing
+
 Storage Backends
 ----------------
 

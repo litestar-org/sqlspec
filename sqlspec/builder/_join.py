@@ -15,7 +15,7 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_query_builder_parameters
 
 if TYPE_CHECKING:
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL
     from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = ("JoinBuilder", "JoinClauseMixin")

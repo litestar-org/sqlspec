@@ -128,7 +128,7 @@ def test_from_json_basic_types() -> None:
     assert from_json('"hello"') == "hello"
 
     assert from_json("42") == 42
-    assert from_json("3.14") == 3.14
+    assert from_json("3.14") == pytest.approx(3.14)
 
     assert from_json("true") is True
     assert from_json("false") is False
@@ -192,7 +192,7 @@ def test_from_json_numeric_edge_cases() -> None:
     assert from_json("9223372036854775807") == 9223372036854775807
 
     assert from_json("-42") == -42
-    assert from_json("-3.14") == -3.14
+    assert from_json("-3.14") == pytest.approx(-3.14)
 
     assert from_json("0") == 0
     assert from_json("0.0") == 0.0
@@ -450,9 +450,21 @@ def test_module_all_exports() -> None:
     """Test that __all__ contains the expected exports."""
     from sqlspec.utils.serializers import __all__
 
-    assert "from_json" in __all__
-    assert "to_json" in __all__
-    assert len(__all__) == 2
+    expected = {
+        "SchemaSerializer",
+        "from_json",
+        "get_collection_serializer",
+        "get_serializer_metrics",
+        "numpy_array_dec_hook",
+        "numpy_array_enc_hook",
+        "numpy_array_predicate",
+        "reset_serializer_cache",
+        "schema_dump",
+        "serialize_collection",
+        "to_json",
+    }
+
+    assert set(__all__) == expected
 
 
 def test_error_messages_are_helpful() -> None:
@@ -464,3 +476,200 @@ def test_error_messages_are_helpful() -> None:
         error_msg = str(e).lower()
 
         assert any(word in error_msg for word in ["json", "decode", "parse", "invalid", "expect", "malformed"])
+
+
+numpy_available = pytest.importorskip("numpy", reason="NumPy not installed")
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_enc_hook_basic() -> None:
+    """Test basic NumPy array encoding to list."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_enc_hook
+
+    arr = np.array([1.0, 2.0, 3.0])
+    result = numpy_array_enc_hook(arr)
+
+    assert result == [1.0, 2.0, 3.0]
+    assert isinstance(result, list)
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_enc_hook_multidimensional() -> None:
+    """Test NumPy array encoding for multi-dimensional arrays."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_enc_hook
+
+    arr_2d = np.array([[1, 2], [3, 4]])
+    result = numpy_array_enc_hook(arr_2d)
+
+    assert result == [[1, 2], [3, 4]]
+
+    arr_3d = np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])
+    result_3d = numpy_array_enc_hook(arr_3d)
+
+    assert result_3d == [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_enc_hook_empty() -> None:
+    """Test NumPy array encoding for empty arrays."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_enc_hook
+
+    empty_arr = np.array([])
+    result = numpy_array_enc_hook(empty_arr)
+
+    assert result == []
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_enc_hook_various_dtypes() -> None:
+    """Test NumPy array encoding for various dtypes."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_enc_hook
+
+    arr_float32 = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    assert numpy_array_enc_hook(arr_float32) == [1.0, 2.0, 3.0]
+
+    arr_float64 = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    assert numpy_array_enc_hook(arr_float64) == [1.0, 2.0, 3.0]
+
+    arr_int64 = np.array([1, 2, 3], dtype=np.int64)
+    assert numpy_array_enc_hook(arr_int64) == [1, 2, 3]
+
+    arr_uint8 = np.array([1, 2, 3], dtype=np.uint8)
+    assert numpy_array_enc_hook(arr_uint8) == [1, 2, 3]
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_enc_hook_non_array() -> None:
+    """Test that non-array values are passed through unchanged."""
+    from sqlspec.utils.serializers import numpy_array_enc_hook
+
+    assert numpy_array_enc_hook([1, 2, 3]) == [1, 2, 3]
+    assert numpy_array_enc_hook("string") == "string"
+    assert numpy_array_enc_hook(42) == 42
+    assert numpy_array_enc_hook(None) is None
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_dec_hook_basic() -> None:
+    """Test basic list decoding to NumPy array."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_dec_hook
+
+    result = numpy_array_dec_hook([1.0, 2.0, 3.0])
+
+    assert isinstance(result, np.ndarray)
+    assert np.array_equal(result, np.array([1.0, 2.0, 3.0]))
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_dec_hook_multidimensional() -> None:
+    """Test list decoding for multi-dimensional arrays."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_dec_hook
+
+    result_2d = numpy_array_dec_hook([[1, 2], [3, 4]])
+    expected_2d = np.array([[1, 2], [3, 4]])
+
+    assert isinstance(result_2d, np.ndarray)
+    assert np.array_equal(result_2d, expected_2d)
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_dec_hook_empty() -> None:
+    """Test list decoding for empty lists."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_dec_hook
+
+    result = numpy_array_dec_hook([])
+
+    assert isinstance(result, np.ndarray)
+    assert len(result) == 0
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_dec_hook_non_list() -> None:
+    """Test that non-list values are passed through unchanged."""
+    from sqlspec.utils.serializers import numpy_array_dec_hook
+
+    assert numpy_array_dec_hook("string") == "string"
+    assert numpy_array_dec_hook(42) == 42
+    assert numpy_array_dec_hook(None) is None
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_predicate_basic() -> None:
+    """Test NumPy array predicate for type checking."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_predicate
+
+    arr = np.array([1, 2, 3])
+    assert numpy_array_predicate(arr) is True
+
+    assert numpy_array_predicate([1, 2, 3]) is False
+    assert numpy_array_predicate("string") is False
+    assert numpy_array_predicate(42) is False
+    assert numpy_array_predicate(None) is False
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_round_trip() -> None:
+    """Test round-trip NumPy array serialization."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_dec_hook, numpy_array_enc_hook
+
+    original = np.array([1.5, 2.5, 3.5])
+
+    encoded = numpy_array_enc_hook(original)
+    decoded = numpy_array_dec_hook(encoded)
+
+    assert isinstance(encoded, list)
+    assert isinstance(decoded, np.ndarray)
+    assert np.array_equal(decoded, original)
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_round_trip_multidimensional() -> None:
+    """Test round-trip for multi-dimensional NumPy arrays."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_dec_hook, numpy_array_enc_hook
+
+    original = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+
+    encoded = numpy_array_enc_hook(original)
+    decoded = numpy_array_dec_hook(encoded)
+
+    assert isinstance(encoded, list)
+    assert isinstance(decoded, np.ndarray)
+    assert np.array_equal(decoded, original)
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_serialization_with_to_json() -> None:
+    """Test that NumPy arrays can be serialized with to_json via hook."""
+    import numpy as np
+
+    from sqlspec.utils.serializers import numpy_array_enc_hook
+
+    arr = np.array([1.0, 2.0, 3.0])
+
+    encoded = numpy_array_enc_hook(arr)
+    json_str = to_json(encoded)
+
+    assert isinstance(json_str, str)
+
+    decoded_list = from_json(json_str)
+    assert decoded_list == [1.0, 2.0, 3.0]

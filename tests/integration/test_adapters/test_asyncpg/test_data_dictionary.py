@@ -9,6 +9,8 @@ from sqlspec.driver import VersionInfo
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 
+pytestmark = pytest.mark.xdist_group("postgres")
+
 
 @pytest.mark.asyncpg
 async def test_asyncpg_data_dictionary_version_detection(asyncpg_async_driver: "AsyncpgDriver") -> None:

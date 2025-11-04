@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.loader import SQLFileLoader
 
 try:

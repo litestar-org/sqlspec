@@ -10,6 +10,118 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+Migration Convenience Methods on Config Classes
+------------------------------------------------
+
+Added migration methods directly to database configuration classes, eliminating the need to instantiate separate command objects.
+
+**What's New:**
+
+All database configs (both sync and async) now provide migration methods:
+
+- ``migrate_up()`` / ``upgrade()`` - Apply migrations up to a revision
+- ``migrate_down()`` / ``downgrade()`` - Rollback migrations
+- ``get_current_migration()`` - Check current version
+- ``create_migration()`` - Create new migration file
+- ``init_migrations()`` - Initialize migrations directory
+- ``stamp_migration()`` - Stamp database to specific revision
+- ``fix_migrations()`` - Convert timestamp to sequential migrations
+
+**Before (verbose):**
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.migrations.commands import AsyncMigrationCommands
+
+   config = AsyncpgConfig(
+       pool_config={"dsn": "postgresql://..."},
+       migration_config={"script_location": "migrations"}
+   )
+
+   commands = AsyncMigrationCommands(config)
+   await commands.upgrade("head")
+
+**After (recommended):**
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+   config = AsyncpgConfig(
+       pool_config={"dsn": "postgresql://..."},
+       migration_config={"script_location": "migrations"}
+   )
+
+   await config.upgrade("head")
+
+**Key Benefits:**
+
+- Simpler API - no need to import and instantiate command classes
+- Works with both sync and async adapters
+- Full backward compatibility - command classes still available
+- Cleaner test fixtures and deployment scripts
+
+**Async Adapters** (AsyncPG, Asyncmy, Aiosqlite, Psqlpy):
+
+.. code-block:: python
+
+   await config.migrate_up("head")
+   await config.create_migration("add users")
+
+**Sync Adapters** (SQLite, DuckDB):
+
+.. code-block:: python
+
+   config.migrate_up("head")  # No await needed
+   config.create_migration("add users")
+
+SQL Loader Graceful Error Handling
+-----------------------------------
+
+**Breaking Change**: Files without named statements (``-- name:``) are now gracefully skipped instead of raising ``SQLFileParseError``.
+
+This allows loading directories containing both aiosql-style named queries and raw DDL/DML scripts without errors.
+
+**What Changed:**
+
+- Files without ``-- name:`` markers return empty dict instead of raising exception
+- Directory loading continues when encountering such files
+- Skipped files are logged at DEBUG level
+- Malformed named statements (duplicate names, etc.) still raise exceptions
+
+**Migration Guide:**
+
+Code explicitly catching ``SQLFileParseError`` for files without named statements will need updating:
+
+.. code-block:: python
+
+   # OLD (breaks):
+   try:
+       loader.load_sql("directory/")
+   except SQLFileParseError as e:
+       if "No named SQL statements found" in str(e):
+           pass
+
+   # NEW (recommended):
+   loader.load_sql("directory/")  # Just works - DDL files skipped
+   if not loader.list_queries():
+       # No queries loaded
+       pass
+
+**Example Use Case:**
+
+.. code-block:: python
+
+   # Directory structure:
+   # migrations/
+   # ├── schema.sql              # Raw DDL (no -- name:) → SKIP
+   # ├── queries.sql             # Named queries → LOAD
+   # └── seed-data.sql          # Raw DML (no -- name:) → SKIP
+
+   loader = SQLFileLoader()
+   loader.load_sql("migrations/")  # Loads only named queries, skips DDL
+
 Hybrid Versioning with Fix Command
 -----------------------------------
 

@@ -14,8 +14,7 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL, SQLResult
 
 pytestmark = pytest.mark.xdist_group("mysql")
 

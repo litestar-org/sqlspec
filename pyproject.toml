@@ -7,7 +7,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.27.0"
+version = "0.28.1"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -207,7 +207,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.27.0"
+current_version = "0.28.1"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"
@@ -402,8 +402,8 @@ target-version = "py310"
 [tool.ruff.format]
 docstring-code-format = true
 docstring-code-line-length = 60
+preview = true
 skip-magic-trailing-comma = true
-
 
 [tool.ruff.lint]
 extend-safe-fixes = ["TC"]
@@ -462,6 +462,7 @@ ignore = [
   "PLR6301", # method could be static or class method
   "B903",    # class could be a dataclass or named tuple
   "PLW0603", # Using the global statement to update is discouraged
+  "PLW0108", # Replace lambda expression with a def
 ]
 select = ["ALL"]
 

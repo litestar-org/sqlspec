@@ -11,9 +11,13 @@ import asyncmy.errors  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import (
+    DriverParameterProfile,
+    ParameterStyle,
+    build_statement_config_from_profile,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -27,18 +31,23 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.asyncmy._types import AsyncmyConnection
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
-__all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "asyncmy_statement_config")
+__all__ = (
+    "AsyncmyCursor",
+    "AsyncmyDriver",
+    "AsyncmyExceptionHandler",
+    "asyncmy_statement_config",
+    "build_asyncmy_statement_config",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,24 +58,6 @@ ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value 
 MYSQL_ER_DUP_ENTRY = 1062
 MYSQL_ER_NO_DEFAULT_FOR_FIELD = 1364
 MYSQL_ER_CHECK_CONSTRAINT_VIOLATED = 3819
-
-asyncmy_statement_config = StatementConfig(
-    dialect="mysql",
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
-        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},
-        type_coercion_map={dict: to_json, list: to_json, tuple: lambda v: to_json(list(v)), bool: int},
-        has_native_list_expansion=False,
-        needs_static_script_compilation=True,
-        preserve_parameter_format=True,
-    ),
-    enable_parsing=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-)
 
 
 class AsyncmyCursor:
@@ -243,81 +234,10 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                 dialect="mysql",
             )
 
-        final_statement_config = self._apply_json_serializer_feature(final_statement_config, driver_features)
-
         super().__init__(
             connection=connection, statement_config=final_statement_config, driver_features=driver_features
         )
         self._data_dictionary: AsyncDataDictionaryBase | None = None
-
-    @staticmethod
-    def _clone_parameter_config(
-        parameter_config: ParameterStyleConfig, type_coercion_map: "dict[type[Any], Callable[[Any], Any]]"
-    ) -> ParameterStyleConfig:
-        """Create a copy of the parameter configuration with updated coercion map.
-
-        Args:
-            parameter_config: Existing parameter configuration to copy.
-            type_coercion_map: Updated coercion mapping for parameter serialization.
-
-        Returns:
-            ParameterStyleConfig with the updated type coercion map applied.
-        """
-
-        supported_execution_styles = (
-            set(parameter_config.supported_execution_parameter_styles)
-            if parameter_config.supported_execution_parameter_styles is not None
-            else None
-        )
-
-        return ParameterStyleConfig(
-            default_parameter_style=parameter_config.default_parameter_style,
-            supported_parameter_styles=set(parameter_config.supported_parameter_styles),
-            supported_execution_parameter_styles=supported_execution_styles,
-            default_execution_parameter_style=parameter_config.default_execution_parameter_style,
-            type_coercion_map=type_coercion_map,
-            has_native_list_expansion=parameter_config.has_native_list_expansion,
-            needs_static_script_compilation=parameter_config.needs_static_script_compilation,
-            allow_mixed_parameter_styles=parameter_config.allow_mixed_parameter_styles,
-            preserve_parameter_format=parameter_config.preserve_parameter_format,
-            preserve_original_params_for_many=parameter_config.preserve_original_params_for_many,
-            output_transformer=parameter_config.output_transformer,
-            ast_transformer=parameter_config.ast_transformer,
-        )
-
-    @staticmethod
-    def _apply_json_serializer_feature(
-        statement_config: "StatementConfig", driver_features: "dict[str, Any] | None"
-    ) -> "StatementConfig":
-        """Apply driver-level JSON serializer customization to the statement config.
-
-        Args:
-            statement_config: Base statement configuration for the driver.
-            driver_features: Driver feature mapping provided via configuration.
-
-        Returns:
-            StatementConfig with serializer adjustments applied when configured.
-        """
-
-        if not driver_features:
-            return statement_config
-
-        serializer = driver_features.get("json_serializer")
-        if serializer is None:
-            return statement_config
-
-        parameter_config = statement_config.parameter_config
-        type_coercion_map = dict(parameter_config.type_coercion_map)
-
-        def serialize_tuple(value: Any) -> Any:
-            return serializer(list(value))
-
-        type_coercion_map[dict] = serializer
-        type_coercion_map[list] = serializer
-        type_coercion_map[tuple] = serialize_tuple
-
-        updated_parameter_config = AsyncmyDriver._clone_parameter_config(parameter_config, type_coercion_map)
-        return statement_config.replace(parameter_config=updated_parameter_config)
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         """Create cursor context manager for the connection.
@@ -563,3 +483,50 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = MySQLAsyncDataDictionary()
         return self._data_dictionary
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _build_asyncmy_profile() -> DriverParameterProfile:
+    """Create the AsyncMy driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="AsyncMy",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
+        default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=True,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={bool: _bool_to_int},
+        default_dialect="mysql",
+    )
+
+
+_ASYNCMY_PROFILE = _build_asyncmy_profile()
+
+register_driver_profile("asyncmy", _ASYNCMY_PROFILE)
+
+
+def build_asyncmy_statement_config(
+    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
+) -> "StatementConfig":
+    """Construct the AsyncMy statement configuration with optional JSON codecs."""
+
+    serializer = json_serializer or to_json
+    deserializer = json_deserializer or from_json
+    return build_statement_config_from_profile(
+        _ASYNCMY_PROFILE,
+        statement_overrides={"dialect": "mysql"},
+        json_serializer=serializer,
+        json_deserializer=deserializer,
+    )
+
+
+asyncmy_statement_config = build_asyncmy_statement_config()

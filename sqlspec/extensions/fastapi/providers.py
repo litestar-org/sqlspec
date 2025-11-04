@@ -13,7 +13,7 @@ from fastapi import Depends, Query
 from fastapi.exceptions import RequestValidationError
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.core.filters import (
+from sqlspec.core import (
     BeforeAfterFilter,
     FilterTypes,
     InCollectionFilter,

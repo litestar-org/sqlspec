@@ -42,6 +42,7 @@ def test_uuid_conversion_can_be_disabled() -> None:
     config = DuckDBConfig(pool_config={"database": ":memory:"}, driver_features={"enable_uuid_conversion": False})
     try:
         with config.provide_session() as session:
+            session.execute("DROP TABLE IF EXISTS test")
             session.execute("CREATE TABLE test (id UUID, value TEXT)")
             uuid_str = "550e8400-e29b-41d4-a716-446655440000"
 
@@ -64,6 +65,7 @@ def test_custom_json_serializer_for_dict() -> None:
     config = DuckDBConfig(pool_config={"database": ":memory:"}, driver_features={"json_serializer": custom_json})
     try:
         with config.provide_session() as session:
+            session.execute("DROP TABLE IF EXISTS test")
             session.execute("CREATE TABLE test (data JSON)")
             test_data = {"key": "value", "number": 42}
             session.execute("INSERT INTO test (data) VALUES (?)", (test_data,))
@@ -83,6 +85,7 @@ def test_custom_json_serializer_for_list() -> None:
     config = DuckDBConfig(pool_config={"database": ":memory:"}, driver_features={"json_serializer": custom_json})
     try:
         with config.provide_session() as session:
+            session.execute("DROP TABLE IF EXISTS test")
             session.execute("CREATE TABLE test (data JSON)")
             test_data = [1, 2, 3, 4, 5]
             session.execute("INSERT INTO test (data) VALUES (?)", (test_data,))
@@ -98,6 +101,7 @@ def test_backward_compatibility_default_json_serializer(duckdb_config: DuckDBCon
     """Test backward compatibility - default JSON serializer still works."""
     try:
         with duckdb_config.provide_session() as session:
+            session.execute("DROP TABLE IF EXISTS test")
             session.execute("CREATE TABLE test (data JSON)")
             test_data = {"key": "value", "nested": {"data": [1, 2, 3]}}
             session.execute("INSERT INTO test (data) VALUES (?)", (test_data,))
@@ -120,6 +124,7 @@ def test_combined_features_json_and_uuid() -> None:
     )
     try:
         with config.provide_session() as session:
+            session.execute("DROP TABLE IF EXISTS test")
             session.execute("CREATE TABLE test (id UUID, data JSON)")
             uuid_str = "550e8400-e29b-41d4-a716-446655440000"
             test_data = {"uuid_field": uuid_str, "other": "data"}

@@ -15,7 +15,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import SQLFileLoader
 
@@ -399,18 +399,17 @@ def test_nonexistent_directory_error() -> None:
     assert loader.list_files() == []
 
 
-def test_corrupted_sql_file_error() -> None:
-    """Test handling of corrupted or invalid SQL files."""
+def test_sql_file_without_named_statements_skipped() -> None:
+    """Test that SQL files without named statements are gracefully skipped."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
         tf.write("SELECT * FROM users; -- No name comment")
         tf.flush()
 
         loader = SQLFileLoader()
+        loader.load_sql(tf.name)
 
-        with pytest.raises(SQLFileParseError) as exc_info:
-            loader.load_sql(tf.name)
-
-        assert "No named SQL statements found" in str(exc_info.value)
+        assert len(loader.list_queries()) == 0
+        assert str(tf.name) not in loader._files  # pyright: ignore
 
         Path(tf.name).unlink()
 

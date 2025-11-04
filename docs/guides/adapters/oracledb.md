@@ -11,6 +11,12 @@ This guide provides specific instructions and best practices for working with th
 - **Driver:** `oracledb`
 - **Parameter Style:** `named` (e.g., `:name`)
 
+## Parameter Profile
+
+- **Registry Key:** `"oracledb"`
+- **JSON Strategy:** `helper` (shared JSON serializer applied through the profile)
+- **Extras:** None (uses defaults with native list expansion disabled)
+
 ## Thick vs. Thin Client
 
 The `oracledb` driver supports two modes:
@@ -50,7 +56,7 @@ The Oracle Database In-Memory Column Store enables tables, partitions, or materi
 
 ### Litestar Session Store In-Memory Support
 
-The Oracle session stores (`OracleAsyncStore` and `OracleSyncStore`) support optional In-Memory Column Store via the `use_in_memory` parameter:
+The Oracle session stores (`OracleAsyncStore` and `OracleSyncStore`) support optional In-Memory Column Store via the `in_memory` parameter:
 
 ```python
 from sqlspec.adapters.oracledb import OracleAsyncConfig
@@ -62,7 +68,7 @@ config = OracleAsyncConfig(pool_config={"dsn": "oracle://..."})
 store = OracleAsyncStore(config)
 
 # In-Memory enabled table (requires license)
-store_inmem = OracleAsyncStore(config, use_in_memory=True)
+store_inmem = OracleAsyncStore(config, in_memory=True)
 await store_inmem.create_table()
 ```
 
@@ -95,12 +101,12 @@ SELECT NAME, VALUE FROM V$PARAMETER WHERE NAME = 'inmemory_size';
 
 ### Error Handling
 
-If `use_in_memory=True` but In-Memory is not available/licensed, table creation will fail with:
+If `in_memory=True` but In-Memory is not available/licensed, table creation will fail with:
 
 - **ORA-00439:** Feature not enabled
 - **ORA-62142:** INMEMORY clause specified but INMEMORY_SIZE is 0
 
-**Recommendation:** Use `use_in_memory=False` (default) unless you have confirmed licensing and configuration.
+**Recommendation:** Use `in_memory=False` (default) unless you have confirmed licensing and configuration.
 
 ## CLOB/BLOB Handling
 
@@ -448,10 +454,138 @@ vector = np.random.rand(512).astype(np.float32)
 - **No automatic conversion**: Verify `enable_numpy_vectors=True` in driver_features
 - **`ORA-00904: "VECTOR": invalid identifier`**: Requires Oracle Database 23ai or higher
 
+## MERGE Operations
+
+Oracle supports MERGE operations with high-performance bulk upserts using `JSON_TABLE()` for efficient multi-row operations.
+
+### Single Row Upsert
+
+```python
+from sqlspec import sql
+
+async with config.provide_session() as session:
+    query = (
+        sql.merge_
+        .into("products", alias="t")
+        .using({"id": 1, "name": "Widget", "price": 19.99}, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name", price="src.price")
+        .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price")
+    )
+
+    result = await session.execute(query)
+    print(f"Rows affected: {result.rows_affected}")
+```
+
+### Bulk Upsert with JSON_TABLE (High Performance)
+
+For 100+ rows, Oracle automatically uses `JSON_TABLE()` for optimal performance:
+
+```python
+from decimal import Decimal
+
+products = [
+    {"id": 1, "name": "Widget", "price": Decimal("19.99")},
+    {"id": 2, "name": "Gadget", "price": Decimal("29.99")},
+    # ... up to 1000+ rows
+]
+
+query = (
+    sql.merge_
+    .into("products", alias="t")
+    .using(products, alias="src")
+    .on("t.id = src.id")
+    .when_matched_then_update(name="src.name", price="src.price")
+    .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price")
+)
+
+result = await session.execute(query)
+print(f"Upserted {result.rows_affected} rows")
+```
+
+Generated SQL uses Oracle's efficient JSON_TABLE strategy:
+
+```sql
+MERGE INTO products t
+USING (
+  SELECT * FROM JSON_TABLE(
+    :data,
+    '$[*]' COLUMNS(
+      id NUMBER PATH '$.id',
+      name VARCHAR2(4000) PATH '$.name',
+      price NUMBER PATH '$.price'
+    )
+  )
+) src
+ON (t.id = src.id)
+WHEN MATCHED THEN UPDATE SET t.name = src.name, t.price = src.price
+WHEN NOT MATCHED THEN INSERT (id, name, price) VALUES (src.id, src.name, src.price)
+```
+
+### Oracle Bind Variable Limit Handling
+
+Oracle has a 1000 bind variable limit per statement. SQLSpec automatically handles this by:
+
+1. Using multi-row VALUES for small datasets (<100 rows)
+2. Switching to JSON_TABLE for larger datasets (100+ rows)
+3. Avoiding bind variable limits entirely with JSON-based approach
+
+This means you can safely upsert 1000+ rows without hitting Oracle's limit:
+
+```python
+large_dataset = [{"id": i, "name": f"Item {i}", "price": i * 10} for i in range(1, 2001)]
+
+query = sql.merge_.into("products", alias="t").using(large_dataset, alias="src").on("t.id = src.id")
+# JSON_TABLE automatically used - no bind variable limit issues
+result = await session.execute(query)
+print(f"Upserted {result.rows_affected} rows")  # Works with 2000 rows!
+```
+
+### NULL Value Handling in Bulk Operations
+
+Oracle MERGE correctly handles NULL values in bulk data:
+
+```python
+products_with_nulls = [
+    {"id": 1, "name": "Widget", "price": None},
+    {"id": 2, "name": None, "price": Decimal("29.99")},
+]
+
+query = (
+    sql.merge_
+    .into("products", alias="t")
+    .using(products_with_nulls, alias="src")
+    .on("t.id = src.id")
+    .when_matched_then_update(name="src.name", price="src.price")
+    .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price")
+)
+
+result = await session.execute(query)
+```
+
+### Unified Upsert API
+
+Use `sql.upsert()` for database-agnostic upsert operations:
+
+```python
+upsert_query = (
+    sql.upsert("products", dialect="oracle")
+    .using([{"id": 1, "name": "Widget", "price": 19.99}], alias="src")
+    .on("t.id = src.id")
+    .when_matched_then_update(name="src.name", price="src.price")
+    .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price")
+)
+```
+
+For comprehensive examples and migration guides, see:
+
+- [MERGE Statement Builder Guide](/guides/builder/merge.md)
+- [Unified Upsert API Guide](/guides/upsert.md)
+
 ## Common Issues & Troubleshooting
 
 - **`ORA-12154: TNS:could not resolve the connect identifier specified`**: This usually means the `tnsnames.ora` file is not found or the DSN is incorrect. Ensure the wallet path is correct.
 - **`ORA-28759: failure to open file`**: Wallet file permission issue. Ensure the application has read access to the wallet files.
-- **`ORA-00439: feature not enabled: Oracle Database In-Memory`**: In-Memory option not licensed. Set `use_in_memory=False` or acquire license.
-- **`ORA-62142: INMEMORY attribute cannot be specified`**: `INMEMORY_SIZE` parameter is 0. Either increase it or set `use_in_memory=False`.
+- **`ORA-00439: feature not enabled: Oracle Database In-Memory`**: In-Memory option not licensed. Set `in_memory=False` or acquire license.
+- **`ORA-62142: INMEMORY attribute cannot be specified`**: `INMEMORY_SIZE` parameter is 0. Either increase it or set `in_memory=False`.
 - **Performance:** If experiencing performance issues, investigate whether Thick Mode is required for your use case.

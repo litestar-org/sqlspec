@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI
 from docs.examples.shared.configs import aiosqlite_registry
 from docs.examples.shared.data import ARTICLES, CREATE_ARTICLES
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 
 __all__ = ("get_session", "list_articles", "main", "on_startup", "seed_database")
 

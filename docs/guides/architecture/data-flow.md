@@ -170,85 +170,59 @@ The `SQL.compile()` method triggers the enhanced processing pipeline:
    })
    ```
 
-### 5. Enhanced `_perform_execute` Method
+### 5. Enhanced `dispatch_statement_execution` Method
 
 This is where the enhanced template method pattern provides significant improvements. The base class coordinates execution while drivers implement specific methods.
 
-The current implementation uses enhanced template method pattern with better separation of concerns:
+The current implementation uses an enhanced template method pattern with better separation of concerns:
 
 ```python
-def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[int], Any]:
-    """Enhanced execution with special handling and routing."""
+def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
+    """Central execution dispatcher using the Template Method Pattern."""
+    with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
+        special_result = self._try_special_handling(cursor, statement)
+        if special_result is not None:
+            return special_result
 
-    # Step 1: Try special handling first (COPY, bulk ops, etc.)
-    special_result = self._try_special_handling(cursor, statement)
-    if special_result is not None:
-        return special_result
-
-    # Step 2: Get compiled SQL with driver's parameter style
-    sql, parameters = self._get_compiled_sql(statement, self.statement_config)
-
-    # Step 3: Route to appropriate execution method
-    if statement.is_script:
-        if self.statement_config.parameter_config.needs_static_script_compilation:
-            static_sql = self._prepare_script_sql(statement)
-            result = self._execute_script(cursor, static_sql, None, self.statement_config)
+        if statement.is_script:
+            execution_result = self._execute_script(cursor, statement)
+        elif statement.is_many:
+            execution_result = self._execute_many(cursor, statement)
         else:
-            prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
-            result = self._execute_script(cursor, sql, prepared_parameters, self.statement_config)
-    elif statement.is_many:
-        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=True)
-        result = self._execute_many(cursor, sql, prepared_parameters)
-    else:
-        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
-        result = self._execute_statement(cursor, sql, prepared_parameters)
+            execution_result = self._execute_statement(cursor, statement)
 
-    return create_execution_result(result)
+        return self.build_statement_result(statement, execution_result)
 ```
 
 **Drivers implement these specific methods:**
 
 ```python
-def _try_special_handling(self, cursor, statement):
-    """Hook for database-specific operations (COPY, bulk ops, etc.)."""
+def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
+    """Hook for database-specific operations (COPY, bulk ops, etc.)"""
     return None  # Use standard execution
 
-def _execute_statement(self, cursor, sql, prepared_parameters):
+def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
     """Execute single statement."""
-    cursor.execute(sql, prepared_parameters or ())
+    # ...
 
-def _execute_many(self, cursor, sql, prepared_parameters):
+def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
     """Execute with parameter batches."""
-    cursor.executemany(sql, prepared_parameters)
+    # ...
 
-def _execute_script(self, cursor, sql, prepared_parameters, statement_config):
+def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
     """Execute multi-statement script."""
-    cursor.executescript(sql)  # Uses static compilation
-
-def _get_selected_data(self, cursor):
-    """Extract SELECT results (CURRENT SIGNATURE)."""
-    fetched_data = cursor.fetchall()
-    column_names = [col[0] for col in cursor.description or []]
-    data = [dict(zip(column_names, row)) for row in fetched_data]
-    return data, column_names, len(data)
-
-def _get_row_count(self, cursor):
-    """Extract row count (CURRENT SIGNATURE)."""
-    return cursor.rowcount or 0
+    # ...
 ```
 
 This enhanced template method pattern provides better separation of concerns and enables database-specific optimizations through the `_try_special_handling` hook.
 
-### 6. Enhanced `_build_result` Method
+### 6. Enhanced `build_statement_result` Method
 
-After `_perform_execute` is done, `_build_result` is called with enhanced metadata support. This method inspects the cursor to determine the outcome and packages it into a `SQLResult` object with improved information.
+After `dispatch_statement_execution` is done, `build_statement_result` is called with enhanced metadata support. This method inspects the cursor to determine the outcome and packages it into a `SQLResult` object with improved information.
 
-It uses two other abstract methods that drivers must implement:
+It uses information from the `ExecutionResult` object returned by the `_execute_*` methods.
 
-- `_get_selected_data(cursor)`: For `SELECT` statements, this method should return a tuple containing the data rows, column names, and row count. ✅ **CURRENT SIGNATURE**
-- `_get_row_count(cursor)`: For `INSERT`, `UPDATE`, and `DELETE` statements, this should return the number of affected rows. ✅ **CURRENT SIGNATURE**
-
-The `_build_result` method then uses this information to create a `SQLResult` object with the appropriate `operation_type` and enhanced metadata.
+The `build_statement_result` method then uses this information to create a `SQLResult` object with the appropriate `operation_type` and enhanced metadata.
 
 ### 7. Enhanced `SQLResult` Object
 
@@ -387,8 +361,8 @@ To add support for a new database using the enhanced architecture:
 
 ```python
 from sqlspec.driver import SyncDriverAdapterBase  # or AsyncDriverAdapterBase
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import ParameterStyle, ParameterStyleConfig
+from sqlspec.core import StatementConfig
 
 class MyDatabaseDriver(SyncDriverAdapterBase):
     dialect = "mydatabase"
@@ -404,7 +378,6 @@ class MyDatabaseDriver(SyncDriverAdapterBase):
                     # ... database-specific coercions
                 },
                 has_native_list_expansion=False,
-                needs_static_script_compilation=True,
             )
             statement_config = StatementConfig(
                 dialect="mydatabase",
@@ -427,39 +400,20 @@ def commit(self): self.connection.commit()
 def rollback(self): self.connection.rollback()
 
 # Special handling hook
-def _try_special_handling(self, cursor, statement):
+def _try_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
     # Return None for standard execution
-    # Return result tuple for special operations (COPY, bulk, etc.)
+    # Return result object for special operations (COPY, bulk, etc.)
     return None
 
 # Execution methods (template method pattern)
-def _execute_statement(self, cursor, sql, prepared_parameters):
-    cursor.execute(sql, prepared_parameters or ())
+def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    # ...
 
-def _execute_many(self, cursor, sql, prepared_parameters):
-    cursor.executemany(sql, prepared_parameters)
+def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    # ...
 
-def _execute_script(self, cursor, sql, prepared_parameters, statement_config):
-    # Handle based on needs_static_script_compilation
-    if statement_config.parameter_config.needs_static_script_compilation:
-        cursor.executescript(sql)  # If database supports it
-    else:
-        statements = self.split_script_statements(sql)
-        for stmt in statements:
-            if stmt.strip():
-                cursor.execute(stmt, prepared_parameters or ())
-
-# Data extraction methods (CURRENT SIGNATURES)
-def _get_selected_data(self, cursor):
-    """Extract SELECT results: (data, columns, count)."""
-    fetched_data = cursor.fetchall()
-    column_names = [col[0] for col in cursor.description or []]
-    data = [dict(zip(column_names, row)) for row in fetched_data]
-    return data, column_names, len(data)
-
-def _get_row_count(self, cursor):
-    """Extract affected row count."""
-    return cursor.rowcount or 0
+def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+    # ...
 ```
 
 ### 3. Create Configuration Class

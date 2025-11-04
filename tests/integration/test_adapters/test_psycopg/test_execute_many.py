@@ -7,7 +7,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.adapters.psycopg.driver import psycopg_statement_config
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -182,7 +182,7 @@ def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriv
 
 def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with SQL object on Psycopg."""
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL
 
     parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 

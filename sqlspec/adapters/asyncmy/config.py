@@ -11,8 +11,13 @@ from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncmy._types import AsyncmyConnection
-from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, asyncmy_statement_config
-from sqlspec.config import AsyncDatabaseConfig
+from sqlspec.adapters.asyncmy.driver import (
+    AsyncmyCursor,
+    AsyncmyDriver,
+    asyncmy_statement_config,
+    build_asyncmy_statement_config,
+)
+from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -21,7 +26,7 @@ if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
     from asyncmy.pool import Pool  # pyright: ignore
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 
 __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", "AsyncmyPoolParams")
@@ -94,7 +99,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         statement_config: "StatementConfig | None" = None,
         driver_features: "AsyncmyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize Asyncmy configuration.
 
@@ -117,21 +122,19 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         if "port" not in processed_pool_config:
             processed_pool_config["port"] = 3306
 
-        if statement_config is None:
-            statement_config = asyncmy_statement_config
-
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        serializer = processed_driver_features.setdefault("json_serializer", to_json)
+        deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
 
-        if "json_serializer" not in processed_driver_features:
-            processed_driver_features["json_serializer"] = to_json
-        if "json_deserializer" not in processed_driver_features:
-            processed_driver_features["json_deserializer"] = from_json
+        base_statement_config = statement_config or build_asyncmy_statement_config(
+            json_serializer=serializer, json_deserializer=deserializer
+        )
 
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config,
+            statement_config=base_statement_config,
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
@@ -222,7 +225,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {"AsyncmyConnection": AsyncmyConnection, "AsyncmyPool": AsyncmyPool, "AsyncmyCursor": AsyncmyCursor}
-        )
+        namespace.update({
+            "AsyncmyConnection": AsyncmyConnection,
+            "AsyncmyPool": AsyncmyPool,
+            "AsyncmyCursor": AsyncmyCursor,
+        })
         return namespace

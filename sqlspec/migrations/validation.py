@@ -123,15 +123,13 @@ def format_out_of_order_warning(gaps: "list[MigrationGap]") -> str:
         lines.extend(f"  - {applied.raw}" for applied in gap.applied_after)
         lines.append("")
 
-    lines.extend(
-        (
-            "These migrations will be applied but may cause issues if they",
-            "depend on schema changes from later migrations.",
-            "",
-            "To prevent this in the future, ensure migrations are merged in",
-            "chronological order or use strict_ordering mode in migration_config.",
-        )
-    )
+    lines.extend((
+        "These migrations will be applied but may cause issues if they",
+        "depend on schema changes from later migrations.",
+        "",
+        "To prevent this in the future, ensure migrations are merged in",
+        "chronological order or use strict_ordering mode in migration_config.",
+    ))
 
     return "\n".join(lines)
 

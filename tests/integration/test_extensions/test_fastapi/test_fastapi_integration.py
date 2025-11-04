@@ -3,12 +3,15 @@
 import tempfile
 from typing import Annotated, Any
 
+import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteConnection, AiosqliteDriver
 from sqlspec.base import SQLSpec
 from sqlspec.extensions.fastapi import SQLSpecPlugin
+
+pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 def test_fastapi_dependency_injection() -> None:

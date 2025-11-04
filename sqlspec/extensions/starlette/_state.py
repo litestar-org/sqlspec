@@ -23,3 +23,4 @@ class SQLSpecConfigState:
     commit_mode: CommitMode
     extra_commit_statuses: "set[int] | None"
     extra_rollback_statuses: "set[int] | None"
+    disable_di: bool

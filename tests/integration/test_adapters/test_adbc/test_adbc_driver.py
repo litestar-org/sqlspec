@@ -1,90 +1,14 @@
 """Integration tests for ADBC driver implementation."""
 
-from collections.abc import Generator
 from typing import Any, Literal
 
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.adapters.adbc import AdbcDriver
+from sqlspec.core import SQLResult
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
-
-
-@pytest.fixture
-def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
-    """Create an ADBC PostgreSQL session with test table."""
-    config = AdbcConfig(
-        connection_config={
-            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql",
-        }
-    )
-
-    with config.provide_session() as session:
-        session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_table (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        yield session
-        try:
-            session.execute_script("DROP TABLE IF EXISTS test_table")
-        except Exception:
-            try:
-                session.execute("ROLLBACK")
-                session.execute_script("DROP TABLE IF EXISTS test_table")
-            except Exception:
-                pass
-
-
-@pytest.fixture
-def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
-    """Create an ADBC SQLite session with test table."""
-    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
-
-    with config.provide_session() as session:
-        session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_table (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        yield session
-
-
-@pytest.fixture
-def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
-    """Create an ADBC DuckDB session with test table."""
-    try:
-        config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
-
-        with config.provide_session() as session:
-            session.execute_script("""
-                CREATE TABLE IF NOT EXISTS test_table (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    value INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            yield session
-    except Exception as e:
-        if (
-            "cannot open shared object file" in str(e)
-            or "No module named" in str(e)
-            or "Failed to import connect function" in str(e)
-            or "Could not configure connection" in str(e)
-        ):
-            pytest.skip(f"DuckDB ADBC driver not available: {e}")
-        raise
 
 
 @pytest.mark.xdist_group("postgres")
@@ -336,7 +260,7 @@ def test_adbc_postgresql_error_handling(adbc_postgresql_session: AdbcDriver) -> 
 def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None:
     """Test PostgreSQL data type handling with ADBC."""
     adbc_postgresql_session.execute_script("""
-        CREATE TABLE data_types_test (
+        CREATE TABLE adbc_data_types_test (
             id SERIAL PRIMARY KEY,
             text_col TEXT,
             integer_col INTEGER,
@@ -350,7 +274,7 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
 
     adbc_postgresql_session.execute(
         """
-        INSERT INTO data_types_test (
+        INSERT INTO adbc_data_types_test (
             text_col, integer_col, numeric_col, boolean_col,
             array_col, date_col, timestamp_col
         ) VALUES (
@@ -361,7 +285,7 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
     )
 
     select_result = adbc_postgresql_session.execute(
-        "SELECT text_col, integer_col, numeric_col, boolean_col, array_col FROM data_types_test"
+        "SELECT text_col, integer_col, numeric_col, boolean_col, array_col FROM adbc_data_types_test"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -373,7 +297,7 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
     assert row["boolean_col"] is True
     assert row["array_col"] == [1, 2, 3]
 
-    adbc_postgresql_session.execute_script("DROP TABLE data_types_test")
+    adbc_postgresql_session.execute_script("DROP TABLE adbc_data_types_test")
 
 
 @pytest.mark.xdist_group("postgres")
@@ -423,6 +347,7 @@ def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> 
     assert agg_result.data[0]["total"] == 300
 
 
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     """Test that FOR UPDATE is stripped by sqlglot for ADBC SQLite backend."""
     from sqlspec import sql
@@ -455,6 +380,7 @@ def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     assert result.data[0]["name"] == "adbc_lock"
 
 
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     """Test that FOR SHARE is stripped by sqlglot for ADBC SQLite backend."""
     from sqlspec import sql
@@ -487,6 +413,7 @@ def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     assert result.data[0]["name"] == "adbc_share"
 
 
+@pytest.mark.xdist_group("sqlite")
 def test_adbc_for_update_skip_locked_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
     """Test that FOR UPDATE SKIP LOCKED generates SQL for ADBC."""
     from sqlspec import sql

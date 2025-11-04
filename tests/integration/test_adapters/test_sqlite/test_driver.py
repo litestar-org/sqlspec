@@ -6,7 +6,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -171,7 +171,7 @@ def test_sqlite_data_types(sqlite_session: SqliteDriver) -> None:
     """Test SQLite data type handling."""
 
     sqlite_session.execute_script("""
-        CREATE TABLE data_types_test (
+        CREATE TABLE test_sqlite_data_types (
             id INTEGER PRIMARY KEY,
             text_col TEXT,
             integer_col INTEGER,
@@ -184,14 +184,14 @@ def test_sqlite_data_types(sqlite_session: SqliteDriver) -> None:
     test_data = ("text_value", 42, math.pi, b"binary_data", None)
 
     insert_result = sqlite_session.execute(
-        "INSERT INTO data_types_test (text_col, integer_col, real_col, blob_col, null_col) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO test_sqlite_data_types (text_col, integer_col, real_col, blob_col, null_col) VALUES (?, ?, ?, ?, ?)",
         test_data,
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
     select_result = sqlite_session.execute(
-        "SELECT text_col, integer_col, real_col, blob_col, null_col FROM data_types_test"
+        "SELECT text_col, integer_col, real_col, blob_col, null_col FROM test_sqlite_data_types"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None

@@ -8,7 +8,8 @@ from datetime import datetime
 
 import pytest
 
-from sqlspec.core.filters import (
+from sqlspec.core import (
+    SQL,
     AnyCollectionFilter,
     BeforeAfterFilter,
     InCollectionFilter,
@@ -18,7 +19,6 @@ from sqlspec.core.filters import (
     SearchFilter,
     apply_filter,
 )
-from sqlspec.core.statement import SQL
 from sqlspec.driver._common import CommonDriverAttributesMixin
 
 pytestmark = pytest.mark.xdist_group("core")
