@@ -7,7 +7,7 @@ database dialects, parameter style conversion, and transaction management.
 import contextlib
 import datetime
 import decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.adbc.type_converter import ADBCTypeConverter
@@ -727,6 +727,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
+        ingest_mode: Literal["append", "create", "replace", "create_append"]
         ingest_mode = "replace" if overwrite else "create_append"
         with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
             cursor.adbc_ingest(table, arrow_table, mode=ingest_mode)

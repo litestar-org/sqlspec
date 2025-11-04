@@ -12,14 +12,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlglot
-from google.cloud.bigquery import (
-    ArrayQueryParameter,
-    LoadJobConfig,
-    QueryJob,
-    QueryJobConfig,
-    ScalarQueryParameter,
-    SourceFormat,
-)
+from google.cloud.bigquery import ArrayQueryParameter, LoadJobConfig, QueryJob, QueryJobConfig, ScalarQueryParameter
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
@@ -451,13 +444,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
             except (AttributeError, TypeError):
                 continue
 
-    def _map_source_format(self, file_format: "StorageFormat") -> SourceFormat:
+    def _map_source_format(self, file_format: "StorageFormat") -> str:
         if file_format == "parquet":
-            return SourceFormat.PARQUET
+            return "PARQUET"
         if file_format in {"json", "jsonl"}:
-            return SourceFormat.NEWLINE_DELIMITED_JSON
-        if file_format == "arrow-ipc":
-            return SourceFormat.ARROW
+            return "NEWLINE_DELIMITED_JSON"
         msg = f"BigQuery does not support loading '{file_format}' artifacts via the storage bridge"
         raise StorageCapabilityError(msg, capability="parquet_import_enabled")
 

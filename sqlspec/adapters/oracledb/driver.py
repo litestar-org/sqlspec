@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQLResult, Statement, StatementFilter
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import (
         AsyncStoragePipeline,

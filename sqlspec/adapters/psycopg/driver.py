@@ -16,6 +16,7 @@ PostgreSQL Features:
 
 import datetime
 import io
+from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
+    from sqlspec.core import ArrowResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
@@ -96,7 +98,8 @@ def _compose_table_identifier(table: str) -> "psycopg_sql.Composed":
     if not parts:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
-    return psycopg_sql.Identifier(*parts)
+    identifiers = [psycopg_sql.Identifier(part) for part in parts]
+    return psycopg_sql.SQL(".").join(identifiers)
 
 
 def _build_copy_from_command(table: str, columns: "list[str]") -> "psycopg_sql.Composed":
@@ -511,10 +514,12 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             copy_sql = _build_copy_from_command(table, columns)
-            with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
-                with cursor.copy(copy_sql) as copy_ctx:
-                    for record in records:
-                        copy_ctx.write_row(record)
+            with ExitStack() as stack:
+                stack.enter_context(self.handle_database_exceptions())
+                cursor = stack.enter_context(self.with_cursor(self.connection))
+                copy_ctx = stack.enter_context(cursor.copy(copy_sql))
+                for record in records:
+                    copy_ctx.write_row(record)
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -964,10 +969,12 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             copy_sql = _build_copy_from_command(table, columns)
-            async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
-                async with cursor.copy(copy_sql) as copy_ctx:
-                    for record in records:
-                        await copy_ctx.write_row(record)
+            async with AsyncExitStack() as stack:
+                await stack.enter_async_context(self.handle_database_exceptions())
+                cursor = await stack.enter_async_context(self.with_cursor(self.connection))
+                copy_ctx = await stack.enter_async_context(cursor.copy(copy_sql))
+                for record in records:
+                    await copy_ctx.write_row(record)
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)

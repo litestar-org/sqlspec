@@ -1,9 +1,12 @@
 """Unit tests for storage bridge ingestion helpers."""
 
+from typing import cast
+
 import duckdb
 import pyarrow as pa
 import pytest
 
+from sqlspec.adapters.asyncpg._types import AsyncpgConnection
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, asyncpg_statement_config
 from sqlspec.adapters.duckdb.driver import DuckDBDriver, duckdb_statement_config
 
@@ -36,7 +39,7 @@ async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> Non
         return arrow_table, {"destination": "file://tmp/part-0.parquet", "bytes_processed": 128}
 
     driver = AsyncpgDriver(
-        connection=DummyAsyncpgConnection(),
+        connection=cast(AsyncpgConnection, DummyAsyncpgConnection()),
         statement_config=asyncpg_statement_config,
         driver_features={"storage_capabilities": CAPABILITIES},
     )
