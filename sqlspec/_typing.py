@@ -710,16 +710,8 @@ NUMPY_INSTALLED = bool(find_spec("numpy"))
 OBSTORE_INSTALLED = bool(find_spec("obstore"))
 PGVECTOR_INSTALLED = bool(find_spec("pgvector"))
 
-try:
-    CLOUD_SQL_CONNECTOR_INSTALLED = bool(find_spec("google.cloud.sql.connector"))
-except (ImportError, ModuleNotFoundError):
-    CLOUD_SQL_CONNECTOR_INSTALLED = False
-
-try:
-    ALLOYDB_CONNECTOR_INSTALLED = bool(find_spec("google.cloud.alloydb.connector"))
-except (ImportError, ModuleNotFoundError):
-    ALLOYDB_CONNECTOR_INSTALLED = False
-
+CLOUD_SQL_CONNECTOR_INSTALLED = bool(find_spec("google.cloud.sql.connector"))
+ALLOYDB_CONNECTOR_INSTALLED = bool(find_spec("google.cloud.alloydb.connector"))
 
 __all__ = (
     "AIOSQL_INSTALLED",
