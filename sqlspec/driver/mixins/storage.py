@@ -1,5 +1,6 @@
 """Storage bridge mixin shared by sync and async drivers."""
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import trait
@@ -15,6 +16,7 @@ from sqlspec.storage import (
     SyncStoragePipeline,
     create_storage_bridge_job,
 )
+from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -22,7 +24,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig, StatementFilter
     from sqlspec.core.result import ArrowResult
     from sqlspec.core.statement import SQL
-    from sqlspec.typing import StatementParameters
+    from sqlspec.typing import ArrowTable, StatementParameters
 
 __all__ = ("StorageDriverMixin",)
 
@@ -162,3 +164,68 @@ class StorageDriverMixin:
         if provided:
             merged.update(provided)
         return create_storage_bridge_job(status, merged)
+
+    def _read_arrow_from_storage_sync(
+        self,
+        source: StorageDestination,
+        *,
+        file_format: StorageFormat,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "tuple[ArrowTable, StorageTelemetry]":
+        pipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        return pipeline.read_arrow(source, file_format=file_format, storage_options=storage_options)
+
+    async def _read_arrow_from_storage_async(
+        self,
+        source: StorageDestination,
+        *,
+        file_format: StorageFormat,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "tuple[ArrowTable, StorageTelemetry]":
+        pipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        return await pipeline.read_arrow_async(source, file_format=file_format, storage_options=storage_options)
+
+    @staticmethod
+    def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> StorageTelemetry:
+        rows = int(getattr(table, "num_rows", 0))
+        bytes_processed = int(getattr(table, "nbytes", 0))
+        return {
+            "rows_processed": rows,
+            "bytes_processed": bytes_processed,
+            "format": format_label,
+        }
+
+    def _coerce_arrow_table(self, source: "ArrowResult | Any") -> "ArrowTable":
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        if hasattr(source, "get_data"):
+            table = source.get_data()
+            if isinstance(table, pa.Table):
+                return table
+            msg = "ArrowResult did not return a pyarrow.Table instance"
+            raise TypeError(msg)
+        if isinstance(source, pa.Table):
+            return source
+        if isinstance(source, pa.RecordBatch):
+            return pa.Table.from_batches([source])
+        if isinstance(source, Iterable):
+            return pa.Table.from_pylist(list(source))
+        msg = f"Unsupported Arrow source type: {type(source).__name__}"
+        raise TypeError(msg)
+
+    @staticmethod
+    def _arrow_table_to_rows(
+        table: "ArrowTable", columns: "list[str] | None" = None
+    ) -> "tuple[list[str], list[tuple[Any, ...]]]":
+        ensure_pyarrow()
+        resolved_columns = columns or list(table.column_names)
+        if not resolved_columns:
+            msg = "Arrow table has no columns to import"
+            raise ValueError(msg)
+        batches = table.to_pylist()
+        records: list[tuple[Any, ...]] = []
+        for row in batches:
+            record = tuple(row.get(col) for col in resolved_columns)
+            records.append(record)
+        return resolved_columns, records

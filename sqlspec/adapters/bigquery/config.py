@@ -101,6 +101,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
     connection_type: "ClassVar[type[BigQueryConnection]]" = BigQueryConnection
     supports_transactional_ddl: ClassVar[bool] = False
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    requires_staging_for_load: ClassVar[bool] = True
+    staging_protocols: ClassVar[tuple[str, ...]] = ("gs://",)
 
     def __init__(
         self,

@@ -1,9 +1,11 @@
 """DuckDB driver implementation."""
 
+import contextlib
 import typing
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
+from uuid import uuid4
 
 import duckdb
 
@@ -509,6 +511,54 @@ class DuckDBDriver(SyncDriverAdapterBase):
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into DuckDB using temporary table registration."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        temp_view = f"_sqlspec_arrow_{uuid4().hex}"
+        if overwrite:
+            self.connection.execute(f"TRUNCATE TABLE {table}")
+        self.connection.register(temp_view, arrow_table)
+        try:
+            self.connection.execute(f"INSERT INTO {table} SELECT * FROM {temp_view}")
+        finally:
+            with contextlib.suppress(Exception):
+                self.connection.unregister(temp_view)
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Read an artifact from storage and load it into DuckDB."""
+
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(
+            table,
+            arrow_table,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=inbound,
+        )
 
 
 def _bool_to_int(value: bool) -> int:

@@ -3,7 +3,7 @@
 from functools import partial
 from pathlib import Path
 from time import perf_counter, time
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeAlias, cast
 from uuid import uuid4
 
 from mypy_extensions import mypyc_attr
@@ -12,7 +12,7 @@ from typing_extensions import NotRequired, TypedDict
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
-from sqlspec.utils.serializers import serialize_collection, to_json
+from sqlspec.utils.serializers import from_json, serialize_collection, to_json
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -176,6 +176,26 @@ def _encode_arrow_payload(table: "ArrowTable", format_choice: StorageFormat, *, 
     return result_bytes
 
 
+def _decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "ArrowTable":
+    pa = import_pyarrow()
+    if format_choice == "parquet":
+        pq = import_pyarrow_parquet()
+        return cast("ArrowTable", pq.read_table(pa.BufferReader(payload)))
+    if format_choice == "arrow-ipc":
+        reader = pa.ipc.open_file(pa.BufferReader(payload))
+        return cast("ArrowTable", reader.read_all())
+    text_payload = payload.decode()
+    if format_choice == "json":
+        data = from_json(text_payload)
+        rows = data if isinstance(data, list) else [data]
+        return cast("ArrowTable", pa.Table.from_pylist(rows))
+    if format_choice == "jsonl":
+        rows = [from_json(line) for line in text_payload.splitlines() if line.strip()]
+        return cast("ArrowTable", pa.Table.from_pylist(rows))
+    msg = f"Unsupported storage format for Arrow decoding: {format_choice}"
+    raise ValueError(msg)
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class SyncStoragePipeline:
     """Pipeline coordinating storage registry operations and telemetry."""
@@ -226,6 +246,31 @@ class SyncStoragePipeline:
             format_label=format_choice,
             storage_options=storage_options or {},
         )
+
+    def read_arrow(
+        self,
+        source: StorageDestination,
+        *,
+        file_format: StorageFormat,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "tuple[ArrowTable, StorageTelemetry]":
+        """Read an artifact from storage and decode it into an Arrow table."""
+
+        backend, path = self._resolve_backend(source, **(storage_options or {}))
+        payload = execute_sync_storage_operation(
+            partial(backend.read_bytes, path),
+            backend=getattr(backend, "backend_type", "storage"),
+            operation="read_bytes",
+            path=path,
+        )
+        table = _decode_arrow_payload(payload, file_format)
+        telemetry: StorageTelemetry = {
+            "destination": path,
+            "bytes_processed": len(payload),
+            "rows_processed": int(getattr(table, "num_rows", 0)),
+            "format": file_format,
+        }
+        return table, telemetry
 
     def allocate_staging_artifacts(self, requests: "list[StorageLoadRequest]") -> "list[StagedArtifact]":
         """Allocate staging metadata for upcoming loads."""
@@ -441,6 +486,47 @@ class AsyncStoragePipeline:
             "format": format_label,
         }
         return telemetry
+
+    async def read_arrow_async(
+        self,
+        source: StorageDestination,
+        *,
+        file_format: StorageFormat,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "tuple[ArrowTable, StorageTelemetry]":
+        backend, path = self._resolve_backend(source, **(storage_options or {}))
+        backend_name = getattr(backend, "backend_type", "storage")
+        reader = getattr(backend, "read_bytes_async", None)
+        if reader is not None:
+            payload = await execute_async_storage_operation(
+                partial(reader, path),
+                backend=backend_name,
+                operation="read_bytes",
+                path=path,
+            )
+        else:
+            def _read_sync(
+                backend: "ObjectStoreProtocol" = backend,
+                path: str = path,
+                backend_name: str = backend_name,
+            ) -> bytes:
+                return execute_sync_storage_operation(
+                    partial(backend.read_bytes, path),
+                    backend=backend_name,
+                    operation="read_bytes",
+                    path=path,
+                )
+
+            payload = await async_(_read_sync)()
+
+        table = _decode_arrow_payload(payload, file_format)
+        telemetry: StorageTelemetry = {
+            "destination": path,
+            "bytes_processed": len(payload),
+            "rows_processed": int(getattr(table, "num_rows", 0)),
+            "format": file_format,
+        }
+        return table, telemetry
 
     def _resolve_backend(
         self, destination: StorageDestination, **backend_options: Any
