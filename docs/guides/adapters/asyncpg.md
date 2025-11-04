@@ -8,27 +8,134 @@ This guide provides specific instructions and best practices for working with th
 
 ## Key Information
 
--   **Driver:** `asyncpg`
--   **Parameter Style:** `numeric` (e.g., `$1, $2`)
+- **Driver:** `asyncpg`
+- **Parameter Style:** `numeric` (e.g., `$1, $2`)
 
 ## Parameter Profile
 
--   **Registry Key:** `"asyncpg"`
--   **JSON Strategy:** `driver` (delegates JSON binding to asyncpg codecs)
--   **Extras:** None (codecs registered through config init hook)
+- **Registry Key:** `"asyncpg"`
+- **JSON Strategy:** `driver` (delegates JSON binding to asyncpg codecs)
+- **Extras:** None (codecs registered through config init hook)
 
 ## Best Practices
 
--   **High-Performance:** `asyncpg` is often chosen for high-performance applications due to its speed. It's a good choice for applications with a high volume of database traffic.
+- **High-Performance:** `asyncpg` is often chosen for high-performance applications due to its speed. It's a good choice for applications with a high volume of database traffic.
 
 ## Driver Features
 
 The `asyncpg` adapter supports the following driver features:
 
--   `json_serializer`: A function to serialize Python objects to JSON. Defaults to `sqlspec.utils.serializers.to_json`.
--   `json_deserializer`: A function to deserialize JSON strings to Python objects. Defaults to `sqlspec.utils.serializers.from_json`.
--   `enable_json_codecs`: A boolean to enable or disable automatic JSON/JSONB codec registration. Defaults to `True`.
--   `enable_pgvector`: A boolean to enable or disable `pgvector` support. Defaults to `True` if `pgvector` is installed.
+- `json_serializer`: A function to serialize Python objects to JSON. Defaults to `sqlspec.utils.serializers.to_json`.
+- `json_deserializer`: A function to deserialize JSON strings to Python objects. Defaults to `sqlspec.utils.serializers.from_json`.
+- `enable_json_codecs`: A boolean to enable or disable automatic JSON/JSONB codec registration. Defaults to `True`.
+- `enable_pgvector`: A boolean to enable or disable `pgvector` support. Defaults to `True` if `pgvector` is installed.
+- `enable_cloud_sql`: Enable Google Cloud SQL connector integration. Defaults to `True` when `cloud-sql-python-connector` is installed.
+- `cloud_sql_instance`: Cloud SQL instance connection name (format: `"project:region:instance"`). Required when `enable_cloud_sql` is `True`.
+- `cloud_sql_enable_iam_auth`: Enable IAM database authentication for Cloud SQL. Defaults to `False`.
+- `cloud_sql_ip_type`: IP address type for Cloud SQL connection (`"PUBLIC"`, `"PRIVATE"`, or `"PSC"`). Defaults to `"PRIVATE"`.
+- `enable_alloydb`: Enable Google AlloyDB connector integration. Defaults to `True` when `cloud-alloydb-python-connector` is installed.
+- `alloydb_instance_uri`: AlloyDB instance URI (format: `"projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"`). Required when `enable_alloydb` is `True`.
+- `alloydb_enable_iam_auth`: Enable IAM database authentication for AlloyDB. Defaults to `False`.
+- `alloydb_ip_type`: IP address type for AlloyDB connection (`"PUBLIC"`, `"PRIVATE"`, or `"PSC"`). Defaults to `"PRIVATE"`.
+
+## Google Cloud Integration
+
+AsyncPG supports native integration with Google Cloud SQL and AlloyDB connectors for simplified authentication and connection management.
+
+### Cloud SQL Connector
+
+Connect to Cloud SQL PostgreSQL instances with automatic SSL and IAM authentication:
+
+```python
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+db_manager = SQLSpec()
+
+# IAM authentication (no password required)
+db = db_manager.add_config(AsyncpgConfig(
+    pool_config={
+        "user": "my-service-account@project.iam",
+        "database": "mydb",
+        "min_size": 2,
+        "max_size": 10,
+    },
+    driver_features={
+        "enable_cloud_sql": True,
+        "cloud_sql_instance": "my-project:us-central1:my-instance",
+        "cloud_sql_enable_iam_auth": True,
+        "cloud_sql_ip_type": "PRIVATE",
+    }
+))
+
+async with db_manager.provide_session(db) as session:
+    result = await session.select_one("SELECT current_user, version()")
+    print(result)
+```
+
+Password authentication is also supported:
+
+```python
+config = AsyncpgConfig(
+    pool_config={
+        "user": "postgres",
+        "password": "secret",
+        "database": "mydb",
+    },
+    driver_features={
+        "enable_cloud_sql": True,
+        "cloud_sql_instance": "my-project:us-central1:my-instance",
+        "cloud_sql_ip_type": "PUBLIC",  # Public IP for external access
+    }
+)
+```
+
+### AlloyDB Connector
+
+Connect to AlloyDB instances with the same pattern:
+
+```python
+# IAM authentication
+config = AsyncpgConfig(
+    pool_config={
+        "user": "my-service-account@project.iam",
+        "database": "mydb",
+    },
+    driver_features={
+        "enable_alloydb": True,
+        "alloydb_instance_uri": "projects/my-project/locations/us-central1/clusters/my-cluster/instances/my-instance",
+        "alloydb_enable_iam_auth": True,
+        "alloydb_ip_type": "PRIVATE",
+    }
+)
+```
+
+### Configuration Notes
+
+**Auto-Detection**: Both connectors are automatically enabled when their respective packages are installed:
+
+```bash
+# Install Cloud SQL connector
+pip install cloud-sql-python-connector
+
+# Install AlloyDB connector
+pip install cloud-alloydb-python-connector
+```
+
+**Mutual Exclusion**: A single config can only use one connector (Cloud SQL or AlloyDB). For multiple databases, create separate configs with unique `bind_key` values.
+
+**IP Type Selection**:
+
+- `"PRIVATE"` (default): Connect via private VPC network
+- `"PUBLIC"`: Connect via public IP address
+- `"PSC"`: Connect via Private Service Connect (AlloyDB only)
+
+**Authentication Methods**:
+
+- IAM authentication: Set `cloud_sql_enable_iam_auth=True` or `alloydb_enable_iam_auth=True`
+- Password authentication: Leave IAM flags as `False` (default) and provide password in `pool_config`
+
+For comprehensive configuration options and troubleshooting, see the [Google Cloud Connectors Guide](/guides/cloud/google-connectors.md).
 
 ## MERGE Operations (PostgreSQL 15+)
 
@@ -112,5 +219,5 @@ For comprehensive examples and migration guides, see:
 
 ## Common Issues
 
--   **`asyncpg.exceptions.PostgresSyntaxError`**: Check your SQL syntax and parameter styles. `asyncpg` uses the `$` numeric style for parameters.
--   **Connection Pooling:** `asyncpg` has its own connection pool implementation. Ensure the pool settings in the `sqlspec` config are appropriate for the application's needs (e.g., `min_size`, `max_size`).
+- **`asyncpg.exceptions.PostgresSyntaxError`**: Check your SQL syntax and parameter styles. `asyncpg` uses the `$` numeric style for parameters.
+- **Connection Pooling:** `asyncpg` has its own connection pool implementation. Ensure the pool settings in the `sqlspec` config are appropriate for the application's needs (e.g., `min_size`, `max_size`).

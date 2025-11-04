@@ -19,7 +19,8 @@ from sqlspec.adapters.asyncpg.driver import (
     build_asyncpg_statement_config,
 )
 from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
-from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -88,12 +89,47 @@ class AsyncpgDriverFeatures(TypedDict):
         Defaults to True when pgvector-python is installed.
         Provides automatic conversion between Python objects and PostgreSQL vector types.
         Enables vector similarity operations and index support.
+    enable_cloud_sql: Enable Google Cloud SQL connector integration.
+        Requires cloud-sql-python-connector package.
+        Defaults to False (explicit opt-in required).
+        Auto-configures IAM authentication, SSL, and IP routing.
+        Mutually exclusive with enable_alloydb.
+    cloud_sql_instance: Cloud SQL instance connection name.
+        Format: "project:region:instance"
+        Required when enable_cloud_sql is True.
+    cloud_sql_enable_iam_auth: Enable IAM database authentication.
+        Defaults to False for passwordless authentication.
+        When False, requires user/password in pool_config.
+    cloud_sql_ip_type: IP address type for connection.
+        Options: "PUBLIC", "PRIVATE", "PSC"
+        Defaults to "PRIVATE".
+    enable_alloydb: Enable Google AlloyDB connector integration.
+        Requires cloud-alloydb-python-connector package.
+        Defaults to False (explicit opt-in required).
+        Auto-configures IAM authentication and private networking.
+        Mutually exclusive with enable_cloud_sql.
+    alloydb_instance_uri: AlloyDB instance URI.
+        Format: "projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"
+        Required when enable_alloydb is True.
+    alloydb_enable_iam_auth: Enable IAM database authentication.
+        Defaults to False for passwordless authentication.
+    alloydb_ip_type: IP address type for connection.
+        Options: "PUBLIC", "PRIVATE", "PSC"
+        Defaults to "PRIVATE".
     """
 
     json_serializer: NotRequired[Callable[[Any], str]]
     json_deserializer: NotRequired[Callable[[str], Any]]
     enable_json_codecs: NotRequired[bool]
     enable_pgvector: NotRequired[bool]
+    enable_cloud_sql: NotRequired[bool]
+    cloud_sql_instance: NotRequired[str]
+    cloud_sql_enable_iam_auth: NotRequired[bool]
+    cloud_sql_ip_type: NotRequired[str]
+    enable_alloydb: NotRequired[bool]
+    alloydb_instance_uri: NotRequired[str]
+    alloydb_enable_iam_auth: NotRequired[bool]
+    alloydb_ip_type: NotRequired[str]
 
 
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
@@ -135,6 +171,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         deserializer = features_dict.setdefault("json_deserializer", from_json)
         features_dict.setdefault("enable_json_codecs", True)
         features_dict.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+        features_dict.setdefault("enable_cloud_sql", False)
+        features_dict.setdefault("enable_alloydb", False)
 
         base_statement_config = statement_config or build_asyncpg_statement_config(
             json_serializer=serializer, json_deserializer=deserializer
@@ -150,6 +188,53 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             extension_config=extension_config,
         )
 
+        self._cloud_sql_connector: Any | None = None
+        self._alloydb_connector: Any | None = None
+
+        self._validate_connector_config()
+
+    def _validate_connector_config(self) -> None:
+        """Validate Google Cloud connector configuration.
+
+        Raises:
+            ImproperConfigurationError: If configuration is invalid.
+        """
+        enable_cloud_sql = self.driver_features.get("enable_cloud_sql", False)
+        enable_alloydb = self.driver_features.get("enable_alloydb", False)
+
+        if enable_cloud_sql and enable_alloydb:
+            msg = "Cannot enable both Cloud SQL and AlloyDB connectors simultaneously. Use separate configs for each database."
+            raise ImproperConfigurationError(msg)
+
+        if enable_cloud_sql:
+            if not CLOUD_SQL_CONNECTOR_INSTALLED:
+                msg = "cloud-sql-python-connector package not installed. Install with: pip install cloud-sql-python-connector"
+                raise ImproperConfigurationError(msg)
+
+            instance = self.driver_features.get("cloud_sql_instance")
+            if not instance:
+                msg = "cloud_sql_instance required when enable_cloud_sql is True. Format: 'project:region:instance'"
+                raise ImproperConfigurationError(msg)
+
+            cloud_sql_instance_parts_expected = 2
+            if instance.count(":") != cloud_sql_instance_parts_expected:
+                msg = f"Invalid Cloud SQL instance format: {instance}. Expected format: 'project:region:instance'"
+                raise ImproperConfigurationError(msg)
+
+        elif enable_alloydb:
+            if not ALLOYDB_CONNECTOR_INSTALLED:
+                msg = "cloud-alloydb-python-connector package not installed. Install with: pip install cloud-alloydb-python-connector"
+                raise ImproperConfigurationError(msg)
+
+            instance_uri = self.driver_features.get("alloydb_instance_uri")
+            if not instance_uri:
+                msg = "alloydb_instance_uri required when enable_alloydb is True. Format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
+                raise ImproperConfigurationError(msg)
+
+            if not instance_uri.startswith("projects/"):
+                msg = f"Invalid AlloyDB instance URI format: {instance_uri}. Expected format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
+                raise ImproperConfigurationError(msg)
+
     def _get_pool_config_dict(self) -> "dict[str, Any]":
         """Get pool configuration as plain dict for external library.
 
@@ -161,9 +246,88 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         config.update(extras)
         return {k: v for k, v in config.items() if v is not None}
 
+    def _setup_cloud_sql_connector(self, config: "dict[str, Any]") -> None:
+        """Setup Cloud SQL connector and configure pool for connection factory pattern.
+
+        Args:
+            config: Pool configuration dictionary to modify in-place.
+        """
+        from google.cloud.sql.connector import Connector  # pyright: ignore
+
+        self._cloud_sql_connector = Connector()
+
+        user = config.get("user")
+        password = config.get("password")
+        database = config.get("database")
+
+        async def get_conn() -> "AsyncpgConnection":
+            conn_kwargs: dict[str, Any] = {
+                "instance_connection_string": self.driver_features["cloud_sql_instance"],
+                "driver": "asyncpg",
+                "enable_iam_auth": self.driver_features.get("cloud_sql_enable_iam_auth", False),
+                "ip_type": self.driver_features.get("cloud_sql_ip_type", "PRIVATE"),
+            }
+
+            if user:
+                conn_kwargs["user"] = user
+            if password:
+                conn_kwargs["password"] = password
+            if database:
+                conn_kwargs["db"] = database
+
+            conn: AsyncpgConnection = await self._cloud_sql_connector.connect_async(**conn_kwargs)  # type: ignore[union-attr]
+            return conn
+
+        for key in ("dsn", "host", "port", "user", "password", "database"):
+            config.pop(key, None)
+
+        config["connect"] = get_conn
+
+    def _setup_alloydb_connector(self, config: "dict[str, Any]") -> None:
+        """Setup AlloyDB connector and configure pool for connection factory pattern.
+
+        Args:
+            config: Pool configuration dictionary to modify in-place.
+        """
+        from google.cloud.alloydb.connector import AsyncConnector
+
+        self._alloydb_connector = AsyncConnector()
+
+        user = config.get("user")
+        password = config.get("password")
+        database = config.get("database")
+
+        async def get_conn() -> "AsyncpgConnection":
+            conn_kwargs: dict[str, Any] = {
+                "instance_uri": self.driver_features["alloydb_instance_uri"],
+                "driver": "asyncpg",
+                "enable_iam_auth": self.driver_features.get("alloydb_enable_iam_auth", False),
+                "ip_type": self.driver_features.get("alloydb_ip_type", "PRIVATE"),
+            }
+
+            if user:
+                conn_kwargs["user"] = user
+            if password:
+                conn_kwargs["password"] = password
+            if database:
+                conn_kwargs["db"] = database
+
+            conn: AsyncpgConnection = await self._alloydb_connector.connect(**conn_kwargs)  # type: ignore[union-attr]
+            return conn
+
+        for key in ("dsn", "host", "port", "user", "password", "database"):
+            config.pop(key, None)
+
+        config["connect"] = get_conn
+
     async def _create_pool(self) -> "Pool[Record]":
         """Create the actual async connection pool."""
         config = self._get_pool_config_dict()
+
+        if self.driver_features.get("enable_cloud_sql", False):
+            self._setup_cloud_sql_connector(config)
+        elif self.driver_features.get("enable_alloydb", False):
+            self._setup_alloydb_connector(config)
 
         if "init" not in config:
             config["init"] = self._init_connection
@@ -191,9 +355,17 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             await register_pgvector_support(connection)
 
     async def _close_pool(self) -> None:
-        """Close the actual async connection pool."""
+        """Close the actual async connection pool and cleanup connectors."""
         if self.pool_instance:
             await self.pool_instance.close()
+
+        if self._cloud_sql_connector is not None:
+            await self._cloud_sql_connector.close_async()
+            self._cloud_sql_connector = None
+
+        if self._alloydb_connector is not None:
+            await self._alloydb_connector.close()
+            self._alloydb_connector = None
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
