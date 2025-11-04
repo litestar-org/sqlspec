@@ -110,9 +110,6 @@ config = AsyncpgConfig(
 )
 ```
 
-### Configuration Notes
-
-**Auto-Detection**: Both connectors are automatically enabled when their respective packages are installed:
 
 ```bash
 # Install Cloud SQL connector
