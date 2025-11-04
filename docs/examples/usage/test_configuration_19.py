@@ -1,10 +1,10 @@
 """Test configuration example: Binding multiple database configurations."""
 
-import tempfile
-
 
 def test_binding_multiple_configs() -> None:
     """Test binding multiple database configurations."""
+    import tempfile
+
     from sqlspec import SQLSpec
     from sqlspec.adapters.asyncpg import AsyncpgConfig
     from sqlspec.adapters.sqlite import SqliteConfig

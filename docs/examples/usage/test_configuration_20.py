@@ -1,10 +1,10 @@
 """Test configuration example: Named database bindings."""
 
-import tempfile
-
 
 def test_named_bindings() -> None:
     """Test named database bindings."""
+    import tempfile
+
     from sqlspec import SQLSpec
     from sqlspec.adapters.asyncpg import AsyncpgConfig
     from sqlspec.adapters.sqlite import SqliteConfig

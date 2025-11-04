@@ -21,7 +21,7 @@ The simplest way to use SQLSpec is with default configuration:
 .. literalinclude:: /examples/usage/test_configuration_1.py
    :language: python
    :caption: `basic configuration`
-   :lines: 2-12
+   :lines: 2-14
    :dedent: 2
 
 Database Configurations
@@ -62,11 +62,6 @@ PostgreSQL Configuration (psycopg)
 
    The `PsycopgConfig` class referenced here is for documentation purposes only and may not be present in the codebase. Future releases may include this feature if demand warrants.
 
-.. literalinclude:: /examples/usage/test_configuration_5.py
-   :language: python
-   :caption: `postgres psycopg configuration`
-   :lines: 1-6
-   :dedent: 2
 
 MySQL Configuration (asyncmy)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -192,7 +187,7 @@ Per-Instance Cache Configuration
 .. literalinclude:: /examples/usage/test_configuration_17.py
    :language: python
    :caption: `per-instance cache configuration`
-   :lines: 1-28
+   :lines: 6-27
    :dedent: 2
 
 Cache Statistics
@@ -203,7 +198,7 @@ Monitor cache statistics:
 .. literalinclude:: /examples/usage/test_configuration_18.py
    :language: python
    :caption: `cache statistics`
-   :lines: 1-19
+   :lines: 6-18
    :dedent: 2
 
 Clear Cache
@@ -212,7 +207,7 @@ Clear Cache
 .. literalinclude:: /examples/usage/test_configuration_19.py
    :language: python
    :caption: `clear cache`
-   :lines: 1-27
+   :lines: 6-24
    :dedent: 2
 
 Multiple Database Configurations
@@ -226,7 +221,7 @@ Binding Multiple Configs
 .. literalinclude:: /examples/usage/test_configuration_20.py
    :language: python
    :caption: `binding multiple configurations`
-   :lines: 1-30
+   :lines: 6-24
    :dedent: 2
 
 Named Bindings
@@ -237,7 +232,7 @@ Use bind keys for clearer configuration management:
 .. literalinclude:: /examples/usage/test_configuration_21.py
    :language: python
    :caption: `named bindings`
-   :lines: 1-29
+   :lines: 11-26
    :dedent: 2
 
 Migration Configuration
@@ -251,15 +246,14 @@ Basic Migration Config
 .. literalinclude:: /examples/usage/test_configuration_22.py
    :language: python
    :caption: `basic migration config`
-   :lines: 12-24
-   :dedent: 4
+   :lines: 2-15
+   :dedent: 2
 
 **Migration CLI**
 
 .. literalinclude:: /examples/usage/test_configuration_22.txt
    :language: text
    :caption: `migration CLI`
-   :dedent: 2
 
 
 Extension Migration Versioning

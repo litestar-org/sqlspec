@@ -1,10 +1,10 @@
 """Test configuration example: Cache statistics tracking."""
 
-import tempfile
-
 
 def test_cache_statistics() -> None:
     """Test cache statistics tracking."""
+    import tempfile
+
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
     from sqlspec.core.cache import get_cache_statistics, log_cache_stats

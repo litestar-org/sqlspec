@@ -1,7 +1,6 @@
-from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-
 def test_basic_migration_config() -> None:
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
+
     config = AsyncpgConfig(
         pool_config={"dsn": "postgresql://localhost/db"},
         extension_config={
