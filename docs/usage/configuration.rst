@@ -132,7 +132,7 @@ Basic Statement Config
 .. literalinclude:: /examples/usage/test_configuration_12.py
    :language: python
    :caption: `basic statement config`
-   :lines: 2-16
+   :lines: 2-14
    :dedent: 2
 
 Parameter Style Configuration
