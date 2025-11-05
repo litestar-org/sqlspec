@@ -25,9 +25,7 @@ def oracle_uuid_async_config(oracle_async_config: OracleAsyncConfig) -> OracleAs
 @pytest.fixture
 def oracle_uuid_disabled_async_config(oracle_async_config: OracleAsyncConfig) -> OracleAsyncConfig:
     """Create Oracle async config with UUID binary explicitly disabled."""
-    return OracleAsyncConfig(
-        pool_config=oracle_async_config.pool_config, driver_features={"enable_uuid_binary": False}
-    )
+    return OracleAsyncConfig(pool_config=oracle_async_config.pool_config, driver_features={"enable_uuid_binary": False})
 
 
 async def test_create_uuid_table(oracle_async_session: OracleAsyncDriver) -> None:
@@ -164,11 +162,7 @@ async def test_uuid_variants(oracle_uuid_async_config: OracleAsyncConfig) -> Non
             )
         """)
 
-        test_uuids = [
-            (1, uuid.uuid1()),
-            (2, uuid.uuid4()),
-            (3, uuid.uuid5(uuid.NAMESPACE_DNS, "example.com")),
-        ]
+        test_uuids = [(1, uuid.uuid1()), (2, uuid.uuid4()), (3, uuid.uuid5(uuid.NAMESPACE_DNS, "example.com"))]
 
         for row_id, test_uuid in test_uuids:
             await session.execute("INSERT INTO test_uuid_variants VALUES (:1, :2)", (row_id, test_uuid))
@@ -203,7 +197,7 @@ async def test_uuid_executemany(oracle_uuid_async_config: OracleAsyncConfig) -> 
 
         test_data = [(i, uuid.uuid4()) for i in range(1, 101)]
 
-        await session.executemany("INSERT INTO test_uuid_bulk VALUES (:1, :2)", test_data)
+        await session.execute_many("INSERT INTO test_uuid_bulk VALUES (:1, :2)", test_data)
 
         count = await session.select_value("SELECT COUNT(*) FROM test_uuid_bulk")
         assert count == 100
