@@ -55,25 +55,22 @@ def detect_out_of_order_migrations(
         applied_versions: List of migration versions already applied.
 
     Returns:
-        List of migration gaps representing out-of-order migrations.
-        Empty list if no out-of-order migrations detected.
-
-    Example:
-        Applied: [20251011120000, 20251012140000]
-        Pending: [20251011130000, 20251013090000]
-        Result: Gap for 20251011130000 (created between applied migrations)
-
-        Applied: [ext_litestar_0001, 0001, 0002]
-        Pending: [ext_adk_0001]
-        Result: [] (extensions excluded from out-of-order detection)
+        List of migration gaps where pending versions are older than applied.
     """
     if not applied_versions or not pending_versions:
         return []
 
     gaps: list[MigrationGap] = []
 
-    parsed_applied = [parse_version(v) for v in applied_versions]
-    parsed_pending = [parse_version(v) for v in pending_versions]
+    # Filter out None values and empty strings
+    valid_applied = [v for v in applied_versions if v and v is not None]
+    valid_pending = [v for v in pending_versions if v and v is not None]
+    
+    if not valid_applied or not valid_pending:
+        return []
+
+    parsed_applied = [parse_version(v) for v in valid_applied]
+    parsed_pending = [parse_version(v) for v in valid_pending]
 
     core_applied = [v for v in parsed_applied if v.extension is None]
     core_pending = [v for v in parsed_pending if v.extension is None]
