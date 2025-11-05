@@ -15,6 +15,7 @@ from sqlspec.adapters.oracledb._types import (
     OracleSyncConnection,
     OracleSyncConnectionPool,
 )
+from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncCursor,
     OracleAsyncDriver,
@@ -104,10 +105,17 @@ class OracleDriverFeatures(TypedDict):
     enable_lowercase_column_names: Normalize implicit Oracle uppercase column names to lowercase.
         Targets unquoted Oracle identifiers that default to uppercase while preserving quoted case-sensitive aliases.
         Defaults to True for compatibility with schema libraries expecting snake_case fields.
+    enable_uuid_binary: Enable automatic UUID ↔ RAW(16) binary conversion.
+        When True (default), Python UUID objects are automatically converted to/from
+        RAW(16) binary format for optimal storage efficiency (16 bytes vs 36 bytes).
+        Applies only to RAW(16) columns; other RAW sizes remain unchanged.
+        Uses Python's stdlib uuid module (no external dependencies).
+        Defaults to True for improved type safety and storage efficiency.
     """
 
     enable_numpy_vectors: NotRequired[bool]
     enable_lowercase_column_names: NotRequired[bool]
+    enable_uuid_binary: NotRequired[bool]
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
@@ -158,6 +166,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             processed_driver_features["enable_numpy_vectors"] = NUMPY_INSTALLED
         if "enable_lowercase_column_names" not in processed_driver_features:
             processed_driver_features["enable_lowercase_column_names"] = True
+        if "enable_uuid_binary" not in processed_driver_features:
+            processed_driver_features["enable_uuid_binary"] = True
 
         super().__init__(
             pool_config=processed_pool_config,
@@ -173,22 +183,29 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Create the actual connection pool."""
         config = dict(self.pool_config)
 
-        if self.driver_features.get("enable_numpy_vectors", False):
+        needs_session_callback = self.driver_features.get("enable_numpy_vectors", False) or self.driver_features.get(
+            "enable_uuid_binary", False
+        )
+        if needs_session_callback:
             config["session_callback"] = self._init_connection
 
         return oracledb.create_pool(**config)
 
     def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
-        """Initialize connection with optional NumPy vector support.
+        """Initialize connection with optional type handlers.
+
+        Registers NumPy vector handlers and UUID binary handlers when enabled.
+        Registration order ensures handler chaining works correctly.
 
         Args:
             connection: Oracle connection to initialize.
             tag: Connection tag for session state (unused).
         """
         if self.driver_features.get("enable_numpy_vectors", False):
-            from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers
-
             register_numpy_handlers(connection)
+
+        if self.driver_features.get("enable_uuid_binary", False):
+            register_uuid_handlers(connection)
 
     def _close_pool(self) -> None:
         """Close the actual connection pool."""
@@ -319,6 +336,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             processed_driver_features["enable_numpy_vectors"] = NUMPY_INSTALLED
         if "enable_lowercase_column_names" not in processed_driver_features:
             processed_driver_features["enable_lowercase_column_names"] = True
+        if "enable_uuid_binary" not in processed_driver_features:
+            processed_driver_features["enable_uuid_binary"] = True
 
         super().__init__(
             pool_config=processed_pool_config,
@@ -334,13 +353,19 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Create the actual async connection pool."""
         config = dict(self.pool_config)
 
-        if self.driver_features.get("enable_numpy_vectors", False):
+        needs_session_callback = self.driver_features.get("enable_numpy_vectors", False) or self.driver_features.get(
+            "enable_uuid_binary", False
+        )
+        if needs_session_callback:
             config["session_callback"] = self._init_connection
 
         return oracledb.create_pool_async(**config)
 
     async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
-        """Initialize async connection with optional NumPy vector support.
+        """Initialize async connection with optional type handlers.
+
+        Registers NumPy vector handlers and UUID binary handlers when enabled.
+        Registration order ensures handler chaining works correctly.
 
         Args:
             connection: Oracle async connection to initialize.
@@ -348,6 +373,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """
         if self.driver_features.get("enable_numpy_vectors", False):
             register_numpy_handlers(connection)
+
+        if self.driver_features.get("enable_uuid_binary", False):
+            from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
+
+            register_uuid_handlers(connection)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
