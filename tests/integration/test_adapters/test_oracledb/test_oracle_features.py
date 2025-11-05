@@ -6,8 +6,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import SQL, SQLResult, StatementConfig
 
 
 def _lower_keys(row: dict[str, object]) -> dict[str, object]:

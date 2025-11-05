@@ -11,6 +11,12 @@ This guide provides specific instructions for the `aiosqlite` adapter.
 - **Driver:** `aiosqlite`
 - **Parameter Style:** `qmark` (e.g., `?`)
 
+## Parameter Profile
+
+- **Registry Key:** `"aiosqlite"`
+- **JSON Strategy:** `helper` (shared serializer handles dict/list/tuple inputs)
+- **Extras:** None (profile applies bool→int and ISO datetime coercions automatically)
+
 ## Best Practices
 
 - **Async Only:** This is an asynchronous driver for SQLite. Use it in `asyncio` applications.

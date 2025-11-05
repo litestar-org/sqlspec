@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import pytest
 
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,

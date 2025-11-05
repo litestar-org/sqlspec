@@ -7,6 +7,7 @@ __all__ = (
     "ConfigResolverError",
     "DataError",
     "DatabaseConnectionError",
+    "DialectNotSupportedError",
     "FileNotFoundInStorageError",
     "ForeignKeyViolationError",
     "ImproperConfigurationError",
@@ -27,6 +28,7 @@ __all__ = (
     "SQLParsingError",
     "SQLSpecError",
     "SerializationError",
+    "StorageCapabilityError",
     "StorageOperationFailedError",
     "TransactionError",
     "UniqueViolationError",
@@ -116,6 +118,10 @@ class ImproperConfigurationError(SQLSpecError):
     """Raised when configuration is invalid or incomplete."""
 
 
+class DialectNotSupportedError(SQLBuilderError):
+    """Raised when a SQL dialect does not support a specific feature."""
+
+
 class SerializationError(SQLSpecError):
     """Encoding or decoding of an object failed."""
 
@@ -170,6 +176,21 @@ class OperationalError(SQLSpecError):
 
 class StorageOperationFailedError(SQLSpecError):
     """Raised when a storage backend operation fails (e.g., network, permission, API error)."""
+
+
+class StorageCapabilityError(SQLSpecError):
+    """Raised when a requested storage bridge capability is unavailable."""
+
+    def __init__(self, message: str, *, capability: str | None = None, remediation: str | None = None) -> None:
+        parts = [message]
+        if capability:
+            parts.append(f"(capability: {capability})")
+        if remediation:
+            parts.append(remediation)
+        detail = " ".join(parts)
+        super().__init__(detail)
+        self.capability = capability
+        self.remediation = remediation
 
 
 class FileNotFoundInStorageError(StorageOperationFailedError):

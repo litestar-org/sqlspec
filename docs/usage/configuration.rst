@@ -236,8 +236,8 @@ Basic Statement Config
 
 .. code-block:: python
 
-   from sqlspec.core.statement import StatementConfig
-   from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+   from sqlspec.core import StatementConfig
+   from sqlspec.core import ParameterStyle, ParameterStyleConfig
 
    statement_config = StatementConfig(
        dialect="postgres",                # SQLGlot dialect
@@ -260,7 +260,7 @@ Control how parameters are handled:
 
 .. code-block:: python
 
-   from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+   from sqlspec.core import ParameterStyle, ParameterStyleConfig
 
    param_config = ParameterStyleConfig(
        default_parameter_style=ParameterStyle.NUMERIC,  # $1, $2, ...
@@ -283,7 +283,7 @@ SQLSpec supports multiple parameter placeholder styles:
 
 .. code-block:: python
 
-   from sqlspec.core.parameters import ParameterStyle
+   from sqlspec.core import ParameterStyle
 
    # Question mark (SQLite, DuckDB)
    ParameterStyle.QMARK          # WHERE id = ?
@@ -326,7 +326,7 @@ Global Cache Configuration
 
 .. code-block:: python
 
-   from sqlspec.core.cache import CacheConfig, update_cache_config
+   from sqlspec.core import CacheConfig, update_cache_config
 
    cache_config = CacheConfig(
        enable_sql_cache=True,          # Cache compiled SQL strings
@@ -360,7 +360,7 @@ Monitor cache statistics:
 
 .. code-block:: python
 
-   from sqlspec.core.cache import get_cache_statistics, log_cache_stats
+   from sqlspec.core import get_cache_statistics, log_cache_stats
 
    # Get statistics
    stats = get_cache_statistics()
@@ -375,7 +375,7 @@ Clear Cache
 
 .. code-block:: python
 
-   from sqlspec.core.cache import reset_cache_stats
+   from sqlspec.core import reset_cache_stats
 
    # Clear all caches and reset statistics
    reset_cache_stats()

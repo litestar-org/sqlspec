@@ -65,3 +65,6 @@ requirements/archive/*
 requirements/*
 !requirements/example-feature
 !requirements/README.md
+!.claude/bootstrap.md
+.pre-commit-cache
+.gh-cache

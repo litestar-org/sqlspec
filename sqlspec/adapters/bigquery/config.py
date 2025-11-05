@@ -8,10 +8,16 @@ from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
-from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver, bigquery_statement_config
-from sqlspec.config import NoPoolSyncConfig
+from sqlspec.adapters.bigquery.driver import (
+    BigQueryCursor,
+    BigQueryDriver,
+    BigQueryExceptionHandler,
+    build_bigquery_statement_config,
+)
+from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -20,7 +26,7 @@ if TYPE_CHECKING:
     from google.api_core.client_options import ClientOptions
     from google.auth.credentials import Credentials
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 
 logger = logging.getLogger(__name__)
@@ -100,6 +106,11 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
     connection_type: "ClassVar[type[BigQueryConnection]]" = BigQueryConnection
     supports_transactional_ddl: ClassVar[bool] = False
+    supports_native_parquet_import: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    requires_staging_for_load: ClassVar[bool] = True
+    staging_protocols: ClassVar[tuple[str, ...]] = ("gs://",)
 
     def __init__(
         self,
@@ -109,7 +120,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "BigQueryDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize BigQuery configuration.
 
@@ -128,27 +139,20 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             self.connection_config.update(extras)
 
         self.driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-
-        if "enable_uuid_conversion" not in self.driver_features:
-            self.driver_features["enable_uuid_conversion"] = True
-
-        if "json_serializer" not in self.driver_features:
-            from sqlspec.utils.serializers import to_json
-
-            self.driver_features["json_serializer"] = to_json
+        self.driver_features.setdefault("enable_uuid_conversion", True)
+        serializer = self.driver_features.setdefault("json_serializer", to_json)
 
         self._connection_instance: BigQueryConnection | None = self.driver_features.get("connection_instance")
 
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
 
-        if statement_config is None:
-            statement_config = bigquery_statement_config
+        base_statement_config = statement_config or build_bigquery_statement_config(json_serializer=serializer)
 
         super().__init__(
             connection_config=self.connection_config,
             migration_config=migration_config,
-            statement_config=statement_config,
+            statement_config=base_statement_config,
             driver_features=self.driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
@@ -261,7 +265,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             )
             yield driver
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for BigQuery types.
 
         Returns:
@@ -269,5 +273,11 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update({"BigQueryConnection": BigQueryConnection, "BigQueryCursor": BigQueryCursor})
+        namespace.update({
+            "BigQueryConnection": BigQueryConnection,
+            "BigQueryConnectionParams": BigQueryConnectionParams,
+            "BigQueryCursor": BigQueryCursor,
+            "BigQueryDriver": BigQueryDriver,
+            "BigQueryExceptionHandler": BigQueryExceptionHandler,
+        })
         return namespace

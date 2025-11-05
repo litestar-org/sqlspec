@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 BatchParameters = list[tuple[Any, ...]] | list[dict[str, Any]] | list[list[Any]]
 pytestmark = pytest.mark.xdist_group("oracle")

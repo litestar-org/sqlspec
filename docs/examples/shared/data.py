@@ -1,6 +1,6 @@
 """Shared schema and sample rows for documentation examples."""
 
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 
 __all__ = ("ARTICLES", "CREATE_ARTICLES")
 

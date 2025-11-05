@@ -8,6 +8,7 @@ Components:
 
 import hashlib
 from collections import OrderedDict
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import sqlglot
@@ -16,13 +17,26 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
-from sqlspec.core.parameters import ParameterProcessor
+from sqlspec.core.parameters import ParameterProcessor, ParameterProfile, validate_parameter_alignment
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    import logging
+
     from sqlspec.core.statement import StatementConfig
 
 
+__all__ = (
+    "CompiledSQL",
+    "OperationProfile",
+    "OperationType",
+    "SQLProcessor",
+    "is_copy_from_operation",
+    "is_copy_operation",
+    "is_copy_to_operation",
+)
+
+logger: "logging.Logger" = get_logger("sqlspec.core.compiler")
 OperationType = Literal[
     "SELECT",
     "INSERT",
@@ -35,13 +49,9 @@ OperationType = Literal[
     "SCRIPT",
     "DDL",
     "PRAGMA",
+    "MERGE",
     "UNKNOWN",
 ]
-
-
-__all__ = ("CompiledSQL", "OperationType", "SQLProcessor")
-
-logger = get_logger("sqlspec.core.compiler")
 
 OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
     exp.Select: "SELECT",
@@ -53,7 +63,81 @@ OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
     exp.Create: "DDL",
     exp.Drop: "DDL",
     exp.Alter: "DDL",
+    exp.Merge: "MERGE",
 }
+
+COPY_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM", "COPY_TO")
+
+COPY_FROM_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM")
+
+COPY_TO_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY_TO",)
+
+
+def is_copy_operation(operation_type: "OperationType") -> bool:
+    """Determine if the operation corresponds to any PostgreSQL COPY variant.
+
+    Args:
+        operation_type: Operation type detected by the compiler.
+
+    Returns:
+        True when the operation type represents COPY, COPY FROM, or COPY TO.
+    """
+
+    return operation_type in COPY_OPERATION_TYPES
+
+
+def is_copy_from_operation(operation_type: "OperationType") -> bool:
+    """Check if the operation streams data into the database using COPY.
+
+    Args:
+        operation_type: Operation type detected by the compiler.
+
+    Returns:
+        True for COPY operations that read from client input (COPY FROM).
+    """
+
+    return operation_type in COPY_FROM_OPERATION_TYPES
+
+
+def is_copy_to_operation(operation_type: "OperationType") -> bool:
+    """Check if the operation streams data out from the database using COPY.
+
+    Args:
+        operation_type: Operation type detected by the compiler.
+
+    Returns:
+        True for COPY operations that write to client output (COPY TO).
+    """
+
+    return operation_type in COPY_TO_OPERATION_TYPES
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class OperationProfile:
+    """Semantic characteristics derived from the parsed SQL expression."""
+
+    __slots__ = ("modifies_rows", "returns_rows")
+
+    def __init__(self, returns_rows: bool = False, modifies_rows: bool = False) -> None:
+        self.returns_rows = returns_rows
+        self.modifies_rows = modifies_rows
+
+    @classmethod
+    def empty(cls) -> "OperationProfile":
+        return cls(returns_rows=False, modifies_rows=False)
+
+    def __repr__(self) -> str:
+        return f"OperationProfile(returns_rows={self.returns_rows!r}, modifies_rows={self.modifies_rows!r})"
+
+
+def _is_effectively_empty_parameters(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, Mapping):
+        return len(value) == 0
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return len(value) == 0
+    return False
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -70,8 +154,10 @@ class CompiledSQL:
         "compiled_sql",
         "execution_parameters",
         "expression",
+        "operation_profile",
         "operation_type",
         "parameter_casts",
+        "parameter_profile",
         "parameter_style",
         "supports_many",
     )
@@ -87,6 +173,8 @@ class CompiledSQL:
         parameter_style: str | None = None,
         supports_many: bool = False,
         parameter_casts: Optional["dict[int, str]"] = None,
+        parameter_profile: "ParameterProfile | None" = None,
+        operation_profile: "OperationProfile | None" = None,
     ) -> None:
         """Initialize compiled result.
 
@@ -98,6 +186,8 @@ class CompiledSQL:
             parameter_style: Parameter style used in compilation
             supports_many: Whether this supports execute_many operations
             parameter_casts: Mapping of parameter positions to cast types
+            parameter_profile: Profile describing detected placeholders
+            operation_profile: Profile describing semantic characteristics
         """
         self.compiled_sql = compiled_sql
         self.execution_parameters = execution_parameters
@@ -106,6 +196,8 @@ class CompiledSQL:
         self.parameter_style = parameter_style
         self.supports_many = supports_many
         self.parameter_casts = parameter_casts or {}
+        self.parameter_profile = parameter_profile
+        self.operation_profile = operation_profile or OperationProfile.empty()
         self._hash: int | None = None
 
     def __hash__(self) -> int:
@@ -203,18 +295,24 @@ class SQLProcessor:
         Returns:
             CompiledSQL result
         """
+        parameter_profile = ParameterProfile.empty()
+        operation_profile = OperationProfile.empty()
+
         try:
             dialect_str = str(self._config.dialect) if self._config.dialect else None
 
             processed_sql: str
             processed_params: Any
-            processed_sql, processed_params = self._parameter_processor.process(
+            process_result = self._parameter_processor.process(
                 sql=sql,
                 parameters=parameters,
                 config=self._config.parameter_config,
                 dialect=dialect_str,
                 is_many=is_many,
             )
+            processed_sql = process_result.sql
+            processed_params = process_result.parameters
+            parameter_profile = process_result.parameter_profile
 
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 sqlglot_sql = processed_sql
@@ -234,6 +332,7 @@ class SQLProcessor:
                     expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
                     operation_type = self._detect_operation_type(expression)
                     parameter_casts = self._detect_parameter_casts(expression)
+                    operation_profile = self._build_operation_profile(expression, operation_type)
 
                     ast_transformer = self._config.parameter_config.ast_transformer
                     if ast_transformer:
@@ -244,17 +343,21 @@ class SQLProcessor:
                     expression = None
                     operation_type = "EXECUTE"
                     parameter_casts = {}
+                    operation_profile = OperationProfile.empty()
 
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
             elif ast_was_transformed and expression is not None:
-                final_sql, final_params = self._parameter_processor.process(
+                transformed_result = self._parameter_processor.process(
                     sql=expression.sql(dialect=dialect_str),
                     parameters=final_parameters,
                     config=self._config.parameter_config,
                     dialect=dialect_str,
                     is_many=is_many,
                 )
+                final_sql = transformed_result.sql
+                final_params = transformed_result.parameters
+                parameter_profile = transformed_result.parameter_profile
                 output_transformer = self._config.output_transformer
                 if output_transformer:
                     final_sql, final_params = output_transformer(final_sql, final_params)
@@ -262,6 +365,16 @@ class SQLProcessor:
                 final_sql, final_params = self._apply_final_transformations(
                     expression, processed_sql, final_parameters, dialect_str
                 )
+
+            should_validate = True
+            if (
+                _is_effectively_empty_parameters(final_params)
+                and _is_effectively_empty_parameters(parameters)
+                and not is_many
+            ):
+                should_validate = False
+            if self._config.enable_validation and should_validate:
+                validate_parameter_alignment(parameter_profile, final_params, is_many=is_many)
 
             return CompiledSQL(
                 compiled_sql=final_sql,
@@ -271,6 +384,8 @@ class SQLProcessor:
                 parameter_style=self._config.parameter_config.default_parameter_style.value,
                 supports_many=isinstance(final_params, list) and len(final_params) > 0,
                 parameter_casts=parameter_casts,
+                parameter_profile=parameter_profile,
+                operation_profile=operation_profile,
             )
 
         except sqlspec.exceptions.SQLSpecError:
@@ -278,7 +393,12 @@ class SQLProcessor:
         except Exception as e:
             logger.warning("Compilation failed, using fallback: %s", e)
             return CompiledSQL(
-                compiled_sql=sql, execution_parameters=parameters, operation_type="UNKNOWN", parameter_casts={}
+                compiled_sql=sql,
+                execution_parameters=parameters,
+                operation_type="UNKNOWN",
+                parameter_casts={},
+                parameter_profile=parameter_profile,
+                operation_profile=operation_profile,
             )
 
     def _make_cache_key(self, sql: str, parameters: Any, is_many: bool = False) -> str:
@@ -346,10 +466,33 @@ class SQLProcessor:
         if not expression:
             return {}
 
-        cast_positions = {}
+        cast_positions: dict[int, str] = {}
+        placeholder_positions: dict[str, int] = {}
+        placeholder_counter = 0
+
+        def _assign_placeholder_position(placeholder: "exp.Placeholder") -> "int | None":
+            nonlocal placeholder_counter
+
+            name_expr = placeholder.name if placeholder.name is not None else None
+            if name_expr is not None:
+                placeholder_key = str(name_expr)
+            else:
+                value = placeholder.args.get("this")
+                placeholder_key = str(value) if value is not None else placeholder.sql()
+
+            if not placeholder_key:
+                return None
+
+            if placeholder_key not in placeholder_positions:
+                placeholder_counter += 1
+                placeholder_positions[placeholder_key] = placeholder_counter
+
+            return placeholder_positions[placeholder_key]
 
         # Walk all nodes in order to track parameter positions
         for node in expression.walk():
+            if isinstance(node, exp.Placeholder):
+                _assign_placeholder_position(node)
             # Check for cast nodes with parameter children
             if isinstance(node, exp.Cast):
                 cast_target = node.this
@@ -361,8 +504,7 @@ class SQLProcessor:
                     if isinstance(param_value, exp.Literal):
                         position = int(param_value.this)
                 elif isinstance(cast_target, exp.Placeholder):
-                    # For ? style, we need to count position (will implement if needed)
-                    pass
+                    position = _assign_placeholder_position(cast_target)
                 elif isinstance(cast_target, exp.Column):
                     # Handle cases where $1 gets parsed as a column
                     column_name = str(cast_target.this) if cast_target.this else str(cast_target)
@@ -401,6 +543,34 @@ class SQLProcessor:
             return output_transformer(sql, parameters)
 
         return sql, parameters
+
+    def _build_operation_profile(
+        self, expression: "exp.Expression | None", operation_type: "OperationType"
+    ) -> "OperationProfile":
+        if expression is None:
+            return OperationProfile.empty()
+
+        returns_rows = False
+        modifies_rows = False
+
+        expr = expression
+        if isinstance(expr, (exp.Select, exp.Values, exp.Table, exp.TableSample, exp.With)):
+            returns_rows = True
+        elif isinstance(expr, (exp.Insert, exp.Update, exp.Delete, exp.Merge)):
+            modifies_rows = True
+            returns_rows = bool(expr.args.get("returning"))
+        elif isinstance(expr, exp.Copy):
+            copy_kind = expr.args.get("kind")
+            modifies_rows = copy_kind is True
+            returns_rows = copy_kind is False
+
+        if not returns_rows and operation_type in {"SELECT", "WITH", "VALUES", "TABLE"}:
+            returns_rows = True
+
+        if not modifies_rows and operation_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}:
+            modifies_rows = True
+
+        return OperationProfile(returns_rows=returns_rows, modifies_rows=modifies_rows)
 
     def clear_cache(self) -> None:
         """Clear compilation cache and reset statistics."""

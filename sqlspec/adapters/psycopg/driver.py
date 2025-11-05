@@ -16,15 +16,27 @@ PostgreSQL Features:
 
 import datetime
 import io
-from typing import TYPE_CHECKING, Any
+from contextlib import AsyncExitStack, ExitStack
+from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
+from psycopg import sql as psycopg_sql
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import (
+    SQL,
+    DriverParameterProfile,
+    ParameterStyle,
+    ParameterStyleConfig,
+    SQLResult,
+    StatementConfig,
+    build_statement_config_from_profile,
+    get_cache_config,
+    is_copy_from_operation,
+    is_copy_operation,
+    is_copy_to_operation,
+    register_driver_profile,
+)
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -41,13 +53,35 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
+    from sqlspec.core import ArrowResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
+    from sqlspec.storage import (
+        AsyncStoragePipeline,
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
+
+__all__ = (
+    "PsycopgAsyncCursor",
+    "PsycopgAsyncDriver",
+    "PsycopgAsyncExceptionHandler",
+    "PsycopgSyncCursor",
+    "PsycopgSyncDriver",
+    "PsycopgSyncExceptionHandler",
+    "build_psycopg_statement_config",
+    "psycopg_statement_config",
+)
 
 logger = get_logger("adapters.psycopg")
 
@@ -59,77 +93,23 @@ TRANSACTION_STATUS_INERROR = 3
 TRANSACTION_STATUS_UNKNOWN = 4
 
 
-def _convert_list_to_postgres_array(value: Any) -> str:
-    """Convert Python list to PostgreSQL array literal format.
-
-    Args:
-        value: Python list to convert
-
-    Returns:
-        PostgreSQL array literal string
-    """
-    if not isinstance(value, list):
-        return str(value)
-
-    elements = []
-    for item in value:
-        if isinstance(item, list):
-            elements.append(_convert_list_to_postgres_array(item))
-        elif isinstance(item, str):
-            escaped = item.replace("'", "''")
-            elements.append(f"'{escaped}'")
-        elif item is None:
-            elements.append("NULL")
-        else:
-            elements.append(str(item))
-
-    return f"{{{','.join(elements)}}}"
+def _compose_table_identifier(table: str) -> "psycopg_sql.Composed":
+    parts = [part for part in table.split(".") if part]
+    if not parts:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    identifiers = [psycopg_sql.Identifier(part) for part in parts]
+    return psycopg_sql.SQL(".").join(identifiers)
 
 
-psycopg_statement_config = StatementConfig(
-    dialect="postgres",
-    pre_process_steps=None,
-    post_process_steps=None,
-    enable_parsing=True,
-    enable_transformations=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_parameter_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-            ParameterStyle.QMARK,
-        },
-        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_parameter_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-        },
-        type_coercion_map={
-            dict: to_json,
-            datetime.datetime: lambda x: x,
-            datetime.date: lambda x: x,
-            datetime.time: lambda x: x,
-        },
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-    ),
-)
+def _build_copy_from_command(table: str, columns: "list[str]") -> "psycopg_sql.Composed":
+    table_identifier = _compose_table_identifier(table)
+    column_sql = psycopg_sql.SQL(", ").join(psycopg_sql.Identifier(column) for column in columns)
+    return psycopg_sql.SQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)
 
-__all__ = (
-    "PsycopgAsyncCursor",
-    "PsycopgAsyncDriver",
-    "PsycopgAsyncExceptionHandler",
-    "PsycopgSyncCursor",
-    "PsycopgSyncDriver",
-    "PsycopgSyncExceptionHandler",
-    "psycopg_statement_config",
-)
+
+def _build_truncate_command(table: str) -> "psycopg_sql.Composed":
+    return psycopg_sql.SQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
 
 
 class PsycopgSyncCursor:
@@ -343,7 +323,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
         statement.compile()
 
-        if statement.operation_type in {"COPY_FROM", "COPY_TO"}:
+        if is_copy_operation(statement.operation_type):
             return self._handle_copy_operation(cursor, statement)
 
         return None
@@ -360,12 +340,12 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         """
 
         sql = statement.sql
-
+        operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
             copy_data = copy_data[0]
 
-        if statement.operation_type == "COPY_FROM":
+        if is_copy_from_operation(operation_type):
             if isinstance(copy_data, (str, bytes)):
                 data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
             elif hasattr(copy_data, "read"):
@@ -385,7 +365,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                 data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FROM_STDIN"}
             )
 
-        if statement.operation_type == "COPY_TO":
+        if is_copy_to_operation(operation_type):
             output_data: list[str] = []
             with cursor.copy(sql) as copy_ctx:
                 output_data.extend(row.decode() if isinstance(row, bytes) else str(row) for row in copy_ctx)
@@ -486,6 +466,72 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream Arrow results to storage (sync)."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = arrow_result.write_to_storage_sync(
+            destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into PostgreSQL using COPY."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            self._truncate_table_sync(table)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            copy_sql = _build_copy_from_command(table, columns)
+            with ExitStack() as stack:
+                stack.enter_context(self.handle_database_exceptions())
+                cursor = stack.enter_context(self.with_cursor(self.connection))
+                copy_ctx = stack.enter_context(cursor.copy(copy_sql))
+                for record in records:
+                    copy_ctx.write_row(record)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts into PostgreSQL via COPY."""
+
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -498,6 +544,11 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
             self._data_dictionary = PostgresSyncDataDictionary()
         return self._data_dictionary
+
+    def _truncate_table_sync(self, table: str) -> None:
+        truncate_sql = _build_truncate_command(table)
+        with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            cursor.execute(truncate_sql)
 
 
 class PsycopgAsyncCursor:
@@ -711,8 +762,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             SQLResult if special handling was applied, None otherwise
         """
 
-        sql_upper = statement.sql.strip().upper()
-        if sql_upper.startswith("COPY ") and ("FROM STDIN" in sql_upper or "TO STDOUT" in sql_upper):
+        statement.compile()
+
+        if is_copy_operation(statement.operation_type):
             return await self._handle_copy_operation_async(cursor, statement)
 
         return None
@@ -729,16 +781,13 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         """
 
         sql = statement.sql
-
+        sql_upper = sql.upper()
+        operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
             copy_data = copy_data[0]
 
-        sql_upper = sql.upper()
-        is_stdin = "FROM STDIN" in sql_upper
-        is_stdout = "TO STDOUT" in sql_upper
-
-        if is_stdin:
+        if is_copy_from_operation(operation_type) and "FROM STDIN" in sql_upper:
             if isinstance(copy_data, (str, bytes)):
                 data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
             elif hasattr(copy_data, "read"):
@@ -758,7 +807,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                 data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FROM_STDIN"}
             )
 
-        if is_stdout:
+        if is_copy_to_operation(operation_type) and "TO STDOUT" in sql_upper:
             output_data: list[str] = []
             async with cursor.copy(sql) as copy_ctx:
                 output_data.extend([row.decode() if isinstance(row, bytes) else str(row) async for row in copy_ctx])
@@ -859,6 +908,74 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    async def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream Arrow data to storage asynchronously."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = await arrow_result.write_to_storage_async(
+            destination, format_hint=format_hint, pipeline=async_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into PostgreSQL asynchronously via COPY."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            await self._truncate_table_async(table)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            copy_sql = _build_copy_from_command(table, columns)
+            async with AsyncExitStack() as stack:
+                await stack.enter_async_context(self.handle_database_exceptions())
+                cursor = await stack.enter_async_context(self.with_cursor(self.connection))
+                copy_ctx = await stack.enter_async_context(cursor.copy(copy_sql))
+                for record in records:
+                    await copy_ctx.write_row(record)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts asynchronously."""
+
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
+
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -871,3 +988,80 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
+
+    async def _truncate_table_async(self, table: str) -> None:
+        truncate_sql = _build_truncate_command(table)
+        async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            await cursor.execute(truncate_sql)
+
+
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _build_psycopg_custom_type_coercions() -> dict[type, "Callable[[Any], Any]"]:
+    """Return custom type coercions for psycopg."""
+
+    return {datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity}
+
+
+def _build_psycopg_profile() -> DriverParameterProfile:
+    """Create the psycopg driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="Psycopg",
+        default_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_styles={
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            ParameterStyle.NAMED_PYFORMAT,
+            ParameterStyle.NUMERIC,
+            ParameterStyle.QMARK,
+        },
+        default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions=_build_psycopg_custom_type_coercions(),
+        default_dialect="postgres",
+    )
+
+
+_PSYCOPG_PROFILE = _build_psycopg_profile()
+
+register_driver_profile("psycopg", _PSYCOPG_PROFILE)
+
+
+def _create_psycopg_parameter_config(serializer: "Callable[[Any], str]") -> ParameterStyleConfig:
+    """Construct parameter configuration with shared JSON serializer support."""
+
+    base_config = build_statement_config_from_profile(_PSYCOPG_PROFILE, json_serializer=serializer).parameter_config
+
+    updated_type_map = dict(base_config.type_coercion_map)
+    updated_type_map[list] = build_json_list_converter(serializer)
+    updated_type_map[tuple] = build_json_tuple_converter(serializer)
+
+    return base_config.replace(type_coercion_map=updated_type_map)
+
+
+def build_psycopg_statement_config(*, json_serializer: "Callable[[Any], str]" = to_json) -> StatementConfig:
+    """Construct the psycopg statement configuration with optional JSON codecs."""
+
+    parameter_config = _create_psycopg_parameter_config(json_serializer)
+    return StatementConfig(
+        dialect="postgres",
+        pre_process_steps=None,
+        post_process_steps=None,
+        enable_parsing=True,
+        enable_transformations=True,
+        enable_validation=True,
+        enable_caching=True,
+        enable_parameter_type_wrapping=True,
+        parameter_config=parameter_config,
+    )
+
+
+psycopg_statement_config = build_psycopg_statement_config()

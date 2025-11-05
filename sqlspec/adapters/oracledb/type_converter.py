@@ -10,7 +10,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any, Final
 
-from sqlspec.core.type_conversion import BaseTypeConverter
+from sqlspec.core import BaseTypeConverter
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.sync_tools import ensure_async_
 

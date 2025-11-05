@@ -8,9 +8,18 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
-from sqlspec.core import SQL, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
-from sqlspec.core.cache import CachedStatement, get_cache, get_cache_config
-from sqlspec.core.splitter import split_sql_script
+from sqlspec.core import (
+    SQL,
+    CachedStatement,
+    ParameterStyle,
+    SQLResult,
+    Statement,
+    StatementConfig,
+    TypedParameter,
+    get_cache,
+    get_cache_config,
+    split_sql_script,
+)
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter
@@ -18,7 +27,7 @@ from sqlspec.utils.type_guards import is_statement_filter
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.core.filters import FilterTypeT, StatementFilter
+    from sqlspec.core import FilterTypeT, StatementFilter
     from sqlspec.typing import StatementParameters
 
 
@@ -175,12 +184,7 @@ class DataDictionaryMixin:
         Returns:
             VersionInfo instance or None if parsing fails
         """
-        # Try common version patterns
-        patterns = [
-            r"(\d+)\.(\d+)\.(\d+)",  # x.y.z
-            r"(\d+)\.(\d+)",  # x.y
-            r"(\d+)",  # x
-        ]
+        patterns = [r"(\d+)\.(\d+)\.(\d+)", r"(\d+)\.(\d+)", r"(\d+)"]
 
         for pattern in patterns:
             match = re.search(pattern, version_str)
@@ -662,7 +666,10 @@ class CommonDriverAttributesMixin:
         compiled_sql, execution_parameters = prepared_statement.compile()
 
         prepared_parameters = self.prepare_driver_parameters(
-            execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
+            execution_parameters,
+            statement_config,
+            is_many=prepared_statement.is_many,
+            prepared_statement=prepared_statement,
         )
 
         if statement_config.parameter_config.output_transformer:
@@ -685,7 +692,7 @@ class CommonDriverAttributesMixin:
                         else prepared_parameters
                     )
                 ),
-                expression=statement.expression,
+                expression=prepared_statement.expression,
             )
             cache.put("statement", cache_key, cached_statement, str(statement.dialect) if statement.dialect else None)
 
@@ -699,18 +706,16 @@ class CommonDriverAttributesMixin:
         Creates a deterministic cache key that includes all factors that affect SQL compilation,
         preventing cache contamination between different compilation contexts.
         """
-        context_hash = hash(
-            (
-                config.parameter_config.hash(),
-                config.dialect,
-                statement.is_script,
-                statement.is_many,
-                flatten_single_parameters,
-                bool(config.parameter_config.output_transformer),
-                bool(config.parameter_config.ast_transformer),
-                bool(config.parameter_config.needs_static_script_compilation),
-            )
-        )
+        context_hash = hash((
+            config.parameter_config.hash(),
+            config.dialect,
+            statement.is_script,
+            statement.is_many,
+            flatten_single_parameters,
+            bool(config.parameter_config.output_transformer),
+            bool(config.parameter_config.ast_transformer),
+            bool(config.parameter_config.needs_static_script_compilation),
+        ))
 
         params = statement.parameters
 

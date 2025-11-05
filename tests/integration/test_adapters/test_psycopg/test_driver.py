@@ -1,15 +1,12 @@
 """Integration tests for psycopg driver implementation."""
 
-from __future__ import annotations
-
 from collections.abc import Generator
 from typing import Any, Literal
 
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -17,50 +14,43 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture
-def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncDriver, None, None]:
+def psycopg_session(psycopg_sync_config: PsycopgSyncConfig) -> Generator[PsycopgSyncDriver, None, None]:
     """Create a psycopg session with test table."""
-    config = PsycopgSyncConfig(
-        pool_config={
-            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
-    )
 
-    try:
-        with config.provide_session() as session:
-            session.execute_script("""
+    with psycopg_sync_config.provide_session() as session:
+        session.execute_script(
+            """
                 CREATE TABLE IF NOT EXISTS test_table (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     value INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """)
+            """
+        )
 
-            session.commit()
+        session.commit()
+        session.begin()
+        yield session
 
-            session.begin()
-            yield session
+        try:
+            session.rollback()
+        except Exception:
+            pass
 
-            try:
-                session.rollback()
-            except Exception:
-                pass
+        try:
+            session.execute_script("DROP TABLE IF EXISTS test_table")
+        except Exception:
+            if hasattr(session.connection, "rollback"):
+                try:
+                    session.connection.rollback()
+                except Exception:
+                    pass
 
             try:
                 session.execute_script("DROP TABLE IF EXISTS test_table")
             except Exception:
-                if hasattr(session.connection, "rollback"):
-                    try:
-                        session.connection.rollback()
-                    except Exception:
-                        pass
-
-                try:
-                    session.execute_script("DROP TABLE IF EXISTS test_table")
-                except Exception:
-                    pass
-    finally:
-        config.close_pool()
+                pass
 
 
 def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
@@ -212,7 +202,7 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL data type handling with psycopg."""
 
     psycopg_session.execute_script("""
-        CREATE TABLE data_types_test (
+        CREATE TABLE psycopg_data_types_test (
             id SERIAL PRIMARY KEY,
             text_col TEXT,
             integer_col INTEGER,
@@ -228,7 +218,7 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
 
     psycopg_session.execute(
         """
-        INSERT INTO data_types_test (
+        INSERT INTO psycopg_data_types_test (
             text_col, integer_col, numeric_col, boolean_col, json_col,
             array_col, date_col, timestamp_col, uuid_col
         ) VALUES (
@@ -247,7 +237,7 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     )
 
     select_result = psycopg_session.execute(
-        "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM data_types_test"
+        "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM psycopg_data_types_test"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -259,7 +249,7 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     assert row["boolean_col"] is True
     assert row["array_col"] == [1, 2, 3]
 
-    psycopg_session.execute_script("DROP TABLE data_types_test")
+    psycopg_session.execute_script("DROP TABLE psycopg_data_types_test")
 
 
 def test_psycopg_transactions(psycopg_session: PsycopgSyncDriver) -> None:

@@ -8,8 +8,15 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
-from sqlspec.core.compiler import OperationType, SQLProcessor
-from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
+from sqlspec.core.compiler import OperationProfile, OperationType
+from sqlspec.core.parameters import (
+    ParameterConverter,
+    ParameterProfile,
+    ParameterStyle,
+    ParameterStyleConfig,
+    ParameterValidator,
+)
+from sqlspec.core.pipeline import compile_with_shared_pipeline
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
@@ -61,6 +68,8 @@ PROCESSED_STATE_SLOTS: Final = (
     "parsed_expression",
     "operation_type",
     "parameter_casts",
+    "parameter_profile",
+    "operation_profile",
     "validation_errors",
     "is_many",
 )
@@ -85,6 +94,8 @@ class ProcessedState:
         operation_type: "OperationType" = "UNKNOWN",
         parameter_casts: "dict[int, str] | None" = None,
         validation_errors: "list[str] | None" = None,
+        parameter_profile: "ParameterProfile | None" = None,
+        operation_profile: "OperationProfile | None" = None,
         is_many: bool = False,
     ) -> None:
         self.compiled_sql = compiled_sql
@@ -93,6 +104,8 @@ class ProcessedState:
         self.operation_type = operation_type
         self.parameter_casts = parameter_casts or {}
         self.validation_errors = validation_errors or []
+        self.parameter_profile = parameter_profile or ParameterProfile.empty()
+        self.operation_profile = operation_profile or OperationProfile.empty()
         self.is_many = is_many
 
     def __hash__(self) -> int:
@@ -403,6 +416,10 @@ class SQL:
             if self._processed_state is Empty:
                 return False
 
+        profile = getattr(self._processed_state, "operation_profile", None)
+        if profile and profile.returns_rows:
+            return True
+
         op_type = self._processed_state.operation_type
         if op_type in RETURNS_ROWS_OPERATIONS:
             return True
@@ -422,6 +439,10 @@ class SQL:
         """
         if self._processed_state is Empty:
             return False
+
+        profile = getattr(self._processed_state, "operation_profile", None)
+        if profile and profile.modifies_rows:
+            return True
 
         op_type = self._processed_state.operation_type
         if op_type in MODIFYING_OPERATIONS:
@@ -444,7 +465,7 @@ class SQL:
                 raw_sql = self._raw_sql
                 params = self._named_parameters or self._positional_parameters
                 is_many = self._is_many
-                compiled_result = SQLProcessor(config).compile(raw_sql, params, is_many=is_many)
+                compiled_result = compile_with_shared_pipeline(config, raw_sql, params, is_many=is_many)
 
                 self._processed_state = ProcessedState(
                     compiled_sql=compiled_result.compiled_sql,
@@ -452,20 +473,15 @@ class SQL:
                     parsed_expression=compiled_result.expression,
                     operation_type=compiled_result.operation_type,
                     parameter_casts=compiled_result.parameter_casts,
+                    parameter_profile=compiled_result.parameter_profile,
+                    operation_profile=compiled_result.operation_profile,
                     validation_errors=[],
                     is_many=self._is_many,
                 )
             except sqlspec.exceptions.SQLSpecError:
                 raise
             except Exception as e:
-                logger.warning("Processing failed, using fallback: %s", e)
-                self._processed_state = ProcessedState(
-                    compiled_sql=self._raw_sql,
-                    execution_parameters=self._named_parameters or self._positional_parameters,
-                    operation_type="UNKNOWN",
-                    parameter_casts={},
-                    is_many=self._is_many,
-                )
+                self._processed_state = self._handle_compile_failure(e)
 
         return self._processed_state.compiled_sql, self._processed_state.execution_parameters
 
@@ -510,6 +526,18 @@ class SQL:
             new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
         return new_sql
+
+    def _handle_compile_failure(self, error: Exception) -> ProcessedState:
+        logger.warning("Processing failed, using fallback: %s", error)
+        return ProcessedState(
+            compiled_sql=self._raw_sql,
+            execution_parameters=self._named_parameters or self._positional_parameters,
+            operation_type="UNKNOWN",
+            parameter_casts={},
+            parameter_profile=ParameterProfile.empty(),
+            operation_profile=OperationProfile.empty(),
+            is_many=self._is_many,
+        )
 
     def add_named_parameter(self, name: str, value: Any) -> "SQL":
         """Add a named parameter and return a new SQL instance.
@@ -718,18 +746,16 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on configuration settings."""
-        return hash(
-            (
-                self.enable_parsing,
-                self.enable_validation,
-                self.enable_transformations,
-                self.enable_analysis,
-                self.enable_expression_simplification,
-                self.enable_parameter_type_wrapping,
-                self.enable_caching,
-                str(self.dialect),
-            )
-        )
+        return hash((
+            self.enable_parsing,
+            self.enable_validation,
+            self.enable_transformations,
+            self.enable_analysis,
+            self.enable_expression_simplification,
+            self.enable_parameter_type_wrapping,
+            self.enable_caching,
+            str(self.dialect),
+        ))
 
     def __repr__(self) -> str:
         """String representation of the StatementConfig instance."""

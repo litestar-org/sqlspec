@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.exceptions import NotFoundError
 
 pytestmark = pytest.mark.xdist_group("sqlite")

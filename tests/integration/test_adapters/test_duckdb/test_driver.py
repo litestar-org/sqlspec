@@ -5,8 +5,8 @@ from typing import Any, Literal
 
 import pytest
 
-from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.adapters.duckdb import DuckDBDriver
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 
@@ -14,29 +14,24 @@ ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
 @pytest.fixture
-def duckdb_session() -> Generator[DuckDBDriver, None, None]:
-    """Create a DuckDB session with a test table.
+def duckdb_session(duckdb_basic_session: DuckDBDriver) -> Generator[DuckDBDriver, None, None]:
+    """Create a DuckDB session with a test table."""
 
-    Returns:
-        A DuckDB session with a test table.
-    """
-    adapter = DuckDBConfig(pool_config={"database": ":memory:"})
+    duckdb_basic_session.execute_script("CREATE SEQUENCE IF NOT EXISTS test_id_seq START 1")
+    duckdb_basic_session.execute_script(
+        """
+            CREATE TABLE IF NOT EXISTS test_table (
+                id INTEGER PRIMARY KEY DEFAULT nextval('test_id_seq'),
+                name TEXT NOT NULL
+            )
+        """
+    )
+
     try:
-        with adapter.provide_session() as session:
-            session.execute_script("CREATE SEQUENCE IF NOT EXISTS test_id_seq START 1")
-            create_table_sql = """
-                CREATE TABLE IF NOT EXISTS test_table (
-                    id INTEGER PRIMARY KEY DEFAULT nextval('test_id_seq'),
-                    name TEXT NOT NULL
-                )
-            """
-            session.execute_script(create_table_sql)
-            yield session
-
-            session.execute_script("DROP TABLE IF EXISTS test_table")
-            session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq")
+        yield duckdb_basic_session
     finally:
-        adapter.close_pool()
+        duckdb_basic_session.execute_script("DROP TABLE IF EXISTS test_table")
+        duckdb_basic_session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq")
 
 
 @pytest.mark.parametrize(
@@ -216,7 +211,7 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB-specific data types and functionality."""
 
     duckdb_session.execute_script("""
-        CREATE TABLE data_types_test (
+        CREATE TABLE duckdb_data_types_test (
             id INTEGER,
             text_col TEXT,
             numeric_col DECIMAL(10,2),
@@ -229,7 +224,7 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     """)
 
     insert_sql = """
-        INSERT INTO data_types_test VALUES (
+        INSERT INTO duckdb_data_types_test VALUES (
             1,
             'test_text',
             123.45,
@@ -243,7 +238,7 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     result = duckdb_session.execute(insert_sql)
     assert result.rows_affected == 1
 
-    select_result = duckdb_session.execute("SELECT * FROM data_types_test")
+    select_result = duckdb_session.execute("SELECT * FROM duckdb_data_types_test")
     assert len(select_result.data) == 1
     row = select_result.data[0]
 
@@ -254,7 +249,7 @@ def test_duckdb_data_types(duckdb_session: DuckDBDriver) -> None:
     assert row["array_col"] is not None
     assert row["json_col"] is not None
 
-    duckdb_session.execute_script("DROP TABLE data_types_test")
+    duckdb_session.execute_script("DROP TABLE duckdb_data_types_test")
 
 
 def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:

@@ -2,15 +2,20 @@
 
 import asyncio
 import contextlib
-import datetime
+from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import aiosqlite
 
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import (
+    ArrowResult,
+    DriverParameterProfile,
+    ParameterStyle,
+    build_statement_config_from_profile,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -25,15 +30,22 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
+    from sqlspec.storage import (
+        AsyncStoragePipeline,
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+    )
 
 __all__ = ("AiosqliteCursor", "AiosqliteDriver", "AiosqliteExceptionHandler", "aiosqlite_statement_config")
 
@@ -45,33 +57,8 @@ SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
-
-
-aiosqlite_statement_config = StatementConfig(
-    dialect="sqlite",
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK},
-        type_coercion_map={
-            bool: int,
-            datetime.datetime: lambda v: v.isoformat(),
-            datetime.date: lambda v: v.isoformat(),
-            Decimal: str,
-            dict: to_json,
-            list: to_json,
-            tuple: lambda v: to_json(list(v)),
-        },
-        has_native_list_expansion=False,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-    ),
-    enable_parsing=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-)
+_TIME_TO_ISO = build_time_iso_converter()
+_DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
 
 class AiosqliteCursor:
@@ -294,6 +281,72 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    async def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream Arrow results into storage."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = await arrow_result.write_to_storage_async(
+            destination, format_hint=format_hint, pipeline=async_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into SQLite using batched inserts."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            await self._truncate_table_async(table)
+
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            insert_sql = _build_sqlite_insert_statement(table, columns)
+            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+                await cursor.executemany(insert_sql, records)
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage into SQLite."""
+
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
+
     async def begin(self) -> None:
         """Begin a database transaction."""
         try:
@@ -332,6 +385,11 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
+    async def _truncate_table_async(self, table: str) -> None:
+        statement = f"DELETE FROM {_format_sqlite_identifier(table)}"
+        async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            await cursor.execute(statement)
+
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -344,3 +402,62 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = AiosqliteAsyncDataDictionary()
         return self._data_dictionary
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _quote_sqlite_identifier(identifier: str) -> str:
+    normalized = identifier.replace('"', '""')
+    return f'"{normalized}"'
+
+
+def _format_sqlite_identifier(identifier: str) -> str:
+    cleaned = identifier.strip()
+    if not cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    parts = [part for part in cleaned.split(".") if part]
+    formatted = ".".join(_quote_sqlite_identifier(part) for part in parts)
+    return formatted or _quote_sqlite_identifier(cleaned)
+
+
+def _build_sqlite_insert_statement(table: str, columns: "list[str]") -> str:
+    column_clause = ", ".join(_quote_sqlite_identifier(column) for column in columns)
+    placeholders = ", ".join("?" for _ in columns)
+    return f"INSERT INTO {_format_sqlite_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+
+
+def _build_aiosqlite_profile() -> DriverParameterProfile:
+    """Create the AIOSQLite driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="AIOSQLite",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            bool: _bool_to_int,
+            datetime: _TIME_TO_ISO,
+            date: _TIME_TO_ISO,
+            Decimal: _DECIMAL_TO_STRING,
+        },
+        default_dialect="sqlite",
+    )
+
+
+_AIOSQLITE_PROFILE = _build_aiosqlite_profile()
+
+register_driver_profile("aiosqlite", _AIOSQLITE_PROFILE)
+
+aiosqlite_statement_config = build_statement_config_from_profile(
+    _AIOSQLITE_PROFILE, statement_overrides={"dialect": "sqlite"}, json_serializer=to_json
+)

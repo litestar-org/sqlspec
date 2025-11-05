@@ -12,6 +12,12 @@ This guide provides specific instructions for the `psqlpy` adapter for PostgreSQ
 -   **Parameter Style:** `numeric` (e.g., `$1, $2`)
 -   **Type System:** Rust-level type conversion (not Python-level)
 
+## Parameter Profile
+
+-   **Registry Key:** `"psqlpy"`
+-   **JSON Strategy:** `helper` (shared JSON serializer applied before Rust-side codecs)
+-   **Extras:** Decimal writes coerce through `_decimal_to_float` to match Rust numeric expectations
+
 ## Architecture
 
 Psqlpy handles type conversion differently than other PostgreSQL drivers:
@@ -156,6 +162,86 @@ For comparison:
 - **psycopg**: Has `_type_handlers.py` with `register_pgvector_sync()` and `register_pgvector_async()`
 - **oracledb**: Has `_numpy_handlers.py` with `register_numpy_handlers()`
 - **psqlpy**: **No type handlers file** - all handled in Rust
+
+## MERGE Operations (PostgreSQL 15+)
+
+Psqlpy supports MERGE operations for bulk upserts using PostgreSQL's native MERGE statement with `jsonb_to_recordset()`.
+
+### Single Row Upsert
+
+```python
+from sqlspec import sql
+
+async with config.provide_session() as session:
+    query = (
+        sql.merge_
+        .into("products", alias="t")
+        .using({"id": 1, "name": "Widget", "price": 19.99}, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name", price="src.price")
+        .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price")
+    )
+
+    result = await session.execute(query)
+    print(f"Rows affected: {result.rows_affected}")
+```
+
+### Bulk Upsert (High Performance)
+
+For 100+ rows, Psqlpy automatically uses `jsonb_to_recordset()` for optimal performance:
+
+```python
+from decimal import Decimal
+
+products = [
+    {"id": 1, "name": "Widget", "price": Decimal("19.99")},
+    {"id": 2, "name": "Gadget", "price": Decimal("29.99")},
+    # ... up to 1000+ rows
+]
+
+query = (
+    sql.merge_
+    .into("products", alias="t")
+    .using(products, alias="src")
+    .on("t.id = src.id")
+    .when_matched_then_update(name="src.name", price="src.price")
+    .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price")
+)
+
+result = await session.execute(query)
+print(f"Upserted {result.rows_affected} rows")
+```
+
+Generated SQL uses PostgreSQL's efficient JSON-based strategy:
+
+```sql
+MERGE INTO products AS t
+USING (
+  SELECT * FROM jsonb_to_recordset($1) AS src(id INTEGER, name TEXT, price NUMERIC)
+) AS src
+ON t.id = src.id
+WHEN MATCHED THEN UPDATE SET name = src.name, price = src.price
+WHEN NOT MATCHED THEN INSERT (id, name, price) VALUES (src.id, src.name, src.price)
+```
+
+### Unified Upsert API
+
+Use `sql.upsert()` for database-agnostic upsert operations:
+
+```python
+upsert_query = (
+    sql.upsert("products", dialect="postgres")
+    .using([{"id": 1, "name": "Widget", "price": 19.99}], alias="src")
+    .on("t.id = src.id")
+    .when_matched_then_update(name="src.name", price="src.price")
+    .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price")
+)
+```
+
+For comprehensive examples and migration guides, see:
+
+- [MERGE Statement Builder Guide](/guides/builder/merge.md)
+- [Unified Upsert API Guide](/guides/upsert.md)
 
 ## Best Practices
 

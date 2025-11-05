@@ -2,19 +2,25 @@
 
 from collections.abc import Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb._types import DuckDBConnection
-from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, duckdb_statement_config
+from sqlspec.adapters.duckdb.driver import (
+    DuckDBCursor,
+    DuckDBDriver,
+    DuckDBExceptionHandler,
+    build_duckdb_statement_config,
+)
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
-from sqlspec.config import SyncDatabaseConfig
+from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig, SyncDatabaseConfig
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 __all__ = (
     "DuckDBConfig",
@@ -177,6 +183,11 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
     connection_type: "ClassVar[type[DuckDBConnection]]" = DuckDBConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
+    storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed", "rows_per_chunk", "manifest")
 
     def __init__(
         self,
@@ -187,7 +198,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         statement_config: "StatementConfig | None" = None,
         driver_features: "DuckDBDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize DuckDB configuration.
 
@@ -203,22 +214,25 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         """
         if pool_config is None:
             pool_config = {}
-        if "database" not in pool_config:
-            pool_config["database"] = ":memory:shared_db"
+        pool_config.setdefault("database", ":memory:shared_db")
 
         if pool_config.get("database") in {":memory:", ""}:
             pool_config["database"] = ":memory:shared_db"
 
         processed_features = dict(driver_features) if driver_features else {}
-        if "enable_uuid_conversion" not in processed_features:
-            processed_features["enable_uuid_conversion"] = True
+        processed_features.setdefault("enable_uuid_conversion", True)
+        serializer = processed_features.setdefault("json_serializer", to_json)
+
+        base_statement_config = statement_config or build_duckdb_statement_config(
+            json_serializer=cast("Callable[[Any], str]", serializer)
+        )
 
         super().__init__(
             bind_key=bind_key,
             pool_config=dict(pool_config),
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or duckdb_statement_config,
+            statement_config=base_statement_config,
             driver_features=processed_features,
             extension_config=extension_config,
         )
@@ -321,7 +335,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             )
             yield driver
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for DuckDB types.
 
         This provides all DuckDB-specific types that Litestar needs to recognize
@@ -332,5 +346,16 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update({"DuckDBConnection": DuckDBConnection, "DuckDBCursor": DuckDBCursor})
+        namespace.update({
+            "DuckDBConnection": DuckDBConnection,
+            "DuckDBConnectionParams": DuckDBConnectionParams,
+            "DuckDBConnectionPool": DuckDBConnectionPool,
+            "DuckDBCursor": DuckDBCursor,
+            "DuckDBDriver": DuckDBDriver,
+            "DuckDBDriverFeatures": DuckDBDriverFeatures,
+            "DuckDBExceptionHandler": DuckDBExceptionHandler,
+            "DuckDBExtensionConfig": DuckDBExtensionConfig,
+            "DuckDBPoolParams": DuckDBPoolParams,
+            "DuckDBSecretConfig": DuckDBSecretConfig,
+        })
         return namespace

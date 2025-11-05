@@ -36,23 +36,17 @@ class StorageRegistry:
     unless explicitly overridden.
 
     Examples:
-        # Direct URI access to storage containers
         backend = registry.get("s3://my-bucket")
         backend = registry.get("file:///tmp/data")
         backend = registry.get("gs://my-gcs-bucket")
 
-        # Named store pattern for environment-specific backends
-        # Development
         registry.register_alias("my_app_store", "file:///tmp/dev_data")
 
-        # Production
         registry.register_alias("my_app_store", "s3://prod-bucket/data")
 
-        # Access from anywhere in your app
-        store = registry.get("my_app_store")  # Works in both environments
+        store = registry.get("my_app_store")
 
-        # Force specific backend when multiple options available
-        backend = registry.get("s3://bucket", backend="fsspec")  # Force fsspec over obstore
+        backend = registry.get("s3://bucket", backend="fsspec")
     """
 
     __slots__ = ("_alias_configs", "_aliases", "_cache", "_instances")
@@ -117,7 +111,6 @@ class StorageRegistry:
         if isinstance(uri_or_alias, Path):
             uri_or_alias = f"file://{uri_or_alias.resolve()}"
 
-        # Include backend in cache key to ensure different backends for same URI are cached separately
         cache_params = dict(kwargs)
         if backend:
             cache_params["__backend__"] = backend
@@ -168,40 +161,33 @@ class StorageRegistry:
 
         scheme = self._get_scheme(uri)
 
-        # NEW: Prefer obstore for local files when available
         if scheme in {None, "file"}:
-            # Try obstore first for async performance
             if OBSTORE_INSTALLED:
                 try:
                     return self._create_backend("obstore", uri, **kwargs)
                 except (ValueError, ImportError, NotImplementedError):
                     pass
 
-            # Fallback to fsspec if available
             if FSSPEC_INSTALLED:
                 try:
                     return self._create_backend("fsspec", uri, **kwargs)
                 except (ValueError, ImportError, NotImplementedError):
                     pass
 
-            # Final fallback: local zero-dependency backend
             return self._create_backend("local", uri, **kwargs)
 
-        # For cloud schemes, prefer obstore over fsspec
         if scheme not in FSSPEC_ONLY_SCHEMES and OBSTORE_INSTALLED:
             try:
                 return self._create_backend("obstore", uri, **kwargs)
             except (ValueError, ImportError, NotImplementedError):
                 pass
 
-        # Try fsspec if available
         if FSSPEC_INSTALLED:
             try:
                 return self._create_backend("fsspec", uri, **kwargs)
             except (ValueError, ImportError, NotImplementedError):
                 pass
 
-        # No backend available
         msg = f"No backend available for URI scheme '{scheme}'. Install obstore or fsspec for cloud storage support."
         raise MissingDependencyError(msg)
 
@@ -219,7 +205,6 @@ class StorageRegistry:
         """
         scheme = self._get_scheme(uri)
 
-        # NEW: For local files, prefer obstore > fsspec > local
         if scheme in {None, "file"}:
             if OBSTORE_INSTALLED:
                 return self._get_backend_class("obstore")
@@ -227,14 +212,12 @@ class StorageRegistry:
                 return self._get_backend_class("fsspec")
             return self._get_backend_class("local")
 
-        # FSSpec-only schemes require FSSpec
         if scheme in FSSPEC_ONLY_SCHEMES:
             if not FSSPEC_INSTALLED:
                 msg = f"Scheme '{scheme}' requires fsspec. Install with: pip install fsspec"
                 raise MissingDependencyError(msg)
             return self._get_backend_class("fsspec")
 
-        # For cloud schemes, prefer obstore
         if OBSTORE_INSTALLED:
             return self._get_backend_class("obstore")
 

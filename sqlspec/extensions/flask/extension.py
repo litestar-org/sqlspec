@@ -96,6 +96,7 @@ class SQLSpecPlugin:
         commit_mode = flask_config.get("commit_mode", DEFAULT_COMMIT_MODE)
         extra_commit_statuses = flask_config.get("extra_commit_statuses")
         extra_rollback_statuses = flask_config.get("extra_rollback_statuses")
+        disable_di = flask_config.get("disable_di", False)
 
         is_async = isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig))
 
@@ -107,6 +108,7 @@ class SQLSpecPlugin:
             extra_commit_statuses=extra_commit_statuses,
             extra_rollback_statuses=extra_rollback_statuses,
             is_async=is_async,
+            disable_di=disable_di,
         )
 
     def init_app(self, app: "Flask") -> None:
@@ -143,9 +145,11 @@ class SQLSpecPlugin:
 
         app.extensions["sqlspec"] = {"plugin": self, "pools": pools}
 
-        app.before_request(self._before_request_handler)
-        app.after_request(self._after_request_handler)
-        app.teardown_appcontext(self._teardown_appcontext_handler)
+        if any(not state.disable_di for state in self._config_states):
+            app.before_request(self._before_request_handler)
+            app.after_request(self._after_request_handler)
+            app.teardown_appcontext(self._teardown_appcontext_handler)
+
         self._register_shutdown_hook()
 
         logger.debug("SQLSpec Flask extension initialized")
@@ -186,6 +190,9 @@ class SQLSpecPlugin:
         from flask import current_app, g
 
         for config_state in self._config_states:
+            if config_state.disable_di:
+                continue
+
             if config_state.config.supports_connection_pooling:
                 pool = current_app.extensions["sqlspec"]["pools"][config_state.session_key]
                 conn_ctx = config_state.config.provide_connection(pool)
@@ -215,6 +222,9 @@ class SQLSpecPlugin:
         from flask import g
 
         for config_state in self._config_states:
+            if config_state.disable_di:
+                continue
+
             if config_state.commit_mode == "manual":
                 continue
 
@@ -242,6 +252,9 @@ class SQLSpecPlugin:
         from flask import g
 
         for config_state in self._config_states:
+            if config_state.disable_di:
+                continue
+
             connection = getattr(g, config_state.connection_key, None)
             ctx_key = f"{config_state.connection_key}_ctx"
             conn_ctx = getattr(g, ctx_key, None)

@@ -7,7 +7,7 @@ from litestar import Litestar, get
 from docs.examples.shared.configs import sqlite_registry
 from docs.examples.shared.data import ARTICLES, CREATE_ARTICLES
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
 registry = sqlite_registry()

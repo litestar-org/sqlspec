@@ -1,7 +1,8 @@
 from typing import TYPE_CHECKING, Any, overload
 
-from fastapi import Request
+from fastapi import FastAPI, Request
 
+from sqlspec.base import SQLSpec
 from sqlspec.extensions.fastapi.providers import DEPENDENCY_DEFAULTS
 from sqlspec.extensions.fastapi.providers import provide_filters as _provide_filters
 from sqlspec.extensions.starlette.extension import SQLSpecPlugin as _StarlettePlugin
@@ -10,7 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
-    from sqlspec.core.filters import FilterTypes
+    from sqlspec.core import FilterTypes
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.extensions.fastapi.providers import DependencyDefaults, FilterConfig
 
@@ -49,6 +50,15 @@ class SQLSpecPlugin(_StarlettePlugin):
             result = await db.execute("SELECT * FROM users")
             return {"users": result.all()}
     """
+
+    def __init__(self, sqlspec: SQLSpec, app: "FastAPI | None" = None) -> None:
+        """Initialize SQLSpec FastAPI extension.
+
+        Args:
+            sqlspec: Pre-configured SQLSpec instance with registered configs.
+            app: Optional FastAPI application to initialize immediately.
+        """
+        super().__init__(sqlspec, app)
 
     @overload
     def provide_session(

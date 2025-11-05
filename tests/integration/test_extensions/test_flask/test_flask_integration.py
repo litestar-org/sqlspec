@@ -3,14 +3,13 @@
 from typing import Any
 
 import pytest
-
-pytest.importorskip("flask")
-
 from flask import Flask
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.extensions.flask import SQLSpecPlugin
+
+pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 def test_flask_manual_mode_sync_sqlite() -> None:

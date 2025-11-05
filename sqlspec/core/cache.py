@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
+from sqlspec.core.pipeline import get_statement_pipeline_metrics, reset_statement_pipeline_cache
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -40,6 +41,8 @@ __all__ = (
     "get_cache",
     "get_cache_config",
     "get_default_cache",
+    "get_pipeline_metrics",
+    "reset_pipeline_registry",
 )
 
 T = TypeVar("T")
@@ -768,3 +771,15 @@ class FiltersView:
                 filter_objects.append(Filter(f.field_name, f.operation, f.value))
 
         return canonicalize_filters(filter_objects)
+
+
+def get_pipeline_metrics() -> "list[dict[str, Any]]":
+    """Return metrics for the shared statement pipeline cache when enabled."""
+
+    return get_statement_pipeline_metrics()
+
+
+def reset_pipeline_registry() -> None:
+    """Clear shared statement pipeline caches and metrics."""
+
+    reset_statement_pipeline_cache()

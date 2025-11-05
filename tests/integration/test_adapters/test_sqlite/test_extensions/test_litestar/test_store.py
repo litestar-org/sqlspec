@@ -9,7 +9,7 @@ import pytest
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
 
-pytestmark = [pytest.mark.sqlite, pytest.mark.integration]
+pytestmark = [pytest.mark.sqlite, pytest.mark.integration, pytest.mark.xdist_group("sqlite")]
 
 
 @pytest.fixture

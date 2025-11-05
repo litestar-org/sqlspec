@@ -465,17 +465,15 @@ def fsspec_s3_backend_optional(minio_service: "MinioService", minio_default_buck
 
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    return FSSpecBackend.from_config(
-        {
-            "protocol": "s3",
-            "fs_config": {
-                "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-                "key": minio_service.access_key,
-                "secret": minio_service.secret_key,
-            },
-            "base_path": minio_default_bucket_name,
-        }
-    )
+    return FSSpecBackend.from_config({
+        "protocol": "s3",
+        "fs_config": {
+            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
+            "key": minio_service.access_key,
+            "secret": minio_service.secret_key,
+        },
+        "base_path": minio_default_bucket_name,
+    })
 
 
 @pytest.fixture
@@ -563,22 +561,21 @@ def test_local_backend_error_handling(tmp_path: Path) -> None:
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
 def test_fsspec_s3_error_handling(minio_service: "MinioService", minio_default_bucket_name: str) -> None:
     """Test FSSpec S3 backend error handling."""
+    from sqlspec.exceptions import FileNotFoundInStorageError
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    backend = FSSpecBackend.from_config(
-        {
-            "protocol": "s3",
-            "fs_config": {
-                "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-                "key": minio_service.access_key,
-                "secret": minio_service.secret_key,
-            },
-            "base_path": minio_default_bucket_name,
-        }
-    )
+    backend = FSSpecBackend.from_config({
+        "protocol": "s3",
+        "fs_config": {
+            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
+            "key": minio_service.access_key,
+            "secret": minio_service.secret_key,
+        },
+        "base_path": minio_default_bucket_name,
+    })
 
     # Test reading nonexistent file
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FileNotFoundInStorageError):
         backend.read_text("nonexistent.txt")
 
 
@@ -730,17 +727,15 @@ def test_fsspec_s3_arrow_operations(minio_service: "MinioService", minio_default
     """Test FSSpec S3 backend Arrow operations if pyarrow is available."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    backend = FSSpecBackend.from_config(
-        {
-            "protocol": "s3",
-            "fs_config": {
-                "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-                "key": minio_service.access_key,
-                "secret": minio_service.secret_key,
-            },
-            "base_path": minio_default_bucket_name,
-        }
-    )
+    backend = FSSpecBackend.from_config({
+        "protocol": "s3",
+        "fs_config": {
+            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
+            "key": minio_service.access_key,
+            "secret": minio_service.secret_key,
+        },
+        "base_path": minio_default_bucket_name,
+    })
 
     import pyarrow as pa
 
@@ -853,17 +848,15 @@ def test_fsspec_s3_metadata_operations(minio_service: "MinioService", minio_defa
     """Test FSSpec S3 backend metadata operations."""
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    backend = FSSpecBackend.from_config(
-        {
-            "protocol": "s3",
-            "fs_config": {
-                "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-                "key": minio_service.access_key,
-                "secret": minio_service.secret_key,
-            },
-            "base_path": minio_default_bucket_name,
-        }
-    )
+    backend = FSSpecBackend.from_config({
+        "protocol": "s3",
+        "fs_config": {
+            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
+            "key": minio_service.access_key,
+            "secret": minio_service.secret_key,
+        },
+        "base_path": minio_default_bucket_name,
+    })
 
     # Test S3 metadata
     test_path = "s3_metadata_test.txt"

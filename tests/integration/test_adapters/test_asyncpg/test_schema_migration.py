@@ -6,6 +6,8 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.migrations.tracker import AsyncMigrationTracker
 
+pytestmark = pytest.mark.xdist_group("postgres")
+
 
 def _create_config(postgres_service: PostgresService) -> AsyncpgConfig:
     """Create AsyncpgConfig from PostgresService fixture."""

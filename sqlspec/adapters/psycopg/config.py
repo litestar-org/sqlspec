@@ -9,21 +9,34 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.psycopg._type_handlers import register_pgvector_async, register_pgvector_sync
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncCursor,
     PsycopgAsyncDriver,
+    PsycopgAsyncExceptionHandler,
     PsycopgSyncCursor,
     PsycopgSyncDriver,
+    PsycopgSyncExceptionHandler,
+    build_psycopg_statement_config,
     psycopg_statement_config,
 )
-from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+from sqlspec.config import (
+    ADKConfig,
+    AsyncDatabaseConfig,
+    FastAPIConfig,
+    FlaskConfig,
+    LitestarConfig,
+    StarletteConfig,
+    SyncDatabaseConfig,
+)
 from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
@@ -74,9 +87,13 @@ class PsycopgDriverFeatures(TypedDict):
         Provides automatic conversion between Python objects and PostgreSQL vector types.
         Enables vector similarity operations and index support.
         Set to False to disable pgvector support even when package is available.
+    json_serializer: Custom JSON serializer for StatementConfig parameter handling.
+    json_deserializer: Custom JSON deserializer reference stored alongside the serializer for parity with asyncpg.
     """
 
     enable_pgvector: NotRequired[bool]
+    json_serializer: NotRequired["Callable[[Any], str]"]
+    json_deserializer: NotRequired["Callable[[str], Any]"]
 
 
 __all__ = (
@@ -96,6 +113,10 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     driver_type: "ClassVar[type[PsycopgSyncDriver]]" = PsycopgSyncDriver
     connection_type: "ClassVar[type[PsycopgSyncConnection]]" = PsycopgSyncConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
 
     def __init__(
         self,
@@ -106,7 +127,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize Psycopg synchronous configuration.
 
@@ -124,17 +145,17 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
 
-        if driver_features is None:
-            driver_features = {}
-        if "enable_pgvector" not in driver_features:
-            driver_features["enable_pgvector"] = PGVECTOR_INSTALLED
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
+        processed_driver_features.setdefault("json_serializer", serializer)
+        processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or psycopg_statement_config,
-            driver_features=driver_features,
+            statement_config=statement_config or build_psycopg_statement_config(json_serializer=serializer),
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )
@@ -166,8 +187,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                     conn.autocommit = autocommit_setting
 
                 if self.driver_features.get("enable_pgvector", False):
-                    from sqlspec.adapters.psycopg._type_handlers import register_pgvector_sync
-
                     register_pgvector_sync(conn)
 
             pool_parameters["configure"] = all_config.pop("configure", configure_connection)
@@ -267,7 +286,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self.pool_instance = self.create_pool()
         return self.pool_instance
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for Psycopg types.
 
         This provides all Psycopg-specific types that Litestar needs to recognize
@@ -277,7 +296,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"PsycopgSyncConnection": PsycopgSyncConnection, "PsycopgSyncCursor": PsycopgSyncCursor})
+        namespace.update({
+            "PsycopgConnectionParams": PsycopgConnectionParams,
+            "PsycopgPoolParams": PsycopgPoolParams,
+            "PsycopgSyncConnection": PsycopgSyncConnection,
+            "PsycopgSyncCursor": PsycopgSyncCursor,
+            "PsycopgSyncDriver": PsycopgSyncDriver,
+            "PsycopgSyncExceptionHandler": PsycopgSyncExceptionHandler,
+        })
         return namespace
 
 
@@ -287,6 +313,10 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
     connection_type: "ClassVar[type[PsycopgAsyncConnection]]" = PsycopgAsyncConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    supports_native_parquet_import: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -297,7 +327,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
@@ -315,17 +345,17 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
 
-        if driver_features is None:
-            driver_features = {}
-        if "enable_pgvector" not in driver_features:
-            driver_features["enable_pgvector"] = PGVECTOR_INSTALLED
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
+        processed_driver_features.setdefault("json_serializer", serializer)
+        processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
 
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or psycopg_statement_config,
-            driver_features=driver_features,
+            statement_config=statement_config or build_psycopg_statement_config(json_serializer=serializer),
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )
@@ -354,10 +384,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             if autocommit_setting is not None:
                 await conn.set_autocommit(autocommit_setting)
 
-            if self.driver_features.get("enable_pgvector", False):
-                from sqlspec.adapters.psycopg._type_handlers import register_pgvector_async
-
-                await register_pgvector_async(conn)
+                if self.driver_features.get("enable_pgvector", False):
+                    await register_pgvector_async(conn)
 
         pool_parameters["configure"] = all_config.pop("configure", configure_connection)
 
@@ -448,7 +476,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             self.pool_instance = await self.create_pool()
         return self.pool_instance
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for Psycopg async types.
 
         This provides all Psycopg async-specific types that Litestar needs to recognize
@@ -458,5 +486,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"PsycopgAsyncConnection": PsycopgAsyncConnection, "PsycopgAsyncCursor": PsycopgAsyncCursor})
+        namespace.update({
+            "PsycopgAsyncConnection": PsycopgAsyncConnection,
+            "PsycopgAsyncCursor": PsycopgAsyncCursor,
+            "PsycopgAsyncDriver": PsycopgAsyncDriver,
+            "PsycopgAsyncExceptionHandler": PsycopgAsyncExceptionHandler,
+            "PsycopgConnectionParams": PsycopgConnectionParams,
+            "PsycopgPoolParams": PsycopgPoolParams,
+        })
         return namespace
