@@ -58,10 +58,11 @@ PostgreSQL Configuration (asyncpg)
 PostgreSQL Configuration (psycopg)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. note::
-
-   The `PsycopgConfig` class referenced here is for documentation purposes only and may not be present in the codebase. Future releases may include this feature if demand warrants.
-
+.. literalinclude:: /examples/usage/test_configuration_5.py
+   :language: python
+   :caption: `psycopg async configuration`
+   :lines: 2-19
+   :dedent: 2
 
 MySQL Configuration (asyncmy)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
