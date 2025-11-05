@@ -14,6 +14,7 @@ from sqlspec.adapters.asyncmy._types import AsyncmyConnection
 from sqlspec.adapters.asyncmy.driver import (
     AsyncmyCursor,
     AsyncmyDriver,
+    AsyncmyExceptionHandler,
     asyncmy_statement_config,
     build_asyncmy_statement_config,
 )
@@ -121,10 +122,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
 
-        if "host" not in processed_pool_config:
-            processed_pool_config["host"] = "localhost"
-        if "port" not in processed_pool_config:
-            processed_pool_config["port"] = 3306
+        processed_pool_config.setdefault("host", "localhost")
+        processed_pool_config.setdefault("port", 3306)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         serializer = processed_driver_features.setdefault("json_serializer", to_json)
@@ -221,7 +220,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             self.pool_instance = await self.create_pool()
         return self.pool_instance
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for Asyncmy types.
 
         Returns:
@@ -231,7 +230,12 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         namespace = super().get_signature_namespace()
         namespace.update({
             "AsyncmyConnection": AsyncmyConnection,
-            "AsyncmyPool": AsyncmyPool,
+            "AsyncmyConnectionParams": AsyncmyConnectionParams,
             "AsyncmyCursor": AsyncmyCursor,
+            "AsyncmyDriver": AsyncmyDriver,
+            "AsyncmyDriverFeatures": AsyncmyDriverFeatures,
+            "AsyncmyExceptionHandler": AsyncmyExceptionHandler,
+            "AsyncmyPool": AsyncmyPool,
+            "AsyncmyPoolParams": AsyncmyPoolParams,
         })
         return namespace

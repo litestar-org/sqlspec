@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.adbc._types import AdbcConnection
-from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, get_adbc_statement_config
+from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, get_adbc_statement_config
 from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -420,13 +420,18 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         return config
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for types.
 
         Returns:
             Dictionary mapping type names to types.
         """
-
         namespace = super().get_signature_namespace()
-        namespace.update({"AdbcConnection": AdbcConnection, "AdbcCursor": AdbcCursor})
+        namespace.update({
+            "AdbcConnection": AdbcConnection,
+            "AdbcConnectionParams": AdbcConnectionParams,
+            "AdbcCursor": AdbcCursor,
+            "AdbcDriver": AdbcDriver,
+            "AdbcExceptionHandler": AdbcExceptionHandler,
+        })
         return namespace
