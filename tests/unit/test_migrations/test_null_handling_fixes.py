@@ -1,12 +1,13 @@
 """Test cases for null handling fixes in migration system."""
 
-import pytest
 import tempfile
 from pathlib import Path
 
-from sqlspec.utils.version import parse_version, is_sequential_version, is_timestamp_version
+import pytest
+
 from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.validation import detect_out_of_order_migrations
+from sqlspec.utils.version import is_sequential_version, is_timestamp_version, parse_version
 
 
 class TestNullHandlingFixes:
@@ -34,7 +35,7 @@ class TestNullHandlingFixes:
         assert result.type.value == "sequential"
         assert result.sequence == 1
 
-        result = parse_version("9999") 
+        result = parse_version("9999")
         assert result.type.value == "sequential"
         assert result.sequence == 9999
 
@@ -70,8 +71,7 @@ class TestNullHandlingFixes:
         """Test migration validation filters None values properly."""
         # Should not crash with None values in lists
         gaps = detect_out_of_order_migrations(
-            pending_versions=["0001", None, "0003", ""],
-            applied_versions=[None, "0002", "   ", "0004"]
+            pending_versions=["0001", None, "0003", ""], applied_versions=[None, "0002", "   ", "0004"]
         )
 
         # Should only process valid versions
@@ -79,24 +79,24 @@ class TestNullHandlingFixes:
 
     def test_sequential_pattern_edge_cases(self):
         """Test sequential pattern handles edge cases."""
-        assert is_sequential_version("0001") == True
-        assert is_sequential_version("9999") == True
-        assert is_sequential_version("10000") == True
-        assert is_sequential_version("20251011120000") == False  # Timestamp
-        assert is_sequential_version("abc") == False
-        assert is_sequential_version("") == False
-        assert is_sequential_version(None) == False
+        assert is_sequential_version("0001")
+        assert is_sequential_version("9999")
+        assert is_sequential_version("10000")
+        assert not is_sequential_version("20251011120000")  # Timestamp
+        assert not is_sequential_version("abc")
+        assert not is_sequential_version("")
+        assert not is_sequential_version(None)
 
     def test_timestamp_pattern_edge_cases(self):
         """Test timestamp pattern handles edge cases."""
-        assert is_timestamp_version("20251011120000") == True
-        assert is_timestamp_version("20250101000000") == True
-        assert is_timestamp_version("20251231235959") == True
-        assert is_timestamp_version("0001") == False  # Sequential
-        assert is_timestamp_version("2025101112000") == False  # Too short
-        assert is_timestamp_version("202510111200000") == False  # Too long
-        assert is_timestamp_version("") == False
-        assert is_timestamp_version(None) == False
+        assert is_timestamp_version("20251011120000")
+        assert is_timestamp_version("20250101000000")
+        assert is_timestamp_version("20251231235959")
+        assert not is_timestamp_version("0001")  # Sequential
+        assert not is_timestamp_version("2025101112000")  # Too short
+        assert not is_timestamp_version("202510111200000")  # Too long
+        assert not is_timestamp_version("")
+        assert not is_timestamp_version(None)
 
     def test_error_messages_are_descriptive(self):
         """Test that error messages are helpful for debugging."""

@@ -135,7 +135,7 @@ class MigrationVersion:
         return f"MigrationVersion({self.type.value}={self.raw})"
 
 
-def is_sequential_version(version_str: str) -> bool:
+def is_sequential_version(version_str: "str | None") -> bool:
     """Check if version string is sequential format.
 
     Sequential format: Any sequence of digits (0001, 42, 9999, 10000+).
@@ -144,7 +144,7 @@ def is_sequential_version(version_str: str) -> bool:
         version_str: Version string to check.
 
     Returns:
-        True if sequential format.
+        True if sequential format, False if None or whitespace.
 
     Examples:
         >>> is_sequential_version("0001")
@@ -155,11 +155,15 @@ def is_sequential_version(version_str: str) -> bool:
         True
         >>> is_sequential_version("20251011120000")
         False
+        >>> is_sequential_version(None)
+        False
     """
+    if version_str is None or not version_str.strip():
+        return False
     return bool(SEQUENTIAL_PATTERN.match(version_str))
 
 
-def is_timestamp_version(version_str: str) -> bool:
+def is_timestamp_version(version_str: "str | None") -> bool:
     """Check if version string is timestamp format.
 
     Timestamp format: 14-digit YYYYMMDDHHmmss (20251011120000).
@@ -168,14 +172,18 @@ def is_timestamp_version(version_str: str) -> bool:
         version_str: Version string to check.
 
     Returns:
-        True if timestamp format.
+        True if timestamp format, False if None or whitespace.
 
     Examples:
         >>> is_timestamp_version("20251011120000")
         True
         >>> is_timestamp_version("0001")
         False
+        >>> is_timestamp_version(None)
+        False
     """
+    if version_str is None or not version_str.strip():
+        return False
     if not TIMESTAMP_PATTERN.match(version_str):
         return False
 
@@ -187,7 +195,7 @@ def is_timestamp_version(version_str: str) -> bool:
         return True
 
 
-def parse_version(version_str: str) -> MigrationVersion:
+def parse_version(version_str: "str | None") -> MigrationVersion:
     """Parse version string into structured format.
 
     Supports:
@@ -202,7 +210,7 @@ def parse_version(version_str: str) -> MigrationVersion:
         Parsed migration version.
 
     Raises:
-        ValueError: If version format is invalid.
+        ValueError: If version format is invalid, None, or whitespace-only.
 
     Examples:
         >>> v = parse_version("0001")
@@ -219,7 +227,7 @@ def parse_version(version_str: str) -> MigrationVersion:
         >>> v.extension
         'litestar'
     """
-    if not version_str or version_str is None:
+    if version_str is None or not version_str.strip():
         msg = "Invalid migration version: version string is None or empty"
         raise ValueError(msg)
 

@@ -140,7 +140,7 @@ class MigrationFixer:
 
             rename.old_path.rename(rename.new_path)
 
-    def update_file_content(self, file_path: Path, old_version: str, new_version: str) -> None:
+    def update_file_content(self, file_path: Path, old_version: "str | None", new_version: "str | None") -> None:
         """Update SQL query names and version comments in file content.
 
         Transforms query names and version metadata from old version to new version:
@@ -153,8 +153,8 @@ class MigrationFixer:
 
         Args:
             file_path: Path to file to update.
-            old_version: Old version string.
-            new_version: New version string.
+            old_version: Old version string (None values skipped gracefully).
+            new_version: New version string (None values skipped gracefully).
 
         """
         if not old_version or not new_version:

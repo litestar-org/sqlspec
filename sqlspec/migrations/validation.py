@@ -14,6 +14,8 @@ from sqlspec.exceptions import OutOfOrderMigrationError
 from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.utils.version import MigrationVersion
 
 __all__ = ("MigrationGap", "detect_out_of_order_migrations", "format_out_of_order_warning")
@@ -39,7 +41,7 @@ class MigrationGap:
 
 
 def detect_out_of_order_migrations(
-    pending_versions: "list[str]", applied_versions: "list[str]"
+    pending_versions: "Sequence[str | None]", applied_versions: "Sequence[str | None]"
 ) -> "list[MigrationGap]":
     """Detect migrations created before already-applied migrations.
 
@@ -51,8 +53,8 @@ def detect_out_of_order_migrations(
     independent sequences within their own namespaces.
 
     Args:
-        pending_versions: List of migration versions not yet applied.
-        applied_versions: List of migration versions already applied.
+        pending_versions: List of migration versions not yet applied (may contain None).
+        applied_versions: List of migration versions already applied (may contain None).
 
     Returns:
         List of migration gaps where pending versions are older than applied.
@@ -62,9 +64,9 @@ def detect_out_of_order_migrations(
 
     gaps: list[MigrationGap] = []
 
-    # Filter out None values and empty strings
-    valid_applied = [v for v in applied_versions if v and v is not None]
-    valid_pending = [v for v in pending_versions if v and v is not None]
+    # Filter out None values, empty strings, and whitespace-only strings
+    valid_applied = [v for v in applied_versions if v is not None and v.strip()]
+    valid_pending = [v for v in pending_versions if v is not None and v.strip()]
 
     if not valid_applied or not valid_pending:
         return []
