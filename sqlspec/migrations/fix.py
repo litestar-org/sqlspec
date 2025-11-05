@@ -160,7 +160,7 @@ class MigrationFixer:
         if not old_version or not new_version:
             logger.warning("Skipping content update - missing version information")
             return
-            
+
         content = file_path.read_text(encoding="utf-8")
 
         up_pattern = re.compile(rf"(-- name:\s+migrate-){re.escape(old_version)}(-up)")

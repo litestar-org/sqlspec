@@ -65,7 +65,7 @@ def detect_out_of_order_migrations(
     # Filter out None values and empty strings
     valid_applied = [v for v in applied_versions if v and v is not None]
     valid_pending = [v for v in pending_versions if v and v is not None]
-    
+
     if not valid_applied or not valid_pending:
         return []
 

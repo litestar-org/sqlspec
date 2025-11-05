@@ -222,7 +222,7 @@ def parse_version(version_str: str) -> MigrationVersion:
     if not version_str or version_str is None:
         msg = "Invalid migration version: version string is None or empty"
         raise ValueError(msg)
-        
+
     extension_match = EXTENSION_PATTERN.match(version_str)
     if extension_match:
         extension_name = extension_match.group(1)
