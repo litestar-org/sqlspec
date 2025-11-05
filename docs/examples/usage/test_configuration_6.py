@@ -1,10 +1,13 @@
+MYSQL_PORT = 3306
+
+
 def test_asyncmy_config_setup() -> None:
     from sqlspec.adapters.asyncmy import AsyncmyConfig
 
     config = AsyncmyConfig(
         pool_config={
             "host": "localhost",
-            "port": 3306,
+            "port": MYSQL_PORT,
             "user": "myuser",
             "password": "mypassword",
             "database": "mydb",
@@ -14,4 +17,4 @@ def test_asyncmy_config_setup() -> None:
             "pool_recycle": 3600,
         }
     )
-    assert config.pool_config["port"] == 3306
+    assert config.pool_config["port"] == MYSQL_PORT

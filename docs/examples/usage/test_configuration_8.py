@@ -1,3 +1,6 @@
+MIN_POOL_SIZE = 10
+
+
 def test_asyncpg_pool_setup() -> None:
     from sqlspec.adapters.asyncpg import AsyncpgConfig
 
@@ -10,4 +13,4 @@ def test_asyncpg_pool_setup() -> None:
             "max_inactive_connection_lifetime": 300.0,
         }
     )
-    assert config.pool_config["min_size"] == 10
+    assert config.pool_config["min_size"] == MIN_POOL_SIZE

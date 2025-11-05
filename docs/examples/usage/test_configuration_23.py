@@ -32,6 +32,9 @@ def test_extension_config() -> None:
     }
 
 
+POSTGRES_PORT = 5433
+
+
 @pytest.mark.skipif(os.getenv("TEST_ASYNCPG", "0") != "1", reason="AsyncPG integration tests disabled")
 def test_environment_based_configuration() -> None:
     """Test environment-based configuration pattern."""
@@ -59,7 +62,7 @@ def test_environment_based_configuration() -> None:
         )
 
         assert config.pool_config["host"] == "testhost"
-        assert config.pool_config["port"] == 5433
+        assert config.pool_config["port"] == POSTGRES_PORT
         assert config.pool_config["user"] == "testuser"
         assert config.pool_config["password"] == "testpass"
         assert config.pool_config["database"] == "testdb"
