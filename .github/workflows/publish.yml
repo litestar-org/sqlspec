@@ -105,6 +105,7 @@ jobs:
           CIBW_ENVIRONMENT: "HATCH_BUILD_HOOKS_ENABLE=1 MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1"
 
           # Test the built wheels
+          CIBW_TEST_REQUIRES: "cloud-sql-python-connector cloud-alloydb-python-connector"
           CIBW_TEST_COMMAND: "python -c \"import sqlspec; print('MyPyC wheel test passed')\""
 
       - name: Upload wheel artifacts
