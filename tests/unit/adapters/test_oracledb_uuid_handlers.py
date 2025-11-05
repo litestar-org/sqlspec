@@ -4,8 +4,8 @@ import uuid
 from unittest.mock import Mock
 
 from sqlspec.adapters.oracledb._uuid_handlers import (
-    _input_type_handler,
-    _output_type_handler,
+    _input_type_handler,  # pyright: ignore
+    _output_type_handler,  # pyright: ignore
     register_uuid_handlers,
     uuid_converter_in,
     uuid_converter_out,
