@@ -8,7 +8,12 @@ from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
-from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver, build_bigquery_statement_config
+from sqlspec.adapters.bigquery.driver import (
+    BigQueryCursor,
+    BigQueryDriver,
+    BigQueryExceptionHandler,
+    build_bigquery_statement_config,
+)
 from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
@@ -134,10 +139,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             self.connection_config.update(extras)
 
         self.driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-
-        if "enable_uuid_conversion" not in self.driver_features:
-            self.driver_features["enable_uuid_conversion"] = True
-
+        self.driver_features.setdefault("enable_uuid_conversion", True)
         serializer = self.driver_features.setdefault("json_serializer", to_json)
 
         self._connection_instance: BigQueryConnection | None = self.driver_features.get("connection_instance")
@@ -263,7 +265,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             )
             yield driver
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for BigQuery types.
 
         Returns:
@@ -271,5 +273,11 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update({"BigQueryConnection": BigQueryConnection, "BigQueryCursor": BigQueryCursor})
+        namespace.update({
+            "BigQueryConnection": BigQueryConnection,
+            "BigQueryConnectionParams": BigQueryConnectionParams,
+            "BigQueryCursor": BigQueryCursor,
+            "BigQueryDriver": BigQueryDriver,
+            "BigQueryExceptionHandler": BigQueryExceptionHandler,
+        })
         return namespace
