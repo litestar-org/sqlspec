@@ -4,4 +4,4 @@ def test_pool_lifecycle() -> None:
 
     spec = SQLSpec()
     db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"}))
-    assert db.pool_config["dsn"] == "postgresql://localhost/db"
+    assert spec.configs[AsyncpgConfig].pool_config["dsn"] == "postgresql://localhost/db"

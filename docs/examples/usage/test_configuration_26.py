@@ -1,5 +1,6 @@
 """Test configuration example: Best practice - Tune pool sizes."""
 
+
 def test_tune_pool_sizes_best_practice() -> None:
     """Test pool sizing best practices for different workloads."""
 
@@ -13,6 +14,7 @@ def test_tune_pool_sizes_best_practice() -> None:
     assert io_bound_pool_config["min_size"] == 20
     assert io_bound_pool_config["max_size"] == 50
 
+
 def test_disable_security_checks_best_practice() -> None:
     """Test disabling security checks when necessary."""
 
@@ -20,7 +22,7 @@ def test_disable_security_checks_best_practice() -> None:
 
     # Example: Disabling security checks for trusted internal queries
     statement_config = StatementConfig(
-           dialect="postgres",
-               enable_validation=False,  # Skip security checks
-           )
+        dialect="postgres",
+        enable_validation=False,  # Skip security checks
+    )
     assert statement_config.enable_validation is False

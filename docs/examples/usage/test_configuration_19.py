@@ -14,11 +14,11 @@ def test_binding_multiple_configs() -> None:
 
         # Add multiple configurations
         sqlite_db = spec.add_config(SqliteConfig(pool_config={"database": tmp.name}))
-        postgres_db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}))
+        spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://..."}))
 
         # Use specific configuration
         with spec.provide_session(sqlite_db) as session:
             session.execute("SELECT 1")
 
-        assert sqlite_db.pool_config["database"] == tmp.name
-        assert postgres_db.pool_config["dsn"] == "postgresql://..."
+        assert spec.configs[SqliteConfig].pool_config["database"] == tmp.name
+        assert spec.configs[AsyncpgConfig].pool_config["dsn"] == "postgresql://..."

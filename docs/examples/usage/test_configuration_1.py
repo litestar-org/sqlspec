@@ -11,4 +11,4 @@ def test_sqlite_memory_db() -> None:
     # Use the database
     with spec.provide_session(db) as session:
         result = session.execute("SELECT 1")
-        assert result.fetchone()[0] == 1
+        assert result[0] == {"1": 1}

@@ -1,6 +1,5 @@
 """Test configuration example: Best practice - Clean up resources."""
 
-
 import pytest
 
 
