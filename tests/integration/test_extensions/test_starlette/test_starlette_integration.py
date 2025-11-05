@@ -2,6 +2,7 @@
 
 import tempfile
 
+import pytest
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -11,6 +12,8 @@ from starlette.testclient import TestClient
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.extensions.starlette import SQLSpecPlugin
+
+pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 def test_starlette_basic_query() -> None:

@@ -2,10 +2,13 @@
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from sqlspec.driver import VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.driver import SqliteDriver
+pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 def test_sqlite_data_dictionary_version_detection(sqlite_driver: "SqliteDriver") -> None:

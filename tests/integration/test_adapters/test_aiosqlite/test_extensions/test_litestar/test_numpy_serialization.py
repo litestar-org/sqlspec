@@ -22,7 +22,7 @@ from litestar.testing import TestClient
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
 
-pytestmark = [pytest.mark.integration, pytest.mark.aiosqlite, pytest.mark.xdist_group("aiosqlite-litestar")]
+pytestmark = [pytest.mark.integration, pytest.mark.aiosqlite, pytest.mark.xdist_group("sqlite")]
 
 
 def test_litestar_numpy_encoder_registered() -> None:

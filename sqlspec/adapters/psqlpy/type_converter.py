@@ -9,7 +9,7 @@ import re
 from functools import lru_cache
 from typing import Any, Final
 
-from sqlspec.core.type_conversion import BaseTypeConverter
+from sqlspec.core import BaseTypeConverter
 
 PG_SPECIFIC_REGEX: Final[re.Pattern[str]] = re.compile(
     r"^(?:"

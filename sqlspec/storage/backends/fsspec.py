@@ -1,12 +1,13 @@
 # pyright: reportPrivateUsage=false
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.storage._utils import resolve_storage_path
-from sqlspec.utils.module_loader import ensure_fsspec, ensure_pyarrow
+from sqlspec.storage._utils import import_pyarrow_parquet, resolve_storage_path
+from sqlspec.storage.errors import execute_sync_storage_operation
+from sqlspec.utils.module_loader import ensure_fsspec
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -158,7 +159,15 @@ class FSSpecBackend:
     def read_bytes(self, path: str | Path, **kwargs: Any) -> bytes:
         """Read bytes from an object."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
-        return self.fs.cat(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore
+        return cast(
+            "bytes",
+            execute_sync_storage_operation(
+                lambda: self.fs.cat(resolved_path, **kwargs),
+                backend=self.backend_type,
+                operation="read_bytes",
+                path=resolved_path,
+            ),
+        )
 
     def write_bytes(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
         """Write bytes to an object."""
@@ -169,8 +178,11 @@ class FSSpecBackend:
             if parent_dir and not self.fs.exists(parent_dir):
                 self.fs.makedirs(parent_dir, exist_ok=True)
 
-        with self.fs.open(resolved_path, mode="wb", **kwargs) as f:
-            f.write(data)  # pyright: ignore
+        def _action() -> None:
+            with self.fs.open(resolved_path, mode="wb", **kwargs) as file_obj:
+                file_obj.write(data)  # pyright: ignore
+
+        execute_sync_storage_operation(_action, backend=self.backend_type, operation="write_bytes", path=resolved_path)
 
     def read_text(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from an object."""
@@ -189,37 +201,65 @@ class FSSpecBackend:
     def delete(self, path: str | Path, **kwargs: Any) -> None:
         """Delete an object."""
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
-        self.fs.rm(resolved_path, **kwargs)
+        execute_sync_storage_operation(
+            lambda: self.fs.rm(resolved_path, **kwargs),
+            backend=self.backend_type,
+            operation="delete",
+            path=resolved_path,
+        )
 
     def copy(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Copy an object."""
         source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=False)
         dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=False)
-        self.fs.copy(source_path, dest_path, **kwargs)
+        execute_sync_storage_operation(
+            lambda: self.fs.copy(source_path, dest_path, **kwargs),
+            backend=self.backend_type,
+            operation="copy",
+            path=f"{source_path}->{dest_path}",
+        )
 
     def move(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Move an object."""
         source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=False)
         dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=False)
-        self.fs.mv(source_path, dest_path, **kwargs)
+        execute_sync_storage_operation(
+            lambda: self.fs.mv(source_path, dest_path, **kwargs),
+            backend=self.backend_type,
+            operation="move",
+            path=f"{source_path}->{dest_path}",
+        )
 
     def read_arrow(self, path: str | Path, **kwargs: Any) -> "ArrowTable":
         """Read an Arrow table from storage."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
+        pq = import_pyarrow_parquet()
 
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
-        with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
-            return pq.read_table(f)
+        return cast(
+            "ArrowTable",
+            execute_sync_storage_operation(
+                lambda: self._read_arrow(resolved_path, pq, kwargs),
+                backend=self.backend_type,
+                operation="read_arrow",
+                path=resolved_path,
+            ),
+        )
 
     def write_arrow(self, path: str | Path, table: "ArrowTable", **kwargs: Any) -> None:
         """Write an Arrow table to storage."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
+        pq = import_pyarrow_parquet()
 
         resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
-        with self.fs.open(resolved_path, mode="wb") as f:
-            pq.write_table(table, f, **kwargs)  # pyright: ignore
+
+        def _action() -> None:
+            with self.fs.open(resolved_path, mode="wb") as file_obj:
+                pq.write_table(table, file_obj, **kwargs)  # pyright: ignore
+
+        execute_sync_storage_operation(_action, backend=self.backend_type, operation="write_arrow", path=resolved_path)
+
+    def _read_arrow(self, resolved_path: str, pq: Any, options: "dict[str, Any]") -> Any:
+        with self.fs.open(resolved_path, mode="rb", **options) as file_obj:
+            return pq.read_table(file_obj)
 
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects with optional prefix."""
@@ -273,15 +313,23 @@ class FSSpecBackend:
         return f"{self._fs_uri}{resolved_path}"
 
     def _stream_file_batches(self, obj_path: str | Path) -> "Iterator[ArrowRecordBatch]":
-        import pyarrow.parquet as pq
+        pq = import_pyarrow_parquet()
 
-        with self.fs.open(obj_path, mode="rb") as f:
-            parquet_file = pq.ParquetFile(f)  # pyright: ignore[reportArgumentType]
+        file_handle = execute_sync_storage_operation(
+            lambda: self.fs.open(obj_path, mode="rb"),
+            backend=self.backend_type,
+            operation="stream_open",
+            path=str(obj_path),
+        )
+
+        with file_handle as stream:
+            parquet_file = execute_sync_storage_operation(
+                lambda: pq.ParquetFile(stream), backend=self.backend_type, operation="stream_arrow", path=str(obj_path)
+            )
             yield from parquet_file.iter_batches()
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
-        ensure_pyarrow()
-
+        import_pyarrow_parquet()
         for obj_path in self.glob(pattern, **kwargs):
             yield from self._stream_file_batches(obj_path)
 
@@ -303,8 +351,6 @@ class FSSpecBackend:
         Returns:
             AsyncIterator of Arrow record batches
         """
-        ensure_pyarrow()
-
         return _ArrowStreamer(self, pattern, **kwargs)
 
     async def read_text_async(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:

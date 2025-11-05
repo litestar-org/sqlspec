@@ -272,6 +272,92 @@ Always preview before applying:
 sqlspec --config myapp.config fix --dry-run
 ```
 
+## Programmatic API
+
+For Python-based migration automation, use the config method directly instead of CLI commands:
+
+### Async Configuration
+
+```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://user:pass@localhost/mydb"},
+    migration_config={
+        "enabled": True,
+        "script_location": "migrations",
+    }
+)
+
+# Preview conversions
+await config.fix_migrations(dry_run=True)
+
+# Apply conversions (auto-approve)
+await config.fix_migrations(dry_run=False, update_database=True, yes=True)
+
+# Files only (skip database update)
+await config.fix_migrations(dry_run=False, update_database=False, yes=True)
+```
+
+### Sync Configuration
+
+```python
+from sqlspec.adapters.sqlite import SqliteConfig
+
+config = SqliteConfig(
+    pool_config={"database": "myapp.db"},
+    migration_config={
+        "enabled": True,
+        "script_location": "migrations",
+    }
+)
+
+# Preview conversions (no await needed)
+config.fix_migrations(dry_run=True)
+
+# Apply conversions (auto-approve)
+config.fix_migrations(dry_run=False, update_database=True, yes=True)
+
+# Files only (skip database update)
+config.fix_migrations(dry_run=False, update_database=False, yes=True)
+```
+
+### Use Cases
+
+The programmatic API is useful for:
+
+- **Custom deployment scripts** - Integrate migration fixing into deployment automation
+- **Testing workflows** - Automate migration testing in CI/CD pipelines
+- **Framework integrations** - Build migration support into web framework startup hooks
+- **Monitoring tools** - Track migration conversions programmatically
+
+### Example: Custom Deployment Script
+
+```python
+import asyncio
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+async def deploy():
+    config = AsyncpgConfig(
+        pool_config={"dsn": "postgresql://..."},
+        migration_config={"script_location": "migrations"}
+    )
+
+    # Step 1: Convert migrations to sequential
+    print("Converting migrations to sequential format...")
+    await config.fix_migrations(dry_run=False, update_database=True, yes=True)
+
+    # Step 2: Apply all pending migrations
+    print("Applying migrations...")
+    await config.upgrade("head")
+
+    # Step 3: Verify current version
+    current = await config.get_current_migration(verbose=True)
+    print(f"Deployed to version: {current}")
+
+asyncio.run(deploy())
+```
+
 ## Best Practices
 
 ### 1. Always Use Version Control

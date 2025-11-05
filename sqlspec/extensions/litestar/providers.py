@@ -14,7 +14,7 @@ from litestar.di import Provide
 from litestar.params import Dependency, Parameter
 from typing_extensions import NotRequired
 
-from sqlspec.core.filters import (
+from sqlspec.core import (
     BeforeAfterFilter,
     FilterTypes,
     InCollectionFilter,

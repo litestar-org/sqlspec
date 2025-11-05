@@ -10,6 +10,72 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+Migration Convenience Methods on Config Classes
+------------------------------------------------
+
+Added migration methods directly to database configuration classes, eliminating the need to instantiate separate command objects.
+
+**What's New:**
+
+All database configs (both sync and async) now provide migration methods:
+
+- ``migrate_up()`` / ``upgrade()`` - Apply migrations up to a revision
+- ``migrate_down()`` / ``downgrade()`` - Rollback migrations
+- ``get_current_migration()`` - Check current version
+- ``create_migration()`` - Create new migration file
+- ``init_migrations()`` - Initialize migrations directory
+- ``stamp_migration()`` - Stamp database to specific revision
+- ``fix_migrations()`` - Convert timestamp to sequential migrations
+
+**Before (verbose):**
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.migrations.commands import AsyncMigrationCommands
+
+   config = AsyncpgConfig(
+       pool_config={"dsn": "postgresql://..."},
+       migration_config={"script_location": "migrations"}
+   )
+
+   commands = AsyncMigrationCommands(config)
+   await commands.upgrade("head")
+
+**After (recommended):**
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+   config = AsyncpgConfig(
+       pool_config={"dsn": "postgresql://..."},
+       migration_config={"script_location": "migrations"}
+   )
+
+   await config.upgrade("head")
+
+**Key Benefits:**
+
+- Simpler API - no need to import and instantiate command classes
+- Works with both sync and async adapters
+- Full backward compatibility - command classes still available
+- Cleaner test fixtures and deployment scripts
+
+**Async Adapters** (AsyncPG, Asyncmy, Aiosqlite, Psqlpy):
+
+.. code-block:: python
+
+   await config.migrate_up("head")
+   await config.create_migration("add users")
+
+**Sync Adapters** (SQLite, DuckDB):
+
+.. code-block:: python
+
+   config.migrate_up("head")  # No await needed
+   config.create_migration("add users")
+
 SQL Loader Graceful Error Handling
 -----------------------------------
 

@@ -183,6 +183,107 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 - **Parameter Style Abstraction**: Automatically converts between different parameter styles (?, :name, $1, %s)
 - **Type Safety**: Supports mapping results to Pydantic, msgspec, attrs, and other typed models
 - **Single-Pass Processing**: Parse once → transform once → validate once - SQL object is single source of truth
+- **Abstract Methods with Concrete Implementations**: Protocol defines abstract methods, base classes provide concrete sync/async implementations
+
+### Driver Parameter Profile Registry
+
+- All adapter parameter defaults live in `DriverParameterProfile` entries inside `sqlspec/core/parameters.py`.
+- Use lowercase adapter keys (e.g., `"asyncpg"`, `"duckdb"`) and populate every required field: default style, supported styles, execution style, native list expansion flags, JSON strategy, and optional extras.
+- JSON behaviour is controlled through `json_serializer_strategy`:
+    - `"helper"`: call `ParameterStyleConfig.with_json_serializers()` (dict/list/tuple auto-encode)
+    - `"driver"`: defer to driver codecs while surfacing serializer references for later registration
+    - `"none"`: skip JSON helpers entirely (reserve for adapters that must not touch JSON)
+- Extras should encapsulate adapter-specific tweaks (e.g., `type_coercion_overrides`, `json_tuple_strategy`). Document new extras inline and keep them immutable.
+- Always build `StatementConfig` via `build_statement_config_from_profile()` and pass adapter-specific overrides through the helper instead of instantiating configs manually in drivers.
+- When introducing a new adapter, add its profile, update relevant guides, and extend unit coverage so each JSON strategy path is exercised.
+- Record the canonical adapter key, JSON strategy, and extras in the corresponding adapter guide so contributors can verify behaviour without reading the registry source.
+
+### Protocol Abstract Methods Pattern
+
+When adding methods that need to support both sync and async configurations, use this pattern:
+
+**Step 1: Define abstract method in protocol**
+
+```python
+from abc import abstractmethod
+from typing import Awaitable
+
+class DatabaseConfigProtocol(Protocol):
+    is_async: ClassVar[bool]  # Set by base classes
+
+    @abstractmethod
+    def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> "Awaitable[None] | None":
+        """Apply database migrations up to specified revision.
+
+        Args:
+            revision: Target revision or "head" for latest.
+            allow_missing: Allow out-of-order migrations.
+            auto_sync: Auto-reconcile renamed migrations.
+            dry_run: Show what would be done without applying.
+        """
+        raise NotImplementedError
+```
+
+**Step 2: Implement in sync base class (no async/await)**
+
+```python
+class NoPoolSyncConfig(DatabaseConfigProtocol):
+    is_async: ClassVar[bool] = False
+
+    def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
+        """Apply database migrations up to specified revision."""
+        commands = self._ensure_migration_commands()
+        commands.upgrade(revision, allow_missing, auto_sync, dry_run)
+```
+
+**Step 3: Implement in async base class (with async/await)**
+
+```python
+class NoPoolAsyncConfig(DatabaseConfigProtocol):
+    is_async: ClassVar[bool] = True
+
+    async def migrate_up(
+        self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
+    ) -> None:
+        """Apply database migrations up to specified revision."""
+        commands = cast("AsyncMigrationCommands", self._ensure_migration_commands())
+        await commands.upgrade(revision, allow_missing, auto_sync, dry_run)
+```
+
+**Key principles:**
+
+- Protocol defines the interface with union return type (`Awaitable[T] | T`)
+- Sync base classes implement without `async def` or `await`
+- Async base classes implement with `async def` and `await`
+- Each base class has concrete implementation - no need for child classes to override
+- Use `cast()` to narrow types when delegating to command objects
+- All 4 base classes (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig) implement the same way
+
+**Benefits:**
+
+- Single source of truth (protocol) for API contract
+- Each base class provides complete implementation
+- Child adapter classes (AsyncpgConfig, SqliteConfig, etc.) inherit working methods automatically
+- Type checkers understand sync vs async based on `is_async` class variable
+- No code duplication across adapters
+
+**When to use:**
+
+- Adding convenience methods that delegate to external command objects
+- Methods that need identical behavior across all adapters
+- Operations that differ only in sync vs async execution
+- Any protocol method where behavior is determined by sync/async mode
+
+**Anti-patterns to avoid:**
+
+- Don't use runtime `if self.is_async:` checks in a single implementation
+- Don't make protocol methods concrete (always use `@abstractmethod`)
+- Don't duplicate logic across the 4 base classes
+- Don't forget to update all 4 base classes when adding new methods
 
 ### Database Connection Flow
 
@@ -246,6 +347,13 @@ def test_starlette_autocommit_mode() -> None:
 - `CREATE TABLE IF NOT EXISTS` - Masks test isolation issues
 - Disabling pooling - Tests don't reflect production configuration
 - Running tests serially - Slows down CI significantly
+
+### CLI Config Loader Isolation Pattern
+
+- When exercising CLI migration commands, generate a unique module namespace for each test (for example `cli_test_config_<uuid>`).
+- Place temporary config modules inside `tmp_path` and register them via `sys.modules` within the test, then delete them during teardown to prevent bleed-through.
+- Always patch `Path.cwd()` or provide explicit path arguments so helper functions resolve the test-local module rather than cached global fixtures.
+- Add regression tests ensuring the helper cleaning logic runs even if CLI commands raise exceptions to avoid polluting later suites.
 
 ### Performance Optimizations
 
@@ -734,6 +842,140 @@ def register_handlers(connection: "Connection") -> None:
     logger.debug("Registered type handlers for [feature]")
 ```
 
+### Handler Chaining Pattern (Multiple Type Handlers)
+
+When multiple type handlers need to coexist (e.g., NumPy vectors + UUID binary), use handler chaining to avoid conflicts. Oracle's python-oracledb allows only ONE inputtypehandler and ONE outputtypehandler per connection.
+
+**Problem**: Directly assigning a new handler overwrites any existing handler.
+
+**Solution**: Check for existing handlers and chain them together:
+
+```python
+def register_handlers(connection: "Connection") -> None:
+    """Register type handlers with chaining support.
+
+    Chains to existing type handlers to avoid conflicts with other features.
+
+    Args:
+        connection: Database connection.
+    """
+    existing_input = getattr(connection, "inputtypehandler", None)
+    existing_output = getattr(connection, "outputtypehandler", None)
+
+    def combined_input_handler(cursor: "Cursor", value: Any, arraysize: int) -> Any:
+        # Try new handler first
+        result = _input_type_handler(cursor, value, arraysize)
+        if result is not None:
+            return result
+        # Chain to existing handler
+        if existing_input is not None:
+            return existing_input(cursor, value, arraysize)
+        return None
+
+    def combined_output_handler(cursor: "Cursor", metadata: Any) -> Any:
+        # Try new handler first
+        result = _output_type_handler(cursor, metadata)
+        if result is not None:
+            return result
+        # Chain to existing handler
+        if existing_output is not None:
+            return existing_output(cursor, metadata)
+        return None
+
+    connection.inputtypehandler = combined_input_handler
+    connection.outputtypehandler = combined_output_handler
+    logger.debug("Registered type handlers with chaining support")
+```
+
+**Registration Order Matters**:
+
+```python
+async def _init_connection(self, connection):
+    """Initialize connection with multiple type handlers."""
+    # Register handlers in order of priority
+    if self.driver_features.get("enable_numpy_vectors", False):
+        from ._numpy_handlers import register_handlers
+        register_handlers(connection)  # First handler
+
+    if self.driver_features.get("enable_uuid_binary", False):
+        from ._uuid_handlers import register_handlers
+        register_handlers(connection)  # Chains to NumPy handler
+```
+
+**Key Principles**:
+
+1. **Use getattr() to check for existing handlers** - This is acceptable duck-typing (not defensive programming)
+2. **Chain handlers in combined functions** - New handler checks first, then delegates to existing
+3. **Return None if no match** - Signals to continue to next handler or default behavior
+4. **Order matters** - Last registered handler gets first chance to process
+5. **Log chaining** - Include "with chaining support" in debug message
+
+**Example Usage**:
+
+```python
+# Both features work together via chaining
+config = OracleAsyncConfig(
+    pool_config={"dsn": "oracle://..."},
+    driver_features={
+        "enable_numpy_vectors": True,  # NumPy vectors
+        "enable_uuid_binary": True      # UUID binary (chains to NumPy)
+    }
+)
+
+# Insert both types in same transaction
+await session.execute(
+    "INSERT INTO ml_data (id, model_id, embedding) VALUES (:1, :2, :3)",
+    (1, uuid.uuid4(), np.random.rand(768).astype(np.float32))
+)
+```
+
+### Oracle Metadata Tuple Unpacking Pattern
+
+Oracle's cursor.description returns a 7-element tuple for each column. Always unpack explicitly to access internal_size:
+
+```python
+def _output_type_handler(cursor: "Cursor", metadata: Any) -> Any:
+    """Oracle output type handler.
+
+    Args:
+        cursor: Oracle cursor.
+        metadata: Column metadata tuple (name, type_code, display_size,
+                  internal_size, precision, scale, null_ok).
+    """
+    import oracledb
+
+    # Unpack tuple explicitly - metadata[3] is internal_size
+    _name, type_code, _display_size, internal_size, _precision, _scale, _null_ok = metadata
+
+    if type_code is oracledb.DB_TYPE_RAW and internal_size == 16:
+        return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=converter_out)
+    return None
+```
+
+**Why explicit unpacking**:
+
+- **Correctness**: Oracle metadata is a tuple, not an object with attributes
+- **No .size attribute**: Attempting `metadata.size` raises AttributeError
+- **Clear intent**: Unpacking documents the 7-element structure
+- **Prevents errors**: Catches unexpected metadata format changes
+
+**Common mistake**:
+
+```python
+# WRONG - metadata has no .size attribute
+if type_code is oracledb.DB_TYPE_RAW and metadata.size == 16:
+    ...
+```
+
+**Correct approach**:
+
+```python
+# RIGHT - unpack tuple to access internal_size
+_name, type_code, _display_size, internal_size, _precision, _scale, _null_ok = metadata
+if type_code is oracledb.DB_TYPE_RAW and internal_size == 16:
+    ...
+```
+
 ### Configuring driver_features with Auto-Detection
 
 In adapter's `config.py`, implement auto-detection:
@@ -1220,7 +1462,7 @@ SQLSpec implements Apache Arrow support through a dual-path architecture: native
 Override `select_to_arrow()` in adapter's driver class:
 
 ```python
-from sqlspec.core.result import create_arrow_result
+from sqlspec.core import create_arrow_result
 from sqlspec.utils.module_loader import ensure_pyarrow
 
 class NativeArrowDriver(AsyncDriverAdapterBase):
@@ -1326,7 +1568,7 @@ UUID → utf8 (converted to string)
 Use `create_arrow_result()` for consistent result wrapping:
 
 ```python
-from sqlspec.core.result import create_arrow_result
+from sqlspec.core import create_arrow_result
 
 # Create ArrowResult from Arrow Table
 result = create_arrow_result(arrow_table, rows_affected=arrow_table.num_rows)
@@ -1813,7 +2055,7 @@ Current state of all adapters (as of type-cleanup branch):
 
 | Adapter    | TypedDict | Auto-Detect | enable_ Prefix | Defaults | Grade      | Notes                                    |
 |------------|-----------|-------------|----------------|----------|------------|------------------------------------------|
-| Oracle     | ✅        | ✅          | ✅             | ✅       | Gold       | Perfect implementation, reference model  |
+| Oracle     | ✅        | ✅          | ✅             | ✅       | Gold       | NumPy vectors + UUID binary w/ chaining  |
 | AsyncPG    | ✅        | ✅          | ✅             | ✅       | Excellent  | Comprehensive TypedDict docs added       |
 | Psycopg    | ✅        | ✅          | ✅             | ✅       | Excellent  | Comprehensive TypedDict docs added       |
 | Psqlpy     | ✅        | ✅          | ✅             | ✅       | Excellent  | Simple but correct                       |
@@ -1829,6 +2071,321 @@ Current state of all adapters (as of type-cleanup branch):
 - **Gold**: Perfect adherence to all patterns, serves as reference
 - **Excellent**: Follows all patterns, well documented
 - **Good**: Follows patterns appropriately for adapter's needs
+
+## Google Cloud Connector Pattern
+
+### Overview
+
+Google Cloud SQL and AlloyDB connectors provide automatic IAM authentication, SSL management, and IP routing for PostgreSQL databases hosted on Google Cloud Platform. SQLSpec integrates these connectors through the AsyncPG adapter using a connection factory pattern.
+
+### When to Use This Pattern
+
+Use Google Cloud connectors when:
+
+- Connecting to Cloud SQL for PostgreSQL instances
+- Connecting to AlloyDB for PostgreSQL clusters
+- Need automatic IAM authentication
+- Want managed SSL/TLS connections
+- Require private IP or PSC connectivity
+
+### Implementation Pattern
+
+#### Step 1: Add Optional Dependencies
+
+Add connector packages as optional dependency groups in pyproject.toml:
+
+```toml
+[project.optional-dependencies]
+cloud-sql = ["cloud-sql-python-connector[asyncpg]"]
+alloydb = ["cloud-alloydb-python-connector[asyncpg]"]
+```
+
+#### Step 2: Add Detection Constants
+
+In sqlspec/_typing.py:
+
+```python
+try:
+    import google.cloud.sql.connector
+    CLOUD_SQL_CONNECTOR_INSTALLED = True
+except ImportError:
+    CLOUD_SQL_CONNECTOR_INSTALLED = False
+
+try:
+    import google.cloud.alloydb.connector
+    ALLOYDB_CONNECTOR_INSTALLED = True
+except ImportError:
+    ALLOYDB_CONNECTOR_INSTALLED = False
+```
+
+Re-export in sqlspec/typing.py and add to **all**.
+
+#### Step 3: Update Driver Features TypedDict
+
+Document all connector options with comprehensive descriptions:
+
+```python
+class AsyncpgDriverFeatures(TypedDict):
+    """AsyncPG driver feature flags."""
+
+    enable_cloud_sql: NotRequired[bool]
+    """Enable Google Cloud SQL connector integration.
+    Requires cloud-sql-python-connector package.
+    Defaults to True when package is installed.
+    Auto-configures IAM authentication, SSL, and IP routing.
+    Mutually exclusive with enable_alloydb.
+    """
+
+    cloud_sql_instance: NotRequired[str]
+    """Cloud SQL instance connection name.
+    Format: "project:region:instance"
+    Required when enable_cloud_sql is True.
+    """
+
+    cloud_sql_enable_iam_auth: NotRequired[bool]
+    """Enable IAM database authentication.
+    Defaults to False for passwordless authentication.
+    When False, requires user/password in pool_config.
+    """
+
+    cloud_sql_ip_type: NotRequired[str]
+    """IP address type for connection.
+    Options: "PUBLIC", "PRIVATE", "PSC"
+    Defaults to "PRIVATE".
+    """
+
+    enable_alloydb: NotRequired[bool]
+    """Enable Google AlloyDB connector integration.
+    Requires cloud-alloydb-python-connector package.
+    Defaults to True when package is installed.
+    Auto-configures IAM authentication and private networking.
+    Mutually exclusive with enable_cloud_sql.
+    """
+
+    alloydb_instance_uri: NotRequired[str]
+    """AlloyDB instance URI.
+    Format: "projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"
+    Required when enable_alloydb is True.
+    """
+
+    alloydb_enable_iam_auth: NotRequired[bool]
+    """Enable IAM database authentication.
+    Defaults to False for passwordless authentication.
+    """
+
+    alloydb_ip_type: NotRequired[str]
+    """IP address type for connection.
+    Options: "PUBLIC", "PRIVATE", "PSC"
+    Defaults to "PRIVATE".
+    """
+```
+
+#### Step 4: Add Auto-Detection to Config Init
+
+```python
+class AsyncpgConfig(AsyncDatabaseConfig):
+    def __init__(self, *, driver_features=None, **kwargs):
+        features_dict = dict(driver_features) if driver_features else {}
+
+        features_dict.setdefault("enable_cloud_sql", CLOUD_SQL_CONNECTOR_INSTALLED)
+        features_dict.setdefault("enable_alloydb", ALLOYDB_CONNECTOR_INSTALLED)
+
+        super().__init__(driver_features=features_dict, **kwargs)
+
+        self._cloud_sql_connector = None
+        self._alloydb_connector = None
+
+        self._validate_connector_config()
+```
+
+#### Step 5: Add Configuration Validation
+
+```python
+def _validate_connector_config(self) -> None:
+    """Validate Google Cloud connector configuration."""
+    enable_cloud_sql = self.driver_features.get("enable_cloud_sql", False)
+    enable_alloydb = self.driver_features.get("enable_alloydb", False)
+
+    if enable_cloud_sql and enable_alloydb:
+        msg = "Cannot enable both Cloud SQL and AlloyDB connectors simultaneously. Use separate configs for each database."
+        raise ImproperConfigurationError(msg)
+
+    if enable_cloud_sql:
+        if not CLOUD_SQL_CONNECTOR_INSTALLED:
+            msg = "cloud-sql-python-connector package not installed. Install with: pip install cloud-sql-python-connector"
+            raise ImproperConfigurationError(msg)
+
+        instance = self.driver_features.get("cloud_sql_instance")
+        if not instance:
+            msg = "cloud_sql_instance required when enable_cloud_sql is True. Format: 'project:region:instance'"
+            raise ImproperConfigurationError(msg)
+
+        cloud_sql_instance_parts_expected = 2
+        if instance.count(":") != cloud_sql_instance_parts_expected:
+            msg = f"Invalid Cloud SQL instance format: {instance}. Expected format: 'project:region:instance'"
+            raise ImproperConfigurationError(msg)
+
+    elif enable_alloydb:
+        if not ALLOYDB_CONNECTOR_INSTALLED:
+            msg = "cloud-alloydb-python-connector package not installed. Install with: pip install cloud-alloydb-python-connector"
+            raise ImproperConfigurationError(msg)
+
+        instance_uri = self.driver_features.get("alloydb_instance_uri")
+        if not instance_uri:
+            msg = "alloydb_instance_uri required when enable_alloydb is True. Format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
+            raise ImproperConfigurationError(msg)
+
+        if not instance_uri.startswith("projects/"):
+            msg = f"Invalid AlloyDB instance URI format: {instance_uri}. Expected format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
+            raise ImproperConfigurationError(msg)
+```
+
+#### Step 6: Implement Connection Factory Pattern
+
+Extract connector setup into private helper methods:
+
+```python
+def _setup_cloud_sql_connector(self, config: dict[str, Any]) -> None:
+    """Setup Cloud SQL connector and configure pool for connection factory pattern."""
+    from google.cloud.sql.connector import Connector
+
+    self._cloud_sql_connector = Connector()
+
+    user = config.get("user")
+    password = config.get("password")
+    database = config.get("database")
+
+    async def get_conn() -> AsyncpgConnection:
+        conn_kwargs = {
+            "instance_connection_string": self.driver_features["cloud_sql_instance"],
+            "driver": "asyncpg",
+            "enable_iam_auth": self.driver_features.get("cloud_sql_enable_iam_auth", False),
+            "ip_type": self.driver_features.get("cloud_sql_ip_type", "PRIVATE"),
+        }
+
+        if user:
+            conn_kwargs["user"] = user
+        if password:
+            conn_kwargs["password"] = password
+        if database:
+            conn_kwargs["db"] = database
+
+        return await self._cloud_sql_connector.connect_async(**conn_kwargs)
+
+    for key in ("dsn", "host", "port", "user", "password", "database"):
+        config.pop(key, None)
+
+    config["connect"] = get_conn
+
+
+def _setup_alloydb_connector(self, config: dict[str, Any]) -> None:
+    """Setup AlloyDB connector and configure pool for connection factory pattern."""
+    from google.cloud.alloydb.connector import AsyncConnector
+
+    self._alloydb_connector = AsyncConnector()
+
+    user = config.get("user")
+    password = config.get("password")
+    database = config.get("database")
+
+    async def get_conn() -> AsyncpgConnection:
+        conn_kwargs = {
+            "instance_uri": self.driver_features["alloydb_instance_uri"],
+            "driver": "asyncpg",
+            "enable_iam_auth": self.driver_features.get("alloydb_enable_iam_auth", False),
+            "ip_type": self.driver_features.get("alloydb_ip_type", "PRIVATE"),
+        }
+
+        if user:
+            conn_kwargs["user"] = user
+        if password:
+            conn_kwargs["password"] = password
+        if database:
+            conn_kwargs["db"] = database
+
+        return await self._alloydb_connector.connect(**conn_kwargs)
+
+    for key in ("dsn", "host", "port", "user", "password", "database"):
+        config.pop(key, None)
+
+    config["connect"] = get_conn
+```
+
+#### Step 7: Use in Pool Creation
+
+```python
+async def _create_pool(self) -> Pool[Record]:
+    config = self._get_pool_config_dict()
+
+    if self.driver_features.get("enable_cloud_sql", False):
+        self._setup_cloud_sql_connector(config)
+    elif self.driver_features.get("enable_alloydb", False):
+        self._setup_alloydb_connector(config)
+
+    if "init" not in config:
+        config["init"] = self._init_connection
+
+    return await asyncpg_create_pool(**config)
+```
+
+#### Step 8: Cleanup Connectors
+
+```python
+async def _close_pool(self) -> None:
+    if self.pool_instance:
+        await self.pool_instance.close()
+
+    if self._cloud_sql_connector is not None:
+        await self._cloud_sql_connector.close_async()
+        self._cloud_sql_connector = None
+
+    if self._alloydb_connector is not None:
+        await self._alloydb_connector.close()
+        self._alloydb_connector = None
+```
+
+### Key Design Principles
+
+1. **Auto-Detection**: Default to package installation status
+2. **Mutual Exclusion**: Cannot enable both connectors simultaneously
+3. **Connection Factory Pattern**: Use driver's `connect` parameter
+4. **Clean Helper Methods**: Extract setup logic for maintainability
+5. **Proper Lifecycle**: Initialize in create_pool, cleanup in close_pool
+6. **Clear Validation**: Validate instance names, package installation, config
+7. **Comprehensive TypedDict**: Document all options inline
+
+### Testing Requirements
+
+- Unit tests with mocked connectors
+- Integration tests with real instances (conditional)
+- Test auto-detection with both packages installed/not installed
+- Test mutual exclusion validation
+- Test connection factory pattern integration
+- Test lifecycle (initialization and cleanup)
+- Test all IP types and auth modes
+
+### Driver Compatibility
+
+| Driver | Cloud SQL | AlloyDB | Notes |
+|--------|-----------|---------|-------|
+| AsyncPG | ✅ Full | ✅ Full | Connection factory pattern via `connect` param |
+| Psycopg | ⚠️ Research | ⚠️ Research | Not officially documented, needs prototype |
+| Psqlpy | ❌ No | ❌ No | Internal Rust driver, architecturally incompatible |
+| ADBC | ❌ No | ❌ No | URI-only interface, no factory pattern support |
+
+### Examples from Existing Implementations
+
+See sqlspec/adapters/asyncpg/config.py for the reference implementation.
+
+### Documentation Requirements
+
+When implementing cloud connector support:
+
+1. **Update adapter guide** - Add cloud integration section with examples
+2. **Create cloud connector guide** - Comprehensive configuration reference
+3. **Document limitations** - Clearly state unsupported drivers
+4. **Provide troubleshooting** - Common errors and solutions
+5. **Include migration guide** - From direct DSN to connector pattern
 
 ### Testing Requirements
 
@@ -2553,6 +3110,141 @@ class StarletteConfig(TypedDict):
     extra_commit_statuses: NotRequired[set[int]]
     extra_rollback_statuses: NotRequired[set[int]]
 ```
+
+### Disabling Built-in Dependency Injection (disable_di Pattern)
+
+**When to Use**: When users want to integrate SQLSpec with their own dependency injection solution (e.g., Dishka, dependency-injector) and need full control over database lifecycle management.
+
+**Pattern**: Add a `disable_di` boolean flag to framework extension configuration that conditionally skips the built-in DI setup.
+
+**Implementation Steps**:
+
+1. **Add to TypedDict in `sqlspec/config.py`**:
+
+```python
+class StarletteConfig(TypedDict):
+    # ... existing fields ...
+
+    disable_di: NotRequired[bool]
+    """Disable built-in dependency injection. Default: False.
+    When True, the Starlette/FastAPI extension will not add middleware for managing
+    database connections and sessions. Users are responsible for managing the
+    database lifecycle manually via their own DI solution.
+    """
+```
+
+2. **Add to Configuration State Dataclass**:
+
+```python
+@dataclass
+class SQLSpecConfigState:
+    config: "DatabaseConfigProtocol[Any, Any, Any]"
+    connection_key: str
+    pool_key: str
+    session_key: str
+    commit_mode: CommitMode
+    extra_commit_statuses: "set[int] | None"
+    extra_rollback_statuses: "set[int] | None"
+    disable_di: bool  # Add this field
+```
+
+3. **Extract from Config and Default to False**:
+
+```python
+def _extract_starlette_settings(self, config):
+    starlette_config = config.extension_config.get("starlette", {})
+    return {
+        # ... existing keys ...
+        "disable_di": starlette_config.get("disable_di", False),  # Default False
+    }
+```
+
+4. **Conditionally Skip DI Setup**:
+
+**Middleware-based (Starlette/FastAPI)**:
+
+```python
+def init_app(self, app):
+    # ... lifespan setup ...
+
+    for config_state in self._config_states:
+        if not config_state.disable_di:  # Only add if DI enabled
+            self._add_middleware(app, config_state)
+```
+
+**Provider-based (Litestar)**:
+
+```python
+def on_app_init(self, app_config):
+    for state in self._plugin_configs:
+        # ... signature namespace ...
+
+        if not state.disable_di:  # Only register if DI enabled
+            app_config.before_send.append(state.before_send_handler)
+            app_config.lifespan.append(state.lifespan_handler)
+            app_config.dependencies.update({
+                state.connection_key: Provide(state.connection_provider),
+                state.pool_key: Provide(state.pool_provider),
+                state.session_key: Provide(state.session_provider),
+            })
+```
+
+**Hook-based (Flask)**:
+
+```python
+def init_app(self, app):
+    # ... pool setup ...
+
+    # Only register hooks if at least one config has DI enabled
+    if any(not state.disable_di for state in self._config_states):
+        app.before_request(self._before_request_handler)
+        app.after_request(self._after_request_handler)
+        app.teardown_appcontext(self._teardown_appcontext_handler)
+
+def _before_request_handler(self):
+    for config_state in self._config_states:
+        if config_state.disable_di:  # Skip if DI disabled
+            continue
+        # ... connection setup ...
+```
+
+**Testing Requirements**:
+
+1. **Test with `disable_di=True`**: Verify DI mechanisms are not active
+2. **Test default behavior**: Verify `disable_di=False` preserves existing functionality
+3. **Integration tests**: Demonstrate manual DI setup works correctly
+
+**Example Usage**:
+
+```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.base import SQLSpec
+from sqlspec.extensions.starlette import SQLSpecPlugin
+
+sql = SQLSpec()
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/db"},
+    extension_config={"starlette": {"disable_di": True}}  # Disable built-in DI
+)
+sql.add_config(config)
+plugin = SQLSpecPlugin(sql)
+
+# User is now responsible for manual lifecycle management
+async def my_route(request):
+    pool = await config.create_pool()
+    async with config.provide_connection(pool) as connection:
+        session = config.driver_type(connection=connection, statement_config=config.statement_config)
+        result = await session.execute("SELECT 1")
+        await config.close_pool()
+        return result
+```
+
+**Key Principles**:
+
+- **Backward Compatible**: Default `False` preserves existing behavior
+- **Consistent Naming**: Use `disable_di` across all frameworks
+- **Clear Documentation**: Warn users they are responsible for lifecycle management
+- **Complete Control**: When disabled, extension does zero automatic DI
 
 ### Multi-Database Support
 

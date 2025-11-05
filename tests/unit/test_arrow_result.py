@@ -4,7 +4,7 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.typing import PYARROW_INSTALLED
 
 pytestmark = pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
@@ -24,7 +24,7 @@ def sample_arrow_table():
 @pytest.fixture
 def arrow_result(sample_arrow_table):
     """Create an ArrowResult with sample data."""
-    from sqlspec.core.result import ArrowResult
+    from sqlspec.core import ArrowResult
 
     stmt = SQL("SELECT * FROM users")
     return ArrowResult(statement=stmt, data=sample_arrow_table, rows_affected=3)
@@ -92,8 +92,7 @@ def test_arrow_result_to_pandas_with_null_values() -> None:
     pandas = pytest.importorskip("pandas")
     import pyarrow as pa
 
-    from sqlspec.core.result import ArrowResult
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL, ArrowResult
 
     data: dict[str, Any] = {
         "id": [1, 2, 3],
@@ -114,8 +113,7 @@ def test_arrow_result_empty_table() -> None:
     """Test ArrowResult methods with empty table."""
     import pyarrow as pa
 
-    from sqlspec.core.result import ArrowResult
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL, ArrowResult
 
     empty_table = pa.Table.from_pydict(cast(dict[str, Any], {}))
     stmt = SQL("SELECT * FROM users WHERE 1=0")
@@ -128,8 +126,7 @@ def test_arrow_result_empty_table() -> None:
 
 def test_arrow_result_methods_with_none_data_raise() -> None:
     """Test that methods raise ValueError when data is None."""
-    from sqlspec.core.result import ArrowResult
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL, ArrowResult
 
     stmt = SQL("SELECT * FROM users")
     result = ArrowResult(statement=stmt, data=None)

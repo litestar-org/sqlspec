@@ -4,7 +4,8 @@ Provides statement builders (select, insert, update, etc.) and column expression
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Union
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Union, cast
 
 import sqlglot
 from sqlglot import exp
@@ -42,10 +43,12 @@ from sqlspec.builder._merge import Merge
 from sqlspec.builder._parsing_utils import extract_expression, to_expression
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.builder._update import Update
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from sqlspec.builder._expression_wrappers import ExpressionWrapper
 
 
@@ -73,6 +76,9 @@ __all__ = (
     "Truncate",
     "Update",
     "WindowFunctionBuilder",
+    "build_copy_from_statement",
+    "build_copy_statement",
+    "build_copy_to_statement",
     "sql",
 )
 
@@ -106,6 +112,96 @@ SQL_STARTERS = {
     "VACUUM",
     "COPY",
 }
+
+
+def _normalize_copy_dialect(dialect: DialectType | None) -> str:
+    if dialect is None:
+        return "postgres"
+    if isinstance(dialect, str):
+        return dialect
+    return str(dialect)
+
+
+def _to_copy_schema(table: str, columns: "Sequence[str] | None") -> exp.Expression:
+    base = exp.table_(table)
+    if not columns:
+        return base
+    column_nodes = [exp.column(column_name) for column_name in columns]
+    return exp.Schema(this=base, expressions=column_nodes)
+
+
+def _build_copy_expression(
+    *, direction: str, table: str, location: str, columns: "Sequence[str] | None", options: "Mapping[str, Any] | None"
+) -> exp.Copy:
+    copy_args: dict[str, Any] = {"this": _to_copy_schema(table, columns), "files": [exp.Literal.string(location)]}
+
+    if direction == "from":
+        copy_args["kind"] = True
+    elif direction == "to":
+        copy_args["kind"] = False
+
+    if options:
+        params: list[exp.CopyParameter] = []
+        for key, value in options.items():
+            identifier = exp.Var(this=str(key).upper())
+            value_expression: exp.Expression
+            if isinstance(value, bool):
+                value_expression = exp.Boolean(this=value)
+            elif value is None:
+                value_expression = exp.null()
+            elif isinstance(value, (int, float)):
+                value_expression = exp.Literal.number(value)
+            elif isinstance(value, (list, tuple)):
+                elements = [exp.Literal.string(str(item)) for item in value]
+                value_expression = exp.Array(expressions=elements)
+            else:
+                value_expression = exp.Literal.string(str(value))
+            params.append(exp.CopyParameter(this=identifier, expression=value_expression))
+        copy_args["params"] = params
+
+    return exp.Copy(**copy_args)
+
+
+def build_copy_statement(
+    *,
+    direction: str,
+    table: str,
+    location: str,
+    columns: "Sequence[str] | None" = None,
+    options: "Mapping[str, Any] | None" = None,
+    dialect: DialectType | None = None,
+) -> SQL:
+    expression = _build_copy_expression(
+        direction=direction, table=table, location=location, columns=columns, options=options
+    )
+    rendered = expression.sql(dialect=_normalize_copy_dialect(dialect))
+    return SQL(rendered)
+
+
+def build_copy_from_statement(
+    table: str,
+    source: str,
+    *,
+    columns: "Sequence[str] | None" = None,
+    options: "Mapping[str, Any] | None" = None,
+    dialect: DialectType | None = None,
+) -> SQL:
+    return build_copy_statement(
+        direction="from", table=table, location=source, columns=columns, options=options, dialect=dialect
+    )
+
+
+def build_copy_to_statement(
+    table: str,
+    target: str,
+    *,
+    columns: "Sequence[str] | None" = None,
+    options: "Mapping[str, Any] | None" = None,
+    dialect: DialectType | None = None,
+) -> SQL:
+    return build_copy_statement(
+        direction="to", table=table, location=target, columns=columns, options=options, dialect=dialect
+    )
 
 
 class SQLFactory:
@@ -267,6 +363,64 @@ class SQLFactory:
             return builder.into(table_or_sql)
         return builder
 
+    @property
+    def merge_(self) -> "Merge":
+        """Create a new MERGE builder (property shorthand).
+
+        Property that returns a new Merge builder instance using the factory's
+        default dialect. Cleaner syntax alternative to merge() method.
+
+        Examples:
+            query = sql.merge_.into("products").using(data, alias="src")
+            query = sql.merge_.into("products", alias="t").on("t.id = src.id")
+
+        Returns:
+            New Merge builder instance
+        """
+        return Merge(dialect=self.dialect)
+
+    def upsert(self, table: str, dialect: DialectType = None) -> "Merge | Insert":
+        """Create an upsert builder (MERGE or INSERT ON CONFLICT).
+
+        Automatically selects the appropriate builder based on database dialect:
+        - PostgreSQL 15+, Oracle, BigQuery: Returns MERGE builder
+        - SQLite, DuckDB, MySQL: Returns INSERT builder with ON CONFLICT support
+
+        Args:
+            table: Target table name
+            dialect: Optional SQL dialect (uses factory default if not provided)
+
+        Returns:
+            MERGE builder for supported databases, INSERT builder otherwise
+
+        Examples:
+            PostgreSQL/Oracle/BigQuery (uses MERGE):
+                upsert_query = (
+                    sql.upsert("products", dialect="postgres")
+                    .using([{"id": 1, "name": "Product 1"}], alias="src")
+                    .on("t.id = src.id")
+                    .when_matched_then_update(name="src.name")
+                    .when_not_matched_then_insert(id="src.id", name="src.name")
+                )
+
+            SQLite/DuckDB/MySQL (uses INSERT ON CONFLICT):
+                upsert_query = (
+                    sql.upsert("products", dialect="sqlite")
+                    .values(id=1, name="Product 1")
+                    .on_conflict("id")
+                    .do_update(name="EXCLUDED.name")
+                )
+        """
+        builder_dialect = dialect or self.dialect
+        dialect_str = str(builder_dialect).lower() if builder_dialect else None
+
+        merge_supported = {"postgres", "postgresql", "oracle", "bigquery"}
+
+        if dialect_str in merge_supported:
+            return self.merge(table, dialect=builder_dialect)
+
+        return self.insert(table, dialect=builder_dialect)
+
     def create_table(self, table_name: str, dialect: DialectType = None) -> "CreateTable":
         """Create a CREATE TABLE builder.
 
@@ -420,6 +574,56 @@ class SQLFactory:
             CommentOn builder instance
         """
         return CommentOn(dialect=dialect or self.dialect)
+
+    def copy_from(
+        self,
+        table: str,
+        source: str,
+        *,
+        columns: "Sequence[str] | None" = None,
+        options: "Mapping[str, Any] | None" = None,
+        dialect: DialectType | None = None,
+    ) -> SQL:
+        """Build a COPY ... FROM statement."""
+
+        effective_dialect = dialect or self.dialect
+        return build_copy_from_statement(table, source, columns=columns, options=options, dialect=effective_dialect)
+
+    def copy_to(
+        self,
+        table: str,
+        target: str,
+        *,
+        columns: "Sequence[str] | None" = None,
+        options: "Mapping[str, Any] | None" = None,
+        dialect: DialectType | None = None,
+    ) -> SQL:
+        """Build a COPY ... TO statement."""
+
+        effective_dialect = dialect or self.dialect
+        return build_copy_to_statement(table, target, columns=columns, options=options, dialect=effective_dialect)
+
+    def copy(
+        self,
+        table: str,
+        *,
+        source: str | None = None,
+        target: str | None = None,
+        columns: "Sequence[str] | None" = None,
+        options: "Mapping[str, Any] | None" = None,
+        dialect: DialectType | None = None,
+    ) -> SQL:
+        """Build a COPY statement, inferring direction from provided arguments."""
+
+        if (source is None and target is None) or (source is not None and target is not None):
+            msg = "Provide either 'source' or 'target' (but not both) to sql.copy()."
+            raise SQLBuilderError(msg)
+
+        if source is not None:
+            return self.copy_from(table, source, columns=columns, options=options, dialect=dialect)
+
+        target_value = cast("str", target)
+        return self.copy_to(table, target_value, columns=columns, options=options, dialect=dialect)
 
     @staticmethod
     def _looks_like_sql(candidate: str, expected_type: str | None = None) -> bool:

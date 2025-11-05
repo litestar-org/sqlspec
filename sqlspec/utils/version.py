@@ -25,7 +25,6 @@ __all__ = (
 
 logger = logging.getLogger(__name__)
 
-# Regex patterns for version detection
 SEQUENTIAL_PATTERN = re.compile(r"^(?!\d{14}$)(\d+)$")
 TIMESTAMP_PATTERN = re.compile(r"^(\d{14})$")
 EXTENSION_PATTERN = re.compile(r"^ext_(\w+)_(.+)$")

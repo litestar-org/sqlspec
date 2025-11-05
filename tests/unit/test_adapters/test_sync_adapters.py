@@ -6,9 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
 from tests.unit.test_adapters.conftest import MockSyncConnection, MockSyncDriver

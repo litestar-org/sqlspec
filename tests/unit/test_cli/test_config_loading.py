@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -10,6 +11,8 @@ import pytest
 from click.testing import CliRunner
 
 from sqlspec.cli import add_migration_commands
+
+MODULE_PREFIX = "cli_test_config_"
 
 
 @pytest.fixture
@@ -19,10 +22,16 @@ def cleanup_test_modules() -> Iterator[None]:
     yield
     # Remove any test modules that were imported during the test
     modules_after = set(sys.modules.keys())
-    test_modules = {m for m in modules_after - modules_before if m.startswith("test_config")}
+    test_modules = {m for m in modules_after - modules_before if m.startswith(MODULE_PREFIX)}
     for module in test_modules:
         if module in sys.modules:
             del sys.modules[module]
+
+
+def _create_module(path: "Path", content: str) -> str:
+    module_name = f"{MODULE_PREFIX}{uuid.uuid4().hex}"
+    (path / f"{module_name}.py").write_text(content)
+    return module_name
 
 
 def test_direct_config_instance_loading(cleanup_test_modules: None) -> None:
@@ -41,13 +50,15 @@ config = SqliteConfig(
 )
 database_config = config
 """
-        (Path(temp_dir) / "test_config.py").write_text(config_module)
+        module_name = _create_module(Path(temp_dir), config_module)
 
         # Change to the temp directory
         original_cwd = os.getcwd()
         try:
             os.chdir(temp_dir)
-            result = runner.invoke(add_migration_commands(), ["--config", "test_config.database_config", "show-config"])
+            result = runner.invoke(
+                add_migration_commands(), ["--config", f"{module_name}.database_config", "show-config"]
+            )
         finally:
             os.chdir(original_cwd)
 
@@ -73,14 +84,14 @@ def get_database_config():
     )
     return config
 """
-        (Path(temp_dir) / "test_config.py").write_text(config_module)
+        module_name = _create_module(Path(temp_dir), config_module)
 
         # Change to the temp directory
         original_cwd = os.getcwd()
         try:
             os.chdir(temp_dir)
             result = runner.invoke(
-                add_migration_commands(), ["--config", "test_config.get_database_config", "show-config"]
+                add_migration_commands(), ["--config", f"{module_name}.get_database_config", "show-config"]
             )
         finally:
             os.chdir(original_cwd)
@@ -110,14 +121,14 @@ async def get_database_config():
     )
     return config
 """
-        (Path(temp_dir) / "test_config.py").write_text(config_module)
+        module_name = _create_module(Path(temp_dir), config_module)
 
         # Change to the temp directory
         original_cwd = os.getcwd()
         try:
             os.chdir(temp_dir)
             result = runner.invoke(
-                add_migration_commands(), ["--config", "test_config.get_database_config", "show-config"]
+                add_migration_commands(), ["--config", f"{module_name}.get_database_config", "show-config"]
             )
         finally:
             os.chdir(original_cwd)
@@ -146,13 +157,15 @@ config = SqliteConfig(
 )
 database_config = config
 """
-        (Path(temp_dir) / "test_config.py").write_text(config_module)
+        module_name = _create_module(Path(temp_dir), config_module)
 
         # Change to the temp directory
         original_cwd = os.getcwd()
         try:
             os.chdir(temp_dir)
-            result = runner.invoke(add_migration_commands(), ["--config", "test_config.database_config", "show-config"])
+            result = runner.invoke(
+                add_migration_commands(), ["--config", f"{module_name}.database_config", "show-config"]
+            )
         finally:
             os.chdir(original_cwd)
 

@@ -8,7 +8,7 @@ import pytest
 from pytest_databases.docker.bigquery import BigQueryService
 
 from sqlspec.adapters.bigquery import BigQueryDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 

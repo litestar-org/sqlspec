@@ -135,18 +135,14 @@ def _is_valid_config(config: Any) -> bool:
     Returns:
         True if object appears to be a valid config.
     """
-    # Check for litestar extension DatabaseConfig wrapper
     nested_config = getattr(config, "config", None)
     if nested_config is not None and hasattr(nested_config, "migration_config"):
         return True
 
-    # Check for direct database config with migration support
     migration_config = getattr(config, "migration_config", None)
     if migration_config is not None:
-        # Modern SQLSpec config with pool_config
         if hasattr(config, "pool_config"):
             return True
-        # Legacy config with database_url and bind_key
         if hasattr(config, "database_url") and hasattr(config, "bind_key"):
             return True
 

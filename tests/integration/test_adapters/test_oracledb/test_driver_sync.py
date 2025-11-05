@@ -6,7 +6,7 @@ import msgspec
 import pytest
 
 from sqlspec.adapters.oracledb import OracleSyncConfig, OracleSyncDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("oracle")
 

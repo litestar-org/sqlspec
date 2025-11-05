@@ -12,6 +12,14 @@ import pytest
 from sqlglot import exp
 from typing_extensions import TypedDict
 
+from sqlspec.typing import PYARROW_INSTALLED
+from sqlspec.utils.serializers import (
+    get_collection_serializer,
+    get_serializer_metrics,
+    reset_serializer_cache,
+    schema_dump,
+    serialize_collection,
+)
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
     expression_has_limit,
@@ -59,7 +67,6 @@ from sqlspec.utils.type_guards import (
     is_schema_without_field,
     is_string_literal,
     is_typed_dict,
-    schema_dump,
 )
 
 pytestmark = pytest.mark.xdist_group("utils")
@@ -82,6 +89,12 @@ class SampleTypedDict(TypedDict):
     name: str
     age: int
     optional_field: "str | None"
+
+
+@dataclass
+class _SerializerRecord:
+    identifier: int
+    name: str
 
 
 class MockSQLGlotExpression:
@@ -781,6 +794,13 @@ def test_schema_dump_with_dict() -> None:
     assert result is data
 
 
+def test_schema_dump_with_primitives() -> None:
+    """Test schema_dump returns primitive payload unchanged."""
+    payload = "primary"
+    result = schema_dump(payload)
+    assert result == payload  # type: ignore[comparison-overlap]
+
+
 def test_schema_dump_with_dataclass() -> None:
     """Test schema_dump converts dataclass to dict."""
     instance = SampleDataclass(name="test", age=25)
@@ -812,6 +832,49 @@ def test_schema_dump_with_dict_attribute() -> None:
 
     expected = {"name": "test", "age": 25}
     assert result == expected
+
+
+def test_serializer_pipeline_reuses_entry() -> None:
+    reset_serializer_cache()
+    metrics = get_serializer_metrics()
+    assert metrics["size"] == 0
+
+    sample = _SerializerRecord(identifier=1, name="first")
+    pipeline = get_collection_serializer(sample)
+    metrics = get_serializer_metrics()
+    assert metrics["size"] == 1
+
+    same_pipeline = get_collection_serializer(_SerializerRecord(identifier=2, name="second"))
+    assert pipeline is same_pipeline
+
+
+def test_serializer_metrics_track_hits_and_misses(monkeypatch: pytest.MonkeyPatch) -> None:
+    reset_serializer_cache()
+    monkeypatch.setenv("SQLSPEC_DEBUG_PIPELINE_CACHE", "1")
+
+    sample = _SerializerRecord(identifier=1, name="instrumented")
+    get_collection_serializer(sample)
+    metrics = get_serializer_metrics()
+    assert metrics["misses"] == 1
+
+    get_collection_serializer(sample)
+    metrics = get_serializer_metrics()
+    assert metrics["hits"] == 1
+
+
+def test_serialize_collection_mixed_models() -> None:
+    items = [_SerializerRecord(identifier=1, name="alpha"), {"identifier": 2, "name": "beta"}]
+    serialized = serialize_collection(items)
+    assert serialized == [{"identifier": 1, "name": "alpha"}, {"identifier": 2, "name": "beta"}]
+
+
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="PyArrow not installed")
+def test_serializer_pipeline_arrow_conversion() -> None:
+    sample = _SerializerRecord(identifier=1, name="alpha")
+    pipeline = get_collection_serializer(sample)
+    table = pipeline.to_arrow([sample, _SerializerRecord(identifier=2, name="beta")])
+    assert table.num_rows == 2
+    assert table.column(0).to_pylist() == [1, 2]
 
 
 @pytest.mark.parametrize(

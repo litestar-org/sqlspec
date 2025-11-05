@@ -1,0 +1,187 @@
+"""Shared statement pipeline registry and instrumentation."""
+
+import os
+from collections import OrderedDict
+from typing import Any, Final
+
+from mypy_extensions import mypyc_attr
+
+from sqlspec.core.compiler import CompiledSQL, SQLProcessor
+
+DEBUG_ENV_FLAG: Final[str] = "SQLSPEC_DEBUG_PIPELINE_CACHE"
+DEFAULT_PIPELINE_CACHE_SIZE: Final[int] = 1000
+DEFAULT_PIPELINE_COUNT: Final[int] = 32
+
+
+def _is_truthy(value: "str | None") -> bool:
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    return normalized in {"1", "true", "yes", "on"}
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _PipelineMetrics:
+    __slots__ = ("hits", "max_size", "misses", "size")
+
+    def __init__(self) -> None:
+        self.hits = 0
+        self.misses = 0
+        self.size = 0
+        self.max_size = 0
+
+    def update(self, stats: "dict[str, int]") -> None:
+        self.hits = stats.get("hits", 0)
+        self.misses = stats.get("misses", 0)
+        self.size = stats.get("size", 0)
+        self.max_size = stats.get("max_size", 0)
+
+    def snapshot(self) -> "dict[str, int]":
+        return {"hits": self.hits, "misses": self.misses, "size": self.size, "max_size": self.max_size}
+
+    def reset(self) -> None:
+        self.hits = 0
+        self.misses = 0
+        self.size = 0
+        self.max_size = 0
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _StatementPipeline:
+    __slots__ = ("_metrics", "_processor", "dialect", "parameter_style")
+
+    def __init__(self, config: "Any", cache_size: int, record_metrics: bool) -> None:
+        self._processor = SQLProcessor(config, max_cache_size=cache_size)
+        self.dialect = str(config.dialect) if getattr(config, "dialect", None) else "default"
+        parameter_style = config.parameter_config.default_parameter_style
+        self.parameter_style = parameter_style.value if parameter_style else "unknown"
+        self._metrics = _PipelineMetrics() if record_metrics else None
+
+    def compile(self, sql: str, parameters: Any, is_many: bool, record_metrics: bool) -> "CompiledSQL":
+        result = self._processor.compile(sql, parameters, is_many=is_many)
+        if record_metrics and self._metrics is not None:
+            self._metrics.update(self._processor.cache_stats)
+        return result
+
+    def reset(self) -> None:
+        self._processor.clear_cache()
+        if self._metrics is not None:
+            self._metrics.reset()
+
+    def metrics(self) -> "dict[str, int] | None":
+        if self._metrics is None:
+            return None
+        return self._metrics.snapshot()
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class StatementPipelineRegistry:
+    __slots__ = ("_max_pipelines", "_pipeline_cache_size", "_pipelines")
+
+    def __init__(
+        self, max_pipelines: int = DEFAULT_PIPELINE_COUNT, cache_size: int = DEFAULT_PIPELINE_CACHE_SIZE
+    ) -> None:
+        self._pipelines: OrderedDict[str, _StatementPipeline] = OrderedDict()
+        self._max_pipelines = max_pipelines
+        self._pipeline_cache_size = cache_size
+
+    def compile(self, config: "Any", sql: str, parameters: Any, is_many: bool = False) -> "CompiledSQL":
+        key = self._fingerprint_config(config)
+        pipeline = self._pipelines.get(key)
+        record_metrics = _is_truthy(os.getenv(DEBUG_ENV_FLAG))
+
+        if pipeline is not None:
+            self._pipelines.move_to_end(key)
+        else:
+            pipeline = _StatementPipeline(config, self._pipeline_cache_size, record_metrics)
+            if len(self._pipelines) >= self._max_pipelines:
+                self._pipelines.popitem(last=False)
+            self._pipelines[key] = pipeline
+
+        return pipeline.compile(sql, parameters, is_many, record_metrics)
+
+    def reset(self) -> None:
+        for pipeline in self._pipelines.values():
+            pipeline.reset()
+        self._pipelines.clear()
+
+    def metrics(self) -> "list[dict[str, Any]]":
+        if not _is_truthy(os.getenv(DEBUG_ENV_FLAG)):
+            return []
+
+        snapshots: list[dict[str, Any]] = []
+        for key, pipeline in self._pipelines.items():
+            metrics = pipeline.metrics()
+            if metrics is None:
+                continue
+            entry = {"config": key, "dialect": pipeline.dialect, "parameter_style": pipeline.parameter_style}
+            entry.update(metrics)
+            snapshots.append(entry)
+        return snapshots
+
+    def _fingerprint_config(self, config: "Any") -> str:
+        param_config = config.parameter_config
+        supported_styles = sorted(style.value for style in param_config.supported_parameter_styles)
+        exec_styles = (
+            sorted(style.value for style in param_config.supported_execution_parameter_styles)
+            if param_config.supported_execution_parameter_styles
+            else None
+        )
+        converter_name = type(config.parameter_converter).__name__ if config.parameter_converter else "None"
+        validator_name = type(config.parameter_validator).__name__ if config.parameter_validator else "None"
+        pre_steps = tuple(type(step).__name__ for step in config.pre_process_steps) if config.pre_process_steps else ()
+        post_steps = (
+            tuple(type(step).__name__ for step in config.post_process_steps) if config.post_process_steps else ()
+        )
+        output_name = type(config.output_transformer).__name__ if config.output_transformer else "None"
+        finger_components = (
+            bool(config.enable_parsing),
+            bool(config.enable_validation),
+            bool(config.enable_transformations),
+            bool(config.enable_analysis),
+            bool(config.enable_expression_simplification),
+            bool(config.enable_parameter_type_wrapping),
+            bool(config.enable_caching),
+            str(config.dialect),
+            param_config.default_parameter_style.value,
+            param_config.default_execution_parameter_style.value,
+            param_config.hash(),
+            tuple(supported_styles),
+            tuple(exec_styles) if exec_styles else None,
+            converter_name,
+            validator_name,
+            pre_steps,
+            post_steps,
+            output_name,
+            bool(param_config.output_transformer),
+            bool(param_config.ast_transformer),
+            param_config.has_native_list_expansion,
+            param_config.allow_mixed_parameter_styles,
+            param_config.preserve_parameter_format,
+            param_config.preserve_original_params_for_many,
+        )
+        fingerprint = hash(finger_components)
+        return f"pipeline::{fingerprint}"
+
+
+_PIPELINE_REGISTRY: "StatementPipelineRegistry" = StatementPipelineRegistry()
+
+
+def compile_with_shared_pipeline(config: "Any", sql: str, parameters: Any, is_many: bool = False) -> "CompiledSQL":
+    return _PIPELINE_REGISTRY.compile(config, sql, parameters, is_many=is_many)
+
+
+def reset_statement_pipeline_cache() -> None:
+    _PIPELINE_REGISTRY.reset()
+
+
+def get_statement_pipeline_metrics() -> "list[dict[str, Any]]":
+    return _PIPELINE_REGISTRY.metrics()
+
+
+__all__ = (
+    "StatementPipelineRegistry",
+    "compile_with_shared_pipeline",
+    "get_statement_pipeline_metrics",
+    "reset_statement_pipeline_cache",
+)

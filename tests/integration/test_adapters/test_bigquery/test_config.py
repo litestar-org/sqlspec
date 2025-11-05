@@ -6,7 +6,7 @@ from google.auth.credentials import AnonymousCredentials
 from pytest_databases.docker.bigquery import BigQueryService
 
 from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("bigquery")
 

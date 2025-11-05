@@ -10,13 +10,16 @@ Tests for MigrationRunner core functionality including:
 """
 
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
 
+from sqlspec.migrations import runner as runner_module
 from sqlspec.migrations.base import BaseMigrationRunner
+from sqlspec.migrations.runner import SyncMigrationRunner
 
 pytestmark = pytest.mark.xdist_group("migrations")
 
@@ -99,6 +102,66 @@ def create_migration_runner_with_metadata(migrations_path: Path) -> BaseMigratio
             pass
 
     return TestMigrationRunner(migrations_path)
+
+
+def _write_basic_sql(path: Path, version: str, body: str = "SELECT 1;") -> None:
+    path.write_text(
+        f"""
+-- name: migrate-{version}-up
+{body}
+
+-- name: migrate-{version}-down
+{body}
+""".strip()
+    )
+
+
+def test_load_migration_metadata_uses_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure metadata caching prevents redundant checksum calculations."""
+
+    file_path = tmp_path / "0001_cached.sql"
+    _write_basic_sql(file_path, "0001")
+    runner = SyncMigrationRunner(tmp_path, {}, None, {})
+
+    checksum_calls = 0
+    original_checksum = runner_module.BaseMigrationRunner._calculate_checksum
+
+    def _tracked_checksum(self: Any, content: str) -> str:
+        nonlocal checksum_calls
+        checksum_calls += 1
+        return original_checksum(self, content)
+
+    monkeypatch.setattr(runner_module.BaseMigrationRunner, "_calculate_checksum", _tracked_checksum)
+
+    runner.load_migration(file_path)
+    runner.load_migration(file_path)
+
+    assert checksum_calls == 1
+
+
+def test_load_migration_metadata_invalidates_on_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Metadata cache invalidates when file content changes."""
+
+    file_path = tmp_path / "0001_mutated.sql"
+    _write_basic_sql(file_path, "0001")
+    runner = SyncMigrationRunner(tmp_path, {}, None, {})
+
+    checksum_calls = 0
+    original_checksum = runner_module.BaseMigrationRunner._calculate_checksum
+
+    def _tracked_checksum(self: Any, content: str) -> str:
+        nonlocal checksum_calls
+        checksum_calls += 1
+        return original_checksum(self, content)
+
+    monkeypatch.setattr(runner_module.BaseMigrationRunner, "_calculate_checksum", _tracked_checksum)
+
+    runner.load_migration(file_path)
+    time.sleep(0.01)
+    _write_basic_sql(file_path, "0001", body="SELECT 2;")
+    runner.load_migration(file_path)
+
+    assert checksum_calls == 2
 
 
 def test_migration_runner_initialization() -> None:

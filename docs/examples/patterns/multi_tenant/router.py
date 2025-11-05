@@ -1,7 +1,7 @@
 """Dispatch requests to dedicated SQLite configs per tenant."""
 
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 
 __all__ = ("TenantRouter", "main")
 

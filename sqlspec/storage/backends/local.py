@@ -6,13 +6,16 @@ No external dependencies like fsspec or obstore required.
 
 import shutil
 from collections.abc import AsyncIterator, Iterator
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.exceptions import FileNotFoundInStorageError
+from sqlspec.storage._utils import import_pyarrow_parquet
+from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -107,23 +110,32 @@ class LocalStore:
     def read_bytes(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from file."""
         resolved = self._resolve_path(path)
-        return resolved.read_bytes()
+        try:
+            return execute_sync_storage_operation(
+                lambda: resolved.read_bytes(), backend=self.backend_type, operation="read_bytes", path=str(resolved)
+            )
+        except FileNotFoundInStorageError as error:
+            raise FileNotFoundError(str(resolved)) from error
 
     def write_bytes(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
         """Write bytes to file."""
         resolved = self._resolve_path(path)
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_bytes(data)
+
+        def _action() -> None:
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_bytes(data)
+
+        execute_sync_storage_operation(_action, backend=self.backend_type, operation="write_bytes", path=str(resolved))
 
     def read_text(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from file."""
-        return self._resolve_path(path).read_text(encoding=encoding)
+        data = self.read_bytes(path, **kwargs)
+        return data.decode(encoding)
 
     def write_text(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to file."""
-        resolved = self._resolve_path(path)
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(data, encoding=encoding)
+        encoded = data.encode(encoding)
+        self.write_bytes(path, encoded, **kwargs)
 
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects in directory."""
@@ -163,10 +175,14 @@ class LocalStore:
     def delete(self, path: "str | Path", **kwargs: Any) -> None:
         """Delete file or directory."""
         resolved = self._resolve_path(path)
-        if resolved.is_dir():
-            shutil.rmtree(resolved)
-        elif resolved.exists():
-            resolved.unlink()
+
+        def _action() -> None:
+            if resolved.is_dir():
+                shutil.rmtree(resolved)
+            elif resolved.exists():
+                resolved.unlink()
+
+        execute_sync_storage_operation(_action, backend=self.backend_type, operation="delete", path=str(resolved))
 
     def copy(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy file or directory."""
@@ -174,17 +190,22 @@ class LocalStore:
         dst = self._resolve_path(destination)
         dst.parent.mkdir(parents=True, exist_ok=True)
 
-        if src.is_dir():
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src, dst)
+        def _action() -> None:
+            if src.is_dir():
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
+
+        execute_sync_storage_operation(_action, backend=self.backend_type, operation="copy", path=f"{src}->{dst}")
 
     def move(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Move file or directory."""
         src = self._resolve_path(source)
         dst = self._resolve_path(destination)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dst))
+        execute_sync_storage_operation(
+            lambda: shutil.move(str(src), str(dst)), backend=self.backend_type, operation="move", path=f"{src}->{dst}"
+        )
 
     def glob(self, pattern: str, **kwargs: Any) -> list[str]:
         """Find files matching pattern."""
@@ -210,6 +231,14 @@ class LocalStore:
     def get_metadata(self, path: "str | Path", **kwargs: Any) -> dict[str, Any]:
         """Get file metadata."""
         resolved = self._resolve_path(path)
+        return execute_sync_storage_operation(
+            lambda: self._collect_metadata(resolved),
+            backend=self.backend_type,
+            operation="get_metadata",
+            path=str(resolved),
+        )
+
+    def _collect_metadata(self, resolved: "Path") -> dict[str, Any]:
         if not resolved.exists():
             return {}
 
@@ -233,19 +262,28 @@ class LocalStore:
 
     def read_arrow(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from file."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
-
-        return pq.read_table(str(self._resolve_path(path)))  # pyright: ignore
+        pq = import_pyarrow_parquet()
+        resolved = self._resolve_path(path)
+        return cast(
+            "ArrowTable",
+            execute_sync_storage_operation(
+                lambda: pq.read_table(str(resolved), **kwargs),
+                backend=self.backend_type,
+                operation="read_arrow",
+                path=str(resolved),
+            ),
+        )
 
     def write_arrow(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to file."""
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
-
+        pq = import_pyarrow_parquet()
         resolved = self._resolve_path(path)
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        pq.write_table(table, str(resolved))  # pyright: ignore
+
+        def _action() -> None:
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            pq.write_table(table, str(resolved), **kwargs)  # pyright: ignore
+
+        execute_sync_storage_operation(_action, backend=self.backend_type, operation="write_arrow", path=str(resolved))
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from files matching pattern.
@@ -253,19 +291,21 @@ class LocalStore:
         Yields:
             Arrow record batches from matching files.
         """
-        ensure_pyarrow()
-        import pyarrow.parquet as pq
-
+        pq = import_pyarrow_parquet()
         files = self.glob(pattern)
         for file_path in files:
             resolved = self._resolve_path(file_path)
-            parquet_file = pq.ParquetFile(str(resolved))
+            resolved_str = str(resolved)
+            parquet_file = execute_sync_storage_operation(
+                partial(pq.ParquetFile, resolved_str),
+                backend=self.backend_type,
+                operation="stream_arrow",
+                path=resolved_str,
+            )
             yield from parquet_file.iter_batches()  # pyright: ignore
 
     def sign(self, path: "str | Path", expires_in: int = 3600, for_upload: bool = False) -> str:
         """Generate a signed URL (returns file:// URI for local files)."""
-        # For local files, just return a file:// URI
-        # No actual signing needed for local files
         return self._resolve_path(path).as_uri()
 
     # Async methods using sync_tools.async_

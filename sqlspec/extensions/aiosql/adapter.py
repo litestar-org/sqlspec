@@ -10,8 +10,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, ClassVar, Generic, TypeVar
 
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import SQL, SQLResult, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.typing import AiosqlAsyncProtocol, AiosqlParamType, AiosqlSQLOperationType, AiosqlSyncProtocol
 from sqlspec.utils.module_loader import ensure_aiosql

@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,6 +13,8 @@ import pytest
 from click.testing import CliRunner
 
 from sqlspec.cli import add_migration_commands
+
+MODULE_PREFIX = "cli_test_config_"
 
 if TYPE_CHECKING:
     from unittest.mock import Mock
@@ -24,10 +27,16 @@ def cleanup_test_modules() -> Iterator[None]:
     yield
     # Remove any test modules that were imported during the test
     modules_after = set(sys.modules.keys())
-    test_modules = {m for m in modules_after - modules_before if m.startswith("test_config")}
+    test_modules = {m for m in modules_after - modules_before if m.startswith(MODULE_PREFIX)}
     for module in test_modules:
         if module in sys.modules:
             del sys.modules[module]
+
+
+def _create_module(content: str, directory: "Path") -> str:
+    module_name = f"{MODULE_PREFIX}{uuid.uuid4().hex}"
+    (directory / f"{module_name}.py").write_text(content)
+    return module_name
 
 
 def test_show_config_command(cleanup_test_modules: None) -> None:
@@ -52,9 +61,9 @@ def get_config():
     )
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
-            result = runner.invoke(add_migration_commands(), ["--config", "test_config.get_config", "show-config"])
+            result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}.get_config", "show-config"])
 
         finally:
             os.chdir(original_dir)
@@ -91,9 +100,9 @@ def get_configs():
 
     return [sqlite_config, duckdb_config]
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
-            result = runner.invoke(add_migration_commands(), ["--config", "test_config.get_configs", "show-config"])
+            result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}.get_configs", "show-config"])
 
         finally:
             os.chdir(original_dir)
@@ -123,9 +132,9 @@ def get_config():
     )
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
-            result = runner.invoke(add_migration_commands(), ["--config", "test_config.get_config", "show-config"])
+            result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}.get_config", "show-config"])
 
         finally:
             os.chdir(original_dir)
@@ -161,10 +170,10 @@ def get_config():
     )
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
-                add_migration_commands(), ["--config", "test_config.get_config", "show-current-revision"]
+                add_migration_commands(), ["--config", f"{module_name}.get_config", "show-current-revision"]
             )
 
         finally:
@@ -198,10 +207,11 @@ def get_config():
     )
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
-                add_migration_commands(), ["--config", "test_config.get_config", "show-current-revision", "--verbose"]
+                add_migration_commands(),
+                ["--config", f"{module_name}.get_config", "show-current-revision", "--verbose"],
             )
 
         finally:
@@ -233,10 +243,10 @@ def get_config():
     config.migration_config = {"script_location": "test_migrations"}
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
-                add_migration_commands(), ["--config", "test_config.get_config", "init", "--no-prompt"]
+                add_migration_commands(), ["--config", f"{module_name}.get_config", "init", "--no-prompt"]
             )
 
         finally:
@@ -268,11 +278,11 @@ def get_config():
     config.migration_config = {"script_location": "migrations"}
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
                 add_migration_commands(),
-                ["--config", "test_config.get_config", "init", "custom_migrations", "--no-prompt"],
+                ["--config", f"{module_name}.get_config", "init", "custom_migrations", "--no-prompt"],
             )
 
         finally:
@@ -304,11 +314,11 @@ def get_config():
     config.migration_config = {"enabled": True}
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
                 add_migration_commands(),
-                ["--config", "test_config.get_config", "create-migration", "-m", "test migration", "--no-prompt"],
+                ["--config", f"{module_name}.get_config", "create-migration", "-m", "test migration", "--no-prompt"],
             )
 
         finally:
@@ -340,11 +350,11 @@ def get_config():
     config.migration_config = {"enabled": True}
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
                 add_migration_commands(),
-                ["--config", "test_config.get_config", "make-migration", "-m", "test migration", "--no-prompt"],
+                ["--config", f"{module_name}.get_config", "make-migration", "-m", "test migration", "--no-prompt"],
             )
 
         finally:
@@ -376,10 +386,10 @@ def get_config():
     config.migration_config = {"enabled": True}
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
-                add_migration_commands(), ["--config", "test_config.get_config", "upgrade", "--no-prompt"]
+                add_migration_commands(), ["--config", f"{module_name}.get_config", "upgrade", "--no-prompt"]
             )
 
         finally:
@@ -411,10 +421,10 @@ def get_config():
     config.migration_config = {"enabled": True}
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
-                add_migration_commands(), ["--config", "test_config.get_config", "upgrade", "abc123", "--no-prompt"]
+                add_migration_commands(), ["--config", f"{module_name}.get_config", "upgrade", "abc123", "--no-prompt"]
             )
 
         finally:
@@ -446,10 +456,10 @@ def get_config():
     config.migration_config = {"enabled": True}
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
-                add_migration_commands(), ["--config", "test_config.get_config", "downgrade", "--no-prompt"]
+                add_migration_commands(), ["--config", f"{module_name}.get_config", "downgrade", "--no-prompt"]
             )
 
         finally:
@@ -481,9 +491,11 @@ def get_config():
     config.migration_config = {"enabled": True}
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
-            result = runner.invoke(add_migration_commands(), ["--config", "test_config.get_config", "stamp", "abc123"])
+            result = runner.invoke(
+                add_migration_commands(), ["--config", f"{module_name}.get_config", "stamp", "abc123"]
+            )
 
         finally:
             os.chdir(original_dir)
@@ -520,11 +532,11 @@ def get_configs():
 
     return [sqlite_config, duckdb_config]
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
                 add_migration_commands(),
-                ["--config", "test_config.get_configs", "show-current-revision", "--include", "sqlite_multi"],
+                ["--config", f"{module_name}.get_configs", "show-current-revision", "--include", "sqlite_multi"],
             )
 
         finally:
@@ -562,10 +574,10 @@ def get_configs():
 
     return [config1, config2]
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
-                add_migration_commands(), ["--config", "test_config.get_configs", "upgrade", "--dry-run"]
+                add_migration_commands(), ["--config", f"{module_name}.get_configs", "upgrade", "--dry-run"]
             )
 
         finally:
@@ -595,7 +607,7 @@ def get_config():
     config.migration_config = {"enabled": True}
     return config
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             with patch("sqlspec.migrations.commands.create_migration_commands") as mock_create:
                 mock_commands = Mock()
@@ -604,7 +616,7 @@ def get_config():
 
                 result = runner.invoke(
                     add_migration_commands(),
-                    ["--config", "test_config.get_config", "upgrade", "--execution-mode", "sync", "--no-prompt"],
+                    ["--config", f"{module_name}.get_config", "upgrade", "--execution-mode", "sync", "--no-prompt"],
                 )
 
         finally:
@@ -632,11 +644,11 @@ def get_config():
         migration_config={"enabled": True, "script_location": "migrations"}
     )
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
                 add_migration_commands(),
-                ["--config", "test_config.get_config", "show-config", "--bind-key", "target_config"],
+                ["--config", f"{module_name}.get_config", "show-config", "--bind-key", "target_config"],
             )
 
         finally:
@@ -679,12 +691,12 @@ def get_configs():
 
     return [sqlite_config, duckdb_config, postgres_config]
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             # Test filtering for sqlite_db only
             result = runner.invoke(
                 add_migration_commands(),
-                ["--config", "test_config.get_configs", "show-config", "--bind-key", "sqlite_db"],
+                ["--config", f"{module_name}.get_configs", "show-config", "--bind-key", "sqlite_db"],
             )
 
         finally:
@@ -718,11 +730,11 @@ def get_configs():
         )
     ]
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
                 add_migration_commands(),
-                ["--config", "test_config.get_configs", "show-config", "--bind-key", "nonexistent"],
+                ["--config", f"{module_name}.get_configs", "show-config", "--bind-key", "nonexistent"],
             )
 
         finally:
@@ -763,11 +775,18 @@ def get_multi_configs():
         )
     ]
 """
-            Path("test_config.py").write_text(config_module)
+            module_name = _create_module(config_module, Path(temp_dir))
 
             result = runner.invoke(
                 add_migration_commands(),
-                ["--config", "test_config.get_multi_configs", "upgrade", "--bind-key", "analytics_db", "--no-prompt"],
+                [
+                    "--config",
+                    f"{module_name}.get_multi_configs",
+                    "upgrade",
+                    "--bind-key",
+                    "analytics_db",
+                    "--no-prompt",
+                ],
             )
 
         finally:

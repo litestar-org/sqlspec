@@ -3,7 +3,7 @@
 import datetime
 from uuid import UUID, uuid4
 
-from sqlspec.core.filters import (
+from sqlspec.core import (
     BeforeAfterFilter,
     InCollectionFilter,
     LimitOffsetFilter,

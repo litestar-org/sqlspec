@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
-from sqlspec.core.result import SQLResult
+from sqlspec.core import SQLResult
 
 
 def _lower_dict(data: dict[str, Any]) -> dict[str, Any]:
