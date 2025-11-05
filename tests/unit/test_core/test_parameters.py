@@ -669,6 +669,8 @@ def test_extract_parameters(
         ("SELECT * FROM json WHERE data ?| array['key']", True),
         ("SELECT * FROM json WHERE data ?& array['key']", True),
         ("SELECT * FROM users WHERE id::int = 5", False),
+        ("SELECT * FROM v$version", True),
+        ('SELECT * FROM "V$VERSION"', True),
     ],
 )
 def test_extract_parameters_ignores_special_cases(
