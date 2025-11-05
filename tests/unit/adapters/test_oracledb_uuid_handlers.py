@@ -1,7 +1,7 @@
 """Unit tests for Oracle UUID type handlers."""
 
 import uuid
-from unittest.mock import MagicMock, Mock
+from unittest.mock import Mock
 
 from sqlspec.adapters.oracledb._uuid_handlers import (
     _input_type_handler,
@@ -89,11 +89,7 @@ def test_uuid_converter_out_value_error() -> None:
 
 def test_uuid_variants() -> None:
     """Test all UUID variants (v1, v4, v5) roundtrip correctly."""
-    test_uuids = [
-        uuid.uuid1(),
-        uuid.uuid4(),
-        uuid.uuid5(uuid.NAMESPACE_DNS, "example.com"),
-    ]
+    test_uuids = [uuid.uuid1(), uuid.uuid4(), uuid.uuid5(uuid.NAMESPACE_DNS, "example.com")]
 
     for test_uuid in test_uuids:
         binary = uuid_converter_in(test_uuid)
@@ -125,11 +121,7 @@ def test_input_type_handler_with_uuid() -> None:
     result = _input_type_handler(cursor, test_uuid, arraysize)
 
     assert result is cursor_var
-    cursor.var.assert_called_once_with(
-        oracledb.DB_TYPE_RAW,
-        arraysize=arraysize,
-        inconverter=uuid_converter_in
-    )
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_RAW, arraysize=arraysize, inconverter=uuid_converter_in)
 
 
 def test_input_type_handler_with_non_uuid() -> None:
@@ -176,11 +168,7 @@ def test_output_type_handler_with_raw16() -> None:
     result = _output_type_handler(cursor, metadata)
 
     assert result is cursor_var
-    cursor.var.assert_called_once_with(
-        oracledb.DB_TYPE_RAW,
-        arraysize=50,
-        outconverter=uuid_converter_out
-    )
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_RAW, arraysize=50, outconverter=uuid_converter_out)
 
 
 def test_output_type_handler_with_raw32() -> None:
@@ -295,11 +283,7 @@ def test_register_uuid_handlers_chaining_uuid_takes_priority() -> None:
 
     existing_input.assert_not_called()
     assert result is cursor_var
-    cursor.var.assert_called_once_with(
-        oracledb.DB_TYPE_RAW,
-        arraysize=1,
-        inconverter=uuid_converter_in
-    )
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_RAW, arraysize=1, inconverter=uuid_converter_in)
 
 
 def test_register_uuid_handlers_output_chaining() -> None:
@@ -324,3 +308,65 @@ def test_register_uuid_handlers_output_chaining() -> None:
 
     existing_output.assert_called_once_with(cursor, metadata)
     assert result is existing_output_result
+
+
+def test_combined_input_handler_no_existing_non_uuid() -> None:
+    """Test combined input handler returns None when no existing handler and non-UUID value."""
+    connection = Mock()
+    connection.inputtypehandler = None
+    connection.outputtypehandler = None
+
+    register_uuid_handlers(connection)
+
+    cursor = Mock()
+    result = connection.inputtypehandler(cursor, "not a uuid", 1)
+
+    assert result is None
+
+
+def test_combined_output_handler_no_existing_non_raw16() -> None:
+    """Test combined output handler returns None when no existing handler and non-RAW16."""
+    import oracledb
+
+    connection = Mock()
+    connection.inputtypehandler = None
+    connection.outputtypehandler = None
+
+    register_uuid_handlers(connection)
+
+    cursor = Mock()
+    metadata = Mock()
+    metadata.type_code = oracledb.DB_TYPE_VARCHAR
+    metadata.size = 36
+
+    result = connection.outputtypehandler(cursor, metadata)
+
+    assert result is None
+
+
+def test_combined_output_handler_raw16_priority() -> None:
+    """Test combined output handler prioritizes UUID handler for RAW16."""
+    import oracledb
+
+    existing_output = Mock(return_value=Mock())
+
+    connection = Mock()
+    connection.inputtypehandler = None
+    connection.outputtypehandler = existing_output
+
+    register_uuid_handlers(connection)
+
+    cursor = Mock()
+    cursor.arraysize = 50
+    cursor_var = Mock()
+    cursor.var = Mock(return_value=cursor_var)
+
+    metadata = Mock()
+    metadata.type_code = oracledb.DB_TYPE_RAW
+    metadata.size = 16
+
+    result = connection.outputtypehandler(cursor, metadata)
+
+    existing_output.assert_not_called()
+    assert result is cursor_var
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_RAW, arraysize=50, outconverter=uuid_converter_out)
