@@ -97,7 +97,6 @@ class TestParameterRegexPerformance:
             ("SELECT * FROM user$data WHERE id = :id", ["id"]),
             ("SELECT * FROM price@2023 WHERE amount > @amount", ["amount"]),
             ("SELECT * FROM log:entry WHERE time = :time", ["time"]),
-
             # Column names - NOTE: @column IS detected as parameter in SQL Server
             # This is correct behavior - if you write SELECT @var, it's a parameter
             ("SELECT user$id, :param FROM table", ["param"]),
