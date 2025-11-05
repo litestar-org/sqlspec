@@ -550,15 +550,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 except (TypeError, psqlpy.exceptions.DatabaseError) as exc:
                     logger.debug("Binary COPY not available for psqlpy; falling back to INSERT statements: %s", exc)
                     insert_sql = _build_psqlpy_insert_statement(table, columns)
-                    formatted_records: list[list[Any]] = []
-                    for record in records:
-                        coerced = _coerce_numeric_for_write(record)
-                        if isinstance(coerced, tuple):
-                            formatted_records.append(list(coerced))
-                        elif isinstance(coerced, list):
-                            formatted_records.append(coerced)
-                        else:
-                            formatted_records.append([coerced])
+                    formatted_records = _coerce_records_for_execute_many(records)
                     insert_operation = cursor.execute_many(insert_sql, formatted_records)
                     if inspect.isawaitable(insert_operation):
                         await insert_operation
@@ -834,6 +826,19 @@ def _build_psqlpy_insert_statement(table: str, columns: "list[str]") -> str:
     column_clause = ", ".join(_quote_identifier(column) for column in columns)
     placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
     return f"INSERT INTO {_format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+
+
+def _coerce_records_for_execute_many(records: "list[tuple[Any, ...]]") -> "list[list[Any]]":
+    formatted_records: list[list[Any]] = []
+    for record in records:
+        coerced = _coerce_numeric_for_write(record)
+        if isinstance(coerced, tuple):
+            formatted_records.append(list(coerced))
+        elif isinstance(coerced, list):
+            formatted_records.append(coerced)
+        else:
+            formatted_records.append([coerced])
+    return formatted_records
 
 
 def _build_psqlpy_profile() -> DriverParameterProfile:

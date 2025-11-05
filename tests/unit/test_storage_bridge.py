@@ -148,7 +148,11 @@ async def test_psqlpy_load_from_arrow_overwrite() -> None:
     assert dummy_connection.statements == ['TRUNCATE TABLE "analytics"."ingest_target"']
     assert dummy_connection.copy_calls[0]["table"] == "ingest_target"
     assert dummy_connection.copy_calls[0]["schema"] == "analytics"
-    assert dummy_connection.copy_calls[0]["records"] == [(7, "east"), (8, "west")]
+    payload = dummy_connection.copy_calls[0]["records"]
+    if isinstance(payload, bytes):
+        assert payload == b"7\teast\n8\twest\n"
+    else:
+        assert payload == [(7, "east"), (8, "west")]
     assert job.telemetry["destination"] == "analytics.ingest_target"
     assert job.telemetry["rows_processed"] == arrow_table.num_rows
 
