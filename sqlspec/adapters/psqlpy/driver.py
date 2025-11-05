@@ -7,6 +7,7 @@ and transaction management.
 import datetime
 import decimal
 import inspect
+import io
 import re
 import uuid
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -541,10 +542,26 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 copy_kwargs: dict[str, Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
-                copy_source: Any = records
-                copy_operation = cursor.binary_copy_to_table(copy_source, table_name, **copy_kwargs)  # pyright: ignore[reportArgumentType]
-                if inspect.isawaitable(copy_operation):
-                    await copy_operation
+                try:
+                    copy_payload = _encode_records_for_binary_copy(records)
+                    copy_operation = cursor.binary_copy_to_table(copy_payload, table_name, **copy_kwargs)
+                    if inspect.isawaitable(copy_operation):
+                        await copy_operation
+                except (TypeError, psqlpy.exceptions.DatabaseError) as exc:
+                    logger.debug("Binary COPY not available for psqlpy; falling back to INSERT statements: %s", exc)
+                    insert_sql = _build_psqlpy_insert_statement(table, columns)
+                    formatted_records: list[list[Any]] = []
+                    for record in records:
+                        coerced = _coerce_numeric_for_write(record)
+                        if isinstance(coerced, tuple):
+                            formatted_records.append(list(coerced))
+                        elif isinstance(coerced, list):
+                            formatted_records.append(coerced)
+                        else:
+                            formatted_records.append([coerced])
+                    insert_operation = cursor.execute_many(insert_sql, formatted_records)
+                    if inspect.isawaitable(insert_operation):
+                        await insert_operation
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -747,6 +764,42 @@ def _coerce_numeric_for_write(value: Any) -> Any:
     return value
 
 
+def _escape_copy_text(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def _format_copy_value(value: Any) -> str:
+    if value is None:
+        return r"\N"
+    if isinstance(value, bool):
+        return "t" if value else "f"
+    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, (list, tuple, dict)):
+        return to_json(value)
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8")
+    return str(_coerce_numeric_for_write(value))
+
+
+def _encode_records_for_binary_copy(records: "list[tuple[Any, ...]]") -> bytes:
+    """Encode row tuples into a bytes payload compatible with binary_copy_to_table.
+
+    Args:
+        records: Sequence of row tuples extracted from the Arrow table.
+
+    Returns:
+        UTF-8 encoded bytes buffer representing the COPY payload.
+    """
+
+    buffer = io.StringIO()
+    for record in records:
+        encoded_columns = [_escape_copy_text(_format_copy_value(value)) for value in record]
+        buffer.write("\t".join(encoded_columns))
+        buffer.write("\n")
+    return buffer.getvalue().encode("utf-8")
+
+
 def _split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
     cleaned = identifier.strip()
     if not cleaned:
@@ -775,6 +828,12 @@ def _format_table_identifier(identifier: str) -> str:
     if schema_name:
         return f"{_quote_identifier(schema_name)}.{_quote_identifier(table_name)}"
     return _quote_identifier(table_name)
+
+
+def _build_psqlpy_insert_statement(table: str, columns: "list[str]") -> str:
+    column_clause = ", ".join(_quote_identifier(column) for column in columns)
+    placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
+    return f"INSERT INTO {_format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
 def _build_psqlpy_profile() -> DriverParameterProfile:
