@@ -1,14 +1,19 @@
 """SQLite driver implementation."""
 
 import contextlib
-import datetime
 import sqlite3
+from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import (
+    ArrowResult,
+    DriverParameterProfile,
+    ParameterStyle,
+    build_statement_config_from_profile,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -23,15 +28,22 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from sqlspec.adapters.sqlite._types import SqliteConnection
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
+    from sqlspec.storage import (
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "sqlite_statement_config")
 
@@ -43,31 +55,8 @@ SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
-
-sqlite_statement_config = StatementConfig(
-    dialect="sqlite",
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-        default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-        type_coercion_map={
-            bool: int,
-            datetime.datetime: lambda v: v.isoformat(),
-            datetime.date: lambda v: v.isoformat(),
-            Decimal: str,
-            dict: to_json,
-            list: to_json,
-        },
-        has_native_list_expansion=False,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-    ),
-    enable_parsing=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-)
+_TIME_TO_ISO = build_time_iso_converter()
+_DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
 
 class SqliteCursor:
@@ -359,6 +348,70 @@ class SqliteDriver(SyncDriverAdapterBase):
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and write Arrow-compatible output to storage (sync)."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = arrow_result.write_to_storage_sync(
+            destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into SQLite using batched inserts."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            self._truncate_table_sync(table)
+
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            insert_sql = _build_sqlite_insert_statement(table, columns)
+            with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+                cursor.executemany(insert_sql, records)
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage into SQLite."""
+
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
     def begin(self) -> None:
         """Begin a database transaction.
 
@@ -384,6 +437,11 @@ class SqliteDriver(SyncDriverAdapterBase):
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
 
+    def _truncate_table_sync(self, table: str) -> None:
+        statement = f"DELETE FROM {_format_sqlite_identifier(table)}"
+        with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            cursor.execute(statement)
+
     def commit(self) -> None:
         """Commit the current transaction.
 
@@ -408,3 +466,62 @@ class SqliteDriver(SyncDriverAdapterBase):
 
             self._data_dictionary = SqliteSyncDataDictionary()
         return self._data_dictionary
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _quote_sqlite_identifier(identifier: str) -> str:
+    normalized = identifier.replace('"', '""')
+    return f'"{normalized}"'
+
+
+def _format_sqlite_identifier(identifier: str) -> str:
+    cleaned = identifier.strip()
+    if not cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    parts = [part for part in cleaned.split(".") if part]
+    formatted = ".".join(_quote_sqlite_identifier(part) for part in parts)
+    return formatted or _quote_sqlite_identifier(cleaned)
+
+
+def _build_sqlite_insert_statement(table: str, columns: "list[str]") -> str:
+    column_clause = ", ".join(_quote_sqlite_identifier(column) for column in columns)
+    placeholders = ", ".join("?" for _ in columns)
+    return f"INSERT INTO {_format_sqlite_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+
+
+def _build_sqlite_profile() -> DriverParameterProfile:
+    """Create the SQLite driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="SQLite",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            bool: _bool_to_int,
+            datetime: _TIME_TO_ISO,
+            date: _TIME_TO_ISO,
+            Decimal: _DECIMAL_TO_STRING,
+        },
+        default_dialect="sqlite",
+    )
+
+
+_SQLITE_PROFILE = _build_sqlite_profile()
+
+register_driver_profile("sqlite", _SQLITE_PROFILE)
+
+sqlite_statement_config = build_statement_config_from_profile(
+    _SQLITE_PROFILE, statement_overrides={"dialect": "sqlite"}, json_serializer=to_json
+)

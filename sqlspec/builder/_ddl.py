@@ -7,18 +7,18 @@ TRUNCATE, and other schema manipulation statements.
 from typing import TYPE_CHECKING, Any, Union
 
 from sqlglot import exp
-from sqlglot.dialects.dialect import DialectType
 from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder._select import Select
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL, SQLResult
 from sqlspec.utils.type_guards import has_sqlglot_expression, has_with_method
 
 if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.builder._column import ColumnExpression
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 __all__ = (
     "AlterOperation",
@@ -173,7 +173,7 @@ class DDLBuilder(QueryBuilder):
 
     __slots__ = ()
 
-    def __init__(self, dialect: DialectType = None) -> None:
+    def __init__(self, dialect: "DialectType" = None) -> None:
         super().__init__(dialect=dialect)
         self._expression: exp.Expression | None = None
 
@@ -185,10 +185,10 @@ class DDLBuilder(QueryBuilder):
     def _expected_result_type(self) -> "type[SQLResult]":
         return SQLResult
 
-    def build(self) -> "SafeQuery":
+    def build(self, dialect: "DialectType" = None) -> "SafeQuery":
         if self._expression is None:
             self._expression = self._create_base_expression()
-        return super().build()
+        return super().build(dialect=dialect)
 
     def to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
         return super().to_statement(config=config)
@@ -306,7 +306,7 @@ class CreateTable(DDLBuilder):
         "_temporary",
     )
 
-    def __init__(self, table_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, table_name: str, dialect: "DialectType" = None) -> None:
         super().__init__(dialect=dialect)
         self._table_name = table_name
         self._if_not_exists = False
@@ -595,7 +595,7 @@ class DropTable(DDLBuilder):
 
     __slots__ = ("_cascade", "_if_exists", "_table_name")
 
-    def __init__(self, table_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, table_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP TABLE with table name.
 
         Args:
@@ -636,7 +636,7 @@ class DropIndex(DDLBuilder):
 
     __slots__ = ("_cascade", "_if_exists", "_index_name", "_table_name")
 
-    def __init__(self, index_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, index_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP INDEX with index name.
 
         Args:
@@ -686,7 +686,7 @@ class DropView(DDLBuilder):
 
     __slots__ = ("_cascade", "_if_exists", "_view_name")
 
-    def __init__(self, view_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, view_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP VIEW with view name.
 
         Args:
@@ -727,7 +727,7 @@ class DropSchema(DDLBuilder):
 
     __slots__ = ("_cascade", "_if_exists", "_schema_name")
 
-    def __init__(self, schema_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, schema_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP SCHEMA with schema name.
 
         Args:
@@ -768,7 +768,7 @@ class CreateIndex(DDLBuilder):
 
     __slots__ = ("_columns", "_if_not_exists", "_index_name", "_table_name", "_unique", "_using", "_where")
 
-    def __init__(self, index_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, index_name: str, dialect: "DialectType" = None) -> None:
         """Initialize CREATE INDEX with index name.
 
         Args:
@@ -845,7 +845,7 @@ class Truncate(DDLBuilder):
 
     __slots__ = ("_cascade", "_identity", "_table_name")
 
-    def __init__(self, table_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, table_name: str, dialect: "DialectType" = None) -> None:
         """Initialize TRUNCATE with table name.
 
         Args:
@@ -930,7 +930,7 @@ class CreateSchema(DDLBuilder):
 
     __slots__ = ("_authorization", "_if_not_exists", "_schema_name")
 
-    def __init__(self, schema_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, schema_name: str, dialect: "DialectType" = None) -> None:
         """Initialize CREATE SCHEMA with schema name.
 
         Args:
@@ -993,7 +993,7 @@ class CreateTableAsSelect(DDLBuilder):
 
     __slots__ = ("_columns", "_if_not_exists", "_select_query", "_table_name")
 
-    def __init__(self, dialect: DialectType = None) -> None:
+    def __init__(self, dialect: "DialectType" = None) -> None:
         super().__init__(dialect=dialect)
         self._table_name: str | None = None
         self._if_not_exists = False
@@ -1078,7 +1078,7 @@ class CreateMaterializedView(DDLBuilder):
         "_with_data",
     )
 
-    def __init__(self, view_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, view_name: str, dialect: "DialectType" = None) -> None:
         """Initialize CREATE MATERIALIZED VIEW with view name.
 
         Args:
@@ -1203,7 +1203,7 @@ class CreateView(DDLBuilder):
 
     __slots__ = ("_columns", "_hints", "_if_not_exists", "_select_query", "_view_name")
 
-    def __init__(self, view_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, view_name: str, dialect: "DialectType" = None) -> None:
         """Initialize CREATE VIEW with view name.
 
         Args:
@@ -1297,7 +1297,7 @@ class AlterTable(DDLBuilder):
 
     __slots__ = ("_if_exists", "_operations", "_schema", "_table_name")
 
-    def __init__(self, table_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, table_name: str, dialect: "DialectType" = None) -> None:
         super().__init__(dialect=dialect)
         self._table_name = table_name
         self._operations: list[AlterOperation] = []
@@ -1559,7 +1559,7 @@ class CommentOn(DDLBuilder):
 
     __slots__ = ("_column", "_comment", "_table", "_target_type")
 
-    def __init__(self, dialect: DialectType = None) -> None:
+    def __init__(self, dialect: "DialectType" = None) -> None:
         """Initialize COMMENT ON builder.
 
         Args:
@@ -1605,7 +1605,7 @@ class RenameTable(DDLBuilder):
 
     __slots__ = ("_new_name", "_old_name")
 
-    def __init__(self, old_name: str, dialect: DialectType = None) -> None:
+    def __init__(self, old_name: str, dialect: "DialectType" = None) -> None:
         """Initialize RENAME TABLE with old name.
 
         Args:

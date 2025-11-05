@@ -1,14 +1,16 @@
 # pyright: ignore[reportAttributeAccessIssue]
 from collections.abc import Iterator
 from functools import lru_cache
-from typing import Annotated, Any, Protocol, TypeAlias, _TypedDict  # pyright: ignore
+from typing import Annotated, Any, Literal, Protocol, TypeAlias, _TypedDict  # pyright: ignore
 
 from typing_extensions import TypeVar
 
 from sqlspec._typing import (
     AIOSQL_INSTALLED,
+    ALLOYDB_CONNECTOR_INSTALLED,
     ATTRS_INSTALLED,
     CATTRS_INSTALLED,
+    CLOUD_SQL_CONNECTOR_INSTALLED,
     FSSPEC_INSTALLED,
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
@@ -66,6 +68,7 @@ from sqlspec._typing import (
     cattrs_structure,
     cattrs_unstructure,
     convert,
+    module_available,
     trace,
 )
 
@@ -116,6 +119,15 @@ Represents:
 - :type:`tuple[Any, ...]`
 - :type:`None`
 """
+ArrowReturnFormat: TypeAlias = Literal["table", "reader", "batch", "batches"]
+"""Type alias for Apache Arrow return format options.
+
+Represents:
+- :literal:`"table"` - Return PyArrow Table
+- :literal:`"reader"` - Return PyArrow RecordBatchReader
+- :literal:`"batch"` - Return single PyArrow RecordBatch
+- :literal:`"batches"` - Return list of PyArrow RecordBatches
+"""
 
 
 @lru_cache(typed=True)
@@ -135,8 +147,10 @@ def get_type_adapter(f: "type[T]") -> Any:
 
 __all__ = (
     "AIOSQL_INSTALLED",
+    "ALLOYDB_CONNECTOR_INSTALLED",
     "ATTRS_INSTALLED",
     "CATTRS_INSTALLED",
+    "CLOUD_SQL_CONNECTOR_INSTALLED",
     "FSSPEC_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
@@ -159,6 +173,7 @@ __all__ = (
     "ArrowRecordBatch",
     "ArrowRecordBatchReader",
     "ArrowRecordBatchReaderProtocol",
+    "ArrowReturnFormat",
     "ArrowSchema",
     "ArrowSchemaProtocol",
     "ArrowTable",
@@ -199,5 +214,6 @@ __all__ = (
     "cattrs_unstructure",
     "convert",
     "get_type_adapter",
+    "module_available",
     "trace",
 )

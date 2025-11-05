@@ -1,42 +1,32 @@
 """Integration tests for Psqlpy ADK store owner_id_column feature."""
 
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING
 
 import pytest
 
 from sqlspec.adapters.psqlpy.adk.store import PsqlpyADKStore
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
-if TYPE_CHECKING:
-    from pytest_databases.docker.postgres import PostgresService
-
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.postgres, pytest.mark.integration]
 
 
 @pytest.fixture
-async def psqlpy_store_with_fk(postgres_service: "PostgresService") -> "AsyncGenerator[PsqlpyADKStore, None]":
+async def psqlpy_store_with_fk(psqlpy_config: PsqlpyConfig) -> "AsyncGenerator[PsqlpyADKStore, None]":
     """Create Psqlpy ADK store with owner_id_column configured."""
-    dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    config = PsqlpyConfig(
-        pool_config={"dsn": dsn, "max_db_pool_size": 5},
-        extension_config={
-            "adk": {
-                "session_table": "test_sessions_fk",
-                "events_table": "test_events_fk",
-                "owner_id_column": "tenant_id INTEGER NOT NULL",
-            }
-        },
-    )
-    store = PsqlpyADKStore(config)
+    psqlpy_config.extension_config = {
+        "adk": {
+            "session_table": "test_sessions_fk",
+            "events_table": "test_events_fk",
+            "owner_id_column": "tenant_id INTEGER NOT NULL",
+        }
+    }
+    store = PsqlpyADKStore(psqlpy_config)
     await store.create_tables()
     yield store
 
-    async with config.provide_connection() as conn:
+    async with psqlpy_config.provide_connection() as conn:
         await conn.execute("DROP TABLE IF EXISTS test_events_fk CASCADE", [])
         await conn.execute("DROP TABLE IF EXISTS test_sessions_fk CASCADE", [])
-
-    await config.close_pool()
 
 
 async def test_store_owner_id_column_initialization(psqlpy_store_with_fk: PsqlpyADKStore) -> None:
@@ -45,42 +35,30 @@ async def test_store_owner_id_column_initialization(psqlpy_store_with_fk: Psqlpy
     assert psqlpy_store_with_fk.owner_id_column_name == "tenant_id"
 
 
-async def test_store_inherits_owner_id_column(postgres_service: "PostgresService") -> None:
+async def test_store_inherits_owner_id_column(psqlpy_config: PsqlpyConfig) -> None:
     """Test that store correctly inherits owner_id_column from base class."""
-    dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    config = PsqlpyConfig(
-        pool_config={"dsn": dsn, "max_db_pool_size": 5},
-        extension_config={
-            "adk": {
-                "session_table": "test_inherit",
-                "events_table": "test_events_inherit",
-                "owner_id_column": "org_id UUID",
-            }
-        },
-    )
-    store = PsqlpyADKStore(config)
+    psqlpy_config.extension_config = {
+        "adk": {
+            "session_table": "test_inherit",
+            "events_table": "test_events_inherit",
+            "owner_id_column": "org_id UUID",
+        }
+    }
+    store = PsqlpyADKStore(psqlpy_config)
 
     assert hasattr(store, "_owner_id_column_ddl")
     assert hasattr(store, "_owner_id_column_name")
     assert store.owner_id_column_ddl == "org_id UUID"
     assert store.owner_id_column_name == "org_id"
 
-    await config.close_pool()
 
-
-async def test_store_without_owner_id_column(postgres_service: "PostgresService") -> None:
+async def test_store_without_owner_id_column(psqlpy_config: PsqlpyConfig) -> None:
     """Test that store works without owner_id_column (default behavior)."""
-    dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    config = PsqlpyConfig(
-        pool_config={"dsn": dsn, "max_db_pool_size": 5},
-        extension_config={"adk": {"session_table": "test_no_fk", "events_table": "test_events_no_fk"}},
-    )
-    store = PsqlpyADKStore(config)
+    psqlpy_config.extension_config = {"adk": {"session_table": "test_no_fk", "events_table": "test_events_no_fk"}}
+    store = PsqlpyADKStore(psqlpy_config)
 
     assert store.owner_id_column_ddl is None
     assert store.owner_id_column_name is None
-
-    await config.close_pool()
 
 
 async def test_create_session_with_owner_id(psqlpy_store_with_fk: PsqlpyADKStore) -> None:

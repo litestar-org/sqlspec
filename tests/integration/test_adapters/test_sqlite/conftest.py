@@ -46,6 +46,19 @@ def sqlite_session() -> Generator[SqliteDriver, None, None]:
 
 
 @pytest.fixture
+def sqlite_basic_session() -> Generator[SqliteDriver, None, None]:
+    """Yield a bare SQLite session for tests needing a clean database."""
+
+    config = SqliteConfig(pool_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as session:
+            session.execute("PRAGMA foreign_keys = ON")
+            yield session
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
 def sqlite_driver() -> Generator[SqliteDriver, None, None]:
     """Create a SQLite driver with a test table for direct driver testing.
 

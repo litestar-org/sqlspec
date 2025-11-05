@@ -40,7 +40,13 @@ from sqlspec.builder._expression_wrappers import (
     MathExpression,
     StringExpression,
 )
-from sqlspec.builder._factory import SQLFactory, sql
+from sqlspec.builder._factory import (
+    SQLFactory,
+    build_copy_from_statement,
+    build_copy_statement,
+    build_copy_to_statement,
+    sql,
+)
 from sqlspec.builder._insert import Insert
 from sqlspec.builder._join import JoinBuilder
 from sqlspec.builder._merge import Merge
@@ -127,6 +133,9 @@ __all__ = (
     "UpdateTableClauseMixin",
     "WhereClauseMixin",
     "WindowFunctionBuilder",
+    "build_copy_from_statement",
+    "build_copy_statement",
+    "build_copy_to_statement",
     "extract_expression",
     "parse_column_expression",
     "parse_condition_expression",

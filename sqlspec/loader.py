@@ -12,9 +12,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import unquote, urlparse
 
-from sqlspec.core.cache import get_cache, get_cache_config
-from sqlspec.core.statement import SQL
-from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, StorageOperationFailedError
+from sqlspec.core import SQL, get_cache, get_cache_config
+from sqlspec.exceptions import (
+    FileNotFoundInStorageError,
+    SQLFileNotFoundError,
+    SQLFileParseError,
+    StorageOperationFailedError,
+)
 from sqlspec.storage.registry import storage_registry as default_storage_registry
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
@@ -260,9 +264,11 @@ class SQLFileLoader:
             return backend.read_text(path_str, encoding=self.encoding)
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e
+        except FileNotFoundInStorageError as e:
+            raise SQLFileNotFoundError(path_str) from e
+        except FileNotFoundError as e:
+            raise SQLFileNotFoundError(path_str) from e
         except StorageOperationFailedError as e:
-            if "not found" in str(e).lower() or "no such file" in str(e).lower():
-                raise SQLFileNotFoundError(path_str) from e
             raise SQLFileParseError(path_str, path_str, e) from e
         except Exception as e:
             raise SQLFileParseError(path_str, path_str, e) from e

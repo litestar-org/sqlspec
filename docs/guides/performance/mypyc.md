@@ -704,7 +704,7 @@ class SQLiteDriver(SyncStorageMixin["sqlite3.Connection", "sqlite3.Row"]):
 
 ```python
 # ✅ DO: Use TypedParameter for type preservation
-from sqlspec.core.parameters.types import TypedParameter
+from sqlspec.core import TypedParameter
 
 class TypedParameter:
     __slots__ = ("name", "value", "type")
@@ -850,11 +850,11 @@ def safe_operation(items: list[Any]) -> None:
 
 ```python
 # ✅ DO: Import from compiled modules
-from sqlspec.core.result import SQLResult  # Compiled module
+from sqlspec.core import SQLResult  # Compiled module
 
 # ❌ DON'T: Use circular imports or dynamic imports
 def get_result_class():
-    from sqlspec.core.result import SQLResult  # Late import
+    from sqlspec.core import SQLResult  # Late import
     return SQLResult
 ```
 

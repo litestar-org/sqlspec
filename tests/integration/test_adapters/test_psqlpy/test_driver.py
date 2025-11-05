@@ -7,8 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import pytest
 
 from sqlspec.adapters.psqlpy import PsqlpyDriver
-from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL, SQLResult
 
 if TYPE_CHECKING:
     pass

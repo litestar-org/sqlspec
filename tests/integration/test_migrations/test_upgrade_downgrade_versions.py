@@ -8,6 +8,8 @@ import pytest
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
 
+pytestmark = pytest.mark.xdist_group("migrations")
+
 
 @pytest.fixture
 def sqlite_config(tmp_path: Path) -> Generator[SqliteConfig, None, None]:

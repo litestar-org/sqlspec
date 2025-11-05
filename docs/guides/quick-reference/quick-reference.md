@@ -31,8 +31,8 @@ orphan: true
 
 ```python
 from typing import Union, Optional
-from sqlspec.core.filters import StatementFilter
-from sqlspec.core.statement import SQL, Statement, StatementConfig
+from sqlspec.core import StatementFilter
+from sqlspec.core import SQL, Statement, StatementConfig
 from sqlspec.builder import QueryBuilder
 from sqlspec.typing import StatementParameters, ModelDTOT
 
@@ -155,9 +155,9 @@ class SQLTransformContext:
 ```python
 from typing import Optional, Any
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import SQL, StatementConfig
-from sqlspec.core.result import SQLResult
+from sqlspec.core import ParameterStyle, ParameterStyleConfig
+from sqlspec.core import SQL, StatementConfig
+from sqlspec.core import SQLResult
 
 class MyDriver(SyncDriverAdapterBase):
     """Example driver implementation."""
@@ -412,7 +412,7 @@ from sqlspec.typing import (
 Statement = Union[str, exp.Expression, SQL]
 
 # Filter types
-from sqlspec.core.statement.filters import StatementFilter
+from sqlspec.core import StatementFilter
 ```
 
 ### StatementFilter Protocol
@@ -434,7 +434,7 @@ class StatementFilter(ABC):
 ### Common Filters
 
 ```python
-from sqlspec.core.statement.filters import (
+from sqlspec.core import (
     LimitOffsetFilter,     # .limit(10).offset(20)
     OrderByFilter,         # .order_by("name", "created_at DESC")
     InCollectionFilter,    # WHERE col IN (...)
@@ -534,8 +534,8 @@ def _get_row_count(self, cursor: Any) -> int:
 **StatementConfig with ParameterStyleConfig:**
 
 ```python
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import ParameterStyle, ParameterStyleConfig
+from sqlspec.core import StatementConfig
 
 # Create parameter configuration
 parameter_config = ParameterStyleConfig(
@@ -569,8 +569,8 @@ statement_config = StatementConfig(
 
 ```python
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core import ParameterStyle, ParameterStyleConfig
+from sqlspec.core import StatementConfig
 
 class SqliteDriver(SyncDriverAdapterBase):
     """Reference implementation for SQLite."""

@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import CachedSQLFile, NamedStatement, SQLFile, SQLFileLoader
 
@@ -945,7 +945,7 @@ def fixture_integration_path() -> Path:
 
 def test_load_and_execute_fixture_queries(fixture_integration_path: Path) -> None:
     """Test loading and creating SQL objects from fixture queries."""
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL
     from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_integration_path / "init.sql"
@@ -983,7 +983,7 @@ def test_fixture_query_metadata_preservation(fixture_integration_path: Path) -> 
 
 def test_fixture_parameter_extraction(fixture_integration_path: Path) -> None:
     """Test parameter extraction from fixture queries."""
-    from sqlspec.core.statement import SQL
+    from sqlspec.core import SQL
     from sqlspec.loader import SQLFileLoader
 
     fixture_file = fixture_integration_path / "postgres" / "collection-database_details.sql"

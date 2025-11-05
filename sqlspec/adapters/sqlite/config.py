@@ -11,7 +11,7 @@ from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
 from sqlspec.adapters.sqlite._types import SqliteConnection
 from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, sqlite_statement_config
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
-from sqlspec.config import SyncDatabaseConfig
+from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig, SyncDatabaseConfig
 from sqlspec.utils.serializers import from_json, to_json
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 
 class SqliteConnectionParams(TypedDict):
@@ -63,6 +63,10 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     driver_type: "ClassVar[type[SqliteDriver]]" = SqliteDriver
     connection_type: "ClassVar[type[SqliteConnection]]" = SqliteConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
 
     def __init__(
         self,
@@ -73,7 +77,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         statement_config: "StatementConfig | None" = None,
         driver_features: "SqliteDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize SQLite configuration.
 
@@ -112,12 +116,22 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         if "json_deserializer" not in processed_driver_features:
             processed_driver_features["json_deserializer"] = from_json
 
+        base_statement_config = statement_config or sqlite_statement_config
+
+        json_serializer = processed_driver_features.get("json_serializer")
+        json_deserializer = processed_driver_features.get("json_deserializer")
+        if json_serializer is not None:
+            parameter_config = base_statement_config.parameter_config.with_json_serializers(
+                json_serializer, deserializer=json_deserializer
+            )
+            base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
+
         super().__init__(
             bind_key=bind_key,
             pool_instance=pool_instance,
             pool_config=cast("dict[str, Any]", pool_config),
             migration_config=migration_config,
-            statement_config=statement_config or sqlite_statement_config,
+            statement_config=base_statement_config,
             driver_features=processed_driver_features,
             extension_config=extension_config,
         )

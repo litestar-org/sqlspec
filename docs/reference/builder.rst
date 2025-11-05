@@ -51,6 +51,7 @@ Builder Factory
    - ``insert(table)`` - Create INSERT query
    - ``update(table)`` - Create UPDATE query
    - ``delete(table)`` - Create DELETE query
+   - ``merge(dialect=None)`` - Create MERGE query (PostgreSQL 15+, Oracle, BigQuery)
 
 SELECT Queries
 ==============
@@ -363,6 +364,115 @@ DELETE Queries
        .returning("id", "name", "email")
    )
 
+MERGE Queries (UPSERT)
+======================
+
+.. autoclass:: Merge
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   Builder for MERGE statements (INSERT or UPDATE based on condition).
+
+   **Database Support:**
+
+   - ✅ PostgreSQL 15+
+   - ✅ Oracle 9i+
+   - ✅ BigQuery
+   - ❌ MySQL (use INSERT ... ON DUPLICATE KEY UPDATE)
+   - ❌ SQLite (use INSERT ... ON CONFLICT)
+
+Basic MERGE
+-----------
+
+.. code-block:: python
+
+   # Simple upsert from dict
+   query = (
+       sql.merge(dialect="postgres")
+       .into("products", alias="t")
+       .using({"id": 1, "name": "Product A", "price": 19.99}, alias="src")
+       .on("t.id = src.id")
+       .when_matched_then_update(name="src.name", price="src.price")
+       .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price")
+   )
+
+   # MERGE from table source
+   query = (
+       sql.merge(dialect="postgres")
+       .into("products", alias="t")
+       .using("staging_products", alias="s")
+       .on("t.id = s.id")
+       .when_matched_then_update(name="s.name", price="s.price")
+       .when_not_matched_then_insert(columns=["id", "name", "price"])
+   )
+
+Conditional MERGE
+-----------------
+
+.. code-block:: python
+
+   # Update only if condition met
+   query = (
+       sql.merge(dialect="postgres")
+       .into("products", alias="t")
+       .using(staging_data, alias="src")
+       .on("t.id = src.id")
+       .when_matched_then_update(
+           condition="t.price < src.price",
+           price="src.price"
+       )
+       .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price")
+   )
+
+   # Delete matched rows conditionally
+   query = (
+       sql.merge(dialect="postgres")
+       .into("products", alias="t")
+       .using({"id": 1, "discontinued": True}, alias="src")
+       .on("t.id = src.id")
+       .when_matched_then_delete(condition="src.discontinued = TRUE")
+   )
+
+SQL Server Extensions
+---------------------
+
+SQL Server supports additional WHEN NOT MATCHED BY SOURCE clauses:
+
+.. code-block:: python
+
+   # SQL Server: Handle rows in target not in source
+   query = (
+       sql.merge(dialect="tsql")
+       .into("products", alias="t")
+       .using(current_products, alias="src")
+       .on("t.id = src.id")
+       .when_matched_then_update(name="src.name", price="src.price")
+       .when_not_matched_then_insert(id="src.id", name="src.name", price="src.price")
+       .when_not_matched_by_source_then_delete()  # Delete obsolete products
+   )
+
+NULL Value Handling
+-------------------
+
+MERGE automatically handles NULL values in source data:
+
+.. code-block:: python
+
+   # NULL values are properly typed
+   query = (
+       sql.merge(dialect="postgres")
+       .into("products", alias="t")
+       .using({"id": 1, "name": "Updated", "price": None}, alias="src")
+       .on("t.id = src.id")
+       .when_matched_then_update(name="src.name", price="src.price")
+   )
+   # Sets price to NULL if matched
+
+.. note::
+   When all values for a column are NULL, PostgreSQL defaults to NUMERIC type.
+   For other column types, provide at least one non-NULL value for accurate type inference.
+
 Query Mixins
 ============
 
@@ -411,7 +521,7 @@ The builder integrates with SQLSpec's filter system:
 
 .. code-block:: python
 
-   from sqlspec.core.filters import LimitOffsetFilter, SearchFilter, OrderByFilter
+   from sqlspec.core import LimitOffsetFilter, SearchFilter, OrderByFilter
 
    # Base query
    query = sql.select("*").from_("users")
@@ -433,7 +543,7 @@ Convert builder to executable SQL:
 
 .. code-block:: python
 
-   from sqlspec.core.statement import SQL
+   from sqlspec.core import SQL
 
    # Build query
    query = sql.select("*").from_("users").limit(10)

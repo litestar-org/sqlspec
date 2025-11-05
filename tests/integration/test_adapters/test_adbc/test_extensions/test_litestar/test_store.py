@@ -5,7 +5,6 @@ from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.litestar.store import ADBCStore
@@ -14,21 +13,18 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.adbc, pytest.mark
 
 
 @pytest.fixture
-async def adbc_store(postgres_service: PostgresService) -> AsyncGenerator[ADBCStore, None]:
+async def adbc_store(adbc_postgres_config: AdbcConfig) -> AsyncGenerator[ADBCStore, None]:
     """Create ADBC store with PostgreSQL backend."""
-    config = AdbcConfig(
-        connection_config={
-            "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        },
-        extension_config={"litestar": {"session_table": "test_adbc_sessions"}},
-    )
-    store = ADBCStore(config)
+    adbc_postgres_config.extension_config = {"litestar": {"session_table": "test_adbc_sessions"}}
+    store = ADBCStore(adbc_postgres_config)
     await store.create_table()
-    yield store
     try:
-        await store.delete_all()
-    except Exception:
-        pass
+        yield store
+    finally:
+        try:
+            await store.delete_all()
+        except Exception:  # pragma: no cover - best effort cleanup
+            pass
 
 
 async def test_store_create_table(adbc_store: ADBCStore) -> None:

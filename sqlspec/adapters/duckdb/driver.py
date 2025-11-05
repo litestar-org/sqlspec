@@ -1,17 +1,25 @@
 """DuckDB driver implementation."""
 
-import datetime
+import contextlib
+import typing
+from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
+from uuid import uuid4
 
 import duckdb
-from sqlglot import exp
 
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBSyncDataDictionary
 from sqlspec.adapters.duckdb.type_converter import DuckDBTypeConverter
-from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import (
+    SQL,
+    DriverParameterProfile,
+    ParameterStyle,
+    StatementConfig,
+    build_statement_config_from_profile,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -28,54 +36,39 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from sqlspec.adapters.duckdb._types import DuckDBConnection
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import Statement, StatementFilter
-    from sqlspec.core.result import ArrowResult, SQLResult
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
-    from sqlspec.typing import StatementParameters
+    from sqlspec.storage import (
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
+    from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
-__all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "duckdb_statement_config")
+__all__ = (
+    "DuckDBCursor",
+    "DuckDBDriver",
+    "DuckDBExceptionHandler",
+    "build_duckdb_statement_config",
+    "duckdb_statement_config",
+)
 
 logger = get_logger("adapters.duckdb")
 
+_TIME_TO_ISO = build_time_iso_converter()
+_DECIMAL_TO_STRING = build_decimal_converter(mode="string")
+
 _type_converter = DuckDBTypeConverter()
-
-
-duckdb_statement_config = StatementConfig(
-    dialect="duckdb",
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
-        default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
-        type_coercion_map={
-            bool: int,
-            datetime.datetime: lambda v: v.isoformat(),
-            datetime.date: lambda v: v.isoformat(),
-            Decimal: str,
-            dict: to_json,
-            list: to_json,
-            str: _type_converter.convert_if_detected,
-        },
-        has_native_list_expansion=True,
-        needs_static_script_compilation=False,
-        preserve_parameter_format=True,
-        allow_mixed_parameter_styles=False,
-    ),
-    enable_parsing=True,
-    enable_validation=True,
-    enable_caching=True,
-    enable_parameter_type_wrapping=True,
-)
-
-
-MODIFYING_OPERATIONS: Final[tuple[str, ...]] = ("INSERT", "UPDATE", "DELETE")
 
 
 class DuckDBCursor:
@@ -229,36 +222,20 @@ class DuckDBDriver(SyncDriverAdapterBase):
             statement_config = updated_config
 
         if driver_features:
+            param_config = statement_config.parameter_config
             json_serializer = driver_features.get("json_serializer")
+            if json_serializer:
+                param_config = param_config.with_json_serializers(json_serializer, tuple_strategy="tuple")
+
             enable_uuid_conversion = driver_features.get("enable_uuid_conversion", True)
-
-            if json_serializer or not enable_uuid_conversion:
+            if not enable_uuid_conversion:
                 type_converter = DuckDBTypeConverter(enable_uuid_conversion=enable_uuid_conversion)
-                type_coercion_map = dict(statement_config.parameter_config.type_coercion_map)
+                type_coercion_map = dict(param_config.type_coercion_map)
+                type_coercion_map[str] = type_converter.convert_if_detected
+                param_config = param_config.replace(type_coercion_map=type_coercion_map)
 
-                if json_serializer:
-                    type_coercion_map[dict] = json_serializer
-                    type_coercion_map[list] = json_serializer
-
-                if not enable_uuid_conversion:
-                    type_coercion_map[str] = type_converter.convert_if_detected
-
-                param_config = statement_config.parameter_config
-                updated_param_config = ParameterStyleConfig(
-                    default_parameter_style=param_config.default_parameter_style,
-                    supported_parameter_styles=param_config.supported_parameter_styles,
-                    supported_execution_parameter_styles=param_config.supported_execution_parameter_styles,
-                    default_execution_parameter_style=param_config.default_execution_parameter_style,
-                    type_coercion_map=type_coercion_map,
-                    has_native_list_expansion=param_config.has_native_list_expansion,
-                    needs_static_script_compilation=param_config.needs_static_script_compilation,
-                    allow_mixed_parameter_styles=param_config.allow_mixed_parameter_styles,
-                    preserve_parameter_format=param_config.preserve_parameter_format,
-                    preserve_original_params_for_many=param_config.preserve_original_params_for_many,
-                    output_transformer=param_config.output_transformer,
-                    ast_transformer=param_config.ast_transformer,
-                )
-                statement_config = statement_config.replace(parameter_config=updated_param_config)
+            if param_config is not statement_config.parameter_config:
+                statement_config = statement_config.replace(parameter_config=param_config)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SyncDataDictionaryBase | None = None
@@ -297,26 +274,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         _ = (cursor, statement)
         return None
-
-    def _is_modifying_operation(self, statement: SQL) -> bool:
-        """Check if the SQL statement modifies data.
-
-        Determines if a statement is an INSERT, UPDATE, or DELETE operation
-        using AST analysis when available, falling back to text parsing.
-
-        Args:
-            statement: SQL statement to analyze
-
-        Returns:
-            True if the operation modifies data (INSERT/UPDATE/DELETE)
-        """
-
-        expression = statement.expression
-        if expression and isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
-            return True
-
-        sql_upper = statement.sql.strip().upper()
-        return any(sql_upper.startswith(op) for op in MODIFYING_OPERATIONS)
 
     def _execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -363,7 +320,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if prepared_parameters:
             cursor.executemany(sql, prepared_parameters)
 
-            if self._is_modifying_operation(statement):
+            if statement.is_modifying_operation():
                 row_count = len(prepared_parameters)
             else:
                 try:
@@ -458,7 +415,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         /,
         *parameters: "StatementParameters | StatementFilter",
         statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
+        return_format: "ArrowReturnFormat" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,
@@ -481,11 +438,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         Returns:
             ArrowResult with native Arrow data
-
-        Raises:
-            MissingDependencyError: If pyarrow not installed
-            SQLExecutionError: If query execution fails
-
         Example:
             >>> result = driver.select_to_arrow(
             ...     "SELECT * FROM users WHERE age > ?", 18
@@ -498,7 +450,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         import pyarrow as pa
 
-        from sqlspec.core.result import create_arrow_result
+        from sqlspec.core import create_arrow_result
 
         # Prepare statement
         config = statement_config or self.statement_config
@@ -533,3 +485,118 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         # Create ArrowResult
         return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_data.num_rows)
+
+    def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Persist DuckDB query output to a storage backend using Arrow fast paths."""
+
+        _ = kwargs
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = arrow_result.write_to_storage_sync(
+            destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into DuckDB using temporary table registration."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        temp_view = f"_sqlspec_arrow_{uuid4().hex}"
+        if overwrite:
+            self.connection.execute(f"TRUNCATE TABLE {table}")
+        self.connection.register(temp_view, arrow_table)
+        try:
+            self.connection.execute(f"INSERT INTO {table} SELECT * FROM {temp_view}")
+        finally:
+            with contextlib.suppress(Exception):
+                self.connection.unregister(temp_view)
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Read an artifact from storage and load it into DuckDB."""
+
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _build_duckdb_profile() -> DriverParameterProfile:
+    """Create the DuckDB driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="DuckDB",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK},
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            bool: _bool_to_int,
+            datetime: _TIME_TO_ISO,
+            date: _TIME_TO_ISO,
+            Decimal: _DECIMAL_TO_STRING,
+        },
+        default_dialect="duckdb",
+    )
+
+
+_DUCKDB_PROFILE = _build_duckdb_profile()
+
+register_driver_profile("duckdb", _DUCKDB_PROFILE)
+
+
+def build_duckdb_statement_config(*, json_serializer: "typing.Callable[[Any], str] | None" = None) -> StatementConfig:
+    """Construct the DuckDB statement configuration with optional JSON serializer."""
+
+    serializer = json_serializer or to_json
+    return build_statement_config_from_profile(
+        _DUCKDB_PROFILE, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
+    )
+
+
+duckdb_statement_config = build_duckdb_statement_config()
+
+
+MODIFYING_OPERATIONS: Final[tuple[str, ...]] = ("INSERT", "UPDATE", "DELETE")

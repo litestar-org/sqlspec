@@ -223,7 +223,7 @@ The current parameter processing system uses `ParameterStyleConfig` integrated w
 
 ```python
 # Current parameter configuration
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core import ParameterStyle, ParameterStyleConfig
 
 parameter_config = ParameterStyleConfig(
     default_parameter_style=ParameterStyle.QMARK,

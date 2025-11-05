@@ -13,6 +13,8 @@ from sqlspec.migrations.runner import SyncMigrationRunner, create_migration_runn
 from sqlspec.utils.config_resolver import resolve_config_async
 from sqlspec.utils.sync_tools import run_
 
+pytestmark = pytest.mark.xdist_group("migrations")
+
 
 class TestAsyncMigrationsIntegration:
     """Integration tests for async migrations functionality."""

@@ -20,7 +20,6 @@ from sqlspec.typing import (
     DataclassProtocol,
     DTOData,
     Struct,
-    attrs_asdict,
     attrs_has,
 )
 
@@ -32,7 +31,7 @@ if TYPE_CHECKING:
 
     from sqlspec._typing import AttrsInstanceStub, BaseModelStub, DTODataStub, StructStub
     from sqlspec.builder import Select
-    from sqlspec.core.filters import LimitOffsetFilter, StatementFilter
+    from sqlspec.core import LimitOffsetFilter, StatementFilter
     from sqlspec.protocols import (
         BytesConvertibleProtocol,
         DictProtocol,
@@ -123,7 +122,6 @@ __all__ = (
     "is_string_literal",
     "is_typed_dict",
     "is_typed_parameter",
-    "schema_dump",
     "supports_arrow_native",
     "supports_arrow_results",
     "supports_limit",
@@ -154,7 +152,7 @@ def is_statement_filter(obj: Any) -> "TypeGuard[StatementFilter]":
     Returns:
         True if the object is a StatementFilter, False otherwise
     """
-    from sqlspec.core.filters import StatementFilter as FilterProtocol
+    from sqlspec.core import StatementFilter as FilterProtocol
 
     return isinstance(obj, FilterProtocol)
 
@@ -168,7 +166,7 @@ def is_limit_offset_filter(obj: Any) -> "TypeGuard[LimitOffsetFilter]":
     Returns:
         True if the object is a LimitOffsetFilter, False otherwise
     """
-    from sqlspec.core.filters import LimitOffsetFilter
+    from sqlspec.core import LimitOffsetFilter
 
     return isinstance(obj, LimitOffsetFilter)
 
@@ -465,7 +463,6 @@ def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
     """
     from sqlspec.utils.text import camelize, kebabize, pascalize
 
-    # Test camelCase conversion
     if encode_name == camelize(field_name) and encode_name != field_name:
         return "camel"
 
@@ -514,13 +511,10 @@ def get_msgspec_rename_config(schema_type: type) -> "str | None":
     if not fields:
         return None
 
-    # Check if any field name differs from its encode_name
     for field in fields:
         if field.name != field.encode_name:
-            # Detect the rename pattern by comparing transformations
             return _detect_rename_pattern(field.name, field.encode_name)
 
-    # If all field names match their encode_name, no rename is applied
     return None
 
 
@@ -830,36 +824,6 @@ def dataclass_to_dict(
         else:
             ret[field.name] = getattr(obj, field.name)
     return cast("dict[str, Any]", ret)
-
-
-def schema_dump(data: Any, exclude_unset: bool = True) -> "dict[str, Any]":
-    """Dump a data object to a dictionary.
-
-    Args:
-        data:  :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`AttrsInstance`
-        exclude_unset: :type:`bool` Whether to exclude unset values.
-
-    Returns:
-        :type:`dict[str, Any]`
-    """
-    from sqlspec._typing import UNSET
-
-    if is_dict(data):
-        return data
-    if is_dataclass(data):
-        return dataclass_to_dict(data, exclude_empty=exclude_unset)
-    if is_pydantic_model(data):
-        return data.model_dump(exclude_unset=exclude_unset)  # type: ignore[no-any-return]
-    if is_msgspec_struct(data):
-        if exclude_unset:
-            return {f: val for f in data.__struct_fields__ if (val := getattr(data, f, None)) != UNSET}
-        return {f: getattr(data, f, None) for f in data.__struct_fields__}
-    if is_attrs_instance(data):
-        return attrs_asdict(data)
-
-    if has_dict_attribute(data):
-        return data.__dict__
-    return cast("dict[str, Any]", data)
 
 
 def can_extract_parameters(obj: Any) -> "TypeGuard[FilterParameterProtocol]":
@@ -1227,7 +1191,7 @@ def is_typed_parameter(obj: Any) -> "TypeGuard[Any]":
     Returns:
         True if the object is a TypedParameter, False otherwise
     """
-    from sqlspec.core.parameters import TypedParameter
+    from sqlspec.core import TypedParameter
 
     return isinstance(obj, TypedParameter)
 

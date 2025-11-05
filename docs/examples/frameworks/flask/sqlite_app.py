@@ -5,7 +5,7 @@ from flask import Flask, Response, jsonify
 from docs.examples.shared.configs import sqlite_registry
 from docs.examples.shared.data import ARTICLES, CREATE_ARTICLES
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 
 __all__ = ("list_articles", "main", "seed_database")
 

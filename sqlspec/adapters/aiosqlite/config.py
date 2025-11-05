@@ -14,13 +14,13 @@ from sqlspec.adapters.aiosqlite.pool import (
     AiosqlitePoolClosedError,
     AiosqlitePoolConnection,
 )
-from sqlspec.config import AsyncDatabaseConfig
+from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
 __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteDriverFeatures", "AiosqlitePoolParams")
 
@@ -74,6 +74,10 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
     driver_type: "ClassVar[type[AiosqliteDriver]]" = AiosqliteDriver
     connection_type: "ClassVar[type[AiosqliteConnection]]" = AiosqliteConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
 
     def __init__(
         self,
@@ -84,7 +88,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         statement_config: "StatementConfig | None" = None,
         driver_features: "AiosqliteDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
     ) -> None:
         """Initialize AioSQLite configuration.
 
@@ -123,11 +127,21 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         if "json_deserializer" not in processed_driver_features:
             processed_driver_features["json_deserializer"] = from_json
 
+        base_statement_config = statement_config or aiosqlite_statement_config
+
+        json_serializer = processed_driver_features.get("json_serializer")
+        json_deserializer = processed_driver_features.get("json_deserializer")
+        if json_serializer is not None:
+            parameter_config = base_statement_config.parameter_config.with_json_serializers(
+                json_serializer, deserializer=json_deserializer
+            )
+            base_statement_config = base_statement_config.replace(parameter_config=parameter_config)
+
         super().__init__(
             pool_config=config_dict,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or aiosqlite_statement_config,
+            statement_config=base_statement_config,
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
@@ -276,16 +290,14 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {
-                "AiosqliteConnection": AiosqliteConnection,
-                "AiosqliteConnectionPool": AiosqliteConnectionPool,
-                "AiosqliteConnectTimeoutError": AiosqliteConnectTimeoutError,
-                "AiosqliteCursor": AiosqliteCursor,
-                "AiosqlitePoolClosedError": AiosqlitePoolClosedError,
-                "AiosqlitePoolConnection": AiosqlitePoolConnection,
-            }
-        )
+        namespace.update({
+            "AiosqliteConnection": AiosqliteConnection,
+            "AiosqliteConnectionPool": AiosqliteConnectionPool,
+            "AiosqliteConnectTimeoutError": AiosqliteConnectTimeoutError,
+            "AiosqliteCursor": AiosqliteCursor,
+            "AiosqlitePoolClosedError": AiosqlitePoolClosedError,
+            "AiosqlitePoolConnection": AiosqlitePoolConnection,
+        })
         return namespace
 
     async def _close_pool(self) -> None:
