@@ -119,6 +119,10 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
     migration_tracker_type: "ClassVar[type[OracleSyncMigrationTracker]]" = OracleSyncMigrationTracker
     supports_transactional_ddl: ClassVar[bool] = False
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    supports_native_parquet_import: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -277,6 +281,10 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
     migration_tracker_type: "ClassVar[type[OracleAsyncMigrationTracker]]" = OracleAsyncMigrationTracker
     supports_transactional_ddl: ClassVar[bool] = False
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    supports_native_parquet_import: ClassVar[bool] = True
 
     def __init__(
         self,

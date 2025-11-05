@@ -60,6 +60,9 @@ Adapters
    * - File
      - Adapter
      - Highlights
+   * - ``adapters/adbc_postgres_ingest.py``
+     - ADBC (Postgres)
+     - Rich Click CLI that exports SELECT queries to Parquet/Arrow and loads them via the storage bridge.
    * - ``adapters/asyncpg/connect_pool.py``
      - AsyncPG
      - Minimal pool configuration plus a version probe.
@@ -124,6 +127,7 @@ Shared Utilities
    frameworks/litestar/aiosqlite_app
    frameworks/litestar/duckdb_app
    frameworks/litestar/sqlite_app
+   adapters/adbc_postgres_ingest
    adapters/asyncpg/connect_pool
    adapters/psycopg/connect_sync
    adapters/oracledb/connect_async

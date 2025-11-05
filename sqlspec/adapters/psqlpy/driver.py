@@ -6,9 +6,11 @@ and transaction management.
 
 import datetime
 import decimal
+import inspect
+import io
 import re
 import uuid
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import psqlpy.exceptions
 from psqlpy.extra_types import JSONB
@@ -49,9 +51,16 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.psqlpy._types import PsqlpyConnection
-    from sqlspec.core import SQLResult
+    from sqlspec.core import ArrowResult, SQLResult
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
+    from sqlspec.storage import (
+        AsyncStoragePipeline,
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+    )
 
 __all__ = (
     "PsqlpyCursor",
@@ -487,6 +496,86 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 return int(match.group(3))
         return -1
 
+    async def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream Arrow results to a storage backend."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = await arrow_result.write_to_storage_async(
+            destination, format_hint=format_hint, pipeline=async_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow-formatted data into PostgreSQL via psqlpy binary COPY."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            await self._truncate_table_async(table)
+
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            schema_name, table_name = _split_schema_and_table(table)
+            async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+                copy_kwargs: dict[str, Any] = {"columns": columns}
+                if schema_name:
+                    copy_kwargs["schema_name"] = schema_name
+                try:
+                    copy_payload = _encode_records_for_binary_copy(records)
+                    copy_operation = cursor.binary_copy_to_table(copy_payload, table_name, **copy_kwargs)
+                    if inspect.isawaitable(copy_operation):
+                        await copy_operation
+                except (TypeError, psqlpy.exceptions.DatabaseError) as exc:
+                    logger.debug("Binary COPY not available for psqlpy; falling back to INSERT statements: %s", exc)
+                    insert_sql = _build_psqlpy_insert_statement(table, columns)
+                    formatted_records = _coerce_records_for_execute_many(records)
+                    insert_operation = cursor.execute_many(insert_sql, formatted_records)
+                    if inspect.isawaitable(insert_operation):
+                        await insert_operation
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage using the storage bridge pipeline."""
+
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
+
     async def begin(self) -> None:
         """Begin a database transaction."""
         try:
@@ -510,6 +599,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         except psqlpy.exceptions.DatabaseError as e:
             msg = f"Failed to commit psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    async def _truncate_table_async(self, table: str) -> None:
+        qualified = _format_table_identifier(table)
+        async with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            await cursor.execute(f"TRUNCATE TABLE {qualified}")
 
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
@@ -660,6 +754,91 @@ def _coerce_numeric_for_write(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _coerce_numeric_for_write(item) for key, item in value.items()}
     return value
+
+
+def _escape_copy_text(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def _format_copy_value(value: Any) -> str:
+    if value is None:
+        return r"\N"
+    if isinstance(value, bool):
+        return "t" if value else "f"
+    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, (list, tuple, dict)):
+        return to_json(value)
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8")
+    return str(_coerce_numeric_for_write(value))
+
+
+def _encode_records_for_binary_copy(records: "list[tuple[Any, ...]]") -> bytes:
+    """Encode row tuples into a bytes payload compatible with binary_copy_to_table.
+
+    Args:
+        records: Sequence of row tuples extracted from the Arrow table.
+
+    Returns:
+        UTF-8 encoded bytes buffer representing the COPY payload.
+    """
+
+    buffer = io.StringIO()
+    for record in records:
+        encoded_columns = [_escape_copy_text(_format_copy_value(value)) for value in record]
+        buffer.write("\t".join(encoded_columns))
+        buffer.write("\n")
+    return buffer.getvalue().encode("utf-8")
+
+
+def _split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
+    cleaned = identifier.strip()
+    if not cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    if "." not in cleaned:
+        return None, cleaned.strip('"')
+    parts = [part for part in cleaned.split(".") if part]
+    if len(parts) == 1:
+        return None, parts[0].strip('"')
+    schema_name = ".".join(parts[:-1]).strip('"')
+    table_name = parts[-1].strip('"')
+    if not table_name:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    return schema_name or None, table_name
+
+
+def _quote_identifier(identifier: str) -> str:
+    normalized = identifier.replace('"', '""')
+    return f'"{normalized}"'
+
+
+def _format_table_identifier(identifier: str) -> str:
+    schema_name, table_name = _split_schema_and_table(identifier)
+    if schema_name:
+        return f"{_quote_identifier(schema_name)}.{_quote_identifier(table_name)}"
+    return _quote_identifier(table_name)
+
+
+def _build_psqlpy_insert_statement(table: str, columns: "list[str]") -> str:
+    column_clause = ", ".join(_quote_identifier(column) for column in columns)
+    placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
+    return f"INSERT INTO {_format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+
+
+def _coerce_records_for_execute_many(records: "list[tuple[Any, ...]]") -> "list[list[Any]]":
+    formatted_records: list[list[Any]] = []
+    for record in records:
+        coerced = _coerce_numeric_for_write(record)
+        if isinstance(coerced, tuple):
+            formatted_records.append(list(coerced))
+        elif isinstance(coerced, list):
+            formatted_records.append(coerced)
+        else:
+            formatted_records.append([coerced])
+    return formatted_records
 
 
 def _build_psqlpy_profile() -> DriverParameterProfile:

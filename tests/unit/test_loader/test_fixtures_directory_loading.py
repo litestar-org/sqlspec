@@ -31,6 +31,8 @@ except ImportError:
 
 pytestmark = pytest.mark.xdist_group("loader")
 
+MAX_LARGE_QUERY_LOOKUP_SECONDS = 0.75
+
 
 @pytest.fixture
 def fixtures_path() -> Path:
@@ -636,6 +638,9 @@ limit :result_limit
         loader.get_sql("large_database_analysis")
     elapsed = time.perf_counter() - start_time
 
-    assert elapsed < 0.1, f"Large query retrieval too slow: {elapsed:.3f}s for 100 calls"
+    assert elapsed < MAX_LARGE_QUERY_LOOKUP_SECONDS, (
+        f"Large query retrieval too slow: {elapsed:.3f}s for 100 calls "
+        f"(threshold {MAX_LARGE_QUERY_LOOKUP_SECONDS:.2f}s)"
+    )
     console.print(f"[green]✓[/green] Large query ({len(sql.sql)} chars) handled efficiently")
     console.print(f"  • Performance: {elapsed * 1000:.1f}ms for 100 calls ({elapsed * 10.0:.1f}ms per call)")

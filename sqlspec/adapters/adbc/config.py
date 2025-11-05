@@ -101,6 +101,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     driver_type: ClassVar[type[AdbcDriver]] = AdbcDriver
     connection_type: "ClassVar[type[AdbcConnection]]" = AdbcConnection
     supports_transactional_ddl: ClassVar[bool] = False
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
+    storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed", "rows_per_chunk")
 
     def __init__(
         self,

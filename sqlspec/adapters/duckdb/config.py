@@ -178,6 +178,11 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
     connection_type: "ClassVar[type[DuckDBConnection]]" = DuckDBConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
+    storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed", "rows_per_chunk", "manifest")
 
     def __init__(
         self,

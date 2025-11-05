@@ -3,7 +3,7 @@
 import contextlib
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import oracledb
 from oracledb import AsyncCursor, Cursor
@@ -47,8 +47,16 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQLResult, Statement, StatementFilter
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
+    from sqlspec.storage import (
+        AsyncStoragePipeline,
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 logger = logging.getLogger(__name__)
@@ -81,6 +89,16 @@ def _normalize_column_names(column_names: "list[str]", driver_features: "dict[st
         else:
             normalized.append(name)
     return normalized
+
+
+def _oracle_insert_statement(table: str, columns: "list[str]") -> str:
+    column_list = ", ".join(columns)
+    placeholders = ", ".join(f":{idx + 1}" for idx in range(len(columns)))
+    return f"INSERT INTO {table} ({column_list}) VALUES ({placeholders})"
+
+
+def _oracle_truncate_statement(table: str) -> str:
+    return f"TRUNCATE TABLE {table}"
 
 
 def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "list[Any]":
@@ -471,6 +489,68 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         affected_rows = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream Arrow-formatted output to storage (sync)."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = arrow_result.write_to_storage_sync(
+            destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into Oracle using batched executemany calls."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            self._truncate_table_sync(table)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            statement = _oracle_insert_statement(table, columns)
+            with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+                cursor.executemany(statement, records)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts into Oracle."""
+
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
     # Oracle transaction management
     def begin(self) -> None:
         """Begin a database transaction.
@@ -601,6 +681,11 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = OracleSyncDataDictionary()
         return self._data_dictionary
+
+    def _truncate_table_sync(self, table: str) -> None:
+        statement = _oracle_truncate_statement(table)
+        with self.handle_database_exceptions():
+            self.connection.execute(statement)
 
 
 class OracleAsyncDriver(AsyncDriverAdapterBase):
@@ -757,6 +842,70 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         affected_rows = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    async def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and write Arrow-compatible output to storage (async)."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = await arrow_result.write_to_storage_async(
+            destination, format_hint=format_hint, pipeline=async_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Asynchronously load Arrow data into Oracle."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            await self._truncate_table_async(table)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            statement = _oracle_insert_statement(table, columns)
+            async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+                await cursor.executemany(statement, records)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Asynchronously load staged artifacts into Oracle."""
+
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
+
     # Oracle transaction management
     async def begin(self) -> None:
         """Begin a database transaction.
@@ -887,6 +1036,11 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = OracleAsyncDataDictionary()
         return self._data_dictionary
+
+    async def _truncate_table_async(self, table: str) -> None:
+        statement = _oracle_truncate_statement(table)
+        async with self.handle_database_exceptions():
+            await self.connection.execute(statement)
 
 
 def _build_oracledb_profile() -> DriverParameterProfile:

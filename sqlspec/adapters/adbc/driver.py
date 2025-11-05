@@ -7,7 +7,7 @@ database dialects, parameter style conversion, and transaction management.
 import contextlib
 import datetime
 import decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.adbc.type_converter import ADBCTypeConverter
@@ -51,6 +51,13 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
+    from sqlspec.storage import (
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "get_adbc_statement_config")
@@ -680,6 +687,66 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         # Create ArrowResult
         return create_arrow_result(statement=prepared_statement, data=arrow_data, rows_affected=arrow_data.num_rows)
+
+    def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Stream query results to storage via the Arrow fast path."""
+
+        _ = kwargs
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = arrow_result.write_to_storage_sync(
+            destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Ingest an Arrow payload directly through the ADBC cursor."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        ingest_mode: Literal["append", "create", "replace", "create_append"]
+        ingest_mode = "replace" if overwrite else "create_append"
+        with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            cursor.adbc_ingest(table, arrow_table, mode=ingest_mode)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Read an artifact from storage and ingest it via ADBC."""
+
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
 
 def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
