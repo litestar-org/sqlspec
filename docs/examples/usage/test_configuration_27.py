@@ -1,26 +1,20 @@
-"""Test configuration example: Best practice - Clean up resources."""
+"""Test configuration example: Best practice - Tune pool sizes."""
 
-import pytest
+MIN_POOL_SIZE_CPU = 5
+MAX_POOL_SIZE_CPU = 10
+MIN_IO_BOUND_POOL_SIZE = 20
+MAX_IO_BOUND_POOL_SIZE = 50
 
 
-@pytest.mark.asyncio
-async def test_cleanup_resources_best_practice() -> None:
-    """Test resource cleanup best practice."""
-    import tempfile
+def test_tune_pool_sizes_best_practice() -> None:
+    """Test pool sizing best practices for different workloads."""
 
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    # CPU-bound workload - smaller pool
+    cpu_bound_pool_config = {"min_size": MIN_POOL_SIZE_CPU, "max_size": MAX_POOL_SIZE_CPU}
+    assert cpu_bound_pool_config["min_size"] == MIN_POOL_SIZE_CPU
+    assert cpu_bound_pool_config["max_size"] == MAX_POOL_SIZE_CPU
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
-        spec = SQLSpec()
-        db = spec.add_config(AiosqliteConfig(pool_config={"database": tmp.name}))
-
-        # Use the connection
-        async with spec.provide_session(db) as session:
-            await session.execute("CREATE TABLE test (id INTEGER)")
-
-        # Clean up resources - important for async adapters
-        await spec.close_all_pools()
-
-        # Verify pools are closed
-        assert db.pool_instance is None or not hasattr(db.pool_instance, "_pool")
+    # I/O-bound workload - larger pool
+    io_bound_pool_config = {"min_size": MIN_IO_BOUND_POOL_SIZE, "max_size": MAX_IO_BOUND_POOL_SIZE}
+    assert io_bound_pool_config["min_size"] == MIN_IO_BOUND_POOL_SIZE
+    assert io_bound_pool_config["max_size"] == MAX_IO_BOUND_POOL_SIZE

@@ -292,7 +292,7 @@ Litestar Plugin Configuration
 .. literalinclude:: /examples/usage/test_configuration_23.py
    :language: python
    :caption: `litestar plugin configuration`
-   :lines: 10-31
+   :lines: 2-26
    :dedent: 2
 
 Environment-Based Configuration
@@ -300,10 +300,10 @@ Environment-Based Configuration
 
 Use environment variables for configuration:
 
-.. literalinclude:: /examples/usage/test_configuration_23.py
+.. literalinclude:: /examples/usage/test_configuration_24.py
    :language: python
    :caption: `environnment-based configuration`
-   :lines: 49-59
+   :lines: 25-41
    :dedent: 4
 
 Configuration Best Practices
@@ -313,7 +313,7 @@ Configuration Best Practices
 
 Always use pooling in production:
 
-.. literalinclude:: /examples/usage/test_configuration_24.py
+.. literalinclude:: /examples/usage/test_configuration_25.py
    :language: python
    :caption: `connection pooling`
    :lines: 11-13
@@ -323,7 +323,7 @@ Always use pooling in production:
 
 Enable caching to avoid recompiling SQL statements:
 
-.. literalinclude:: /examples/usage/test_configuration_25.py
+.. literalinclude:: /examples/usage/test_configuration_26.py
    :language: python
    :caption: `enable caching`
    :lines: 6-8
@@ -333,20 +333,20 @@ Enable caching to avoid recompiling SQL statements:
 
 Size pools based on your workload:
 
-.. literalinclude:: /examples/usage/test_configuration_26.py
+.. literalinclude:: /examples/usage/test_configuration_27.py
    :language: python
    :caption: `tune pool sizes`
-   :lines: 6-14
+   :lines: 3-20
    :dedent: 2
 
 **4. Disable Validation in Production**
 
 For trusted, performance-critical queries:
 
-.. literalinclude:: /examples/usage/test_configuration_26.py
+.. literalinclude:: /examples/usage/test_configuration_28.py
    :language: python
    :caption: `no validation`
-   :lines: 19-25
+   :lines: 6-12
    :dedent: 2
 
 
@@ -354,7 +354,7 @@ For trusted, performance-critical queries:
 
 Always close pools on shutdown:
 
-.. literalinclude:: /examples/usage/test_configuration_27.py
+.. literalinclude:: /examples/usage/test_configuration_29.py
    :language: python
    :caption: `cleanup resources`
    :lines: 10-27
