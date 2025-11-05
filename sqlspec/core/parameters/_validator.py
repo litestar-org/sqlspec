@@ -18,13 +18,14 @@ PARAMETER_REGEX = re.compile(
     (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |
     (?P<pg_q_operator>\?\?|\?\||\?&) |
     (?P<pg_cast>::(?P<cast_type>\w+)) |
+    (?P<sql_server_global>@@(?P<global_var_name>\w+)) |
     (?P<pyformat_named>%\((?P<pyformat_name>\w+)\)s) |
     (?P<pyformat_pos>%s) |
-    (?P<positional_colon>:(?P<colon_num>\d+)) |
-    (?P<named_colon>:(?P<colon_name>\w+)) |
-    (?P<named_at>@(?P<at_name>\w+)) |
-    (?P<numeric>\$(?P<numeric_num>\d+)) |
-    (?P<named_dollar_param>\$(?P<dollar_param_name>\w+)) |
+    (?P<positional_colon>(?<![A-Za-z0-9_]):(?P<colon_num>\d+)) |
+    (?P<named_colon>(?<![A-Za-z0-9_]):(?P<colon_name>\w+)) |
+    (?P<named_at>(?<![A-Za-z0-9_])@(?P<at_name>\w+)) |
+    (?P<numeric>(?<![A-Za-z0-9_])\$(?P<numeric_num>\d+)) |
+    (?P<named_dollar_param>(?<![A-Za-z0-9_])\$(?P<dollar_param_name>\w+)) |
     (?P<qmark>\?)
     """,
     re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
@@ -85,6 +86,7 @@ class ParameterValidator:
             "block_comment",
             "pg_q_operator",
             "pg_cast",
+            "sql_server_global",
         )
 
         for match in PARAMETER_REGEX.finditer(sql):
