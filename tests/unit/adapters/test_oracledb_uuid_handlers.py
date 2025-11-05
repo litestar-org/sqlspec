@@ -161,9 +161,7 @@ def test_output_type_handler_with_raw16() -> None:
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
 
-    metadata = Mock()
-    metadata.type_code = oracledb.DB_TYPE_RAW
-    metadata.size = 16
+    metadata = ("RAW_COL", oracledb.DB_TYPE_RAW, 16, 16, None, None, True)
 
     result = _output_type_handler(cursor, metadata)
 
@@ -176,9 +174,7 @@ def test_output_type_handler_with_raw32() -> None:
     import oracledb
 
     cursor = Mock()
-    metadata = Mock()
-    metadata.type_code = oracledb.DB_TYPE_RAW
-    metadata.size = 32
+    metadata = ("RAW32_COL", oracledb.DB_TYPE_RAW, 32, 32, None, None, True)
 
     result = _output_type_handler(cursor, metadata)
 
@@ -190,9 +186,7 @@ def test_output_type_handler_with_varchar() -> None:
     import oracledb
 
     cursor = Mock()
-    metadata = Mock()
-    metadata.type_code = oracledb.DB_TYPE_VARCHAR
-    metadata.size = 36
+    metadata = ("VARCHAR_COL", oracledb.DB_TYPE_VARCHAR, 36, 36, None, None, True)
 
     result = _output_type_handler(cursor, metadata)
 
@@ -204,9 +198,7 @@ def test_output_type_handler_with_number() -> None:
     import oracledb
 
     cursor = Mock()
-    metadata = Mock()
-    metadata.type_code = oracledb.DB_TYPE_NUMBER
-    metadata.size = 10
+    metadata = ("NUM_COL", oracledb.DB_TYPE_NUMBER, 10, 10, 10, 0, True)
 
     result = _output_type_handler(cursor, metadata)
 
@@ -300,9 +292,7 @@ def test_register_uuid_handlers_output_chaining() -> None:
     register_uuid_handlers(connection)
 
     cursor = Mock()
-    metadata = Mock()
-    metadata.type_code = oracledb.DB_TYPE_VARCHAR
-    metadata.size = 36
+    metadata = ("VARCHAR_COL", oracledb.DB_TYPE_VARCHAR, 36, 36, None, None, True)
 
     result = connection.outputtypehandler(cursor, metadata)
 
@@ -335,9 +325,7 @@ def test_combined_output_handler_no_existing_non_raw16() -> None:
     register_uuid_handlers(connection)
 
     cursor = Mock()
-    metadata = Mock()
-    metadata.type_code = oracledb.DB_TYPE_VARCHAR
-    metadata.size = 36
+    metadata = ("VARCHAR_COL", oracledb.DB_TYPE_VARCHAR, 36, 36, None, None, True)
 
     result = connection.outputtypehandler(cursor, metadata)
 
@@ -361,9 +349,7 @@ def test_combined_output_handler_raw16_priority() -> None:
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
 
-    metadata = Mock()
-    metadata.type_code = oracledb.DB_TYPE_RAW
-    metadata.size = 16
+    metadata = ("RAW_COL", oracledb.DB_TYPE_RAW, 16, 16, None, None, True)
 
     result = connection.outputtypehandler(cursor, metadata)
 

@@ -83,15 +83,17 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
 
     Args:
         cursor: Oracle cursor (sync or async).
-        metadata: Column metadata from Oracle.
+        metadata: Column metadata tuple (name, type_code, display_size, internal_size, precision, scale, null_ok).
 
     Returns:
         Cursor variable with UUID converter if column is RAW(16), None otherwise.
     """
     import oracledb
 
-    if metadata.type_code is oracledb.DB_TYPE_RAW and metadata.size == UUID_BINARY_SIZE:
-        return cursor.var(metadata.type_code, arraysize=cursor.arraysize, outconverter=uuid_converter_out)
+    _name, type_code, _display_size, internal_size, _precision, _scale, _null_ok = metadata
+
+    if type_code is oracledb.DB_TYPE_RAW and internal_size == UUID_BINARY_SIZE:
+        return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=uuid_converter_out)
     return None
 
 
