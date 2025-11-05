@@ -243,8 +243,6 @@ async def example_return_formats() -> None:
 # Example 6: Export to Parquet
 async def example_parquet_export() -> None:
     """Demonstrate exporting Arrow results to Parquet."""
-    import pyarrow.parquet as pq
-
     from sqlspec import SQLSpec
     from sqlspec.adapters.duckdb import DuckDBConfig
 
@@ -276,12 +274,14 @@ async def example_parquet_export() -> None:
         # Query to Arrow
         result = session.select_to_arrow("SELECT * FROM logs")
 
-        # Export to Parquet
-        output_path = Path("/tmp/logs.parquet")
-        pq.write_table(result.data, output_path)
+        # Export to Parquet using the storage bridge
+        output_path = Path("/tmp/arrow_basic_usage_logs.parquet")
+        telemetry = result.write_to_storage_sync(str(output_path), format_hint="parquet")
 
         print("Parquet Export:")
         print(f"  Exported to: {output_path}")
+        print(f"  Rows: {telemetry['rows_processed']}")
+        print(f"  Bytes processed: {telemetry['bytes_processed']}")
         print(f"  File size: {output_path.stat().st_size} bytes")
         print()
 
