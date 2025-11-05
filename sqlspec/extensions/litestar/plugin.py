@@ -258,7 +258,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             app_config.signature_types.append(state.config.connection_type)
             app_config.signature_types.append(state.config.driver_type)
 
-            signature_namespace.update(state.config.get_signature_namespace())  # type: ignore[arg-type]
+            signature_namespace.update(state.config.get_signature_namespace())
 
             if not state.disable_di:
                 app_config.before_send.append(state.before_send_handler)

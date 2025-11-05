@@ -824,6 +824,140 @@ def register_handlers(connection: "Connection") -> None:
     logger.debug("Registered type handlers for [feature]")
 ```
 
+### Handler Chaining Pattern (Multiple Type Handlers)
+
+When multiple type handlers need to coexist (e.g., NumPy vectors + UUID binary), use handler chaining to avoid conflicts. Oracle's python-oracledb allows only ONE inputtypehandler and ONE outputtypehandler per connection.
+
+**Problem**: Directly assigning a new handler overwrites any existing handler.
+
+**Solution**: Check for existing handlers and chain them together:
+
+```python
+def register_handlers(connection: "Connection") -> None:
+    """Register type handlers with chaining support.
+
+    Chains to existing type handlers to avoid conflicts with other features.
+
+    Args:
+        connection: Database connection.
+    """
+    existing_input = getattr(connection, "inputtypehandler", None)
+    existing_output = getattr(connection, "outputtypehandler", None)
+
+    def combined_input_handler(cursor: "Cursor", value: Any, arraysize: int) -> Any:
+        # Try new handler first
+        result = _input_type_handler(cursor, value, arraysize)
+        if result is not None:
+            return result
+        # Chain to existing handler
+        if existing_input is not None:
+            return existing_input(cursor, value, arraysize)
+        return None
+
+    def combined_output_handler(cursor: "Cursor", metadata: Any) -> Any:
+        # Try new handler first
+        result = _output_type_handler(cursor, metadata)
+        if result is not None:
+            return result
+        # Chain to existing handler
+        if existing_output is not None:
+            return existing_output(cursor, metadata)
+        return None
+
+    connection.inputtypehandler = combined_input_handler
+    connection.outputtypehandler = combined_output_handler
+    logger.debug("Registered type handlers with chaining support")
+```
+
+**Registration Order Matters**:
+
+```python
+async def _init_connection(self, connection):
+    """Initialize connection with multiple type handlers."""
+    # Register handlers in order of priority
+    if self.driver_features.get("enable_numpy_vectors", False):
+        from ._numpy_handlers import register_handlers
+        register_handlers(connection)  # First handler
+
+    if self.driver_features.get("enable_uuid_binary", False):
+        from ._uuid_handlers import register_handlers
+        register_handlers(connection)  # Chains to NumPy handler
+```
+
+**Key Principles**:
+
+1. **Use getattr() to check for existing handlers** - This is acceptable duck-typing (not defensive programming)
+2. **Chain handlers in combined functions** - New handler checks first, then delegates to existing
+3. **Return None if no match** - Signals to continue to next handler or default behavior
+4. **Order matters** - Last registered handler gets first chance to process
+5. **Log chaining** - Include "with chaining support" in debug message
+
+**Example Usage**:
+
+```python
+# Both features work together via chaining
+config = OracleAsyncConfig(
+    pool_config={"dsn": "oracle://..."},
+    driver_features={
+        "enable_numpy_vectors": True,  # NumPy vectors
+        "enable_uuid_binary": True      # UUID binary (chains to NumPy)
+    }
+)
+
+# Insert both types in same transaction
+await session.execute(
+    "INSERT INTO ml_data (id, model_id, embedding) VALUES (:1, :2, :3)",
+    (1, uuid.uuid4(), np.random.rand(768).astype(np.float32))
+)
+```
+
+### Oracle Metadata Tuple Unpacking Pattern
+
+Oracle's cursor.description returns a 7-element tuple for each column. Always unpack explicitly to access internal_size:
+
+```python
+def _output_type_handler(cursor: "Cursor", metadata: Any) -> Any:
+    """Oracle output type handler.
+
+    Args:
+        cursor: Oracle cursor.
+        metadata: Column metadata tuple (name, type_code, display_size,
+                  internal_size, precision, scale, null_ok).
+    """
+    import oracledb
+
+    # Unpack tuple explicitly - metadata[3] is internal_size
+    _name, type_code, _display_size, internal_size, _precision, _scale, _null_ok = metadata
+
+    if type_code is oracledb.DB_TYPE_RAW and internal_size == 16:
+        return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=converter_out)
+    return None
+```
+
+**Why explicit unpacking**:
+
+- **Correctness**: Oracle metadata is a tuple, not an object with attributes
+- **No .size attribute**: Attempting `metadata.size` raises AttributeError
+- **Clear intent**: Unpacking documents the 7-element structure
+- **Prevents errors**: Catches unexpected metadata format changes
+
+**Common mistake**:
+
+```python
+# WRONG - metadata has no .size attribute
+if type_code is oracledb.DB_TYPE_RAW and metadata.size == 16:
+    ...
+```
+
+**Correct approach**:
+
+```python
+# RIGHT - unpack tuple to access internal_size
+_name, type_code, _display_size, internal_size, _precision, _scale, _null_ok = metadata
+if type_code is oracledb.DB_TYPE_RAW and internal_size == 16:
+    ...
+```
+
 ### Configuring driver_features with Auto-Detection
 
 In adapter's `config.py`, implement auto-detection:
@@ -1895,7 +2029,7 @@ Current state of all adapters (as of type-cleanup branch):
 
 | Adapter    | TypedDict | Auto-Detect | enable_ Prefix | Defaults | Grade      | Notes                                    |
 |------------|-----------|-------------|----------------|----------|------------|------------------------------------------|
-| Oracle     | ✅        | ✅          | ✅             | ✅       | Gold       | Perfect implementation, reference model  |
+| Oracle     | ✅        | ✅          | ✅             | ✅       | Gold       | NumPy vectors + UUID binary w/ chaining  |
 | AsyncPG    | ✅        | ✅          | ✅             | ✅       | Excellent  | Comprehensive TypedDict docs added       |
 | Psycopg    | ✅        | ✅          | ✅             | ✅       | Excellent  | Comprehensive TypedDict docs added       |
 | Psqlpy     | ✅        | ✅          | ✅             | ✅       | Excellent  | Simple but correct                       |
@@ -1911,6 +2045,321 @@ Current state of all adapters (as of type-cleanup branch):
 - **Gold**: Perfect adherence to all patterns, serves as reference
 - **Excellent**: Follows all patterns, well documented
 - **Good**: Follows patterns appropriately for adapter's needs
+
+## Google Cloud Connector Pattern
+
+### Overview
+
+Google Cloud SQL and AlloyDB connectors provide automatic IAM authentication, SSL management, and IP routing for PostgreSQL databases hosted on Google Cloud Platform. SQLSpec integrates these connectors through the AsyncPG adapter using a connection factory pattern.
+
+### When to Use This Pattern
+
+Use Google Cloud connectors when:
+
+- Connecting to Cloud SQL for PostgreSQL instances
+- Connecting to AlloyDB for PostgreSQL clusters
+- Need automatic IAM authentication
+- Want managed SSL/TLS connections
+- Require private IP or PSC connectivity
+
+### Implementation Pattern
+
+#### Step 1: Add Optional Dependencies
+
+Add connector packages as optional dependency groups in pyproject.toml:
+
+```toml
+[project.optional-dependencies]
+cloud-sql = ["cloud-sql-python-connector[asyncpg]"]
+alloydb = ["cloud-alloydb-python-connector[asyncpg]"]
+```
+
+#### Step 2: Add Detection Constants
+
+In sqlspec/_typing.py:
+
+```python
+try:
+    import google.cloud.sql.connector
+    CLOUD_SQL_CONNECTOR_INSTALLED = True
+except ImportError:
+    CLOUD_SQL_CONNECTOR_INSTALLED = False
+
+try:
+    import google.cloud.alloydb.connector
+    ALLOYDB_CONNECTOR_INSTALLED = True
+except ImportError:
+    ALLOYDB_CONNECTOR_INSTALLED = False
+```
+
+Re-export in sqlspec/typing.py and add to **all**.
+
+#### Step 3: Update Driver Features TypedDict
+
+Document all connector options with comprehensive descriptions:
+
+```python
+class AsyncpgDriverFeatures(TypedDict):
+    """AsyncPG driver feature flags."""
+
+    enable_cloud_sql: NotRequired[bool]
+    """Enable Google Cloud SQL connector integration.
+    Requires cloud-sql-python-connector package.
+    Defaults to True when package is installed.
+    Auto-configures IAM authentication, SSL, and IP routing.
+    Mutually exclusive with enable_alloydb.
+    """
+
+    cloud_sql_instance: NotRequired[str]
+    """Cloud SQL instance connection name.
+    Format: "project:region:instance"
+    Required when enable_cloud_sql is True.
+    """
+
+    cloud_sql_enable_iam_auth: NotRequired[bool]
+    """Enable IAM database authentication.
+    Defaults to False for passwordless authentication.
+    When False, requires user/password in pool_config.
+    """
+
+    cloud_sql_ip_type: NotRequired[str]
+    """IP address type for connection.
+    Options: "PUBLIC", "PRIVATE", "PSC"
+    Defaults to "PRIVATE".
+    """
+
+    enable_alloydb: NotRequired[bool]
+    """Enable Google AlloyDB connector integration.
+    Requires cloud-alloydb-python-connector package.
+    Defaults to True when package is installed.
+    Auto-configures IAM authentication and private networking.
+    Mutually exclusive with enable_cloud_sql.
+    """
+
+    alloydb_instance_uri: NotRequired[str]
+    """AlloyDB instance URI.
+    Format: "projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"
+    Required when enable_alloydb is True.
+    """
+
+    alloydb_enable_iam_auth: NotRequired[bool]
+    """Enable IAM database authentication.
+    Defaults to False for passwordless authentication.
+    """
+
+    alloydb_ip_type: NotRequired[str]
+    """IP address type for connection.
+    Options: "PUBLIC", "PRIVATE", "PSC"
+    Defaults to "PRIVATE".
+    """
+```
+
+#### Step 4: Add Auto-Detection to Config Init
+
+```python
+class AsyncpgConfig(AsyncDatabaseConfig):
+    def __init__(self, *, driver_features=None, **kwargs):
+        features_dict = dict(driver_features) if driver_features else {}
+
+        features_dict.setdefault("enable_cloud_sql", CLOUD_SQL_CONNECTOR_INSTALLED)
+        features_dict.setdefault("enable_alloydb", ALLOYDB_CONNECTOR_INSTALLED)
+
+        super().__init__(driver_features=features_dict, **kwargs)
+
+        self._cloud_sql_connector = None
+        self._alloydb_connector = None
+
+        self._validate_connector_config()
+```
+
+#### Step 5: Add Configuration Validation
+
+```python
+def _validate_connector_config(self) -> None:
+    """Validate Google Cloud connector configuration."""
+    enable_cloud_sql = self.driver_features.get("enable_cloud_sql", False)
+    enable_alloydb = self.driver_features.get("enable_alloydb", False)
+
+    if enable_cloud_sql and enable_alloydb:
+        msg = "Cannot enable both Cloud SQL and AlloyDB connectors simultaneously. Use separate configs for each database."
+        raise ImproperConfigurationError(msg)
+
+    if enable_cloud_sql:
+        if not CLOUD_SQL_CONNECTOR_INSTALLED:
+            msg = "cloud-sql-python-connector package not installed. Install with: pip install cloud-sql-python-connector"
+            raise ImproperConfigurationError(msg)
+
+        instance = self.driver_features.get("cloud_sql_instance")
+        if not instance:
+            msg = "cloud_sql_instance required when enable_cloud_sql is True. Format: 'project:region:instance'"
+            raise ImproperConfigurationError(msg)
+
+        cloud_sql_instance_parts_expected = 2
+        if instance.count(":") != cloud_sql_instance_parts_expected:
+            msg = f"Invalid Cloud SQL instance format: {instance}. Expected format: 'project:region:instance'"
+            raise ImproperConfigurationError(msg)
+
+    elif enable_alloydb:
+        if not ALLOYDB_CONNECTOR_INSTALLED:
+            msg = "cloud-alloydb-python-connector package not installed. Install with: pip install cloud-alloydb-python-connector"
+            raise ImproperConfigurationError(msg)
+
+        instance_uri = self.driver_features.get("alloydb_instance_uri")
+        if not instance_uri:
+            msg = "alloydb_instance_uri required when enable_alloydb is True. Format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
+            raise ImproperConfigurationError(msg)
+
+        if not instance_uri.startswith("projects/"):
+            msg = f"Invalid AlloyDB instance URI format: {instance_uri}. Expected format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
+            raise ImproperConfigurationError(msg)
+```
+
+#### Step 6: Implement Connection Factory Pattern
+
+Extract connector setup into private helper methods:
+
+```python
+def _setup_cloud_sql_connector(self, config: dict[str, Any]) -> None:
+    """Setup Cloud SQL connector and configure pool for connection factory pattern."""
+    from google.cloud.sql.connector import Connector
+
+    self._cloud_sql_connector = Connector()
+
+    user = config.get("user")
+    password = config.get("password")
+    database = config.get("database")
+
+    async def get_conn() -> AsyncpgConnection:
+        conn_kwargs = {
+            "instance_connection_string": self.driver_features["cloud_sql_instance"],
+            "driver": "asyncpg",
+            "enable_iam_auth": self.driver_features.get("cloud_sql_enable_iam_auth", False),
+            "ip_type": self.driver_features.get("cloud_sql_ip_type", "PRIVATE"),
+        }
+
+        if user:
+            conn_kwargs["user"] = user
+        if password:
+            conn_kwargs["password"] = password
+        if database:
+            conn_kwargs["db"] = database
+
+        return await self._cloud_sql_connector.connect_async(**conn_kwargs)
+
+    for key in ("dsn", "host", "port", "user", "password", "database"):
+        config.pop(key, None)
+
+    config["connect"] = get_conn
+
+
+def _setup_alloydb_connector(self, config: dict[str, Any]) -> None:
+    """Setup AlloyDB connector and configure pool for connection factory pattern."""
+    from google.cloud.alloydb.connector import AsyncConnector
+
+    self._alloydb_connector = AsyncConnector()
+
+    user = config.get("user")
+    password = config.get("password")
+    database = config.get("database")
+
+    async def get_conn() -> AsyncpgConnection:
+        conn_kwargs = {
+            "instance_uri": self.driver_features["alloydb_instance_uri"],
+            "driver": "asyncpg",
+            "enable_iam_auth": self.driver_features.get("alloydb_enable_iam_auth", False),
+            "ip_type": self.driver_features.get("alloydb_ip_type", "PRIVATE"),
+        }
+
+        if user:
+            conn_kwargs["user"] = user
+        if password:
+            conn_kwargs["password"] = password
+        if database:
+            conn_kwargs["db"] = database
+
+        return await self._alloydb_connector.connect(**conn_kwargs)
+
+    for key in ("dsn", "host", "port", "user", "password", "database"):
+        config.pop(key, None)
+
+    config["connect"] = get_conn
+```
+
+#### Step 7: Use in Pool Creation
+
+```python
+async def _create_pool(self) -> Pool[Record]:
+    config = self._get_pool_config_dict()
+
+    if self.driver_features.get("enable_cloud_sql", False):
+        self._setup_cloud_sql_connector(config)
+    elif self.driver_features.get("enable_alloydb", False):
+        self._setup_alloydb_connector(config)
+
+    if "init" not in config:
+        config["init"] = self._init_connection
+
+    return await asyncpg_create_pool(**config)
+```
+
+#### Step 8: Cleanup Connectors
+
+```python
+async def _close_pool(self) -> None:
+    if self.pool_instance:
+        await self.pool_instance.close()
+
+    if self._cloud_sql_connector is not None:
+        await self._cloud_sql_connector.close_async()
+        self._cloud_sql_connector = None
+
+    if self._alloydb_connector is not None:
+        await self._alloydb_connector.close()
+        self._alloydb_connector = None
+```
+
+### Key Design Principles
+
+1. **Auto-Detection**: Default to package installation status
+2. **Mutual Exclusion**: Cannot enable both connectors simultaneously
+3. **Connection Factory Pattern**: Use driver's `connect` parameter
+4. **Clean Helper Methods**: Extract setup logic for maintainability
+5. **Proper Lifecycle**: Initialize in create_pool, cleanup in close_pool
+6. **Clear Validation**: Validate instance names, package installation, config
+7. **Comprehensive TypedDict**: Document all options inline
+
+### Testing Requirements
+
+- Unit tests with mocked connectors
+- Integration tests with real instances (conditional)
+- Test auto-detection with both packages installed/not installed
+- Test mutual exclusion validation
+- Test connection factory pattern integration
+- Test lifecycle (initialization and cleanup)
+- Test all IP types and auth modes
+
+### Driver Compatibility
+
+| Driver | Cloud SQL | AlloyDB | Notes |
+|--------|-----------|---------|-------|
+| AsyncPG | ✅ Full | ✅ Full | Connection factory pattern via `connect` param |
+| Psycopg | ⚠️ Research | ⚠️ Research | Not officially documented, needs prototype |
+| Psqlpy | ❌ No | ❌ No | Internal Rust driver, architecturally incompatible |
+| ADBC | ❌ No | ❌ No | URI-only interface, no factory pattern support |
+
+### Examples from Existing Implementations
+
+See sqlspec/adapters/asyncpg/config.py for the reference implementation.
+
+### Documentation Requirements
+
+When implementing cloud connector support:
+
+1. **Update adapter guide** - Add cloud integration section with examples
+2. **Create cloud connector guide** - Comprehensive configuration reference
+3. **Document limitations** - Clearly state unsupported drivers
+4. **Provide troubleshooting** - Common errors and solutions
+5. **Include migration guide** - From direct DSN to connector pattern
 
 ### Testing Requirements
 

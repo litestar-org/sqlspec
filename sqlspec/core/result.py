@@ -16,6 +16,13 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 from sqlspec.core.compiler import OperationType
+from sqlspec.storage import (
+    AsyncStoragePipeline,
+    StorageDestination,
+    StorageFormat,
+    StorageTelemetry,
+    SyncStoragePipeline,
+)
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
 from sqlspec.utils.schema import to_schema
 
@@ -564,6 +571,32 @@ class SQLResult(StatementResult):
 
         return next(iter(row.values()))
 
+    def write_to_storage_sync(
+        self,
+        destination: "StorageDestination",
+        *,
+        format_hint: "StorageFormat | None" = None,
+        storage_options: "dict[str, Any] | None" = None,
+        pipeline: "SyncStoragePipeline | None" = None,
+    ) -> "StorageTelemetry":
+        active_pipeline = pipeline or SyncStoragePipeline()
+        rows = self.get_data()
+        return active_pipeline.write_rows(rows, destination, format_hint=format_hint, storage_options=storage_options)
+
+    async def write_to_storage_async(
+        self,
+        destination: "StorageDestination",
+        *,
+        format_hint: "StorageFormat | None" = None,
+        storage_options: "dict[str, Any] | None" = None,
+        pipeline: "AsyncStoragePipeline | None" = None,
+    ) -> "StorageTelemetry":
+        active_pipeline = pipeline or AsyncStoragePipeline()
+        rows = self.get_data()
+        return await active_pipeline.write_rows(
+            rows, destination, format_hint=format_hint, storage_options=storage_options
+        )
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ArrowResult(StatementResult):
@@ -768,6 +801,36 @@ class ArrowResult(StatementResult):
             raise ValueError(msg)
 
         return cast("list[dict[str, Any]]", self.data.to_pylist())
+
+    def write_to_storage_sync(
+        self,
+        destination: "StorageDestination",
+        *,
+        format_hint: "StorageFormat | None" = None,
+        storage_options: "dict[str, Any] | None" = None,
+        compression: str | None = None,
+        pipeline: "SyncStoragePipeline | None" = None,
+    ) -> "StorageTelemetry":
+        table = self.get_data()
+        active_pipeline = pipeline or SyncStoragePipeline()
+        return active_pipeline.write_arrow(
+            table, destination, format_hint=format_hint, storage_options=storage_options, compression=compression
+        )
+
+    async def write_to_storage_async(
+        self,
+        destination: "StorageDestination",
+        *,
+        format_hint: "StorageFormat | None" = None,
+        storage_options: "dict[str, Any] | None" = None,
+        compression: str | None = None,
+        pipeline: "AsyncStoragePipeline | None" = None,
+    ) -> "StorageTelemetry":
+        table = self.get_data()
+        active_pipeline = pipeline or AsyncStoragePipeline()
+        return await active_pipeline.write_arrow(
+            table, destination, format_hint=format_hint, storage_options=storage_options, compression=compression
+        )
 
     def __len__(self) -> int:
         """Return number of rows in the Arrow table.

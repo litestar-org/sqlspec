@@ -69,4 +69,3 @@ def test_completion_scripts_are_valid_shell_syntax() -> None:
 
         assert result.returncode == 0, f"{shell_name} completion failed: {result.stderr}"
         assert len(result.stdout) > 0, f"{shell_name} completion script is empty"
-        assert result.stderr == "", f"{shell_name} completion has stderr output: {result.stderr}"

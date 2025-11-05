@@ -7,13 +7,19 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
-from sqlspec.adapters.aiosqlite.driver import AiosqliteCursor, AiosqliteDriver, aiosqlite_statement_config
+from sqlspec.adapters.aiosqlite.driver import (
+    AiosqliteCursor,
+    AiosqliteDriver,
+    AiosqliteExceptionHandler,
+    aiosqlite_statement_config,
+)
 from sqlspec.adapters.aiosqlite.pool import (
     AiosqliteConnectionPool,
     AiosqliteConnectTimeoutError,
     AiosqlitePoolClosedError,
     AiosqlitePoolConnection,
 )
+from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
 from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -74,6 +80,10 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
     driver_type: "ClassVar[type[AiosqliteDriver]]" = AiosqliteDriver
     connection_type: "ClassVar[type[AiosqliteConnection]]" = AiosqliteConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
 
     def __init__(
         self,
@@ -113,20 +123,11 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
                 config_dict["uri"] = True
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-
-        if "enable_custom_adapters" not in processed_driver_features:
-            processed_driver_features["enable_custom_adapters"] = True
-
-        if "json_serializer" not in processed_driver_features:
-            processed_driver_features["json_serializer"] = to_json
-
-        if "json_deserializer" not in processed_driver_features:
-            processed_driver_features["json_deserializer"] = from_json
+        processed_driver_features.setdefault("enable_custom_adapters", True)
+        json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
+        json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
 
         base_statement_config = statement_config or aiosqlite_statement_config
-
-        json_serializer = processed_driver_features.get("json_serializer")
-        json_deserializer = processed_driver_features.get("json_deserializer")
         if json_serializer is not None:
             parameter_config = base_statement_config.parameter_config.with_json_serializers(
                 json_serializer, deserializer=json_deserializer
@@ -246,8 +247,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         sync adapter, so this shares the implementation.
         """
         if self.driver_features.get("enable_custom_adapters", False):
-            from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
-
             register_type_handlers(
                 json_serializer=self.driver_features.get("json_serializer"),
                 json_deserializer=self.driver_features.get("json_deserializer"),
@@ -279,7 +278,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             self.pool_instance = await self.create_pool()
         return self.pool_instance
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for aiosqlite types.
 
         Returns:
@@ -288,11 +287,16 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         namespace = super().get_signature_namespace()
         namespace.update({
             "AiosqliteConnection": AiosqliteConnection,
+            "AiosqliteConnectionParams": AiosqliteConnectionParams,
             "AiosqliteConnectionPool": AiosqliteConnectionPool,
             "AiosqliteConnectTimeoutError": AiosqliteConnectTimeoutError,
             "AiosqliteCursor": AiosqliteCursor,
+            "AiosqliteDriver": AiosqliteDriver,
+            "AiosqliteDriverFeatures": AiosqliteDriverFeatures,
+            "AiosqliteExceptionHandler": AiosqliteExceptionHandler,
             "AiosqlitePoolClosedError": AiosqlitePoolClosedError,
             "AiosqlitePoolConnection": AiosqlitePoolConnection,
+            "AiosqlitePoolParams": AiosqlitePoolParams,
         })
         return namespace
 

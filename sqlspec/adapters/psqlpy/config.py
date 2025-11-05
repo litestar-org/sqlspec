@@ -9,7 +9,12 @@ from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy._types import PsqlpyConnection
-from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, build_psqlpy_statement_config
+from sqlspec.adapters.psqlpy.driver import (
+    PsqlpyCursor,
+    PsqlpyDriver,
+    PsqlpyExceptionHandler,
+    build_psqlpy_statement_config,
+)
 from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
 from sqlspec.core import StatementConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
@@ -100,6 +105,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     driver_type: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
     connection_type: "ClassVar[type[PsqlpyConnection]]" = PsqlpyConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    supports_native_parquet_import: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -243,12 +252,19 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             self.pool_instance = await self.create_pool()
         return self.pool_instance
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for Psqlpy types.
 
         Returns:
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"PsqlpyConnection": PsqlpyConnection, "PsqlpyCursor": PsqlpyCursor})
+        namespace.update({
+            "PsqlpyConnection": PsqlpyConnection,
+            "PsqlpyConnectionParams": PsqlpyConnectionParams,
+            "PsqlpyCursor": PsqlpyCursor,
+            "PsqlpyDriver": PsqlpyDriver,
+            "PsqlpyExceptionHandler": PsqlpyExceptionHandler,
+            "PsqlpyPoolParams": PsqlpyPoolParams,
+        })
         return namespace

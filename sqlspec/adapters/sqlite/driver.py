@@ -4,9 +4,10 @@ import contextlib
 import sqlite3
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import (
+    ArrowResult,
     DriverParameterProfile,
     ParameterStyle,
     build_statement_config_from_profile,
@@ -36,6 +37,13 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
+    from sqlspec.storage import (
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "sqlite_statement_config")
 
@@ -340,6 +348,70 @@ class SqliteDriver(SyncDriverAdapterBase):
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and write Arrow-compatible output to storage (sync)."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = arrow_result.write_to_storage_sync(
+            destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into SQLite using batched inserts."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            self._truncate_table_sync(table)
+
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            insert_sql = _build_sqlite_insert_statement(table, columns)
+            with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+                cursor.executemany(insert_sql, records)
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage into SQLite."""
+
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
     def begin(self) -> None:
         """Begin a database transaction.
 
@@ -364,6 +436,11 @@ class SqliteDriver(SyncDriverAdapterBase):
         except sqlite3.Error as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    def _truncate_table_sync(self, table: str) -> None:
+        statement = f"DELETE FROM {_format_sqlite_identifier(table)}"
+        with self.handle_database_exceptions(), self.with_cursor(self.connection) as cursor:
+            cursor.execute(statement)
 
     def commit(self) -> None:
         """Commit the current transaction.
@@ -393,6 +470,27 @@ class SqliteDriver(SyncDriverAdapterBase):
 
 def _bool_to_int(value: bool) -> int:
     return int(value)
+
+
+def _quote_sqlite_identifier(identifier: str) -> str:
+    normalized = identifier.replace('"', '""')
+    return f'"{normalized}"'
+
+
+def _format_sqlite_identifier(identifier: str) -> str:
+    cleaned = identifier.strip()
+    if not cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    parts = [part for part in cleaned.split(".") if part]
+    formatted = ".".join(_quote_sqlite_identifier(part) for part in parts)
+    return formatted or _quote_sqlite_identifier(cleaned)
+
+
+def _build_sqlite_insert_statement(table: str, columns: "list[str]") -> str:
+    column_clause = ", ".join(_quote_sqlite_identifier(column) for column in columns)
+    placeholders = ", ".join("?" for _ in columns)
+    return f"INSERT INTO {_format_sqlite_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
 def _build_sqlite_profile() -> DriverParameterProfile:

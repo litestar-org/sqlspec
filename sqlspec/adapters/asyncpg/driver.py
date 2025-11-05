@@ -2,7 +2,7 @@
 
 import datetime
 import re
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncpg
 
@@ -37,8 +37,15 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.asyncpg._types import AsyncpgConnection
-    from sqlspec.core import SQL, ParameterStyleConfig, SQLResult, StatementConfig
+    from sqlspec.core import SQL, ArrowResult, ParameterStyleConfig, SQLResult, StatementConfig
     from sqlspec.driver import AsyncDataDictionaryBase, ExecutionResult
+    from sqlspec.storage import (
+        AsyncStoragePipeline,
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+    )
 
 __all__ = (
     "AsyncpgCursor",
@@ -335,6 +342,68 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    async def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and persist results to storage once native COPY is available."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = await arrow_result.write_to_storage_async(
+            destination, format_hint=format_hint, pipeline=async_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into a PostgreSQL table via COPY."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            await self._truncate_table(table)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            await self.connection.copy_records_to_table(table, records=records, columns=columns)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Read an artifact from storage and ingest it via COPY."""
+
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
+
     @staticmethod
     def _parse_asyncpg_status(status: str) -> int:
         """Parse AsyncPG status string to extract row count.
@@ -398,6 +467,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
+
+    async def _truncate_table(self, table: str) -> None:
+        try:
+            await self.connection.execute(f"TRUNCATE TABLE {table}")
+        except asyncpg.PostgresError as exc:
+            msg = f"Failed to truncate table '{table}': {exc}"
+            raise SQLSpecError(msg) from exc
 
 
 def _convert_datetime_param(value: Any) -> Any:

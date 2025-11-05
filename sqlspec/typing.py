@@ -7,8 +7,10 @@ from typing_extensions import TypeVar
 
 from sqlspec._typing import (
     AIOSQL_INSTALLED,
+    ALLOYDB_CONNECTOR_INSTALLED,
     ATTRS_INSTALLED,
     CATTRS_INSTALLED,
+    CLOUD_SQL_CONNECTOR_INSTALLED,
     FSSPEC_INSTALLED,
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
@@ -66,6 +68,7 @@ from sqlspec._typing import (
     cattrs_structure,
     cattrs_unstructure,
     convert,
+    module_available,
     trace,
 )
 
@@ -144,8 +147,10 @@ def get_type_adapter(f: "type[T]") -> Any:
 
 __all__ = (
     "AIOSQL_INSTALLED",
+    "ALLOYDB_CONNECTOR_INSTALLED",
     "ATTRS_INSTALLED",
     "CATTRS_INSTALLED",
+    "CLOUD_SQL_CONNECTOR_INSTALLED",
     "FSSPEC_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
@@ -209,5 +214,6 @@ __all__ = (
     "cattrs_unstructure",
     "convert",
     "get_type_adapter",
+    "module_available",
     "trace",
 )

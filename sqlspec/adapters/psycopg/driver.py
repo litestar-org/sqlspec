@@ -16,9 +16,11 @@ PostgreSQL Features:
 
 import datetime
 import io
-from typing import TYPE_CHECKING, Any
+from contextlib import AsyncExitStack, ExitStack
+from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
+from psycopg import sql as psycopg_sql
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.core import (
@@ -57,9 +59,18 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
+    from sqlspec.core import ArrowResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.driver._sync import SyncDataDictionaryBase
+    from sqlspec.storage import (
+        AsyncStoragePipeline,
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
 
 __all__ = (
     "PsycopgAsyncCursor",
@@ -80,6 +91,25 @@ TRANSACTION_STATUS_ACTIVE = 1
 TRANSACTION_STATUS_INTRANS = 2
 TRANSACTION_STATUS_INERROR = 3
 TRANSACTION_STATUS_UNKNOWN = 4
+
+
+def _compose_table_identifier(table: str) -> "psycopg_sql.Composed":
+    parts = [part for part in table.split(".") if part]
+    if not parts:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    identifiers = [psycopg_sql.Identifier(part) for part in parts]
+    return psycopg_sql.SQL(".").join(identifiers)
+
+
+def _build_copy_from_command(table: str, columns: "list[str]") -> "psycopg_sql.Composed":
+    table_identifier = _compose_table_identifier(table)
+    column_sql = psycopg_sql.SQL(", ").join(psycopg_sql.Identifier(column) for column in columns)
+    return psycopg_sql.SQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)
+
+
+def _build_truncate_command(table: str) -> "psycopg_sql.Composed":
+    return psycopg_sql.SQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
 
 
 class PsycopgSyncCursor:
@@ -436,6 +466,72 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream Arrow results to storage (sync)."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = arrow_result.write_to_storage_sync(
+            destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into PostgreSQL using COPY."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            self._truncate_table_sync(table)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            copy_sql = _build_copy_from_command(table, columns)
+            with ExitStack() as stack:
+                stack.enter_context(self.handle_database_exceptions())
+                cursor = stack.enter_context(self.with_cursor(self.connection))
+                copy_ctx = stack.enter_context(cursor.copy(copy_sql))
+                for record in records:
+                    copy_ctx.write_row(record)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts into PostgreSQL via COPY."""
+
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -448,6 +544,11 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
             self._data_dictionary = PostgresSyncDataDictionary()
         return self._data_dictionary
+
+    def _truncate_table_sync(self, table: str) -> None:
+        truncate_sql = _build_truncate_command(table)
+        with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            cursor.execute(truncate_sql)
 
 
 class PsycopgAsyncCursor:
@@ -807,6 +908,74 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    async def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream Arrow data to storage asynchronously."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = await arrow_result.write_to_storage_async(
+            destination, format_hint=format_hint, pipeline=async_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into PostgreSQL asynchronously via COPY."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            await self._truncate_table_async(table)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            copy_sql = _build_copy_from_command(table, columns)
+            async with AsyncExitStack() as stack:
+                await stack.enter_async_context(self.handle_database_exceptions())
+                cursor = await stack.enter_async_context(self.with_cursor(self.connection))
+                copy_ctx = await stack.enter_async_context(cursor.copy(copy_sql))
+                for record in records:
+                    await copy_ctx.write_row(record)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts asynchronously."""
+
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
+
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
         """Get the data dictionary for this driver.
@@ -819,6 +988,11 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
             self._data_dictionary = PostgresAsyncDataDictionary()
         return self._data_dictionary
+
+    async def _truncate_table_async(self, table: str) -> None:
+        truncate_sql = _build_truncate_command(table)
+        async with self.with_cursor(self.connection) as cursor, self.handle_database_exceptions():
+            await cursor.execute(truncate_sql)
 
 
 def _identity(value: Any) -> Any:
@@ -844,11 +1018,7 @@ def _build_psycopg_profile() -> DriverParameterProfile:
             ParameterStyle.QMARK,
         },
         default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-        },
+        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
         has_native_list_expansion=True,
         preserve_parameter_format=True,
         needs_static_script_compilation=False,

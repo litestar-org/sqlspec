@@ -20,11 +20,13 @@ adk = ["google-adk"]
 aioodbc = ["aioodbc"]
 aiosql = ["aiosql"]
 aiosqlite = ["aiosqlite"]
+alloydb = ["google-cloud-alloydb-connector"]
 asyncmy = ["asyncmy"]
 asyncpg = ["asyncpg"]
 attrs = ["attrs", "cattrs"]
-bigquery = ["google-cloud-bigquery"]
+bigquery = ["google-cloud-bigquery", "google-cloud-storage"]
 cli = ["rich-click"]
+cloud-sql = ["cloud-sql-python-connector"]
 duckdb = ["duckdb"]
 fastapi = ["fastapi"]
 flask = ["flask"]
@@ -281,6 +283,7 @@ filterwarnings = [
   "ignore::DeprecationWarning:pkg_resources.*",
   "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
   "ignore::DeprecationWarning:pkg_resources",
+  "ignore:You are using a Python version .+ google\\.api_core:FutureWarning",
   "ignore::DeprecationWarning:google.rpc",
   "ignore::DeprecationWarning:google.gcloud",
   "ignore::DeprecationWarning:google.iam",

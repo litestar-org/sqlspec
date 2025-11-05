@@ -8,11 +8,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.adbc._types import AdbcConnection
-from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, get_adbc_statement_config
+from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, get_adbc_statement_config
 from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.module_loader import import_string
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -101,6 +102,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     driver_type: ClassVar[type[AdbcDriver]] = AdbcDriver
     connection_type: "ClassVar[type[AdbcConnection]]" = AdbcConnection
     supports_transactional_ddl: ClassVar[bool] = False
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
+    storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed", "rows_per_chunk")
 
     def __init__(
         self,
@@ -135,20 +141,12 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             detected_dialect = str(self._get_dialect() or "sqlite")
             statement_config = get_adbc_statement_config(detected_dialect)
 
-        from sqlspec.utils.serializers import to_json
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
+        processed_driver_features.setdefault("enable_cast_detection", True)
+        processed_driver_features.setdefault("strict_type_coercion", False)
+        processed_driver_features.setdefault("arrow_extension_types", True)
 
-        if driver_features is None:
-            driver_features = {}
-        if "json_serializer" not in driver_features:
-            driver_features["json_serializer"] = to_json
-        if "enable_cast_detection" not in driver_features:
-            driver_features["enable_cast_detection"] = True
-        if "strict_type_coercion" not in driver_features:
-            driver_features["strict_type_coercion"] = False
-        if "arrow_extension_types" not in driver_features:
-            driver_features["arrow_extension_types"] = True
-
-        json_serializer = driver_features.get("json_serializer")
         if json_serializer is not None:
             parameter_config = statement_config.parameter_config
             previous_list_converter = parameter_config.type_coercion_map.get(list)
@@ -167,7 +165,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             connection_config=self.connection_config,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=dict(driver_features),
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
         )
@@ -415,13 +413,18 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         return config
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for types.
 
         Returns:
             Dictionary mapping type names to types.
         """
-
         namespace = super().get_signature_namespace()
-        namespace.update({"AdbcConnection": AdbcConnection, "AdbcCursor": AdbcCursor})
+        namespace.update({
+            "AdbcConnection": AdbcConnection,
+            "AdbcConnectionParams": AdbcConnectionParams,
+            "AdbcCursor": AdbcCursor,
+            "AdbcDriver": AdbcDriver,
+            "AdbcExceptionHandler": AdbcExceptionHandler,
+        })
         return namespace

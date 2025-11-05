@@ -9,7 +9,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
 from sqlspec.adapters.sqlite._types import SqliteConnection
-from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, sqlite_statement_config
+from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, SqliteExceptionHandler, sqlite_statement_config
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig, SyncDatabaseConfig
 from sqlspec.utils.serializers import from_json, to_json
@@ -63,6 +63,10 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     driver_type: "ClassVar[type[SqliteDriver]]" = SqliteDriver
     connection_type: "ClassVar[type[SqliteConnection]]" = SqliteConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
 
     def __init__(
         self,
@@ -102,20 +106,11 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
                 pool_config["uri"] = True
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-
-        if "enable_custom_adapters" not in processed_driver_features:
-            processed_driver_features["enable_custom_adapters"] = True
-
-        if "json_serializer" not in processed_driver_features:
-            processed_driver_features["json_serializer"] = to_json
-
-        if "json_deserializer" not in processed_driver_features:
-            processed_driver_features["json_deserializer"] = from_json
+        processed_driver_features.setdefault("enable_custom_adapters", True)
+        json_serializer = processed_driver_features.setdefault("json_serializer", to_json)
+        json_deserializer = processed_driver_features.setdefault("json_deserializer", from_json)
 
         base_statement_config = statement_config or sqlite_statement_config
-
-        json_serializer = processed_driver_features.get("json_serializer")
-        json_deserializer = processed_driver_features.get("json_deserializer")
         if json_serializer is not None:
             parameter_config = base_statement_config.parameter_config.with_json_serializers(
                 json_serializer, deserializer=json_deserializer
@@ -202,12 +197,20 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
                 driver_features=self.driver_features,
             )
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SQLite types.
 
         Returns:
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"SqliteConnection": SqliteConnection, "SqliteCursor": SqliteCursor})
+        namespace.update({
+            "SqliteConnection": SqliteConnection,
+            "SqliteConnectionParams": SqliteConnectionParams,
+            "SqliteConnectionPool": SqliteConnectionPool,
+            "SqliteCursor": SqliteCursor,
+            "SqliteDriver": SqliteDriver,
+            "SqliteDriverFeatures": SqliteDriverFeatures,
+            "SqliteExceptionHandler": SqliteExceptionHandler,
+        })
         return namespace
