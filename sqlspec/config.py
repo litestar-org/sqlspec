@@ -510,15 +510,16 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Provide pool instance."""
         raise NotImplementedError
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for this database configuration.
 
-        Returns a dictionary of type names to types that should be registered
-        with Litestar's signature namespace to prevent serialization attempts
-        on database-specific types.
+        Returns a dictionary of type names to objects (classes, functions, or
+        other callables) that should be registered with Litestar's signature
+        namespace to prevent serialization attempts on database-specific
+        structures.
 
         Returns:
-            Dictionary mapping type names to types.
+            Dictionary mapping type names to objects.
         """
         return {}
 

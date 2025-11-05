@@ -9,12 +9,15 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.psycopg._type_handlers import register_pgvector_async, register_pgvector_sync
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncCursor,
     PsycopgAsyncDriver,
+    PsycopgAsyncExceptionHandler,
     PsycopgSyncCursor,
     PsycopgSyncDriver,
+    PsycopgSyncExceptionHandler,
     build_psycopg_statement_config,
     psycopg_statement_config,
 )
@@ -184,8 +187,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                     conn.autocommit = autocommit_setting
 
                 if self.driver_features.get("enable_pgvector", False):
-                    from sqlspec.adapters.psycopg._type_handlers import register_pgvector_sync
-
                     register_pgvector_sync(conn)
 
             pool_parameters["configure"] = all_config.pop("configure", configure_connection)
@@ -285,7 +286,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self.pool_instance = self.create_pool()
         return self.pool_instance
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for Psycopg types.
 
         This provides all Psycopg-specific types that Litestar needs to recognize
@@ -295,7 +296,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"PsycopgSyncConnection": PsycopgSyncConnection, "PsycopgSyncCursor": PsycopgSyncCursor})
+        namespace.update({
+            "PsycopgConnectionParams": PsycopgConnectionParams,
+            "PsycopgPoolParams": PsycopgPoolParams,
+            "PsycopgSyncConnection": PsycopgSyncConnection,
+            "PsycopgSyncCursor": PsycopgSyncCursor,
+            "PsycopgSyncDriver": PsycopgSyncDriver,
+            "PsycopgSyncExceptionHandler": PsycopgSyncExceptionHandler,
+        })
         return namespace
 
 
@@ -376,10 +384,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             if autocommit_setting is not None:
                 await conn.set_autocommit(autocommit_setting)
 
-            if self.driver_features.get("enable_pgvector", False):
-                from sqlspec.adapters.psycopg._type_handlers import register_pgvector_async
-
-                await register_pgvector_async(conn)
+                if self.driver_features.get("enable_pgvector", False):
+                    await register_pgvector_async(conn)
 
         pool_parameters["configure"] = all_config.pop("configure", configure_connection)
 
@@ -470,7 +476,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             self.pool_instance = await self.create_pool()
         return self.pool_instance
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for Psycopg async types.
 
         This provides all Psycopg async-specific types that Litestar needs to recognize
@@ -480,5 +486,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"PsycopgAsyncConnection": PsycopgAsyncConnection, "PsycopgAsyncCursor": PsycopgAsyncCursor})
+        namespace.update({
+            "PsycopgAsyncConnection": PsycopgAsyncConnection,
+            "PsycopgAsyncCursor": PsycopgAsyncCursor,
+            "PsycopgAsyncDriver": PsycopgAsyncDriver,
+            "PsycopgAsyncExceptionHandler": PsycopgAsyncExceptionHandler,
+            "PsycopgConnectionParams": PsycopgConnectionParams,
+            "PsycopgPoolParams": PsycopgPoolParams,
+        })
         return namespace

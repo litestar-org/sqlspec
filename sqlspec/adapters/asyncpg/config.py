@@ -11,10 +11,12 @@ from asyncpg.connection import ConnectionMeta
 from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncpg._types import AsyncpgConnection
+from sqlspec.adapters.asyncpg._type_handlers import register_json_codecs, register_pgvector_support
+from sqlspec.adapters.asyncpg._types import AsyncpgConnection, AsyncpgPool
 from sqlspec.adapters.asyncpg.driver import (
     AsyncpgCursor,
     AsyncpgDriver,
+    AsyncpgExceptionHandler,
     asyncpg_statement_config,
     build_asyncpg_statement_config,
 )
@@ -329,8 +331,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         elif self.driver_features.get("enable_alloydb", False):
             self._setup_alloydb_connector(config)
 
-        if "init" not in config:
-            config["init"] = self._init_connection
+        config.setdefault("init", self._init_connection)
 
         return await asyncpg_create_pool(**config)
 
@@ -341,8 +342,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             connection: AsyncPG connection to initialize.
         """
         if self.driver_features.get("enable_json_codecs", True):
-            from sqlspec.adapters.asyncpg._type_handlers import register_json_codecs
-
             await register_json_codecs(
                 connection,
                 encoder=self.driver_features.get("json_serializer", to_json),
@@ -350,8 +349,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             )
 
         if self.driver_features.get("enable_pgvector", False):
-            from sqlspec.adapters.asyncpg._type_handlers import register_pgvector_support
-
             await register_pgvector_support(connection)
 
     async def _close_pool(self) -> None:
@@ -432,7 +429,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             self.pool_instance = await self.create_pool()
         return self.pool_instance
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for AsyncPG types.
 
         This provides all AsyncPG-specific types that Litestar needs to recognize
@@ -450,7 +447,12 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
             "ConnectionMeta": ConnectionMeta,
             "Record": Record,
-            "AsyncpgConnection": AsyncpgConnection,  # type: ignore[dict-item]
+            "AsyncpgConnection": AsyncpgConnection,
+            "AsyncpgConnectionConfig": AsyncpgConnectionConfig,
             "AsyncpgCursor": AsyncpgCursor,
+            "AsyncpgDriver": AsyncpgDriver,
+            "AsyncpgExceptionHandler": AsyncpgExceptionHandler,
+            "AsyncpgPool": AsyncpgPool,
+            "AsyncpgPoolConfig": AsyncpgPoolConfig,
         })
         return namespace

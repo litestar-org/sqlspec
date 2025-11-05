@@ -19,8 +19,10 @@ from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncCursor,
     OracleAsyncDriver,
+    OracleAsyncExceptionHandler,
     OracleSyncCursor,
     OracleSyncDriver,
+    OracleSyncExceptionHandler,
     oracledb_statement_config,
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
@@ -162,12 +164,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         statement_config = statement_config or oracledb_statement_config
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        if "enable_numpy_vectors" not in processed_driver_features:
-            processed_driver_features["enable_numpy_vectors"] = NUMPY_INSTALLED
-        if "enable_lowercase_column_names" not in processed_driver_features:
-            processed_driver_features["enable_lowercase_column_names"] = True
-        if "enable_uuid_binary" not in processed_driver_features:
-            processed_driver_features["enable_uuid_binary"] = True
+        processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
+        processed_driver_features.setdefault("enable_lowercase_column_names", True)
+        processed_driver_features.setdefault("enable_uuid_binary", True)
 
         super().__init__(
             pool_config=processed_pool_config,
@@ -269,7 +268,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             self.pool_instance = self.create_pool()
         return self.pool_instance
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for OracleDB types.
 
         Provides OracleDB-specific types for Litestar framework recognition.
@@ -280,11 +279,19 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 
         namespace = super().get_signature_namespace()
         namespace.update({
-            "OracleSyncConnection": OracleSyncConnection,
             "OracleAsyncConnection": OracleAsyncConnection,
-            "OracleSyncConnectionPool": OracleSyncConnectionPool,
             "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
+            "OracleAsyncCursor": OracleAsyncCursor,
+            "OracleAsyncDriver": OracleAsyncDriver,
+            "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
+            "OracleConnectionParams": OracleConnectionParams,
+            "OracleDriverFeatures": OracleDriverFeatures,
+            "OraclePoolParams": OraclePoolParams,
+            "OracleSyncConnection": OracleSyncConnection,
+            "OracleSyncConnectionPool": OracleSyncConnectionPool,
             "OracleSyncCursor": OracleSyncCursor,
+            "OracleSyncDriver": OracleSyncDriver,
+            "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
         })
         return namespace
 
@@ -332,12 +339,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             processed_pool_config.update(extras)
 
         processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        if "enable_numpy_vectors" not in processed_driver_features:
-            processed_driver_features["enable_numpy_vectors"] = NUMPY_INSTALLED
-        if "enable_lowercase_column_names" not in processed_driver_features:
-            processed_driver_features["enable_lowercase_column_names"] = True
-        if "enable_uuid_binary" not in processed_driver_features:
-            processed_driver_features["enable_uuid_binary"] = True
+        processed_driver_features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
+        processed_driver_features.setdefault("enable_lowercase_column_names", True)
+        processed_driver_features.setdefault("enable_uuid_binary", True)
 
         super().__init__(
             pool_config=processed_pool_config,
@@ -375,8 +379,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             register_numpy_handlers(connection)
 
         if self.driver_features.get("enable_uuid_binary", False):
-            from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
-
             register_uuid_handlers(connection)
 
     async def _close_pool(self) -> None:
@@ -445,7 +447,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             self.pool_instance = await self.create_pool()
         return self.pool_instance
 
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+    def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for OracleDB async types.
 
         Provides OracleDB async-specific types for Litestar framework recognition.
@@ -456,11 +458,18 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
         namespace = super().get_signature_namespace()
         namespace.update({
-            "OracleSyncConnection": OracleSyncConnection,
             "OracleAsyncConnection": OracleAsyncConnection,
-            "OracleSyncConnectionPool": OracleSyncConnectionPool,
             "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
-            "OracleSyncCursor": OracleSyncCursor,
             "OracleAsyncCursor": OracleAsyncCursor,
+            "OracleAsyncDriver": OracleAsyncDriver,
+            "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
+            "OracleConnectionParams": OracleConnectionParams,
+            "OracleDriverFeatures": OracleDriverFeatures,
+            "OraclePoolParams": OraclePoolParams,
+            "OracleSyncConnection": OracleSyncConnection,
+            "OracleSyncConnectionPool": OracleSyncConnectionPool,
+            "OracleSyncCursor": OracleSyncCursor,
+            "OracleSyncDriver": OracleSyncDriver,
+            "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
         })
         return namespace
