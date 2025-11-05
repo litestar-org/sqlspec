@@ -225,7 +225,7 @@ async def test_aiosqlite_load_from_storage_includes_source(monkeypatch: pytest.M
 
         async with connection.execute("SELECT id, label FROM raw_data") as cursor:
             rows = await cursor.fetchall()
-        assert rows == [(5, "gamma")]  # type: ignore[comparison-overlap
+        assert rows == [(5, "gamma")]  # type: ignore[comparison-overlap]
         assert job.telemetry["extra"]["source"]["destination"] == "file:///tmp/chunk.parquet"
     finally:
         await connection.close()
