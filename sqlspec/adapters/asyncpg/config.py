@@ -252,7 +252,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Args:
             config: Pool configuration dictionary to modify in-place.
         """
-        from google.cloud.sql.connector import Connector  # pyright: ignore
+        from google.cloud.sql.connector import Connector  # type: ignore[import-untyped,unused-ignore]
 
         self._cloud_sql_connector = Connector()
 
@@ -289,7 +289,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Args:
             config: Pool configuration dictionary to modify in-place.
         """
-        from google.cloud.alloydb.connector import AsyncConnector
+        from google.cloud.alloydb.connector import AsyncConnector  # type: ignore[import-untyped,unused-ignore]
 
         self._alloydb_connector = AsyncConnector()
 
