@@ -207,16 +207,18 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         return self._json_storage_type
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
-        """Return cached Oracle version info, querying via data dictionary if needed."""
+        """Return cached Oracle version info using Oracle data dictionary."""
 
         if self._oracle_version_info is not None:
             return self._oracle_version_info
 
         async with self._config.provide_session() as driver:
-            data_dictionary = OracleAsyncDataDictionary()
-            self._oracle_version_info = await data_dictionary.get_version(driver)
+            dictionary = OracleAsyncDataDictionary()
+            self._oracle_version_info = await dictionary.get_version(driver)
+
         if self._oracle_version_info is None:
             logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+
         return self._oracle_version_info
 
     async def _serialize_state(self, state: "dict[str, Any]") -> "str | bytes":
@@ -965,16 +967,18 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         return self._json_storage_type
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
-        """Return cached Oracle version info for sync store."""
+        """Return cached Oracle version info using Oracle data dictionary."""
 
         if self._oracle_version_info is not None:
             return self._oracle_version_info
 
         with self._config.provide_session() as driver:
-            data_dictionary = OracleSyncDataDictionary()
-            self._oracle_version_info = data_dictionary.get_version(driver)
+            dictionary = OracleSyncDataDictionary()
+            self._oracle_version_info = dictionary.get_version(driver)
+
         if self._oracle_version_info is None:
             logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+
         return self._oracle_version_info
 
     def _serialize_state(self, state: "dict[str, Any]") -> "str | bytes":

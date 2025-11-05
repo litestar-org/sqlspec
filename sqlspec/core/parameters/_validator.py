@@ -20,11 +20,11 @@ PARAMETER_REGEX = re.compile(
     (?P<pg_cast>::(?P<cast_type>\w+)) |
     (?P<pyformat_named>%\((?P<pyformat_name>\w+)\)s) |
     (?P<pyformat_pos>%s) |
-    (?P<positional_colon>:(?P<colon_num>\d+)) |
-    (?P<named_colon>:(?P<colon_name>\w+)) |
-    (?P<named_at>@(?P<at_name>\w+)) |
-    (?P<numeric>\$(?P<numeric_num>\d+)) |
-    (?P<named_dollar_param>\$(?P<dollar_param_name>\w+)) |
+    (?P<positional_colon>(?<![A-Za-z0-9_]):(?P<colon_num>\d+)) |
+    (?P<named_colon>(?<![A-Za-z0-9_]):(?P<colon_name>\w+)) |
+    (?P<named_at>(?<![A-Za-z0-9_])@(?P<at_name>\w+)) |
+    (?P<numeric>(?<![A-Za-z0-9_])\$(?P<numeric_num>\d+)) |
+    (?P<named_dollar_param>(?<![A-Za-z0-9_])\$(?P<dollar_param_name>\w+)) |
     (?P<qmark>\?)
     """,
     re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
