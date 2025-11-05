@@ -541,7 +541,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 copy_kwargs: dict[str, Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
-                copy_operation = cursor.binary_copy_to_table(records, table_name, **copy_kwargs)
+                copy_source: Any = records
+                copy_operation = cursor.binary_copy_to_table(copy_source, table_name, **copy_kwargs)  # pyright: ignore[reportArgumentType]
                 if inspect.isawaitable(copy_operation):
                     await copy_operation
 

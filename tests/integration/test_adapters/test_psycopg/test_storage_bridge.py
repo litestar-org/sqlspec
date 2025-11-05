@@ -88,7 +88,8 @@ def test_psycopg_sync_storage_bridge_with_minio(
 
         object_name = f"{prefix}/psycopg_sync/export.parquet"
         stat = minio_client.stat_object(minio_default_bucket_name, object_name)
-        assert stat.size > 0
+        object_size = stat.size if stat.size is not None else 0
+        assert object_size > 0
     finally:
         storage_registry.clear()
         with psycopg_sync_config.provide_session() as cleanup:
@@ -144,7 +145,8 @@ async def test_psycopg_async_storage_bridge_with_minio(
 
         object_name = f"{prefix}/psycopg_async/export.parquet"
         stat = minio_client.stat_object(minio_default_bucket_name, object_name)
-        assert stat.size > 0
+        object_size = stat.size if stat.size is not None else 0
+        assert object_size > 0
     finally:
         storage_registry.clear()
         await psycopg_async_session.execute_script(f"DROP TABLE IF EXISTS {source_table} CASCADE")

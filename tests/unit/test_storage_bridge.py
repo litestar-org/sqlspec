@@ -9,12 +9,12 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver, aiosqlite_statement_config
+from sqlspec.adapters.aiosqlite import AiosqliteDriver, aiosqlite_statement_config
 from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver, asyncmy_statement_config
 from sqlspec.adapters.asyncpg import AsyncpgConnection, AsyncpgDriver, asyncpg_statement_config
 from sqlspec.adapters.duckdb import DuckDBDriver, duckdb_statement_config
 from sqlspec.adapters.psqlpy import PsqlpyConnection, PsqlpyDriver, psqlpy_statement_config
-from sqlspec.adapters.sqlite import SqliteConnection, SqliteDriver, sqlite_statement_config
+from sqlspec.adapters.sqlite import SqliteDriver, sqlite_statement_config
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
 from sqlspec.storage.pipeline import StorageDestination
 from sqlspec.storage.registry import storage_registry
@@ -185,7 +185,7 @@ async def test_aiosqlite_load_from_arrow_overwrite() -> None:
         await connection.commit()
 
         driver = AiosqliteDriver(
-            connection=cast(AiosqliteConnection, connection),
+            connection=connection,
             statement_config=aiosqlite_statement_config,
             driver_features={"storage_capabilities": CAPABILITIES},
         )
@@ -210,7 +210,7 @@ async def test_aiosqlite_load_from_storage_includes_source(monkeypatch: pytest.M
         await connection.commit()
 
         driver = AiosqliteDriver(
-            connection=cast(AiosqliteConnection, connection),
+            connection=connection,
             statement_config=aiosqlite_statement_config,
             driver_features={"storage_capabilities": CAPABILITIES},
         )
@@ -238,7 +238,7 @@ def test_sqlite_load_from_arrow_overwrite() -> None:
         connection.execute("INSERT INTO staging (id, description) VALUES (42, 'legacy')")
 
         driver = SqliteDriver(
-            connection=cast(SqliteConnection, connection),
+            connection=connection,
             statement_config=sqlite_statement_config,
             driver_features={"storage_capabilities": CAPABILITIES},
         )
@@ -247,7 +247,8 @@ def test_sqlite_load_from_arrow_overwrite() -> None:
         job = driver.load_from_arrow("staging", arrow_table, overwrite=True)
 
         rows = connection.execute("SELECT id, description FROM staging ORDER BY id").fetchall()
-        assert rows == [(10, "north"), (11, "south")]
+        normalized_rows = [tuple(row) for row in rows]
+        assert normalized_rows == [(10, "north"), (11, "south")]
         assert job.telemetry["rows_processed"] == arrow_table.num_rows
     finally:
         connection.close()
@@ -259,7 +260,7 @@ def test_sqlite_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch)
         connection.execute("CREATE TABLE metrics (val INTEGER)")
 
         driver = SqliteDriver(
-            connection=cast(SqliteConnection, connection),
+            connection=connection,
             statement_config=sqlite_statement_config,
             driver_features={"storage_capabilities": CAPABILITIES},
         )
@@ -273,7 +274,8 @@ def test_sqlite_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch)
         job = driver.load_from_storage("metrics", "s3://bucket/segment.parquet", file_format="parquet")
 
         rows = connection.execute("SELECT val FROM metrics").fetchall()
-        assert rows == [(99,)]
+        normalized_rows = [tuple(row) for row in rows]
+        assert normalized_rows == [(99,)]
         assert job.telemetry["extra"]["source"]["destination"] == "s3://bucket/segment.parquet"
     finally:
         connection.close()
