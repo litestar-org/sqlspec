@@ -11,6 +11,22 @@ from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checka
 from typing_extensions import TypeVar, dataclass_transform
 
 
+def module_available(module_name: str) -> bool:
+    """Return True if the given module spec can be resolved.
+
+    Args:
+        module_name: Dotted path for the module to locate.
+
+    Returns:
+        True if the module can be resolved, False otherwise.
+    """
+
+    try:
+        return find_spec(module_name) is not None
+    except ModuleNotFoundError:
+        return False
+
+
 @runtime_checkable
 class DataclassProtocol(Protocol):
     """Protocol for instance checking dataclasses."""
@@ -705,13 +721,13 @@ except ImportError:
     AIOSQL_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]  # pyright: ignore[reportConstantRedefinition]
 
 
-FSSPEC_INSTALLED = bool(find_spec("fsspec"))
-NUMPY_INSTALLED = bool(find_spec("numpy"))
-OBSTORE_INSTALLED = bool(find_spec("obstore"))
-PGVECTOR_INSTALLED = bool(find_spec("pgvector"))
+FSSPEC_INSTALLED = module_available("fsspec")
+NUMPY_INSTALLED = module_available("numpy")
+OBSTORE_INSTALLED = module_available("obstore")
+PGVECTOR_INSTALLED = module_available("pgvector")
 
-CLOUD_SQL_CONNECTOR_INSTALLED = bool(find_spec("google.cloud.sql.connector"))
-ALLOYDB_CONNECTOR_INSTALLED = bool(find_spec("google.cloud.alloydb.connector"))
+CLOUD_SQL_CONNECTOR_INSTALLED = module_available("google.cloud.sql.connector")
+ALLOYDB_CONNECTOR_INSTALLED = module_available("google.cloud.alloydb.connector")
 
 __all__ = (
     "AIOSQL_INSTALLED",
@@ -794,5 +810,6 @@ __all__ = (
     "cattrs_unstructure",
     "convert",
     "convert_stub",
+    "module_available",
     "trace",
 )
