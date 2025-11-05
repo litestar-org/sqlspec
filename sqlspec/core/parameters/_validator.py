@@ -18,6 +18,7 @@ PARAMETER_REGEX = re.compile(
     (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |
     (?P<pg_q_operator>\?\?|\?\||\?&) |
     (?P<pg_cast>::(?P<cast_type>\w+)) |
+    (?P<sql_server_global>@@(?P<global_var_name>\w+)) |
     (?P<pyformat_named>%\((?P<pyformat_name>\w+)\)s) |
     (?P<pyformat_pos>%s) |
     (?P<positional_colon>(?<![A-Za-z0-9_]):(?P<colon_num>\d+)) |
@@ -85,6 +86,7 @@ class ParameterValidator:
             "block_comment",
             "pg_q_operator",
             "pg_cast",
+            "sql_server_global",
         )
 
         for match in PARAMETER_REGEX.finditer(sql):
