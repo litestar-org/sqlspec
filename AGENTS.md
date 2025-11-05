@@ -824,6 +824,140 @@ def register_handlers(connection: "Connection") -> None:
     logger.debug("Registered type handlers for [feature]")
 ```
 
+### Handler Chaining Pattern (Multiple Type Handlers)
+
+When multiple type handlers need to coexist (e.g., NumPy vectors + UUID binary), use handler chaining to avoid conflicts. Oracle's python-oracledb allows only ONE inputtypehandler and ONE outputtypehandler per connection.
+
+**Problem**: Directly assigning a new handler overwrites any existing handler.
+
+**Solution**: Check for existing handlers and chain them together:
+
+```python
+def register_handlers(connection: "Connection") -> None:
+    """Register type handlers with chaining support.
+
+    Chains to existing type handlers to avoid conflicts with other features.
+
+    Args:
+        connection: Database connection.
+    """
+    existing_input = getattr(connection, "inputtypehandler", None)
+    existing_output = getattr(connection, "outputtypehandler", None)
+
+    def combined_input_handler(cursor: "Cursor", value: Any, arraysize: int) -> Any:
+        # Try new handler first
+        result = _input_type_handler(cursor, value, arraysize)
+        if result is not None:
+            return result
+        # Chain to existing handler
+        if existing_input is not None:
+            return existing_input(cursor, value, arraysize)
+        return None
+
+    def combined_output_handler(cursor: "Cursor", metadata: Any) -> Any:
+        # Try new handler first
+        result = _output_type_handler(cursor, metadata)
+        if result is not None:
+            return result
+        # Chain to existing handler
+        if existing_output is not None:
+            return existing_output(cursor, metadata)
+        return None
+
+    connection.inputtypehandler = combined_input_handler
+    connection.outputtypehandler = combined_output_handler
+    logger.debug("Registered type handlers with chaining support")
+```
+
+**Registration Order Matters**:
+
+```python
+async def _init_connection(self, connection):
+    """Initialize connection with multiple type handlers."""
+    # Register handlers in order of priority
+    if self.driver_features.get("enable_numpy_vectors", False):
+        from ._numpy_handlers import register_handlers
+        register_handlers(connection)  # First handler
+
+    if self.driver_features.get("enable_uuid_binary", False):
+        from ._uuid_handlers import register_handlers
+        register_handlers(connection)  # Chains to NumPy handler
+```
+
+**Key Principles**:
+
+1. **Use getattr() to check for existing handlers** - This is acceptable duck-typing (not defensive programming)
+2. **Chain handlers in combined functions** - New handler checks first, then delegates to existing
+3. **Return None if no match** - Signals to continue to next handler or default behavior
+4. **Order matters** - Last registered handler gets first chance to process
+5. **Log chaining** - Include "with chaining support" in debug message
+
+**Example Usage**:
+
+```python
+# Both features work together via chaining
+config = OracleAsyncConfig(
+    pool_config={"dsn": "oracle://..."},
+    driver_features={
+        "enable_numpy_vectors": True,  # NumPy vectors
+        "enable_uuid_binary": True      # UUID binary (chains to NumPy)
+    }
+)
+
+# Insert both types in same transaction
+await session.execute(
+    "INSERT INTO ml_data (id, model_id, embedding) VALUES (:1, :2, :3)",
+    (1, uuid.uuid4(), np.random.rand(768).astype(np.float32))
+)
+```
+
+### Oracle Metadata Tuple Unpacking Pattern
+
+Oracle's cursor.description returns a 7-element tuple for each column. Always unpack explicitly to access internal_size:
+
+```python
+def _output_type_handler(cursor: "Cursor", metadata: Any) -> Any:
+    """Oracle output type handler.
+
+    Args:
+        cursor: Oracle cursor.
+        metadata: Column metadata tuple (name, type_code, display_size,
+                  internal_size, precision, scale, null_ok).
+    """
+    import oracledb
+
+    # Unpack tuple explicitly - metadata[3] is internal_size
+    _name, type_code, _display_size, internal_size, _precision, _scale, _null_ok = metadata
+
+    if type_code is oracledb.DB_TYPE_RAW and internal_size == 16:
+        return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=converter_out)
+    return None
+```
+
+**Why explicit unpacking**:
+
+- **Correctness**: Oracle metadata is a tuple, not an object with attributes
+- **No .size attribute**: Attempting `metadata.size` raises AttributeError
+- **Clear intent**: Unpacking documents the 7-element structure
+- **Prevents errors**: Catches unexpected metadata format changes
+
+**Common mistake**:
+
+```python
+# WRONG - metadata has no .size attribute
+if type_code is oracledb.DB_TYPE_RAW and metadata.size == 16:
+    ...
+```
+
+**Correct approach**:
+
+```python
+# RIGHT - unpack tuple to access internal_size
+_name, type_code, _display_size, internal_size, _precision, _scale, _null_ok = metadata
+if type_code is oracledb.DB_TYPE_RAW and internal_size == 16:
+    ...
+```
+
 ### Configuring driver_features with Auto-Detection
 
 In adapter's `config.py`, implement auto-detection:
@@ -1895,7 +2029,7 @@ Current state of all adapters (as of type-cleanup branch):
 
 | Adapter    | TypedDict | Auto-Detect | enable_ Prefix | Defaults | Grade      | Notes                                    |
 |------------|-----------|-------------|----------------|----------|------------|------------------------------------------|
-| Oracle     | ✅        | ✅          | ✅             | ✅       | Gold       | Perfect implementation, reference model  |
+| Oracle     | ✅        | ✅          | ✅             | ✅       | Gold       | NumPy vectors + UUID binary w/ chaining  |
 | AsyncPG    | ✅        | ✅          | ✅             | ✅       | Excellent  | Comprehensive TypedDict docs added       |
 | Psycopg    | ✅        | ✅          | ✅             | ✅       | Excellent  | Comprehensive TypedDict docs added       |
 | Psqlpy     | ✅        | ✅          | ✅             | ✅       | Excellent  | Simple but correct                       |
