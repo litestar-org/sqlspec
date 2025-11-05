@@ -1018,11 +1018,7 @@ def _build_psycopg_profile() -> DriverParameterProfile:
             ParameterStyle.QMARK,
         },
         default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-        },
+        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
         has_native_list_expansion=True,
         preserve_parameter_format=True,
         needs_static_script_compilation=False,

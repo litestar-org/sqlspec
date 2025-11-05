@@ -68,7 +68,12 @@ def test_psycopg_sync_storage_bridge_with_minio(
             session.commit()
 
             export_job = session.select_to_storage(
-                f"SELECT id, label FROM {source_table} ORDER BY id", destination, format_hint="parquet"
+                f"SELECT id, label FROM {source_table} WHERE label IN ($1, $2, $3) ORDER BY id",
+                destination,
+                "alpha",
+                "beta",
+                "gamma",
+                format_hint="parquet",
             )
             assert export_job.telemetry["rows_processed"] == 3
 
@@ -117,7 +122,12 @@ async def test_psycopg_async_storage_bridge_with_minio(
             await psycopg_async_session.execute(f"INSERT INTO {source_table} (id, label) VALUES (%s, %s)", idx, label)
 
         export_job = await psycopg_async_session.select_to_storage(
-            f"SELECT id, label FROM {source_table} ORDER BY id", destination, format_hint="parquet"
+            f"SELECT id, label FROM {source_table} WHERE label IN ($1, $2, $3) ORDER BY id",
+            destination,
+            "north",
+            "south",
+            "east",
+            format_hint="parquet",
         )
         assert export_job.telemetry["rows_processed"] == 3
 
