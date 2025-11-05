@@ -59,15 +59,15 @@ def _storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSON
     """Determine JSON storage type based on Oracle version metadata."""
 
     if version_info and version_info.supports_native_json():
-        logger.info("Detected Oracle %s with compatible >= 20, using JSON_NATIVE", version_info)
+        logger.debug("Detected Oracle %s with compatible >= 20, using JSON_NATIVE", version_info)
         return JSONStorageType.JSON_NATIVE
 
     if version_info and version_info.supports_json_blob():
-        logger.info("Detected Oracle %s, using BLOB_JSON (recommended)", version_info)
+        logger.debug("Detected Oracle %s, using BLOB_JSON (recommended)", version_info)
         return JSONStorageType.BLOB_JSON
 
     if version_info:
-        logger.info("Detected Oracle %s (pre-12c), using BLOB_PLAIN", version_info)
+        logger.debug("Detected Oracle %s (pre-12c), using BLOB_PLAIN", version_info)
         return JSONStorageType.BLOB_PLAIN
 
     logger.warning("Oracle version could not be detected; defaulting to BLOB_JSON storage")
