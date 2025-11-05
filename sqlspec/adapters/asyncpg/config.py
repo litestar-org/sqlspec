@@ -11,6 +11,7 @@ from asyncpg.connection import ConnectionMeta
 from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.asyncpg._type_handlers import register_json_codecs, register_pgvector_support
 from sqlspec.adapters.asyncpg._types import AsyncpgConnection, AsyncpgPool
 from sqlspec.adapters.asyncpg.driver import (
     AsyncpgCursor,
@@ -341,8 +342,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             connection: AsyncPG connection to initialize.
         """
         if self.driver_features.get("enable_json_codecs", True):
-            from sqlspec.adapters.asyncpg._type_handlers import register_json_codecs
-
             await register_json_codecs(
                 connection,
                 encoder=self.driver_features.get("json_serializer", to_json),
@@ -350,8 +349,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             )
 
         if self.driver_features.get("enable_pgvector", False):
-            from sqlspec.adapters.asyncpg._type_handlers import register_pgvector_support
-
             await register_pgvector_support(connection)
 
     async def _close_pool(self) -> None:

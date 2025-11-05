@@ -9,6 +9,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.psycopg._type_handlers import register_pgvector_async, register_pgvector_sync
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncCursor,
@@ -186,8 +187,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                     conn.autocommit = autocommit_setting
 
                 if self.driver_features.get("enable_pgvector", False):
-                    from sqlspec.adapters.psycopg._type_handlers import register_pgvector_sync
-
                     register_pgvector_sync(conn)
 
             pool_parameters["configure"] = all_config.pop("configure", configure_connection)
@@ -385,10 +384,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             if autocommit_setting is not None:
                 await conn.set_autocommit(autocommit_setting)
 
-            if self.driver_features.get("enable_pgvector", False):
-                from sqlspec.adapters.psycopg._type_handlers import register_pgvector_async
-
-                await register_pgvector_async(conn)
+                if self.driver_features.get("enable_pgvector", False):
+                    await register_pgvector_async(conn)
 
         pool_parameters["configure"] = all_config.pop("configure", configure_connection)
 

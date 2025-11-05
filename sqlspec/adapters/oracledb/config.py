@@ -379,8 +379,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             register_numpy_handlers(connection)
 
         if self.driver_features.get("enable_uuid_binary", False):
-            from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
-
             register_uuid_handlers(connection)
 
     async def _close_pool(self) -> None:

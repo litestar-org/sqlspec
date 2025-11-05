@@ -19,6 +19,7 @@ from sqlspec.adapters.aiosqlite.pool import (
     AiosqlitePoolClosedError,
     AiosqlitePoolConnection,
 )
+from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
 from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -246,8 +247,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         sync adapter, so this shares the implementation.
         """
         if self.driver_features.get("enable_custom_adapters", False):
-            from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
-
             register_type_handlers(
                 json_serializer=self.driver_features.get("json_serializer"),
                 json_deserializer=self.driver_features.get("json_deserializer"),
