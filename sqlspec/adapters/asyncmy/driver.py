@@ -457,8 +457,8 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline: AsyncStoragePipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
-        telemetry_payload = await arrow_result.write_to_storage_async(
-            destination, format_hint=format_hint, pipeline=async_pipeline
+        telemetry_payload = await self._write_result_to_storage_async(
+            arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
     from sqlspec.core import StatementConfig
+    from sqlspec.observability import ObservabilityConfig
 
 
 class SqliteConnectionParams(TypedDict):
@@ -78,6 +79,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         driver_features: "SqliteDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize SQLite configuration.
 
@@ -89,6 +91,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             driver_features: Optional driver feature configuration
             bind_key: Optional bind key for the configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
         if pool_config is None:
             pool_config = {}
@@ -125,6 +128,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             statement_config=base_statement_config,
             driver_features=processed_driver_features,
             extension_config=extension_config,
+            observability_config=observability_config,
         )
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
@@ -191,11 +195,12 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             SqliteDriver: A driver instance with thread-local connection
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=connection,
                 statement_config=statement_config or self.statement_config,
                 driver_features=self.driver_features,
             )
+            yield self._prepare_driver(driver)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SQLite types.

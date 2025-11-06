@@ -1,7 +1,8 @@
 import asyncio
 import atexit
-from collections.abc import Awaitable, Coroutine
-from typing import TYPE_CHECKING, Any, Union, cast, overload
+from collections.abc import AsyncIterator, Awaitable, Coroutine, Iterator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, contextmanager
+from typing import TYPE_CHECKING, Any, TypeGuard, Union, cast, overload
 
 from sqlspec.config import (
     AsyncConfigT,
@@ -21,15 +22,16 @@ from sqlspec.core import (
     reset_cache_stats,
     update_cache_config,
 )
+from sqlspec.observability import ObservabilityConfig, TelemetryDiagnostics
+from sqlspec.typing import ConnectionT
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from pathlib import Path
 
     from sqlspec.core import SQL
     from sqlspec.loader import SQLFileLoader
-    from sqlspec.typing import ConnectionT, PoolT
+    from sqlspec.typing import PoolT
 
 
 __all__ = ("SQLSpec",)
@@ -37,16 +39,27 @@ __all__ = ("SQLSpec",)
 logger = get_logger()
 
 
+def _is_async_context_manager(obj: Any) -> TypeGuard[AbstractAsyncContextManager[Any]]:
+    return hasattr(obj, "__aenter__")
+
+
+def _is_sync_context_manager(obj: Any) -> TypeGuard[AbstractContextManager[Any]]:
+    return hasattr(obj, "__enter__")
+
+
 class SQLSpec:
     """Configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_configs", "_instance_cache_config", "_sql_loader")
+    __slots__ = ("_configs", "_instance_cache_config", "_observability_config", "_sql_loader")
 
-    def __init__(self, *, loader: "SQLFileLoader | None" = None) -> None:
+    def __init__(
+        self, *, loader: "SQLFileLoader | None" = None, observability_config: "ObservabilityConfig | None" = None
+    ) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
         atexit.register(self._cleanup_sync_pools)
         self._instance_cache_config: CacheConfig | None = None
         self._sql_loader: SQLFileLoader | None = loader
+        self._observability_config = observability_config
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
@@ -129,6 +142,8 @@ class SQLSpec:
         config_type = type(config)
         if config_type in self._configs:
             logger.debug("Configuration for %s already exists. Overwriting.", config_type.__name__)
+        if hasattr(config, "attach_observability"):
+            config.attach_observability(self._observability_config)
         self._configs[config_type] = config
         return config_type
 
@@ -169,6 +184,15 @@ class SQLSpec:
             Dictionary mapping config types to config instances.
         """
         return self._configs
+
+    def telemetry_snapshot(self) -> "dict[str, Any]":
+        """Return aggregated diagnostics across all registered configurations."""
+
+        diagnostics = TelemetryDiagnostics()
+        for config in self._configs.values():
+            runtime = config.get_observability_runtime()
+            diagnostics.add_lifecycle_snapshot(runtime.diagnostics_key, runtime.lifecycle_snapshot())
+        return diagnostics.snapshot()
 
     @overload
     def get_connection(
@@ -281,25 +305,19 @@ class SQLSpec:
 
             async def _create_driver_async() -> "DriverT":
                 resolved_connection = await connection_obj  # pyright: ignore
-                return cast(  # pyright: ignore
-                    "DriverT",
-                    config.driver_type(
-                        connection=resolved_connection,
-                        statement_config=config.statement_config,
-                        driver_features=config.driver_features,
-                    ),
+                driver = config.driver_type(  # pyright: ignore
+                    connection=resolved_connection,
+                    statement_config=config.statement_config,
+                    driver_features=config.driver_features,
                 )
+                return config._prepare_driver(driver)  # pyright: ignore
 
             return _create_driver_async()
 
-        return cast(  # pyright: ignore
-            "DriverT",
-            config.driver_type(
-                connection=connection_obj,
-                statement_config=config.statement_config,
-                driver_features=config.driver_features,
-            ),
+        driver = config.driver_type(  # pyright: ignore
+            connection=connection_obj, statement_config=config.statement_config, driver_features=config.driver_features
         )
+        return config._prepare_driver(driver)  # pyright: ignore
 
     @overload
     def provide_connection(
@@ -360,7 +378,41 @@ class SQLSpec:
             config_name = self._get_config_name(name)
 
         logger.debug("Providing connection context for config: %s", config_name, extra={"config_type": config_name})
-        return config.provide_connection(*args, **kwargs)
+        connection_context = config.provide_connection(*args, **kwargs)
+        runtime = config.get_observability_runtime()
+
+        if _is_async_context_manager(connection_context):
+            async_context = cast("AbstractAsyncContextManager[ConnectionT]", connection_context)
+
+            @asynccontextmanager
+            async def _async_wrapper() -> AsyncIterator[ConnectionT]:
+                connection: ConnectionT | None = None
+                try:
+                    async with async_context as conn:
+                        connection = conn
+                        runtime.emit_connection_create(conn)
+                        yield conn
+                finally:
+                    if connection is not None:
+                        runtime.emit_connection_destroy(connection)
+
+            return _async_wrapper()
+
+        sync_context = cast("AbstractContextManager[ConnectionT]", connection_context)
+
+        @contextmanager
+        def _sync_wrapper() -> Iterator[ConnectionT]:
+            connection: ConnectionT | None = None
+            try:
+                with sync_context as conn:
+                    connection = conn
+                    runtime.emit_connection_create(conn)
+                    yield conn
+            finally:
+                if connection is not None:
+                    runtime.emit_connection_destroy(connection)
+
+        return _sync_wrapper()
 
     @overload
     def provide_session(
@@ -421,7 +473,53 @@ class SQLSpec:
             config_name = self._get_config_name(name)
 
         logger.debug("Providing session context for config: %s", config_name, extra={"config_type": config_name})
-        return config.provide_session(*args, **kwargs)
+        session_context = config.provide_session(*args, **kwargs)
+        runtime = config.get_observability_runtime()
+
+        if _is_async_context_manager(session_context):
+            async_session = cast("AbstractAsyncContextManager[DriverT]", session_context)
+
+            @asynccontextmanager
+            async def _async_session_wrapper() -> AsyncIterator[DriverT]:
+                driver: DriverT | None = None
+                try:
+                    async with async_session as session:
+                        driver = config._prepare_driver(session)  # pyright: ignore
+                        connection = getattr(driver, "connection", None)
+                        if connection is not None:
+                            runtime.emit_connection_create(connection)
+                        runtime.emit_session_start(driver)
+                        yield driver
+                finally:
+                    if driver is not None:
+                        runtime.emit_session_end(driver)
+                        connection = getattr(driver, "connection", None)
+                        if connection is not None:
+                            runtime.emit_connection_destroy(connection)
+
+            return _async_session_wrapper()
+
+        sync_session = cast("AbstractContextManager[DriverT]", session_context)
+
+        @contextmanager
+        def _sync_session_wrapper() -> Iterator[DriverT]:
+            driver: DriverT | None = None
+            try:
+                with sync_session as session:
+                    driver = config._prepare_driver(session)  # pyright: ignore
+                    connection = getattr(driver, "connection", None)
+                    if connection is not None:
+                        runtime.emit_connection_create(connection)
+                    runtime.emit_session_start(driver)
+                    yield driver
+            finally:
+                if driver is not None:
+                    runtime.emit_session_end(driver)
+                    connection = getattr(driver, "connection", None)
+                    if connection is not None:
+                        runtime.emit_connection_destroy(connection)
+
+        return _sync_session_wrapper()
 
     @overload
     def get_pool(

@@ -5,13 +5,16 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
+from sqlspec import SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection
+from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQLResult
+from sqlspec.observability import ObservabilityConfig
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 
@@ -129,16 +132,19 @@ def test_connection_with_hook() -> None:
     """Test DuckDB connection with connection creation hook."""
     hook_executed = False
 
-    def connection_hook(conn: DuckDBConnection) -> None:
+    def connection_hook(connection: DuckDBConnection) -> None:
         nonlocal hook_executed
         hook_executed = True
-        conn.execute("SET threads = 1")
+        connection.execute("SET threads = 1")
 
     config = DuckDBConfig(
         pool_config={"database": ":memory:"}, driver_features={"on_connection_create": connection_hook}
     )
 
-    with config.provide_session() as session:
+    registry = SQLSpec()
+    registry.add_config(config)
+
+    with registry.provide_session(config) as session:
         assert hook_executed is True
 
         result = session.execute("SELECT current_setting('threads')")
@@ -194,6 +200,42 @@ def test_connection_with_logging_settings() -> None:
         result = session.execute("SELECT 'logging_test' as message")
         assert result.data is not None
         assert result.data[0]["message"] == "logging_test"
+
+
+def test_duckdb_disabled_observability_has_zero_lifecycle_counts() -> None:
+    """Ensure lifecycle counters stay zero when no hooks are registered."""
+
+    registry = SQLSpec()
+    config = create_permissive_config()
+    registry.add_config(config)
+
+    with registry.provide_session(config) as session:
+        session.execute("SELECT 1")
+
+    runtime = config.get_observability_runtime()
+    assert all(value == 0 for value in runtime.lifecycle_snapshot().values())
+
+
+def test_duckdb_observability_hook_records_query_counts() -> None:
+    """Lifecycle hooks should increment counters when configured."""
+
+    queries: list[dict[str, Any]] = []
+
+    def hook(context: dict[str, Any]) -> None:
+        queries.append(context)
+
+    registry = SQLSpec()
+    config = create_permissive_config(
+        observability_config=ObservabilityConfig(lifecycle=cast(LifecycleConfig, {"on_query_start": [hook]}))
+    )
+    registry.add_config(config)
+
+    with registry.provide_session(config) as session:
+        session.execute("SELECT 1")
+
+    runtime = config.get_observability_runtime()
+    assert runtime.lifecycle_snapshot()["DuckDBConfig.lifecycle.query_start"] == 1
+    assert queries, "Lifecycle hook should capture context"
 
 
 def test_connection_with_extension_settings() -> None:

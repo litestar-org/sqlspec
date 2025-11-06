@@ -236,11 +236,12 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             A PsqlpyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=conn,
                 statement_config=statement_config or self.statement_config,
                 driver_features=self.driver_features,
             )
+            yield self._prepare_driver(driver)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
         """Provide async pool instance.

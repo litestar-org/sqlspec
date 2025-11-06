@@ -30,6 +30,12 @@ ORACLE_MIN_OSON_VERSION = 19
 # Compiled regex patterns
 ORACLE_VERSION_PATTERN = re.compile(r"Oracle Database (\d+)c?.* Release (\d+)\.(\d+)\.(\d+)")
 
+COMPONENT_VERSION_SQL = (
+    "SELECT product || ' Release ' || version AS \"banner\" "
+    "FROM product_component_version WHERE product LIKE 'Oracle%' "
+    "ORDER BY version DESC FETCH FIRST 1 ROWS ONLY"
+)
+
 __all__ = ("OracleAsyncDataDictionary", "OracleSyncDataDictionary", "OracleVersionInfo")
 
 
@@ -130,6 +136,13 @@ class OracleDataDictionaryMixin:
             ORDER BY column_id
         """
 
+    def _select_version_banner(self, driver: "OracleSyncDriver") -> str:
+        return str(driver.select_value(COMPONENT_VERSION_SQL))
+
+    async def _select_version_banner_async(self, driver: "OracleAsyncDriver") -> str:
+        result = await driver.select_value(COMPONENT_VERSION_SQL)
+        return str(result)
+
     def _get_oracle_version(self, driver: "OracleAsyncDriver | OracleSyncDriver") -> "OracleVersionInfo | None":
         """Get Oracle database version information.
 
@@ -139,7 +152,7 @@ class OracleDataDictionaryMixin:
         Returns:
             Oracle version information or None if detection fails
         """
-        banner = driver.select_value("SELECT banner AS \"banner\" FROM v$version WHERE banner LIKE 'Oracle%'")
+        banner = self._select_version_banner(cast("OracleSyncDriver", driver))
 
         # Parse version from banner like "Oracle Database 21c Enterprise Edition Release 21.0.0.0.0 - Production"
         # or "Oracle Database 19c Standard Edition 2 Release 19.0.0.0.0 - Production"
@@ -348,9 +361,8 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         Returns:
             Oracle version information or None if detection fails
         """
-        banner = await cast("OracleAsyncDriver", driver).select_value(
-            "SELECT banner AS \"banner\" FROM v$version WHERE banner LIKE 'Oracle%'"
-        )
+        oracle_driver = cast("OracleAsyncDriver", driver)
+        banner = await self._select_version_banner_async(oracle_driver)
 
         version_match = ORACLE_VERSION_PATTERN.search(str(banner))
 
@@ -369,7 +381,6 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
             version_info = OracleVersionInfo(release_major, minor, patch)
 
         # Enhance with additional information
-        oracle_driver = cast("OracleAsyncDriver", driver)
         compatible = await self._get_oracle_compatible_async(oracle_driver)
         is_autonomous = await self._is_oracle_autonomous_async(oracle_driver)
 

@@ -252,11 +252,12 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """
         _ = (args, kwargs)  # Mark as intentionally unused
         with self.provide_connection() as conn:
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=conn,
                 statement_config=statement_config or self.statement_config,
                 driver_features=self.driver_features,
             )
+            yield self._prepare_driver(driver)
 
     def provide_pool(self) -> "OracleSyncConnectionPool":
         """Provide pool instance.
@@ -431,11 +432,12 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """
         _ = (args, kwargs)  # Mark as intentionally unused
         async with self.provide_connection() as conn:
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=conn,
                 statement_config=statement_config or self.statement_config,
                 driver_features=self.driver_features,
             )
+            yield self._prepare_driver(driver)
 
     async def provide_pool(self) -> "OracleAsyncConnectionPool":
         """Provide async pool instance.

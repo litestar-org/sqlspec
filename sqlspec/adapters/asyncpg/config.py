@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable
 
     from sqlspec.core import StatementConfig
+    from sqlspec.observability import ObservabilityConfig
 
 
 __all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgDriverFeatures", "AsyncpgPoolConfig")
@@ -155,6 +156,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         driver_features: "AsyncpgDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize AsyncPG configuration.
 
@@ -166,6 +168,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             driver_features: Driver features configuration (TypedDict or dict)
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
         features_dict: dict[str, Any] = dict(driver_features) if driver_features else {}
 
@@ -188,6 +191,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
+            observability_config=observability_config,
         )
 
         self._cloud_sql_connector: Any | None = None
@@ -415,9 +419,10 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         async with self.provide_connection(*args, **kwargs) as connection:
             final_statement_config = statement_config or self.statement_config or asyncpg_statement_config
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
             )
+            yield self._prepare_driver(driver)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":
         """Provide async pool instance.

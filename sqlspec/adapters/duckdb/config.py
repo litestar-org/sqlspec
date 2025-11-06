@@ -1,6 +1,6 @@
 """DuckDB database configuration with connection pooling."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
@@ -15,6 +15,7 @@ from sqlspec.adapters.duckdb.driver import (
 )
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig, SyncDatabaseConfig
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -199,6 +200,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         driver_features: "DuckDBDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize DuckDB configuration.
 
@@ -211,6 +213,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
                 and enable_uuid_conversion options
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
         if pool_config is None:
             pool_config = {}
@@ -220,8 +223,23 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             pool_config["database"] = ":memory:shared_db"
 
         processed_features = dict(driver_features) if driver_features else {}
+        user_connection_hook = cast(
+            "Callable[[Any], None] | None", processed_features.pop("on_connection_create", None)
+        )
         processed_features.setdefault("enable_uuid_conversion", True)
         serializer = processed_features.setdefault("json_serializer", to_json)
+
+        local_observability = observability_config
+        if user_connection_hook is not None:
+
+            def _wrap_lifecycle_hook(context: dict[str, Any]) -> None:
+                connection = context.get("connection")
+                if connection is None:
+                    return
+                user_connection_hook(connection)
+
+            lifecycle_override = ObservabilityConfig(lifecycle={"on_connection_create": [_wrap_lifecycle_hook]})
+            local_observability = ObservabilityConfig.merge(local_observability, lifecycle_override)
 
         base_statement_config = statement_config or build_duckdb_statement_config(
             json_serializer=cast("Callable[[Any], str]", serializer)
@@ -235,6 +253,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             statement_config=base_statement_config,
             driver_features=processed_features,
             extension_config=extension_config,
+            observability_config=local_observability,
         )
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
@@ -252,25 +271,11 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         extensions = self.driver_features.get("extensions", None)
         secrets = self.driver_features.get("secrets", None)
-        on_connection_create = self.driver_features.get("on_connection_create", None)
-
         extensions_dicts = [dict(ext) for ext in extensions] if extensions else None
         secrets_dicts = [dict(secret) for secret in secrets] if secrets else None
 
-        pool_callback = None
-        if on_connection_create:
-
-            def wrapped_callback(conn: DuckDBConnection) -> None:
-                on_connection_create(conn)
-
-            pool_callback = wrapped_callback
-
         return DuckDBConnectionPool(
-            connection_config=connection_config,
-            extensions=extensions_dicts,
-            secrets=secrets_dicts,
-            on_connection_create=pool_callback,
-            **self.pool_config,
+            connection_config=connection_config, extensions=extensions_dicts, secrets=secrets_dicts, **self.pool_config
         )
 
     def _close_pool(self) -> None:
@@ -333,7 +338,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
                 statement_config=statement_config or self.statement_config,
                 driver_features=self.driver_features,
             )
-            yield driver
+            yield self._prepare_driver(driver)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for DuckDB types.

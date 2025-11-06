@@ -272,9 +272,10 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         with self.provide_connection(*args, **kwargs) as conn:
             final_statement_config = statement_config or self.statement_config
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=conn, statement_config=final_statement_config, driver_features=self.driver_features
             )
+            yield self._prepare_driver(driver)
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -462,9 +463,10 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """
         async with self.provide_connection(*args, **kwargs) as conn:
             final_statement_config = statement_config or psycopg_statement_config
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=conn, statement_config=final_statement_config, driver_features=self.driver_features
             )
+            yield self._prepare_driver(driver)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.

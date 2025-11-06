@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from inspect import Signature, signature
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, cast
 
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.loader import SQLFileLoader
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
     from sqlspec.storage import StorageCapabilities
 
 
@@ -52,6 +54,15 @@ PoolT = TypeVar("PoolT")
 DriverT = TypeVar("DriverT", bound="SyncDriverAdapterBase | AsyncDriverAdapterBase")
 
 logger = get_logger("config")
+
+DRIVER_FEATURE_LIFECYCLE_HOOKS: dict[str, str | None] = {
+    "on_connection_create": "connection",
+    "on_connection_destroy": "connection",
+    "on_pool_create": "pool",
+    "on_pool_destroy": "pool",
+    "on_session_start": "session",
+    "on_session_end": "session",
+}
 
 
 class LifecycleConfig(TypedDict):
@@ -172,6 +183,9 @@ class LitestarConfig(TypedDict):
 
     enable_correlation_middleware: NotRequired[bool]
     """Enable request correlation ID middleware. Default: True"""
+
+    correlation_header: NotRequired[str]
+    """HTTP header to read the request correlation ID from when middleware is enabled. Default: ``X-Request-ID``"""
 
     extra_commit_statuses: NotRequired[set[int]]
     """Additional HTTP status codes that trigger commit. Default: set()"""
@@ -392,10 +406,12 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     __slots__ = (
         "_migration_commands",
         "_migration_loader",
+        "_observability_runtime",
         "_storage_capabilities",
         "bind_key",
         "driver_features",
         "migration_config",
+        "observability_config",
         "pool_instance",
         "statement_config",
     )
@@ -421,6 +437,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     migration_config: "dict[str, Any] | MigrationConfig"
     driver_features: "dict[str, Any]"
     _storage_capabilities: "StorageCapabilities | None"
+    observability_config: "ObservabilityConfig | None"
+    _observability_runtime: "ObservabilityRuntime | None"
 
     def __hash__(self) -> int:
         return id(self)
@@ -465,6 +483,87 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         if self.default_storage_profile is not None:
             capabilities["default_storage_profile"] = self.default_storage_profile
         return capabilities
+
+    def _init_observability(self, observability_config: "ObservabilityConfig | None" = None) -> None:
+        """Initialize observability attributes for the configuration."""
+
+        self.observability_config = observability_config
+        self._observability_runtime = None
+
+    def _promote_driver_feature_hooks(self) -> None:
+        from sqlspec.observability import ObservabilityConfig as ObservabilityConfigImpl
+
+        lifecycle_hooks: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
+
+        for hook_name, context_key in DRIVER_FEATURE_LIFECYCLE_HOOKS.items():
+            callback = self.driver_features.pop(hook_name, None)
+            if callback is None:
+                continue
+            callbacks = callback if isinstance(callback, (list, tuple)) else (callback,)
+            wrapped_callbacks = [self._wrap_driver_feature_hook(cb, context_key) for cb in callbacks]
+            lifecycle_hooks.setdefault(hook_name, []).extend(wrapped_callbacks)
+
+        if not lifecycle_hooks:
+            return
+
+        lifecycle_config = cast("LifecycleConfig", lifecycle_hooks)
+        override = ObservabilityConfigImpl(lifecycle=lifecycle_config)
+        if self.observability_config is None:
+            self.observability_config = override
+        else:
+            self.observability_config = ObservabilityConfigImpl.merge(self.observability_config, override)
+
+    @staticmethod
+    def _wrap_driver_feature_hook(
+        callback: Callable[..., Any], context_key: str | None
+    ) -> Callable[[dict[str, Any]], None]:
+        try:
+            hook_signature: Signature = signature(callback)
+        except (TypeError, ValueError):  # pragma: no cover - builtins without signatures
+            hook_signature = Signature()
+
+        positional_params = [
+            param
+            for param in hook_signature.parameters.values()
+            if param.kind in {param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD} and param.default is param.empty
+        ]
+        expects_argument = bool(positional_params)
+
+        def handler(context: dict[str, Any]) -> None:
+            if not expects_argument:
+                callback()
+                return
+            if context_key is None:
+                callback(context)
+                return
+            callback(context.get(context_key))
+
+        return handler
+
+    def attach_observability(self, registry_config: "ObservabilityConfig | None") -> None:
+        """Attach merged observability runtime composed from registry and adapter overrides."""
+
+        from sqlspec.observability import ObservabilityConfig as ObservabilityConfigImpl
+        from sqlspec.observability import ObservabilityRuntime
+
+        merged = ObservabilityConfigImpl.merge(registry_config, self.observability_config)
+        self._observability_runtime = ObservabilityRuntime(
+            merged, bind_key=self.bind_key, config_name=type(self).__name__
+        )
+
+    def get_observability_runtime(self) -> "ObservabilityRuntime":
+        """Return the attached runtime, creating a disabled instance when missing."""
+
+        if self._observability_runtime is None:
+            self.attach_observability(None)
+        assert self._observability_runtime is not None
+        return self._observability_runtime
+
+    def _prepare_driver(self, driver: DriverT) -> DriverT:
+        """Attach observability runtime to driver instances before returning them."""
+
+        driver.attach_observability(self.get_observability_runtime())
+        return driver
 
     @staticmethod
     def _dependency_available(checker: "Callable[[], None]") -> bool:
@@ -694,6 +793,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
@@ -712,6 +812,10 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self._init_observability(observability_config)
+        self._promote_driver_feature_hooks()
+        self._promote_driver_feature_hooks()
+        self._promote_driver_feature_hooks()
 
     def create_connection(self) -> ConnectionT:
         """Create a database connection."""
@@ -835,6 +939,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
@@ -851,6 +956,8 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
+        self._init_observability(observability_config)
+        self._promote_driver_feature_hooks()
 
     async def create_connection(self) -> ConnectionT:
         """Create a database connection."""
@@ -975,6 +1082,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
@@ -993,6 +1101,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self._init_observability(observability_config)
 
     def create_pool(self) -> PoolT:
         """Create and return the connection pool.
@@ -1003,11 +1112,16 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         if self.pool_instance is not None:
             return self.pool_instance
         self.pool_instance = self._create_pool()
+        self.get_observability_runtime().emit_pool_create(self.pool_instance)
         return self.pool_instance
 
     def close_pool(self) -> None:
         """Close the connection pool."""
+        pool = self.pool_instance
         self._close_pool()
+        if pool is not None:
+            self.get_observability_runtime().emit_pool_destroy(pool)
+        self.pool_instance = None
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
@@ -1139,6 +1253,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
         extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
@@ -1159,6 +1274,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self._init_observability(observability_config)
 
     async def create_pool(self) -> PoolT:
         """Create and return the connection pool.
@@ -1169,11 +1285,16 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         if self.pool_instance is not None:
             return self.pool_instance
         self.pool_instance = await self._create_pool()
+        self.get_observability_runtime().emit_pool_create(self.pool_instance)
         return self.pool_instance
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
+        pool = self.pool_instance
         await self._close_pool()
+        if pool is not None:
+            self.get_observability_runtime().emit_pool_destroy(pool)
+        self.pool_instance = None
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""

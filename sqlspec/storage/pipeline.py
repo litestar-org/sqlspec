@@ -1,5 +1,6 @@
 """Storage pipeline scaffolding for driver-aware storage bridge."""
 
+from collections import deque
 from functools import partial
 from pathlib import Path
 from time import perf_counter, time
@@ -33,8 +34,11 @@ __all__ = (
     "StorageTelemetry",
     "SyncStoragePipeline",
     "create_storage_bridge_job",
+    "get_recent_storage_events",
     "get_storage_bridge_diagnostics",
     "get_storage_bridge_metrics",
+    "record_storage_diagnostic_event",
+    "reset_storage_bridge_events",
     "reset_storage_bridge_metrics",
 )
 
@@ -96,6 +100,9 @@ class StorageTelemetry(TypedDict, total=False):
     format: str
     extra: "dict[str, Any]"
     backend: str
+    correlation_id: str
+    config: str
+    bind_key: str
 
 
 class StorageBridgeJob(NamedTuple):
@@ -131,6 +138,7 @@ class _StorageBridgeMetrics:
 
 
 _METRICS = _StorageBridgeMetrics()
+_RECENT_STORAGE_EVENTS: "deque[StorageTelemetry]" = deque(maxlen=25)
 
 
 def get_storage_bridge_metrics() -> "dict[str, int]":
@@ -145,10 +153,30 @@ def reset_storage_bridge_metrics() -> None:
     _METRICS.reset()
 
 
+def record_storage_diagnostic_event(telemetry: StorageTelemetry) -> None:
+    """Record telemetry for inclusion in diagnostics snapshots."""
+
+    _RECENT_STORAGE_EVENTS.append(cast("StorageTelemetry", dict(telemetry)))
+
+
+def get_recent_storage_events() -> "list[StorageTelemetry]":
+    """Return recent storage telemetry events (most recent first)."""
+
+    return [cast("StorageTelemetry", dict(entry)) for entry in _RECENT_STORAGE_EVENTS]
+
+
+def reset_storage_bridge_events() -> None:
+    """Clear recorded storage telemetry events."""
+
+    _RECENT_STORAGE_EVENTS.clear()
+
+
 def create_storage_bridge_job(status: str, telemetry: StorageTelemetry) -> StorageBridgeJob:
     """Create a storage bridge job handle with a unique identifier."""
 
-    return StorageBridgeJob(job_id=str(uuid4()), status=status, telemetry=telemetry)
+    job = StorageBridgeJob(job_id=str(uuid4()), status=status, telemetry=telemetry)
+    record_storage_diagnostic_event(job.telemetry)
+    return job
 
 
 def get_storage_bridge_diagnostics() -> "dict[str, int]":
