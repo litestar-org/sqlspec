@@ -185,33 +185,10 @@ DuckDB (Analytical Database)
 
 In-process analytical database optimized for OLAP workloads.
 
-.. code-block:: python
-
-   from sqlspec.adapters.duckdb import DuckDBConfig
-
-   # In-memory
-   config = DuckDBConfig()
-
-   # Persistent
-   config = DuckDBConfig(
-       pool_config={"database": "analytics.duckdb"}
-   )
-
-   with spec.provide_session(config) as session:
-       # Create table from Parquet
-       session.execute("""
-           CREATE TABLE users AS
-           SELECT * FROM read_parquet('users.parquet')
-       """)
-
-       # Analytical query
-       result = session.execute("""
-           SELECT date_trunc('day', created_at) as day,
-                  count(*) as user_count
-           FROM users
-           GROUP BY day
-           ORDER BY day
-       """)
+.. literalinclude:: /examples/test_drivers_and_querying_10.py
+   :language: python
+   :lines: 8-34
+   :dedent: 2
 
 **Features**:
 
@@ -225,23 +202,10 @@ Oracle Database
 
 Oracle database support with python-oracledb.
 
-.. code-block:: python
-
-   from sqlspec.adapters.oracledb import OracleDBConfig
-
-   config = OracleDBConfig(
-       pool_config={
-           "user": "myuser",
-           "password": "mypassword",
-           "dsn": "localhost:1521/ORCLPDB",
-       }
-   )
-
-   with spec.provide_session(config) as session:
-       result = session.execute(
-           "SELECT * FROM employees WHERE employee_id = :id",
-           id=100
-       )
+.. literalinclude:: /examples/test_drivers_and_querying_11.py
+   :language: python
+   :lines: 8-33
+   :dedent: 2
 
 **Features**:
 
