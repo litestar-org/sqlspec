@@ -37,6 +37,8 @@ __all__ = (
     "MigrationConfig",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
+    "OpenTelemetryConfig",
+    "PrometheusConfig",
     "StarletteConfig",
     "SyncConfigT",
     "SyncDatabaseConfig",
@@ -400,6 +402,53 @@ class ADKConfig(TypedDict):
     """
 
 
+class OpenTelemetryConfig(TypedDict):
+    """Configuration options for OpenTelemetry integration.
+
+    Use in ``extension_config["otel"]``.
+    """
+
+    enabled: NotRequired[bool]
+    """Enable the extension. Default: True."""
+
+    enable_spans: NotRequired[bool]
+    """Enable span emission (set False to disable while keeping other settings)."""
+
+    resource_attributes: NotRequired[dict[str, Any]]
+    """Additional resource attributes passed to the tracer provider factory."""
+
+    tracer_provider: NotRequired[Any]
+    """Tracer provider instance to reuse. Mutually exclusive with ``tracer_provider_factory``."""
+
+    tracer_provider_factory: NotRequired[Callable[[], Any]]
+    """Factory returning a tracer provider. Invoked lazily when spans are needed."""
+
+
+class PrometheusConfig(TypedDict):
+    """Configuration options for Prometheus metrics.
+
+    Use in ``extension_config["prometheus"]``.
+    """
+
+    enabled: NotRequired[bool]
+    """Enable the extension. Default: True."""
+
+    namespace: NotRequired[str]
+    """Prometheus metric namespace. Default: ``"sqlspec"``."""
+
+    subsystem: NotRequired[str]
+    """Prometheus metric subsystem. Default: ``"driver"``."""
+
+    registry: NotRequired[Any]
+    """Custom Prometheus registry (defaults to the global registry)."""
+
+    label_names: NotRequired[tuple[str, ...]]
+    """Labels applied to metrics. Default: ("driver", "operation")."""
+
+    duration_buckets: NotRequired[tuple[float, ...]]
+    """Histogram buckets for query duration (seconds)."""
+
+
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
@@ -410,6 +459,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         "_storage_capabilities",
         "bind_key",
         "driver_features",
+        "extension_config",
         "migration_config",
         "observability_config",
         "pool_instance",
@@ -489,6 +539,47 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         self.observability_config = observability_config
         self._observability_runtime = None
+
+    def _configure_observability_extensions(self) -> None:
+        """Apply extension_config hooks (otel/prometheus) to ObservabilityConfig."""
+
+        config_map = cast("dict[str, Any]", self.extension_config)
+        if not config_map:
+            return
+        updated = self.observability_config
+
+        otel_config = cast("OpenTelemetryConfig | None", config_map.get("otel"))
+        if otel_config and otel_config.get("enabled", True):
+            from sqlspec.extensions import otel as otel_extension
+
+            updated = otel_extension.enable_tracing(
+                base_config=updated,
+                resource_attributes=otel_config.get("resource_attributes"),
+                tracer_provider=otel_config.get("tracer_provider"),
+                tracer_provider_factory=otel_config.get("tracer_provider_factory"),
+                enable_spans=otel_config.get("enable_spans", True),
+            )
+
+        prom_config = cast("PrometheusConfig | None", config_map.get("prometheus"))
+        if prom_config and prom_config.get("enabled", True):
+            from sqlspec.extensions import prometheus as prometheus_extension
+
+            label_names = tuple(prom_config.get("label_names", ("driver", "operation")))
+            duration_buckets = prom_config.get("duration_buckets")
+            if duration_buckets is not None:
+                duration_buckets = tuple(duration_buckets)
+
+            updated = prometheus_extension.enable_metrics(
+                base_config=updated,
+                namespace=prom_config.get("namespace", "sqlspec"),
+                subsystem=prom_config.get("subsystem", "driver"),
+                registry=prom_config.get("registry"),
+                label_names=label_names,
+                duration_buckets=duration_buckets,
+            )
+
+        if updated is not self.observability_config:
+            self.observability_config = updated
 
     def _promote_driver_feature_hooks(self) -> None:
         from sqlspec.observability import ObservabilityConfig as ObservabilityConfigImpl
@@ -779,7 +870,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for sync database configurations that do not implement a pool."""
 
-    __slots__ = ("connection_config", "extension_config")
+    __slots__ = ("connection_config",)
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
@@ -792,13 +883,13 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryExtensionConfig | PrometheusExtensionConfig | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, Any]", extension_config or {})
+        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, dict[str, Any]]", extension_config or {})
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -814,8 +905,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
         self._init_observability(observability_config)
         self._promote_driver_feature_hooks()
-        self._promote_driver_feature_hooks()
-        self._promote_driver_feature_hooks()
+        self._configure_observability_extensions()
 
     def create_connection(self) -> ConnectionT:
         """Create a database connection."""
@@ -925,7 +1015,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for async database configurations that do not implement a pool."""
 
-    __slots__ = ("connection_config", "extension_config")
+    __slots__ = ("connection_config",)
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = False
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
@@ -938,13 +1028,13 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryExtensionConfig | PrometheusExtensionConfig | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, Any]", extension_config or {})
+        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, dict[str, Any]]", extension_config or {})
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -958,6 +1048,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.driver_features = driver_features or {}
         self._init_observability(observability_config)
         self._promote_driver_feature_hooks()
+        self._configure_observability_extensions()
 
     async def create_connection(self) -> ConnectionT:
         """Create a database connection."""
@@ -1067,7 +1158,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for sync database configurations with connection pooling."""
 
-    __slots__ = ("extension_config", "pool_config")
+    __slots__ = ("pool_config",)
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
@@ -1081,13 +1172,13 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, dict[str, Any]]", extension_config or {})
+        self.extension_config = cast("dict[str, dict[str, Any]]", extension_config or {})
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -1238,7 +1329,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for async database configurations with connection pooling."""
 
-    __slots__ = ("extension_config", "pool_config")
+    __slots__ = ("pool_config",)
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
@@ -1252,13 +1343,13 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, dict[str, Any]]", extension_config or {})
+        self.extension_config = cast("dict[str, dict[str, Any]]", extension_config or {})
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 

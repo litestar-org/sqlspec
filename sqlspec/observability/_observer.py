@@ -1,7 +1,6 @@
 """Statement observer primitives for SQL execution events."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from time import time
 from typing import Any
 
@@ -16,24 +15,62 @@ logger = get_logger("sqlspec.observability")
 StatementObserver = Callable[["StatementEvent"], None]
 
 
-@dataclass(slots=True)
 class StatementEvent:
     """Structured payload describing a SQL execution."""
 
-    sql: str
-    parameters: Any
-    driver: str
-    adapter: str
-    bind_key: "str | None"
-    operation: str
-    execution_mode: "str | None"
-    is_many: bool
-    is_script: bool
-    rows_affected: "int | None"
-    duration_s: float
-    started_at: float
-    correlation_id: "str | None"
-    storage_backend: "str | None"
+    __slots__ = (
+        "adapter",
+        "bind_key",
+        "correlation_id",
+        "driver",
+        "duration_s",
+        "execution_mode",
+        "is_many",
+        "is_script",
+        "operation",
+        "parameters",
+        "rows_affected",
+        "sql",
+        "started_at",
+        "storage_backend",
+    )
+
+    def __init__(
+        self,
+        *,
+        sql: str,
+        parameters: Any,
+        driver: str,
+        adapter: str,
+        bind_key: "str | None",
+        operation: str,
+        execution_mode: "str | None",
+        is_many: bool,
+        is_script: bool,
+        rows_affected: "int | None",
+        duration_s: float,
+        started_at: float,
+        correlation_id: "str | None",
+        storage_backend: "str | None",
+    ) -> None:
+        self.sql = sql
+        self.parameters = parameters
+        self.driver = driver
+        self.adapter = adapter
+        self.bind_key = bind_key
+        self.operation = operation
+        self.execution_mode = execution_mode
+        self.is_many = is_many
+        self.is_script = is_script
+        self.rows_affected = rows_affected
+        self.duration_s = duration_s
+        self.started_at = started_at
+        self.correlation_id = correlation_id
+        self.storage_backend = storage_backend
+
+    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+        msg = "StatementEvent objects are mutable and unhashable"
+        raise TypeError(msg)
 
     def as_dict(self) -> "dict[str, Any]":
         """Return event payload as a dictionary."""
@@ -54,6 +91,33 @@ class StatementEvent:
             "correlation_id": self.correlation_id,
             "storage_backend": self.storage_backend,
         }
+
+    def __repr__(self) -> str:
+        return (
+            f"StatementEvent(sql={self.sql!r}, parameters={self.parameters!r}, driver={self.driver!r}, adapter={self.adapter!r}, bind_key={self.bind_key!r}, "
+            f"operation={self.operation!r}, execution_mode={self.execution_mode!r}, is_many={self.is_many!r}, is_script={self.is_script!r}, rows_affected={self.rows_affected!r}, "
+            f"duration_s={self.duration_s!r}, started_at={self.started_at!r}, correlation_id={self.correlation_id!r}, storage_backend={self.storage_backend!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, StatementEvent):
+            return NotImplemented
+        return (
+            self.sql == other.sql
+            and self.parameters == other.parameters
+            and self.driver == other.driver
+            and self.adapter == other.adapter
+            and self.bind_key == other.bind_key
+            and self.operation == other.operation
+            and self.execution_mode == other.execution_mode
+            and self.is_many == other.is_many
+            and self.is_script == other.is_script
+            and self.rows_affected == other.rows_affected
+            and self.duration_s == other.duration_s
+            and self.started_at == other.started_at
+            and self.correlation_id == other.correlation_id
+            and self.storage_backend == other.storage_backend
+        )
 
 
 def format_statement_event(event: StatementEvent) -> str:

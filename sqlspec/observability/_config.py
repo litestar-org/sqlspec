@@ -1,7 +1,6 @@
 """Configuration objects for the observability suite."""
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
@@ -12,13 +11,25 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard
 StatementObserver = Callable[["StatementEvent"], None]
 
 
-@dataclass(slots=True)
 class RedactionConfig:
     """Controls SQL and parameter redaction before observers run."""
 
-    mask_parameters: bool | None = None
-    mask_literals: bool | None = None
-    parameter_allow_list: tuple[str, ...] | None = None
+    __slots__ = ("mask_literals", "mask_parameters", "parameter_allow_list")
+
+    def __init__(
+        self,
+        *,
+        mask_parameters: bool | None = None,
+        mask_literals: bool | None = None,
+        parameter_allow_list: tuple[str, ...] | Iterable[str] | None = None,
+    ) -> None:
+        self.mask_parameters = mask_parameters
+        self.mask_literals = mask_literals
+        self.parameter_allow_list = tuple(parameter_allow_list) if parameter_allow_list is not None else None
+
+    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+        msg = "RedactionConfig objects are mutable and unhashable"
+        raise TypeError(msg)
 
     def copy(self) -> "RedactionConfig":
         """Return a copy to avoid sharing mutable state."""
@@ -28,14 +39,38 @@ class RedactionConfig:
             mask_parameters=self.mask_parameters, mask_literals=self.mask_literals, parameter_allow_list=allow_list
         )
 
+    def __repr__(self) -> str:
+        return f"RedactionConfig(mask_parameters={self.mask_parameters!r}, mask_literals={self.mask_literals!r}, parameter_allow_list={self.parameter_allow_list!r})"
 
-@dataclass(slots=True)
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, RedactionConfig):
+            return NotImplemented
+        return (
+            self.mask_parameters == other.mask_parameters
+            and self.mask_literals == other.mask_literals
+            and self.parameter_allow_list == other.parameter_allow_list
+        )
+
+
 class TelemetryConfig:
     """Span emission and tracer provider settings."""
 
-    enable_spans: bool = False
-    provider_factory: Callable[[], Any] | None = None
-    resource_attributes: dict[str, Any] | None = None
+    __slots__ = ("enable_spans", "provider_factory", "resource_attributes")
+
+    def __init__(
+        self,
+        *,
+        enable_spans: bool = False,
+        provider_factory: Callable[[], Any] | None = None,
+        resource_attributes: dict[str, Any] | None = None,
+    ) -> None:
+        self.enable_spans = enable_spans
+        self.provider_factory = provider_factory
+        self.resource_attributes = dict(resource_attributes) if resource_attributes else None
+
+    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+        msg = "TelemetryConfig objects are mutable and unhashable"
+        raise TypeError(msg)
 
     def copy(self) -> "TelemetryConfig":
         """Return a shallow copy preserving optional dictionaries."""
@@ -45,20 +80,42 @@ class TelemetryConfig:
             enable_spans=self.enable_spans, provider_factory=self.provider_factory, resource_attributes=attributes
         )
 
+    def __repr__(self) -> str:
+        return f"TelemetryConfig(enable_spans={self.enable_spans!r}, provider_factory={self.provider_factory!r}, resource_attributes={self.resource_attributes!r})"
 
-@dataclass(slots=True)
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TelemetryConfig):
+            return NotImplemented
+        return (
+            self.enable_spans == other.enable_spans
+            and self.provider_factory == other.provider_factory
+            and self.resource_attributes == other.resource_attributes
+        )
+
+
 class ObservabilityConfig:
     """Aggregates lifecycle hooks, observers, and telemetry toggles."""
 
-    lifecycle: "LifecycleConfig | None" = None
-    print_sql: bool | None = None
-    statement_observers: tuple[StatementObserver, ...] | None = None
-    telemetry: "TelemetryConfig | None" = None
-    redaction: "RedactionConfig | None" = None
+    __slots__ = ("lifecycle", "print_sql", "redaction", "statement_observers", "telemetry")
 
-    def __post_init__(self) -> None:
-        if self.statement_observers is not None:
-            self.statement_observers = tuple(self.statement_observers)
+    def __init__(
+        self,
+        *,
+        lifecycle: "LifecycleConfig | None" = None,
+        print_sql: bool | None = None,
+        statement_observers: tuple[StatementObserver, ...] | Iterable[StatementObserver] | None = None,
+        telemetry: "TelemetryConfig | None" = None,
+        redaction: "RedactionConfig | None" = None,
+    ) -> None:
+        self.lifecycle = lifecycle
+        self.print_sql = print_sql
+        self.statement_observers = tuple(statement_observers) if statement_observers is not None else None
+        self.telemetry = telemetry
+        self.redaction = redaction
+
+    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+        msg = "ObservabilityConfig objects are mutable and unhashable"
+        raise TypeError(msg)
 
     def copy(self) -> "ObservabilityConfig":
         """Return a deep copy of the configuration."""
@@ -111,6 +168,20 @@ class ObservabilityConfig:
             statement_observers=observers,
             telemetry=telemetry,
             redaction=redaction,
+        )
+
+    def __repr__(self) -> str:
+        return f"ObservabilityConfig(lifecycle={self.lifecycle!r}, print_sql={self.print_sql!r}, statement_observers={self.statement_observers!r}, telemetry={self.telemetry!r}, redaction={self.redaction!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ObservabilityConfig):
+            return NotImplemented
+        return (
+            _normalize_lifecycle(self.lifecycle) == _normalize_lifecycle(other.lifecycle)
+            and self.print_sql == other.print_sql
+            and self.statement_observers == other.statement_observers
+            and self.telemetry == other.telemetry
+            and self.redaction == other.redaction
         )
 
 

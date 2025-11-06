@@ -71,6 +71,25 @@ ObservabilityConfig(
 )
 ```
 
+### Optional Exporters (OpenTelemetry & Prometheus)
+
+Two helper modules wire optional dependencies into the runtime without forcing unconditional imports:
+
+* `sqlspec.extensions.otel.enable_tracing()` ensures `opentelemetry-api` is installed, then returns an `ObservabilityConfig` whose `TelemetryConfig` enables spans and (optionally) injects a tracer provider factory.
+* `sqlspec.extensions.prometheus.enable_metrics()` ensures `prometheus-client` is installed and appends a `PrometheusStatementObserver` that emits counters and histograms for every `StatementEvent`.
+
+Both helpers rely on the conditional stubs defined in `sqlspec/typing.py`, so they remain safe to import even when the extras are absent.
+
+```python
+from sqlspec.extensions import otel, prometheus
+
+config = otel.enable_tracing(resource_attributes={"service.name": "orders-api"})
+config = prometheus.enable_metrics(base_config=config, label_names=("driver", "operation", "adapter"))
+sql = SQLSpec(observability_config=config)
+```
+
+You can also opt in per adapter by passing `extension_config["otel"]` or `extension_config["prometheus"]` when constructing a config; the helpers above are invoked automatically during initialization.
+
 ## Span Manager & Diagnostics (Roadmap)
 
 * **Span Manager:** Query spans ship today, lifecycle events emit `sqlspec.lifecycle.*` spans, and storage bridge helpers now wrap reads/writes with `sqlspec.storage.*` spans (see `StorageDriverMixin`). Mocked span tests live in `tests/unit/test_observability.py`.
