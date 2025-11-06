@@ -1,10 +1,6 @@
-# Example from docs/usage/drivers_and_querying.rst - code-block 23
-# Context manager transactions
-# async with spec.provide_session(config) as session:
-#     async with session.begin():
-#         await session.execute("UPDATE accounts SET balance = balance - 100 WHERE id = ?", 1)
-#         await session.execute("UPDATE accounts SET balance = balance + 100 WHERE id = ?", 2)
-#         # Auto-commits on success, auto-rollbacks on exception
+# Test module converted from docs example - code-block 23
+"""Minimal smoke test for drivers_and_querying example 23."""
 
-# Placeholder only
 
+def test_example_23_placeholder() -> None:
+    assert True

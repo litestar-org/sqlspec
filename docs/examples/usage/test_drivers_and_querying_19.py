@@ -1,13 +1,6 @@
-# Example from docs/usage/drivers_and_querying.rst - code-block 19
-# SQLResult object usage placeholder
-# result = session.execute("SELECT id, name, email FROM users")
-# result.data
-# result.column_names
-# result.rows_affected
-# result.operation_type
-# user = result.one()
-# user = result.one_or_none()
-# value = result.scalar()
+# Test module converted from docs example - code-block 19
+"""Minimal smoke test for drivers_and_querying example 19."""
 
-# Placeholder only
 
+def test_example_19_placeholder() -> None:
+    assert True

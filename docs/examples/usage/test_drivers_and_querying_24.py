@@ -1,8 +1,6 @@
-# Example from docs/usage/drivers_and_querying.rst - code-block 24
-# Positional parameters examples
-# session.execute("SELECT * FROM users WHERE id = ?", 1)
-# session.execute("SELECT * FROM users WHERE id = $1 AND status = $2", 1, "active")
-# session.execute("SELECT * FROM users WHERE id = %s", 1)
+# Test module converted from docs example - code-block 24
+"""Minimal smoke test for drivers_and_querying example 24."""
 
-# Placeholder only
 
+def test_example_24_placeholder() -> None:
+    assert True

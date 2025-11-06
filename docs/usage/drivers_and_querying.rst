@@ -51,14 +51,10 @@ SQLSpec drivers follow a layered architecture:
 3. **Driver Layer**: Query execution and result handling
 4. **Session Layer**: Transaction management
 
-.. code-block:: python
-
-   # Typical driver usage
-   spec = SQLSpec()
-   db = spec.add_config(AsyncpgConfig(pool_config={...}))  # Config layer, registers pool
-
-   async with spec.provide_session(db) as session:  # Session layer
-       result = await session.execute("SELECT 1")       # Driver layer
+.. literalinclude:: /examples/test_drivers_and_querying_1.py
+   :language: python
+   :lines: 15-29
+   :dedent: 2
 
 PostgreSQL Drivers
 ------------------
@@ -68,34 +64,10 @@ asyncpg (Recommended for Async)
 
 Async PostgreSQL driver with native connection pooling.
 
-.. code-block:: python
-
-   from sqlspec import SQLSpec
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   spec = SQLSpec()
-   db = spec.add_config(
-       AsyncpgConfig(
-           pool_config={
-               "dsn": "postgresql://user:pass@localhost:5432/mydb",
-               "min_size": 10,
-               "max_size": 20,
-           }
-       )
-   )
-
-   async with spec.provide_session(db) as session:
-       # Basic query
-       result = await session.execute("SELECT * FROM users WHERE id = $1", 1)
-       user = result.one()
-
-       # Insert with RETURNING
-       result = await session.execute(
-           "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
-           "Alice",
-           "alice@example.com"
-       )
-       new_id = result.scalar()
+.. literalinclude:: /examples/test_drivers_and_querying_2.py
+   :language: python
+   :lines: 11-35
+   :dedent: 2
 
 **Features**:
 
@@ -110,25 +82,15 @@ psycopg (Sync/Async)
 
 Official PostgreSQL adapter with both sync and async support.
 
-.. code-block:: python
+.. literalinclude:: /examples/test_drivers_and_querying_3.py
+   :language: python
+   :lines: 8-32
+   :dedent: 2
 
-   from sqlspec.adapters.psycopg import PsycopgConfig
-
-   # Async version
-   config = PsycopgConfig(
-       pool_config={
-           "conninfo": "postgresql://localhost/db",
-           "min_size": 5,
-           "max_size": 10,
-       }
-   )
-
-   async with spec.provide_session(config) as session:
-       result = await session.execute("SELECT * FROM users")
-
-   # Sync version (use psycopg sync config)
-   with spec.provide_session(config) as session:
-       result = session.execute("SELECT * FROM users")
+.. literalinclude:: /examples/test_drivers_and_querying_4.py
+   :language: python
+   :lines: 10-12
+   :dedent: 2
 
 **Features**:
 
@@ -143,19 +105,10 @@ psqlpy (High Performance Async)
 
 Rust-based async PostgreSQL driver for maximum performance.
 
-.. code-block:: python
-
-   from sqlspec.adapters.psqlpy import PsqlpyConfig
-
-   config = PsqlpyConfig(
-       pool_config={
-           "dsn": "postgresql://localhost/db",
-           "max_pool_size": 20,
-       }
-   )
-
-   async with spec.provide_session(config) as session:
-       result = await session.execute("SELECT * FROM users WHERE id = $1", 1)
+.. literalinclude:: /examples/test_drivers_and_querying_5.py
+   :language: python
+   :lines: 11-25
+   :dedent: 2
 
 **Features**:
 
@@ -171,36 +124,15 @@ sqlite3 (Synchronous)
 
 Python's built-in SQLite adapter.
 
-.. code-block:: python
+.. literalinclude:: /examples/test_drivers_and_querying_6.py
+   :language: python
+   :lines: 9-27
+   :dedent: 2
 
-   from sqlspec.adapters.sqlite import SqliteConfig
-
-   config = SqliteConfig(
-       pool_config={
-           "database": "myapp.db",
-           "timeout": 5.0,
-           "check_same_thread": False,
-       }
-   )
-
-   with spec.provide_session(config) as session:
-       # Create table
-       session.execute("""
-           CREATE TABLE IF NOT EXISTS users (
-               id INTEGER PRIMARY KEY,
-               name TEXT NOT NULL
-           )
-       """)
-
-       # Insert with parameters
-       session.execute(
-           "INSERT INTO users (name) VALUES (?)",
-           "Alice"
-       )
-
-       # Query
-       result = session.execute("SELECT * FROM users")
-       users = result.all()
+.. literalinclude:: /examples/test_drivers_and_querying_7.py
+   :language: python
+   :lines: 8-9
+   :dedent: 2
 
 **Features**:
 
@@ -214,20 +146,10 @@ aiosqlite (Asynchronous)
 
 Async wrapper around sqlite3.
 
-.. code-block:: python
-
-   from sqlspec.adapters.aiosqlite import AiosqliteConfig
-
-   config = AiosqliteConfig(
-       pool_config={"database": "myapp.db"}
-   )
-
-   async with spec.provide_session(config) as session:
-       await session.execute(
-           "INSERT INTO users (name) VALUES (?)",
-           "Bob"
-       )
-       result = await session.execute("SELECT * FROM users")
+.. literalinclude:: /examples/test_drivers_and_querying_8.py
+   :language: python
+   :lines: 7-25
+   :dedent: 2
 
 **Features**:
 
@@ -243,27 +165,10 @@ asyncmy (Asynchronous)
 
 Pure Python async MySQL/MariaDB driver.
 
-.. code-block:: python
-
-   from sqlspec.adapters.asyncmy import AsyncmyConfig
-
-   config = AsyncmyConfig(
-       pool_config={
-           "host": "localhost",
-           "port": 3306,
-           "user": "myuser",
-           "password": "mypassword",
-           "database": "mydb",
-           "minsize": 1,
-           "maxsize": 10,
-       }
-   )
-
-   async with spec.provide_session(config) as session:
-       result = await session.execute(
-           "SELECT * FROM users WHERE id = %s",
-           1
-       )
+.. literalinclude:: /examples/test_drivers_and_querying_9.py
+   :language: python
+   :lines: 9-38
+   :dedent: 2
 
 **Features**:
 

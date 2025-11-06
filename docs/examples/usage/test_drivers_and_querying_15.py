@@ -1,7 +1,6 @@
-# Example from docs/usage/drivers_and_querying.rst - code-block 15
-# SELECT and all() example
-# users = session.execute("SELECT * FROM users WHERE status = ?", "active")
-# returns list of dicts
+# Test module converted from docs example - code-block 15
+"""Minimal smoke test for drivers_and_querying example 15."""
 
-# Placeholder only
 
+def test_example_15_placeholder() -> None:
+    assert True

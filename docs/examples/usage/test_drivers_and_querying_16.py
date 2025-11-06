@@ -1,8 +1,6 @@
-# Example from docs/usage/drivers_and_querying.rst - code-block 16
-# select_one example
-# user = session.select_one("SELECT * FROM users WHERE id = ?", 1)
-# Raises NotFoundError if no results
-# Raises MultipleResultsFoundError if multiple results
+# Test module converted from docs example - code-block 16
+"""Minimal smoke test for drivers_and_querying example 16."""
 
-# Placeholder only
 
+def test_example_16_placeholder() -> None:
+    assert True

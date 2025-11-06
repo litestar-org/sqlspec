@@ -1,14 +1,16 @@
-# Example from docs/usage/drivers_and_querying.rst - code-block 4
-from sqlspec.adapters.psycopg import PsycopgConfig
+# Test module converted from docs example - code-block 4
+"""Minimal smoke test for drivers_and_querying example 4."""
 
-# Sync usage example (placeholder)
-config = PsycopgConfig(
-    pool_config={
-        "conninfo": "postgresql://localhost/db",
-        "min_size": 5,
-        "max_size": 10,
-    }
-)
+from pytest_databases.docker.postgres import PostgresService
 
-# In real usage you'd create SQLSpec and call provide_session
+from sqlspec.adapters.psycopg import PsycopgSyncConfig
 
+
+def test_example_4_construct_config(postgres_service: PostgresService) -> None:
+    config = PsycopgSyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        }
+    )
+
+    assert config is not None

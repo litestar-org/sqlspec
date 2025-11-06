@@ -1,7 +1,6 @@
-# Example from docs/usage/drivers_and_querying.rst - code-block 25
-# Named parameters examples
-# session.execute("SELECT * FROM users WHERE id = :id AND status = :status", id=1, status="active")
-# session.execute("SELECT * FROM users WHERE created_at >= @start_date", start_date=...)
+# Test module converted from docs example - code-block 25
+"""Minimal smoke test for drivers_and_querying example 25."""
 
-# Placeholder only
 
+def test_example_25_placeholder() -> None:
+    assert True

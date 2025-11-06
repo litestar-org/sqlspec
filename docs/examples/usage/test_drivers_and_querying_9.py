@@ -1,22 +1,37 @@
-# Example from docs/usage/drivers_and_querying.rst - code-block 9
-from sqlspec.adapters.asyncmy import AsyncmyConfig
+# Test module converted from docs example - code-block 9
+"""Minimal smoke test for drivers_and_querying example 9."""
 
-async def example_asyncmy():
+from pytest_databases.docker.mysql import MySQLService
+
+
+async def test_example_9_asyncmy_config(mysql_service: MySQLService) -> None:
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.asyncmy import AsyncmyConfig
+
+    spec = SQLSpec()
+
     config = AsyncmyConfig(
         pool_config={
-            "host": "localhost",
-            "port": 3306,
-            "user": "myuser",
-            "password": "mypassword",
-            "database": "mydb",
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
             "minsize": 1,
             "maxsize": 10,
         }
     )
 
-    # async with spec.provide_session(config) as session:
-    #     result = await session.execute("SELECT * FROM users WHERE id = %s", 1)
-
-if __name__ == "__main__":
-    pass
-
+    async with spec.provide_session(config) as session:
+        create_table_query = """CREATE TABLE IF NOT EXISTS users (
+           id INT PRIMARY KEY,
+           name VARCHAR(100),
+           email VARCHAR(100)
+       );"""
+        await session.execute(create_table_query)
+        # insert a user
+        await session.execute(
+            "INSERT INTO users (id, name, email) VALUES (%s, %s, %s)", (1, "John Doe", "john.doe@example.com")
+        )
+        # query the user
+        await session.execute("SELECT * FROM users WHERE id = %s", 1)
