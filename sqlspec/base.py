@@ -22,7 +22,8 @@ from sqlspec.core import (
     reset_cache_stats,
     update_cache_config,
 )
-from sqlspec.observability import ObservabilityConfig, TelemetryDiagnostics
+from sqlspec.loader import SQLFileLoader
+from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime, TelemetryDiagnostics
 from sqlspec.typing import ConnectionT
 from sqlspec.utils.logging import get_logger
 
@@ -30,7 +31,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlspec.core import SQL
-    from sqlspec.loader import SQLFileLoader
     from sqlspec.typing import PoolT
 
 
@@ -50,7 +50,7 @@ def _is_sync_context_manager(obj: Any) -> TypeGuard[AbstractContextManager[Any]]
 class SQLSpec:
     """Configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_configs", "_instance_cache_config", "_observability_config", "_sql_loader")
+    __slots__ = ("_configs", "_instance_cache_config", "_loader_runtime", "_observability_config", "_sql_loader")
 
     def __init__(
         self, *, loader: "SQLFileLoader | None" = None, observability_config: "ObservabilityConfig | None" = None
@@ -60,6 +60,10 @@ class SQLSpec:
         self._instance_cache_config: CacheConfig | None = None
         self._sql_loader: SQLFileLoader | None = loader
         self._observability_config = observability_config
+        self._loader_runtime = ObservabilityRuntime(observability_config, config_name="SQLFileLoader")
+        if self._sql_loader is None:
+            self._sql_loader = SQLFileLoader(runtime=self._loader_runtime)
+        self._sql_loader.set_observability_runtime(self._loader_runtime)
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:

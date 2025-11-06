@@ -15,7 +15,16 @@ from sqlspec.adapters.psqlpy.driver import (
     PsqlpyExceptionHandler,
     build_psqlpy_statement_config,
 )
-from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
+from sqlspec.config import (
+    ADKConfig,
+    AsyncDatabaseConfig,
+    FastAPIConfig,
+    FlaskConfig,
+    LitestarConfig,
+    OpenTelemetryConfig,
+    PrometheusConfig,
+    StarletteConfig,
+)
 from sqlspec.core import StatementConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import to_json
@@ -119,7 +128,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         statement_config: StatementConfig | None = None,
         driver_features: "PsqlpyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig] | None" = None,
     ) -> None:
         """Initialize Psqlpy configuration.
 

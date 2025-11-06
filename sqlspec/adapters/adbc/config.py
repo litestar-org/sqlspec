@@ -9,7 +9,16 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.adbc._types import AdbcConnection
 from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, get_adbc_statement_config
-from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
+from sqlspec.config import (
+    ADKConfig,
+    FastAPIConfig,
+    FlaskConfig,
+    LitestarConfig,
+    NoPoolSyncConfig,
+    OpenTelemetryConfig,
+    PrometheusConfig,
+    StarletteConfig,
+)
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.module_loader import import_string
@@ -118,7 +127,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         statement_config: StatementConfig | None = None,
         driver_features: "AdbcDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig] | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize configuration.

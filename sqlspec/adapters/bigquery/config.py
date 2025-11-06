@@ -14,7 +14,16 @@ from sqlspec.adapters.bigquery.driver import (
     BigQueryExceptionHandler,
     build_bigquery_statement_config,
 )
-from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
+from sqlspec.config import (
+    ADKConfig,
+    FastAPIConfig,
+    FlaskConfig,
+    LitestarConfig,
+    NoPoolSyncConfig,
+    OpenTelemetryConfig,
+    PrometheusConfig,
+    StarletteConfig,
+)
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import Empty
@@ -121,7 +130,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "BigQueryDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig] | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize BigQuery configuration.

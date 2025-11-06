@@ -20,7 +20,16 @@ from sqlspec.adapters.aiosqlite.pool import (
     AiosqlitePoolConnection,
 )
 from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
-from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
+from sqlspec.config import (
+    ADKConfig,
+    AsyncDatabaseConfig,
+    FastAPIConfig,
+    FlaskConfig,
+    LitestarConfig,
+    OpenTelemetryConfig,
+    PrometheusConfig,
+    StarletteConfig,
+)
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -95,7 +104,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         statement_config: "StatementConfig | None" = None,
         driver_features: "AiosqliteDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig] | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize AioSQLite configuration.

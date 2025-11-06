@@ -485,6 +485,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     statement_config: "StatementConfig"
     pool_instance: "PoolT | None"
     migration_config: "dict[str, Any] | MigrationConfig"
+    extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig]"
     driver_features: "dict[str, Any]"
     _storage_capabilities: "StorageCapabilities | None"
     observability_config: "ObservabilityConfig | None"
@@ -883,13 +884,13 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig] | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, dict[str, Any]]", extension_config or {})
+        self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -1028,13 +1029,13 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig]| None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.extension_config: dict[str, dict[str, Any]] = cast("dict[str, dict[str, Any]]", extension_config or {})
+        self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -1172,13 +1173,13 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig] | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.extension_config = cast("dict[str, dict[str, Any]]", extension_config or {})
+        self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 
@@ -1343,13 +1344,13 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig | None" = None,
+        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig]| None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.extension_config = cast("dict[str, dict[str, Any]]", extension_config or {})
+        self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
         self._initialize_migration_components()
 

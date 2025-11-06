@@ -18,9 +18,18 @@ if TYPE_CHECKING:
 
 
 class ObservabilityRuntime:
-    """Aggregates dispatchers and observers for a single configuration."""
+    """Aggregates dispatchers, observers, spans, and custom metrics."""
 
-    __slots__ = ("_redaction", "_statement_observers", "bind_key", "config", "config_name", "lifecycle", "span_manager")
+    __slots__ = (
+        "_metrics",
+        "_redaction",
+        "_statement_observers",
+        "bind_key",
+        "config",
+        "config_name",
+        "lifecycle",
+        "span_manager",
+    )
 
     def __init__(
         self, config: ObservabilityConfig | None = None, *, bind_key: str | None = None, config_name: str | None = None
@@ -39,6 +48,7 @@ class ObservabilityRuntime:
             observers.append(default_statement_observer)
         self._statement_observers = tuple(observers)
         self._redaction = config.redaction.copy() if config.redaction else None
+        self._metrics: dict[str, float] = {}
 
     @property
     def has_statement_observers(self) -> bool:
@@ -74,6 +84,24 @@ class ObservabilityRuntime:
         """Return lifecycle counters keyed under the diagnostics prefix."""
 
         return self.lifecycle.snapshot(prefix=self.diagnostics_key)
+
+    def metrics_snapshot(self) -> dict[str, float]:
+        """Return accumulated custom metrics with diagnostics prefix."""
+
+        if not self._metrics:
+            return {}
+        prefix = self.diagnostics_key
+        return {f"{prefix}.{name}": value for name, value in self._metrics.items()}
+
+    def increment_metric(self, name: str, amount: float = 1.0) -> None:
+        """Increment a custom metric counter."""
+
+        self._metrics[name] = self._metrics.get(name, 0.0) + amount
+
+    def record_metric(self, name: str, value: float) -> None:
+        """Set a custom metric to an explicit value."""
+
+        self._metrics[name] = value
 
     def emit_pool_create(self, pool: Any) -> None:
         span = self._start_lifecycle_span("pool.create", subject=pool)
@@ -136,6 +164,7 @@ class ObservabilityRuntime:
             payload = self._build_context(exception=exception)
             payload.update({key: value for key, value in extras.items() if value is not None})
             self.lifecycle.emit_error(payload)
+        self.increment_metric("errors", 1.0)
 
     def emit_statement_event(
         self,
@@ -209,6 +238,25 @@ class ObservabilityRuntime:
         if format_label:
             attributes["sqlspec.storage.format"] = format_label
         return self.span_manager.start_span(f"sqlspec.storage.{operation}", attributes)
+
+    def start_span(self, name: str, *, attributes: dict[str, Any] | None = None) -> Any:
+        """Start a custom span enriched with configuration context."""
+
+        if not getattr(self.span_manager, "is_enabled", False):
+            return None
+        merged: dict[str, Any] = attributes.copy() if attributes else {}
+        merged.setdefault("sqlspec.config", self.config_name)
+        if self.bind_key:
+            merged.setdefault("sqlspec.bind_key", self.bind_key)
+        correlation_id = CorrelationContext.get()
+        if correlation_id:
+            merged.setdefault("sqlspec.correlation_id", correlation_id)
+        return self.span_manager.start_span(name, merged)
+
+    def end_span(self, span: Any, *, error: Exception | None = None) -> None:
+        """Finish a custom span."""
+
+        self.span_manager.end_span(span, error=error)
 
     def end_storage_span(
         self, span: Any, *, telemetry: "StorageTelemetry | None" = None, error: Exception | None = None
