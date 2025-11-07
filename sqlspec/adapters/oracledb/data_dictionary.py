@@ -2,7 +2,6 @@
 # cspell:ignore pdbs
 
 import re
-from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.driver import (
@@ -35,6 +34,8 @@ COMPONENT_VERSION_SQL = (
     "FROM product_component_version WHERE product LIKE 'Oracle%' "
     "ORDER BY version DESC FETCH FIRST 1 ROWS ONLY"
 )
+
+AUTONOMOUS_SERVICE_SQL = "SELECT sys_context('USERENV','CLOUD_SERVICE') AS \"service\" FROM dual"
 
 __all__ = ("OracleAsyncDataDictionary", "OracleSyncDataDictionary", "OracleVersionInfo")
 
@@ -233,8 +234,17 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         Returns:
             True if this is an Autonomous Database, False otherwise
         """
-        result = driver.select_value_or_none('SELECT COUNT(1) AS "cnt" FROM v$pdbs WHERE cloud_identity IS NOT NULL')
-        return bool(result and int(result) > 0)
+        try:
+            service = driver.select_value_or_none(AUTONOMOUS_SERVICE_SQL)
+        except Exception:
+            logger.debug("Unable to detect Oracle cloud service via sys_context")
+            return False
+        if service is None:
+            return False
+        normalized = str(service).strip().upper()
+        if not normalized:
+            return False
+        return "AUTONOMOUS" in normalized or normalized.startswith(("ATP", "ADW"))
 
     def get_version(self, driver: SyncDriverAdapterBase) -> "OracleVersionInfo | None":
         """Get Oracle database version information.
@@ -418,15 +428,19 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         Returns:
             True if this is an Autonomous Database, False otherwise
         """
-        # Check for cloud_identity in v$pdbs (most reliable for Autonomous)
-        with suppress(Exception):
-            result = await driver.execute('SELECT COUNT(1) AS "cnt" FROM v$pdbs WHERE cloud_identity IS NOT NULL')
-            if result.data:
-                count = result.data[0]["cnt"] if isinstance(result.data[0], dict) else result.data[0][0]
-                if int(count) > 0:
-                    logger.debug("Detected Oracle Autonomous Database via v$pdbs")
-                    return True
-
+        try:
+            service = await driver.select_value_or_none(AUTONOMOUS_SERVICE_SQL)
+        except Exception:
+            logger.debug("Unable to detect Oracle cloud service via sys_context (async)")
+            return False
+        if service is None:
+            return False
+        normalized = str(service).strip().upper()
+        if not normalized:
+            return False
+        if "AUTONOMOUS" in normalized or normalized.startswith(("ATP", "ADW")):
+            logger.debug("Detected Oracle Autonomous Database via USERENV context")
+            return True
         logger.debug("Oracle Autonomous Database not detected")
         return False
 
