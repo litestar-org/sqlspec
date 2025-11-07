@@ -1,6 +1,5 @@
 def test_parameter_style_config() -> None:
-    from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 
     param_config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,  # $1, $2, ...
