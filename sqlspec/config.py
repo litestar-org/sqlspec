@@ -2,13 +2,14 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from inspect import Signature, signature
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, TypeVar, cast
 
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.loader import SQLFileLoader
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
-    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+    from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage import StorageCapabilities
 
 
@@ -30,6 +31,7 @@ __all__ = (
     "ConfigT",
     "DatabaseConfigProtocol",
     "DriverT",
+    "ExtensionConfigs",
     "FastAPIConfig",
     "FlaskConfig",
     "LifecycleConfig",
@@ -449,6 +451,19 @@ class PrometheusConfig(TypedDict):
     """Histogram buckets for query duration (seconds)."""
 
 
+ExtensionConfigs: TypeAlias = dict[
+    str,
+    dict[str, Any]
+    | LitestarConfig
+    | FastAPIConfig
+    | StarletteConfig
+    | FlaskConfig
+    | ADKConfig
+    | OpenTelemetryConfig
+    | PrometheusConfig,
+]
+
+
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
@@ -485,7 +500,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     statement_config: "StatementConfig"
     pool_instance: "PoolT | None"
     migration_config: "dict[str, Any] | MigrationConfig"
-    extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig]"
+    extension_config: "ExtensionConfigs"
     driver_features: "dict[str, Any]"
     _storage_capabilities: "StorageCapabilities | None"
     observability_config: "ObservabilityConfig | None"
@@ -583,8 +598,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             self.observability_config = updated
 
     def _promote_driver_feature_hooks(self) -> None:
-        from sqlspec.observability import ObservabilityConfig as ObservabilityConfigImpl
-
         lifecycle_hooks: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
 
         for hook_name, context_key in DRIVER_FEATURE_LIFECYCLE_HOOKS.items():
@@ -599,11 +612,11 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             return
 
         lifecycle_config = cast("LifecycleConfig", lifecycle_hooks)
-        override = ObservabilityConfigImpl(lifecycle=lifecycle_config)
+        override = ObservabilityConfig(lifecycle=lifecycle_config)
         if self.observability_config is None:
             self.observability_config = override
         else:
-            self.observability_config = ObservabilityConfigImpl.merge(self.observability_config, override)
+            self.observability_config = ObservabilityConfig.merge(self.observability_config, override)
 
     @staticmethod
     def _wrap_driver_feature_hook(
@@ -723,7 +736,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         from sqlspec.loader import SQLFileLoader
         from sqlspec.migrations import create_migration_commands
 
-        self._migration_loader = SQLFileLoader()
+        runtime = self.get_observability_runtime()
+        self._migration_loader = SQLFileLoader(runtime=runtime)
         self._migration_commands = create_migration_commands(self)  # pyright: ignore
 
     def _ensure_migration_loader(self) -> "SQLFileLoader":
@@ -884,7 +898,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig] | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
@@ -892,6 +906,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
+        self._init_observability(observability_config)
         self._initialize_migration_components()
 
         if statement_config is None:
@@ -904,7 +919,6 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
-        self._init_observability(observability_config)
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1029,7 +1043,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig]| None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
@@ -1037,6 +1051,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
+        self._init_observability(observability_config)
         self._initialize_migration_components()
 
         if statement_config is None:
@@ -1047,7 +1062,6 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
-        self._init_observability(observability_config)
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1173,7 +1187,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig] | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
@@ -1181,6 +1195,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.pool_config = pool_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
+        self._init_observability(observability_config)
         self._initialize_migration_components()
 
         if statement_config is None:
@@ -1193,7 +1208,6 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
-        self._init_observability(observability_config)
 
     def create_pool(self) -> PoolT:
         """Create and return the connection pool.
@@ -1344,7 +1358,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig]| None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         self.bind_key = bind_key
@@ -1352,6 +1366,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.pool_config = pool_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
+        self._init_observability(observability_config)
         self._initialize_migration_components()
 
         if statement_config is None:
@@ -1366,7 +1381,6 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
-        self._init_observability(observability_config)
 
     async def create_pool(self) -> PoolT:
         """Create and return the connection pool.

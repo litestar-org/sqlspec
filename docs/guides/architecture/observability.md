@@ -8,6 +8,7 @@ This guide explains how the consolidated observability stack works after the Lif
 2. **Structured Statement Events** – observers receive normalized payloads (`StatementEvent`) for printing, logging, or exporting to tracing systems.
 3. **Optional OpenTelemetry Spans** – span creation is lazy and never imports `opentelemetry` unless spans are enabled.
 4. **Diagnostics** – storage bridge + serializer metrics + lifecycle counters roll up under `SQLSpec.telemetry_snapshot()` (Phase 5).
+5. **Loader & Migration Telemetry** – SQL file loader, caching, and migration runners emit metrics/spans without additional plumbing (Phase 7).
 
 ## Configuration Sources
 
@@ -90,10 +91,20 @@ sql = SQLSpec(observability_config=config)
 
 You can also opt in per adapter by passing `extension_config["otel"]` or `extension_config["prometheus"]` when constructing a config; the helpers above are invoked automatically during initialization.
 
-## Span Manager & Diagnostics (Roadmap)
+## Loader & Migration Telemetry
 
-* **Span Manager:** Query spans ship today, lifecycle events emit `sqlspec.lifecycle.*` spans, and storage bridge helpers now wrap reads/writes with `sqlspec.storage.*` spans (see `StorageDriverMixin`). Mocked span tests live in `tests/unit/test_observability.py`.
-* **Diagnostics:** `TelemetryDiagnostics` aggregates lifecycle counters plus storage bridge metrics. Storage telemetry now carries backend IDs, bind key, and correlation IDs so snapshots/spans inherit the same context, and `SQLSpec.telemetry_snapshot()` exposes that data via flat counters (e.g., `storage_bridge.bytes_written`, `serializer.hits`) plus a `storage_bridge.recent_jobs` list detailing the last 25 storage jobs.
+`SQLSpec` instantiates a dedicated `ObservabilityRuntime` for the SQL file loader and shares it with every migration command/runner. Instrumentation highlights:
+
+- Loader metrics such as `SQLFileLoader.loader.load.invocations`, `.cache.hit`, `.files.loaded`, `.statements.loaded`, and `.directories.scanned` fire automatically when queries are loaded or cache state is inspected.
+- Migration runners publish cache stats (`{Config}.migrations.listing.cache_hit`, `.cache_miss`, `.metadata.cache_hit`), command metrics (`{Config}.migrations.command.upgrade.invocations`, `.downgrade.errors`), and per-migration execution metrics (`{Config}.migrations.upgrade.duration_ms`, `.downgrade.applied`).
+- Command and migration spans (`sqlspec.migration.command.upgrade`, `sqlspec.migration.upgrade`) include version numbers, bind keys, and correlation IDs; they end with duration attributes even when exceptions occur.
+
+All metrics surface through `SQLSpec.telemetry_snapshot()` under the adapter key, so exporters observe a flat counter space regardless of which subsystem produced the events.
+
+## Span Manager & Diagnostics
+
+* **Span Manager:** Query spans ship today, lifecycle events emit `sqlspec.lifecycle.*` spans, storage bridge helpers wrap reads/writes with `sqlspec.storage.*` spans, and migration runners create `sqlspec.migration.*` spans for both commands and individual revisions. Mocked span tests live in `tests/unit/test_observability.py`.
+* **Diagnostics:** `TelemetryDiagnostics` aggregates lifecycle counters, loader/migration metrics, storage bridge telemetry, and serializer cache stats. Storage telemetry carries backend IDs, bind key, and correlation IDs so snapshots/spans inherit the same context, and `SQLSpec.telemetry_snapshot()` exposes that data via flat counters plus a `storage_bridge.recent_jobs` list detailing the last 25 operations.
 
 Example snapshot payload:
 
@@ -120,6 +131,6 @@ Example snapshot payload:
 
 ## Next Steps (2025 Q4)
 
-1. **Docs & Samples:** Expand runnable examples covering span enablement, Litestar correlation middleware, and storage telemetry (`storage_bridge.recent_jobs`) once diagnostics are finalized.
-2. **Adapter Migration:** Audit remaining adapters for bespoke callbacks (e.g., `on_statement_execute`) and move them to ObservabilityConfig overrides.
-3. **Performance Budgets:** Add guard-path benchmarks/tests to ensure disabled observability remains near-zero overhead after diagnostics wiring.
+1. **Exporter Validation:** Exercise the OpenTelemetry/Prometheus helpers against the new loader + migration metrics and document recommended dashboards.
+2. **Adapter Audit:** Confirm every adapter’s migration tracker benefits from the instrumentation (especially Oracle/BigQuery fixtures) and extend coverage where needed.
+3. **Performance Budgets:** Add guard-path benchmarks/tests to ensure disabled observability remains near-zero overhead now that migration/loader events emit metrics by default.

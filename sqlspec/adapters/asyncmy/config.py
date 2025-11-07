@@ -18,16 +18,7 @@ from sqlspec.adapters.asyncmy.driver import (
     asyncmy_statement_config,
     build_asyncmy_statement_config,
 )
-from sqlspec.config import (
-    ADKConfig,
-    AsyncDatabaseConfig,
-    FastAPIConfig,
-    FlaskConfig,
-    LitestarConfig,
-    OpenTelemetryConfig,
-    PrometheusConfig,
-    StarletteConfig,
-)
+from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -114,7 +105,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         statement_config: "StatementConfig | None" = None,
         driver_features: "AsyncmyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | OpenTelemetryConfig | PrometheusConfig] | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize Asyncmy configuration.

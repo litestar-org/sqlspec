@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable
 from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from typing import Any, cast
 
 from sqlspec import SQLSpec
@@ -408,6 +409,20 @@ def test_telemetry_snapshot_includes_recent_storage_jobs() -> None:
     recent_jobs = snapshot.get("storage_bridge.recent_jobs")
     assert recent_jobs, "Recent storage jobs should be included in diagnostics"
     assert recent_jobs[0]["correlation_id"] == "diag-test"
+
+
+def test_telemetry_snapshot_includes_loader_metrics(tmp_path: "Path") -> None:
+    """Telemetry snapshot should expose loader metric counters after a load."""
+
+    sql_path = tmp_path / "queries.sql"
+    sql_path.write_text("-- name: example\nSELECT 1;\n", encoding="utf-8")
+
+    spec = SQLSpec()
+    spec.load_sql_files(sql_path)
+
+    snapshot = spec.telemetry_snapshot()
+    assert "SQLFileLoader.loader.load.invocations" in snapshot
+    assert snapshot["SQLFileLoader.loader.files.loaded"] >= 1
 
 
 def test_disabled_runtime_avoids_lifecycle_counters() -> None:

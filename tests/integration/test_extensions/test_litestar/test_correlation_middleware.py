@@ -1,8 +1,11 @@
+from typing import Any, cast
+
 from litestar import Litestar, get
 from litestar.testing import TestClient
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.config import ExtensionConfigs
 from sqlspec.extensions.litestar import SQLSpecPlugin
 from sqlspec.utils.correlation import CorrelationContext
 
@@ -19,13 +22,14 @@ def _build_app(
     headers: list[str] | None = None,
     auto_trace_headers: bool | None = None,
 ) -> Litestar:
-    extension_config: dict[str, dict[str, object]] = {"litestar": {"enable_correlation_middleware": enable}}
+    extension_config = cast("ExtensionConfigs", {"litestar": {"enable_correlation_middleware": enable}})
+    litestar_settings = cast("dict[str, Any]", extension_config["litestar"])
     if header is not None:
-        extension_config["litestar"]["correlation_header"] = header
+        litestar_settings["correlation_header"] = header
     if headers is not None:
-        extension_config["litestar"]["correlation_headers"] = headers
+        litestar_settings["correlation_headers"] = headers
     if auto_trace_headers is not None:
-        extension_config["litestar"]["auto_trace_headers"] = auto_trace_headers
+        litestar_settings["auto_trace_headers"] = auto_trace_headers
 
     spec = SQLSpec()
     spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}, extension_config=extension_config))

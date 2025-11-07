@@ -61,9 +61,8 @@ class SQLSpec:
         self._sql_loader: SQLFileLoader | None = loader
         self._observability_config = observability_config
         self._loader_runtime = ObservabilityRuntime(observability_config, config_name="SQLFileLoader")
-        if self._sql_loader is None:
-            self._sql_loader = SQLFileLoader(runtime=self._loader_runtime)
-        self._sql_loader.set_observability_runtime(self._loader_runtime)
+        if self._sql_loader is not None:
+            self._sql_loader.set_observability_runtime(self._loader_runtime)
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
@@ -193,10 +192,25 @@ class SQLSpec:
         """Return aggregated diagnostics across all registered configurations."""
 
         diagnostics = TelemetryDiagnostics()
+        loader_metrics = self._loader_runtime.metrics_snapshot()
+        if loader_metrics:
+            diagnostics.add_metric_snapshot(loader_metrics)
         for config in self._configs.values():
             runtime = config.get_observability_runtime()
             diagnostics.add_lifecycle_snapshot(runtime.diagnostics_key, runtime.lifecycle_snapshot())
+            metrics_snapshot = runtime.metrics_snapshot()
+            if metrics_snapshot:
+                diagnostics.add_metric_snapshot(metrics_snapshot)
         return diagnostics.snapshot()
+
+    def _ensure_sql_loader(self) -> SQLFileLoader:
+        """Return a SQLFileLoader instance configured with observability runtime."""
+
+        if self._sql_loader is None:
+            self._sql_loader = SQLFileLoader(runtime=self._loader_runtime)
+        else:
+            self._sql_loader.set_observability_runtime(self._loader_runtime)
+        return self._sql_loader
 
     @overload
     def get_connection(
@@ -718,12 +732,8 @@ class SQLSpec:
         Args:
             *paths: One or more file paths or directory paths to load.
         """
-        if self._sql_loader is None:
-            from sqlspec.loader import SQLFileLoader
-
-            self._sql_loader = SQLFileLoader()
-
-        self._sql_loader.load_sql(*paths)
+        loader = self._ensure_sql_loader()
+        loader.load_sql(*paths)
         logger.debug("Loaded SQL files: %s", paths)
 
     def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
@@ -734,12 +744,8 @@ class SQLSpec:
             sql: Raw SQL content.
             dialect: Optional dialect for the SQL statement.
         """
-        if self._sql_loader is None:
-            from sqlspec.loader import SQLFileLoader
-
-            self._sql_loader = SQLFileLoader()
-
-        self._sql_loader.add_named_sql(name, sql, dialect)
+        loader = self._ensure_sql_loader()
+        loader.add_named_sql(name, sql, dialect)
         logger.debug("Added named SQL: %s", name)
 
     def get_sql(self, name: str) -> "SQL":
@@ -752,12 +758,8 @@ class SQLSpec:
         Returns:
             SQL object ready for execution.
         """
-        if self._sql_loader is None:
-            from sqlspec.loader import SQLFileLoader
-
-            self._sql_loader = SQLFileLoader()
-
-        return self._sql_loader.get_sql(name)
+        loader = self._ensure_sql_loader()
+        return loader.get_sql(name)
 
     def list_sql_queries(self) -> "list[str]":
         """List all available query names.

@@ -1,9 +1,10 @@
 """Diagnostics aggregation utilities for observability exports."""
 
+from collections import defaultdict
 from collections.abc import Iterable
 from typing import Any
 
-from sqlspec.storage.pipeline import get_recent_storage_events, get_storage_bridge_diagnostics
+from sqlspec.storage.pipeline import StorageDiagnostics, get_recent_storage_events, get_storage_bridge_diagnostics
 
 
 class TelemetryDiagnostics:
@@ -13,7 +14,7 @@ class TelemetryDiagnostics:
 
     def __init__(self) -> None:
         self._lifecycle_sections: list[tuple[str, dict[str, int]]] = []
-        self._metrics: dict[str, float] = {}
+        self._metrics: StorageDiagnostics = {}
 
     def add_lifecycle_snapshot(self, config_key: str, counters: dict[str, int]) -> None:
         """Store lifecycle counters for later snapshot generation."""
@@ -22,7 +23,7 @@ class TelemetryDiagnostics:
             return
         self._lifecycle_sections.append((config_key, counters))
 
-    def add_metric_snapshot(self, metrics: dict[str, float]) -> None:
+    def add_metric_snapshot(self, metrics: StorageDiagnostics) -> None:
         """Store custom metric snapshots."""
 
         for key, value in metrics.items():
@@ -34,15 +35,22 @@ class TelemetryDiagnostics:
     def snapshot(self) -> "dict[str, Any]":
         """Return aggregated diagnostics payload."""
 
-        payload: dict[str, Any] = get_storage_bridge_diagnostics()
+        def _zero() -> float:
+            return 0.0
+
+        numeric_payload: defaultdict[str, float] = defaultdict(_zero)
+        for key, value in get_storage_bridge_diagnostics().items():
+            numeric_payload[key] = float(value)
+        for _prefix, counters in self._lifecycle_sections:
+            for metric, value in counters.items():
+                numeric_payload[metric] += float(value)
+        for metric, value in self._metrics.items():
+            numeric_payload[metric] += float(value)
+
+        payload: dict[str, Any] = dict(numeric_payload)
         recent_jobs = get_recent_storage_events()
         if recent_jobs:
             payload["storage_bridge.recent_jobs"] = recent_jobs
-        for _prefix, counters in self._lifecycle_sections:
-            for metric, value in counters.items():
-                payload[metric] = payload.get(metric, 0) + value
-        for metric, value in self._metrics.items():
-            payload[metric] = payload.get(metric, 0) + value
         return payload
 
 

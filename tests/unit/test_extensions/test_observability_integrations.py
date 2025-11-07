@@ -12,7 +12,7 @@ def test_enable_tracing_sets_telemetry(monkeypatch):
     assert config.telemetry is not None
     assert config.telemetry.enable_spans is True
     provider = config.telemetry.provider_factory() if config.telemetry.provider_factory else None
-    assert provider is None  # default noop when otel not installed
+    assert provider is not None
 
 
 def test_enable_metrics_registers_observer(monkeypatch):

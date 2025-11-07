@@ -103,6 +103,39 @@ class ObservabilityRuntime:
 
         self._metrics[name] = value
 
+    def start_migration_span(
+        self, event: str, *, version: "str | None" = None, metadata: "dict[str, Any] | None" = None
+    ) -> Any:
+        """Start a migration span when telemetry is enabled."""
+
+        if not getattr(self.span_manager, "is_enabled", False):
+            return None
+        attributes: dict[str, Any] = {"sqlspec.migration.event": event, "sqlspec.config": self.config_name}
+        if self.bind_key:
+            attributes["sqlspec.bind_key"] = self.bind_key
+        correlation_id = CorrelationContext.get()
+        if correlation_id:
+            attributes["sqlspec.correlation_id"] = correlation_id
+        if version:
+            attributes["sqlspec.migration.version"] = version
+        if metadata:
+            for key, value in metadata.items():
+                if value is not None:
+                    attributes[f"sqlspec.migration.{key}"] = value
+        return self.span_manager.start_span(f"sqlspec.migration.{event}", attributes)
+
+    def end_migration_span(
+        self, span: Any, *, duration_ms: "int | None" = None, error: "Exception | None" = None
+    ) -> None:
+        """Finish a migration span, attaching optional duration metadata."""
+
+        if span is None:
+            return
+        setter = getattr(span, "set_attribute", None)
+        if setter is not None and duration_ms is not None:
+            setter("sqlspec.migration.duration_ms", duration_ms)
+        self.span_manager.end_span(span, error=error)
+
     def emit_pool_create(self, pool: Any) -> None:
         span = self._start_lifecycle_span("pool.create", subject=pool)
         try:

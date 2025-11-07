@@ -29,6 +29,7 @@ __all__ = (
     "StorageBridgeJob",
     "StorageCapabilities",
     "StorageDestination",
+    "StorageDiagnostics",
     "StorageFormat",
     "StorageLoadRequest",
     "StorageTelemetry",
@@ -44,6 +45,7 @@ __all__ = (
 
 StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc"]
 StorageDestination: TypeAlias = str | Path
+StorageDiagnostics: TypeAlias = dict[str, float]
 
 
 class StorageCapabilities(TypedDict):
@@ -179,13 +181,13 @@ def create_storage_bridge_job(status: str, telemetry: StorageTelemetry) -> Stora
     return job
 
 
-def get_storage_bridge_diagnostics() -> "dict[str, int]":
+def get_storage_bridge_diagnostics() -> "StorageDiagnostics":
     """Return aggregated storage bridge + serializer cache metrics."""
 
-    diagnostics = dict(get_storage_bridge_metrics())
+    diagnostics: dict[str, float] = {key: float(value) for key, value in get_storage_bridge_metrics().items()}
     serializer_metrics = get_serializer_metrics()
     for key, value in serializer_metrics.items():
-        diagnostics[f"serializer.{key}"] = value
+        diagnostics[f"serializer.{key}"] = float(value)
     return diagnostics
 
 
