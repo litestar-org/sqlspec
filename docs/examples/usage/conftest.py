@@ -1,6 +1,3 @@
-pytest_plugins = ["pytest_databases.docker.postgres", "pytest_databases.docker.mysql",
-                  "pytest_databases.docker.oracle", "pytest_databases.docker.bigquery"]
-
 from collections.abc import Generator
 from typing import Any
 
@@ -11,6 +8,13 @@ from pytest_databases.docker.bigquery import BigQueryService
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
+
+pytest_plugins = [
+    "pytest_databases.docker.postgres",
+    "pytest_databases.docker.mysql",
+    "pytest_databases.docker.oracle",
+    "pytest_databases.docker.bigquery",
+]
 
 
 @pytest.fixture
@@ -39,3 +43,17 @@ def bigquery_session(bigquery_config: BigQueryConfig) -> Generator[BigQueryDrive
     with bigquery_config.provide_session() as session:
         yield session
 
+@pytest.fixture
+async def postgres_session_async(postgres_service: "PostgresService") -> Generator[Any, Any, None]:
+    """Create a Postgres async session."""
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+    config = AsyncpgConfig(
+        pool_config={
+            "dsn": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "min_size": 1,
+            "max_size": 5,
+        }
+    )
+    async with config.provide_session() as session:
+        yield session

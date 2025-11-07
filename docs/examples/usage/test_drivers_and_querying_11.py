@@ -20,7 +20,7 @@ def test_example_11_oracledb_config(oracle_service: OracleService) -> None:
     )
 
     with spec.provide_session(config) as session:
-        create_table_sql = """CREATE TABLE employees (
+        create_table_sql = """CREATE TABLE if not exists employees (
            employee_id NUMBER PRIMARY KEY,
            first_name VARCHAR2(50),
            last_name VARCHAR2(50)

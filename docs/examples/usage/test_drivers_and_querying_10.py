@@ -1,6 +1,8 @@
 # Test module converted from docs example - code-block 10
 """Minimal smoke test for drivers_and_querying example 10."""
 
+from pathlib import Path
+
 from sqlspec.adapters.duckdb import DuckDBConfig
 
 
@@ -16,9 +18,9 @@ def test_example_10_duckdb_config() -> None:
 
     with spec.provide_session(config) as session:
         # Create table from Parquet
-        session.execute("""
-           CREATE TABLE users AS
-           SELECT * FROM read_parquet('users.parquet')
+        session.execute(f"""
+           CREATE TABLE if not exists users AS
+           SELECT * FROM read_parquet('{Path(__file__).parent.parent / "queries/users.parquet"}')
        """)
 
         # Analytical query

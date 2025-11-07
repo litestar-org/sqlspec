@@ -16,7 +16,7 @@ async def test_example_5_construct_config(postgres_service: PostgresService) -> 
     )
     assert config is not None
     async with spec.provide_session(config) as session:
-        create_table_query = """        CREATE TABLE IF NOT EXISTS users (
+        create_table_query = """CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             name VARCHAR(100),
             email VARCHAR(100) UNIQUE
@@ -24,6 +24,6 @@ async def test_example_5_construct_config(postgres_service: PostgresService) -> 
         await session.execute(create_table_query)
         # Insert with RETURNING
         await session.execute(
-            "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id", "Alice", "alice@example.com"
+            "INSERT INTO users (name, email) VALUES ($1, $2) ETURNING id", "Alice", "alice@example.com"
         )
         await session.execute("SELECT * FROM users WHERE id = $1", 1)
