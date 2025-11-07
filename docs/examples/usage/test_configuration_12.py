@@ -1,6 +1,6 @@
 def test_basic_statement_config() -> None:
     from sqlspec.adapters.asyncpg import AsyncpgConfig
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec.core import StatementConfig
 
     statement_config = StatementConfig(
         dialect="postgres",  # SQLGlot dialect
