@@ -179,6 +179,14 @@ include = [
   "sqlspec/utils/fixtures.py",            # File fixture loading
   "sqlspec/utils/data_transformation.py", # Data transformation utilities
 
+  # === OBSERVABILITY ===
+  "sqlspec/observability/_config.py",
+  "sqlspec/observability/_diagnostics.py",
+  "sqlspec/observability/_dispatcher.py",
+  "sqlspec/observability/_observer.py",
+  "sqlspec/observability/_runtime.py",
+  "sqlspec/observability/_spans.py",
+
   # === STORAGE LAYER ===
   "sqlspec/storage/_utils.py",
   "sqlspec/storage/registry.py",

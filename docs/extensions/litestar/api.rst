@@ -34,7 +34,8 @@ Configure the plugin via ``extension_config`` in database configuration:
                "commit_mode": "autocommit",
                "extra_commit_statuses": {201, 204},
                "extra_rollback_statuses": {409},
-               "enable_correlation_middleware": True
+               "enable_correlation_middleware": True,
+               "correlation_header": "x-correlation-id",
            }
        }
    )
@@ -74,10 +75,22 @@ Configuration Options
      - ``set[int]``
      - ``None``
      - Additional HTTP status codes that trigger rollbacks
-   * - ``enable_correlation_middleware``
+  * - ``enable_correlation_middleware``
      - ``bool``
      - ``True``
      - Enable request correlation tracking
+  * - ``correlation_header``
+     - ``str``
+     - ``"X-Request-ID"``
+     - HTTP header to read when populating the correlation ID middleware
+   * - ``correlation_headers``
+     - ``list[str]``
+     - ``[]``
+     - Additional headers to consider (auto-detected headers are appended unless disabled)
+   * - ``auto_trace_headers``
+     - ``bool``
+     - ``True``
+     - Toggle automatic detection of standard tracing headers (`Traceparent`, `X-Cloud-Trace-Context`, etc.)
 
 Session Stores
 ==============

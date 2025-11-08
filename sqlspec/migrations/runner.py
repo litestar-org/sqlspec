@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.observability import ObservabilityRuntime
 
 __all__ = ("AsyncMigrationRunner", "SyncMigrationRunner", "create_migration_runner")
 
@@ -62,6 +63,7 @@ class BaseMigrationRunner(ABC):
         extension_migrations: "dict[str, Path] | None" = None,
         context: "MigrationContext | None" = None,
         extension_configs: "dict[str, dict[str, Any]] | None" = None,
+        runtime: "ObservabilityRuntime | None" = None,
     ) -> None:
         """Initialize the migration runner.
 
@@ -70,12 +72,14 @@ class BaseMigrationRunner(ABC):
             extension_migrations: Optional mapping of extension names to their migration paths.
             context: Optional migration context for Python migrations.
             extension_configs: Optional mapping of extension names to their configurations.
+            runtime: Observability runtime shared with command/context consumers.
         """
         self.migrations_path = migrations_path
         self.extension_migrations = extension_migrations or {}
         from sqlspec.loader import SQLFileLoader
 
-        self.loader = SQLFileLoader()
+        self.runtime = runtime
+        self.loader = SQLFileLoader(runtime=runtime)
         self.project_root: Path | None = None
         self.context = context
         self.extension_configs = extension_configs or {}
@@ -83,6 +87,11 @@ class BaseMigrationRunner(ABC):
         self._listing_cache: list[tuple[str, Path]] | None = None
         self._listing_signatures: dict[str, tuple[int, int]] = {}
         self._metadata_cache: dict[str, _CachedMigrationMetadata] = {}
+
+    def _metric(self, name: str, amount: float = 1.0) -> None:
+        if self.runtime is None:
+            return
+        self.runtime.increment_metric(name, amount)
 
     def _iter_directory_entries(self, base_path: Path, extension_name: "str | None") -> "list[_MigrationFileEntry]":
         """Collect migration files discovered under a base path."""
@@ -173,6 +182,13 @@ class BaseMigrationRunner(ABC):
             len(removed),
             len(modified),
         )
+        self._metric("migrations.listing.cache_invalidations")
+        if added:
+            self._metric("migrations.listing.added", float(len(added)))
+        if removed:
+            self._metric("migrations.listing.removed", float(len(removed)))
+        if modified:
+            self._metric("migrations.listing.modified", float(len(modified)))
 
     def _extract_version(self, filename: str) -> "str | None":
         """Extract version from filename.
@@ -238,12 +254,17 @@ class BaseMigrationRunner(ABC):
         cached_listing = self._listing_cache
 
         if cached_listing is not None and self._listing_digest == digest:
+            self._metric("migrations.listing.cache_hit")
+            self._metric("migrations.listing.files_cached", float(len(cached_listing)))
             logger.debug("Migration listing cache hit (%d files)", len(cached_listing))
             return cached_listing
 
         files = self._build_sorted_listing(entries)
         previous_digest = self._listing_digest
         previous_signatures = self._listing_signatures
+
+        self._metric("migrations.listing.cache_miss")
+        self._metric("migrations.listing.files_scanned", float(len(files)))
 
         self._listing_cache = files
         self._listing_signatures = signatures
@@ -278,10 +299,14 @@ class BaseMigrationRunner(ABC):
             and cached_metadata.mtime_ns == stat_result.st_mtime_ns
             and cached_metadata.size == stat_result.st_size
         ):
+            self._metric("migrations.metadata.cache_hit")
             logger.debug("Migration metadata cache hit: %s", cache_key)
             metadata = cached_metadata.clone()
             metadata["file_path"] = file_path
             return metadata
+
+        self._metric("migrations.metadata.cache_miss")
+        self._metric("migrations.metadata.bytes", float(stat_result.st_size))
 
         content = file_path.read_text(encoding="utf-8")
         checksum = self._calculate_checksum(content)
@@ -436,34 +461,53 @@ class SyncMigrationRunner(BaseMigrationRunner):
         """
         upgrade_sql_list = self._get_migration_sql(migration, "up")
         if upgrade_sql_list is None:
+            self._metric("migrations.upgrade.skipped")
             return None, 0
 
         if use_transaction is None:
             config = self.context.config if self.context else None
             use_transaction = self.should_use_transaction(migration, config) if config else False
 
-        start_time = time.time()
+        runtime = self.runtime
+        span = None
+        if runtime is not None:
+            version = cast("str | None", migration.get("version"))
+            span = runtime.start_migration_span("upgrade", version=version)
+            runtime.increment_metric("migrations.upgrade.invocations")
 
-        if use_transaction:
-            try:
+        start_time = time.perf_counter()
+        execution_time = 0
+
+        try:
+            if use_transaction:
                 driver.begin()
                 for sql_statement in upgrade_sql_list:
                     if sql_statement.strip():
                         driver.execute_script(sql_statement)
-                execution_time = int((time.time() - start_time) * 1000)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
                 if on_success:
                     on_success(execution_time)
                 driver.commit()
-            except Exception:
+            else:
+                for sql_statement in upgrade_sql_list:
+                    if sql_statement.strip():
+                        driver.execute_script(sql_statement)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
+                if on_success:
+                    on_success(execution_time)
+        except Exception as exc:
+            if use_transaction:
                 driver.rollback()
-                raise
-        else:
-            for sql_statement in upgrade_sql_list:
-                if sql_statement.strip():
-                    driver.execute_script(sql_statement)
-            execution_time = int((time.time() - start_time) * 1000)
-            if on_success:
-                on_success(execution_time)
+            if runtime is not None:
+                duration_ms = int((time.perf_counter() - start_time) * 1000)
+                runtime.increment_metric("migrations.upgrade.errors")
+                runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
+            raise
+
+        if runtime is not None:
+            runtime.increment_metric("migrations.upgrade.applied")
+            runtime.increment_metric("migrations.upgrade.duration_ms", float(execution_time))
+            runtime.end_migration_span(span, duration_ms=execution_time)
 
         return None, execution_time
 
@@ -488,34 +532,53 @@ class SyncMigrationRunner(BaseMigrationRunner):
         """
         downgrade_sql_list = self._get_migration_sql(migration, "down")
         if downgrade_sql_list is None:
+            self._metric("migrations.downgrade.skipped")
             return None, 0
 
         if use_transaction is None:
             config = self.context.config if self.context else None
             use_transaction = self.should_use_transaction(migration, config) if config else False
 
-        start_time = time.time()
+        runtime = self.runtime
+        span = None
+        if runtime is not None:
+            version = cast("str | None", migration.get("version"))
+            span = runtime.start_migration_span("downgrade", version=version)
+            runtime.increment_metric("migrations.downgrade.invocations")
 
-        if use_transaction:
-            try:
+        start_time = time.perf_counter()
+        execution_time = 0
+
+        try:
+            if use_transaction:
                 driver.begin()
                 for sql_statement in downgrade_sql_list:
                     if sql_statement.strip():
                         driver.execute_script(sql_statement)
-                execution_time = int((time.time() - start_time) * 1000)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
                 if on_success:
                     on_success(execution_time)
                 driver.commit()
-            except Exception:
+            else:
+                for sql_statement in downgrade_sql_list:
+                    if sql_statement.strip():
+                        driver.execute_script(sql_statement)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
+                if on_success:
+                    on_success(execution_time)
+        except Exception as exc:
+            if use_transaction:
                 driver.rollback()
-                raise
-        else:
-            for sql_statement in downgrade_sql_list:
-                if sql_statement.strip():
-                    driver.execute_script(sql_statement)
-            execution_time = int((time.time() - start_time) * 1000)
-            if on_success:
-                on_success(execution_time)
+            if runtime is not None:
+                duration_ms = int((time.perf_counter() - start_time) * 1000)
+                runtime.increment_metric("migrations.downgrade.errors")
+                runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
+            raise
+
+        if runtime is not None:
+            runtime.increment_metric("migrations.downgrade.applied")
+            runtime.increment_metric("migrations.downgrade.duration_ms", float(execution_time))
+            runtime.end_migration_span(span, duration_ms=execution_time)
 
         return None, execution_time
 
@@ -658,34 +721,53 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         """
         upgrade_sql_list = await self._get_migration_sql_async(migration, "up")
         if upgrade_sql_list is None:
+            self._metric("migrations.upgrade.skipped")
             return None, 0
 
         if use_transaction is None:
             config = self.context.config if self.context else None
             use_transaction = self.should_use_transaction(migration, config) if config else False
 
-        start_time = time.time()
+        runtime = self.runtime
+        span = None
+        if runtime is not None:
+            version = cast("str | None", migration.get("version"))
+            span = runtime.start_migration_span("upgrade", version=version)
+            runtime.increment_metric("migrations.upgrade.invocations")
 
-        if use_transaction:
-            try:
+        start_time = time.perf_counter()
+        execution_time = 0
+
+        try:
+            if use_transaction:
                 await driver.begin()
                 for sql_statement in upgrade_sql_list:
                     if sql_statement.strip():
                         await driver.execute_script(sql_statement)
-                execution_time = int((time.time() - start_time) * 1000)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
                 if on_success:
                     await on_success(execution_time)
                 await driver.commit()
-            except Exception:
+            else:
+                for sql_statement in upgrade_sql_list:
+                    if sql_statement.strip():
+                        await driver.execute_script(sql_statement)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
+                if on_success:
+                    await on_success(execution_time)
+        except Exception as exc:
+            if use_transaction:
                 await driver.rollback()
-                raise
-        else:
-            for sql_statement in upgrade_sql_list:
-                if sql_statement.strip():
-                    await driver.execute_script(sql_statement)
-            execution_time = int((time.time() - start_time) * 1000)
-            if on_success:
-                await on_success(execution_time)
+            if runtime is not None:
+                duration_ms = int((time.perf_counter() - start_time) * 1000)
+                runtime.increment_metric("migrations.upgrade.errors")
+                runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
+            raise
+
+        if runtime is not None:
+            runtime.increment_metric("migrations.upgrade.applied")
+            runtime.increment_metric("migrations.upgrade.duration_ms", float(execution_time))
+            runtime.end_migration_span(span, duration_ms=execution_time)
 
         return None, execution_time
 
@@ -710,34 +792,53 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         """
         downgrade_sql_list = await self._get_migration_sql_async(migration, "down")
         if downgrade_sql_list is None:
+            self._metric("migrations.downgrade.skipped")
             return None, 0
 
         if use_transaction is None:
             config = self.context.config if self.context else None
             use_transaction = self.should_use_transaction(migration, config) if config else False
 
-        start_time = time.time()
+        runtime = self.runtime
+        span = None
+        if runtime is not None:
+            version = cast("str | None", migration.get("version"))
+            span = runtime.start_migration_span("downgrade", version=version)
+            runtime.increment_metric("migrations.downgrade.invocations")
 
-        if use_transaction:
-            try:
+        start_time = time.perf_counter()
+        execution_time = 0
+
+        try:
+            if use_transaction:
                 await driver.begin()
                 for sql_statement in downgrade_sql_list:
                     if sql_statement.strip():
                         await driver.execute_script(sql_statement)
-                execution_time = int((time.time() - start_time) * 1000)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
                 if on_success:
                     await on_success(execution_time)
                 await driver.commit()
-            except Exception:
+            else:
+                for sql_statement in downgrade_sql_list:
+                    if sql_statement.strip():
+                        await driver.execute_script(sql_statement)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
+                if on_success:
+                    await on_success(execution_time)
+        except Exception as exc:
+            if use_transaction:
                 await driver.rollback()
-                raise
-        else:
-            for sql_statement in downgrade_sql_list:
-                if sql_statement.strip():
-                    await driver.execute_script(sql_statement)
-            execution_time = int((time.time() - start_time) * 1000)
-            if on_success:
-                await on_success(execution_time)
+            if runtime is not None:
+                duration_ms = int((time.perf_counter() - start_time) * 1000)
+                runtime.increment_metric("migrations.downgrade.errors")
+                runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
+            raise
+
+        if runtime is not None:
+            runtime.increment_metric("migrations.downgrade.applied")
+            runtime.increment_metric("migrations.downgrade.duration_ms", float(execution_time))
+            runtime.end_migration_span(span, duration_ms=execution_time)
 
         return None, execution_time
 
@@ -818,6 +919,7 @@ def create_migration_runner(
     context: "MigrationContext | None",
     extension_configs: "dict[str, Any]",
     is_async: "Literal[False]" = False,
+    runtime: "ObservabilityRuntime | None" = None,
 ) -> SyncMigrationRunner: ...
 
 
@@ -828,6 +930,7 @@ def create_migration_runner(
     context: "MigrationContext | None",
     extension_configs: "dict[str, Any]",
     is_async: "Literal[True]",
+    runtime: "ObservabilityRuntime | None" = None,
 ) -> AsyncMigrationRunner: ...
 
 
@@ -837,6 +940,7 @@ def create_migration_runner(
     context: "MigrationContext | None",
     extension_configs: "dict[str, Any]",
     is_async: bool = False,
+    runtime: "ObservabilityRuntime | None" = None,
 ) -> "SyncMigrationRunner | AsyncMigrationRunner":
     """Factory function to create the appropriate migration runner.
 
@@ -846,10 +950,11 @@ def create_migration_runner(
         context: Migration context.
         extension_configs: Extension configurations.
         is_async: Whether to create async or sync runner.
+        runtime: Observability runtime shared with loaders and execution steps.
 
     Returns:
         Appropriate migration runner instance.
     """
     if is_async:
-        return AsyncMigrationRunner(migrations_path, extension_migrations, context, extension_configs)
-    return SyncMigrationRunner(migrations_path, extension_migrations, context, extension_configs)
+        return AsyncMigrationRunner(migrations_path, extension_migrations, context, extension_configs, runtime=runtime)
+    return SyncMigrationRunner(migrations_path, extension_migrations, context, extension_configs, runtime=runtime)
