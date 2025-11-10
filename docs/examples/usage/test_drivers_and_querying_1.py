@@ -3,11 +3,11 @@
 
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec import SQLSpec
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
-
 
 async def test_importable_1(postgres_service: PostgresService) -> None:
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
+
     # Typical driver usage
     spec = SQLSpec()
     db = spec.add_config(

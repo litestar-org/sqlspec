@@ -4,12 +4,12 @@
 from pytest_databases.docker.postgres import PostgresService
 
 
-def test_example_3_importable(postgres_service: PostgresService) -> None:
+def test_example_3_sync(postgres_service: PostgresService) -> None:
     from sqlspec import SQLSpec
     from sqlspec.adapters.psycopg import PsycopgSyncConfig
 
     spec = SQLSpec()
-    # Async version
+    # Sync version
     config = PsycopgSyncConfig(
         pool_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",

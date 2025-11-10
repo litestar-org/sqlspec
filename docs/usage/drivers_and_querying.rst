@@ -51,10 +51,11 @@ SQLSpec drivers follow a layered architecture:
 3. **Driver Layer**: Query execution and result handling
 4. **Session Layer**: Transaction management
 
-.. literalinclude:: /examples/test_drivers_and_querying_1.py
+.. literalinclude:: /examples/usage/test_drivers_and_querying_1.py
    :language: python
-   :lines: 15-29
+   :lines: 8-25
    :dedent: 2
+   :caption: `driver architecture`
 
 PostgreSQL Drivers
 ------------------
@@ -64,10 +65,11 @@ asyncpg (Recommended for Async)
 
 Async PostgreSQL driver with native connection pooling.
 
-.. literalinclude:: /examples/test_drivers_and_querying_2.py
+.. literalinclude:: /examples/usage/test_drivers_and_querying_2.py
    :language: python
-   :lines: 11-35
+   :lines: 8-39
    :dedent: 2
+   :caption: `asyncpg`
 
 **Features**:
 
@@ -82,15 +84,23 @@ psycopg (Sync/Async)
 
 Official PostgreSQL adapter with both sync and async support.
 
-.. literalinclude:: /examples/test_drivers_and_querying_3.py
-   :language: python
-   :lines: 8-32
-   :dedent: 2
+.. tab-set::
 
-.. literalinclude:: /examples/test_drivers_and_querying_4.py
-   :language: python
-   :lines: 10-12
-   :dedent: 2
+   .. tab-item:: Sync
+
+      .. literalinclude:: /examples/usage/test_drivers_and_querying_3.py
+         :language: python
+         :lines: 8-32
+         :dedent: 2
+         :caption: `psycopg sync`
+
+   .. tab-item:: Async
+
+      .. literalinclude:: /examples/usage/test_drivers_and_querying_4.py
+         :language: python
+         :lines: 8-34
+         :dedent: 2
+         :caption: `psycopg async`
 
 **Features**:
 
@@ -105,10 +115,11 @@ psqlpy (High Performance Async)
 
 Rust-based async PostgreSQL driver for maximum performance.
 
-.. literalinclude:: /examples/test_drivers_and_querying_5.py
+.. literalinclude:: /examples/usage/test_drivers_and_querying_5.py
    :language: python
-   :lines: 11-25
+   :lines: 11-29
    :dedent: 2
+   :caption: `psqlpy`
 
 **Features**:
 
@@ -124,15 +135,17 @@ sqlite3 (Synchronous)
 
 Python's built-in SQLite adapter.
 
-.. literalinclude:: /examples/test_drivers_and_querying_6.py
+.. literalinclude:: /examples/usage/test_drivers_and_querying_6.py
    :language: python
-   :lines: 9-27
+   :lines: 8-27
    :dedent: 2
+   :caption: `sqlite config`
 
-.. literalinclude:: /examples/test_drivers_and_querying_7.py
+.. literalinclude:: /examples/usage/test_drivers_and_querying_7.py
    :language: python
-   :lines: 8-9
+   :lines: 6-9
    :dedent: 2
+   :caption: `sqlite`
 
 **Features**:
 
@@ -146,10 +159,11 @@ aiosqlite (Asynchronous)
 
 Async wrapper around sqlite3.
 
-.. literalinclude:: /examples/test_drivers_and_querying_8.py
+.. literalinclude:: /examples/usage/test_drivers_and_querying_8.py
    :language: python
-   :lines: 7-25
+   :lines: 6-19
    :dedent: 2
+   :caption: `aiosqlite`
 
 **Features**:
 
@@ -165,10 +179,11 @@ asyncmy (Asynchronous)
 
 Pure Python async MySQL/MariaDB driver.
 
-.. literalinclude:: /examples/test_drivers_and_querying_9.py
+.. literalinclude:: /examples/usage/test_drivers_and_querying_9.py
    :language: python
-   :lines: 9-38
+   :lines: 8-37
    :dedent: 2
+   :caption: `asyncmy`
 
 **Features**:
 
@@ -185,10 +200,11 @@ DuckDB (Analytical Database)
 
 In-process analytical database optimized for OLAP workloads.
 
-.. literalinclude:: /examples/test_drivers_and_querying_10.py
+.. literalinclude:: /examples/usage/test_drivers_and_querying_10.py
    :language: python
-   :lines: 8-34
+   :lines: 8-32
    :dedent: 2
+   :caption: `duckdb`
 
 **Features**:
 
@@ -202,10 +218,11 @@ Oracle Database
 
 Oracle database support with python-oracledb.
 
-.. literalinclude:: /examples/test_drivers_and_querying_11.py
+.. literalinclude:: /examples/usage/test_drivers_and_querying_11.py
    :language: python
    :lines: 8-33
    :dedent: 2
+   :caption: `oracle`
 
 **Features**:
 
@@ -256,100 +273,67 @@ execute()
 
 Execute any SQL statement and return results.
 
-.. code-block:: python
-
-   # SELECT query
-   result = session.execute("SELECT * FROM users WHERE id = ?", 1)
-
-   # INSERT query
-   result = session.execute(
-       "INSERT INTO users (name, email) VALUES (?, ?)",
-       "Alice",
-       "alice@example.com"
-   )
-
-   # UPDATE query
-   result = session.execute(
-       "UPDATE users SET email = ? WHERE id = ?",
-       "newemail@example.com",
-       1
-   )
-   print(f"Updated {result.rows_affected} rows")
-
-   # DELETE query
-   result = session.execute("DELETE FROM users WHERE id = ?", 1)
+.. literalinclude:: /examples/usage/test_drivers_and_querying_13.py
+   :language: python
+   :lines: 9-28
+   :dedent: 2
+   :caption: `execute`
 
 execute_many()
 ^^^^^^^^^^^^^^
 
 Execute a statement with multiple parameter sets (batch insert/update).
 
-.. code-block:: python
+.. literalinclude:: /examples/usage/test_drivers_and_querying_14.py
+   :language: python
+   :lines: 6-27
+   :dedent: 2
+   :caption: `execute_many`
 
-   # Batch insert
-   session.execute_many(
-       "INSERT INTO users (name, email) VALUES (?, ?)",
-       [
-           ("Alice", "alice@example.com"),
-           ("Bob", "bob@example.com"),
-           ("Charlie", "charlie@example.com"),
-       ]
-   )
-
-   # Batch update
-   session.execute_many(
-       "UPDATE users SET status = ? WHERE id = ?",
-       [
-           ("active", 1),
-           ("inactive", 2),
-       ]
-   )
 
 select()
 ^^^^^^^^
 
 Execute a SELECT query and return all rows.
 
-.. code-block:: python
-
-   users = session.execute("SELECT * FROM users WHERE status = ?", "active")
-   # Returns list of dictionaries: [{"id": 1, "name": "Alice", ...}, ...]
+.. literalinclude:: /examples/usage/test_drivers_and_querying_14.py
+   :language: python
+   :lines: 28-30
+   :dedent: 4
+   :caption: `select`
 
 select_one()
 ^^^^^^^^^^^^
 
 Execute a SELECT query expecting exactly one result.
 
-.. code-block:: python
-
-   user = session.select_one("SELECT * FROM users WHERE id = ?", 1)
-   # Returns single dictionary: {"id": 1, "name": "Alice", ...}
-   # Raises NotFoundError if no results
-   # Raises MultipleResultsFoundError if multiple results
+.. literalinclude:: /examples/usage/test_drivers_and_querying_14.py
+   :language: python
+   :lines: 31-35
+   :dedent: 2
+   :caption: `select_one`
 
 select_one_or_none()
 ^^^^^^^^^^^^^^^^^^^^
 
 Execute a SELECT query returning one or no results.
 
-.. code-block:: python
-
-   user = session.select_one_or_none("SELECT * FROM users WHERE email = ?", "nobody@example.com")
-   # Returns dictionary or None
-   # Raises MultipleResultsFoundError if multiple results
+.. literalinclude:: /examples/usage/test_drivers_and_querying_14.py
+   :language: python
+   :lines: 36-38
+   :dedent: 2
+   :caption: `select_one_or_none`
 
 select_value()
 ^^^^^^^^^^^^^^
 
 Execute a SELECT query returning a single scalar value.
 
-.. code-block:: python
-
-   count = session.select_value("SELECT COUNT(*) FROM users")
-   # Returns: 42
-
-   latest_id = session.select_value("SELECT MAX(id) FROM users")
-   # Returns: 100
+.. literalinclude:: /examples/usage/test_drivers_and_querying_14.py
+   :language: python
+   :lines: 39-42
+   :dedent: 2
+   :caption: `select_value`
 
 Working with Results
 --------------------

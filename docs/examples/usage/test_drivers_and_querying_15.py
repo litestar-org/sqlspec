@@ -3,4 +3,4 @@
 
 
 def test_example_15_placeholder() -> None:
-    assert True
+    pass

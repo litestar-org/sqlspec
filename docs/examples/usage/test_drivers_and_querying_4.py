@@ -3,14 +3,32 @@
 
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.psycopg import PsycopgSyncConfig
 
+async def test_example_4_async(postgres_service: PostgresService) -> None:
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 
-def test_example_4_construct_config(postgres_service: PostgresService) -> None:
-    config = PsycopgSyncConfig(
+    spec = SQLSpec()
+    # Async version
+    config = PsycopgAsyncConfig(
         pool_config={
-            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "min_size": 5,
+            "max_size": 10,
         }
     )
 
-    assert config is not None
+    async with spec.provide_session(config) as session:
+        create_table_query = """
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100),
+            email VARCHAR(100) UNIQUE
+        );
+        """
+        await session.execute(create_table_query)
+        # Insert with RETURNING
+        await session.execute(
+            "INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id", "Alice", "alice@example.com"
+        )
+        await session.execute("SELECT * FROM users")

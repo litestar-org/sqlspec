@@ -3,11 +3,10 @@
 
 from pathlib import Path
 
-from sqlspec.adapters.duckdb import DuckDBConfig
-
 
 def test_example_10_duckdb_config() -> None:
     from sqlspec import SQLSpec
+    from sqlspec.adapters.duckdb import DuckDBConfig
 
     spec = SQLSpec()
     # In-memory

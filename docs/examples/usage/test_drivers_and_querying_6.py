@@ -2,10 +2,11 @@
 """Minimal smoke test for drivers_and_querying example 6."""
 
 from sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig
 
 
 def test_example_6_sqlite_config() -> None:
+    from sqlspec.adapters.sqlite import SqliteConfig
+
     spec = SQLSpec()
 
     config = SqliteConfig(pool_config={"database": "myapp.db", "timeout": 5.0, "check_same_thread": False})
