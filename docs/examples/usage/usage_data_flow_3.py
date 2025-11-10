@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+__all__ = ("test_sql_file_loader",)
+
 
 def test_sql_file_loader() -> None:
     """Test loading SQL from files."""
@@ -16,4 +18,3 @@ def test_sql_file_loader() -> None:
 
     # Verify SQL object was created
     assert sql is not None
-

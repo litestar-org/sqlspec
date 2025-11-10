@@ -1,25 +1,27 @@
 """Example 13: Schema Mapping."""
 
+__all__ = ("test_schema_mapping",)
+
 
 def test_schema_mapping() -> None:
     """Test mapping results to typed objects."""
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
 
     # start-example
     from pydantic import BaseModel
-    from typing import Optional
+
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.sqlite import SqliteConfig
 
     class User(BaseModel):
         id: int
         name: str
         email: str
-        is_active: Optional[bool] = True
+        is_active: bool | None = True
 
-    spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db_manager = SQLSpec()
+    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
-    with spec.provide_session(config) as session:
+    with db_manager.provide_session(db) as session:
         # Create test table
         session.execute("CREATE TABLE users (id INTEGER, name TEXT, email TEXT, is_active INTEGER)")
         session.execute("INSERT INTO users VALUES (1, 'Alice', 'alice@example.com', 1)")
@@ -39,4 +41,3 @@ def test_schema_mapping() -> None:
     assert len(users) == 1
     assert isinstance(user, User)
     assert user.id == 1
-

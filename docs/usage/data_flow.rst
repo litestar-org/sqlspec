@@ -60,7 +60,7 @@ The execution flow begins when you create a SQL object. SQLSpec accepts multiple
 
 **Direct SQL Creation**
 
-.. literalinclude:: /examples/usage/test_data_flow_1.py
+.. literalinclude:: /examples/usage/usage_data_flow_1.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -68,7 +68,7 @@ The execution flow begins when you create a SQL object. SQLSpec accepts multiple
 
 **Using the Query Builder**
 
-.. literalinclude:: /examples/usage/test_data_flow_2.py
+.. literalinclude:: /examples/usage/usage_data_flow_2.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -77,7 +77,7 @@ The execution flow begins when you create a SQL object. SQLSpec accepts multiple
 
 **From SQL Files**
 
-.. literalinclude:: /examples/usage/test_data_flow_3.py
+.. literalinclude:: /examples/usage/usage_data_flow_3.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -99,7 +99,7 @@ When the SQL object is compiled for execution, it passes through a sophisticated
 
 The first step extracts and preserves parameter information before any SQL modifications:
 
-.. literalinclude:: /examples/usage/test_data_flow_4.py
+.. literalinclude:: /examples/usage/usage_data_flow_4.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -111,7 +111,7 @@ This step uses ``ParameterValidator`` to ensure parameters are properly formatte
 
 The SQL string is parsed into an Abstract Syntax Tree (AST) using SQLGlot:
 
-.. literalinclude:: /examples/usage/test_data_flow_5.py
+.. literalinclude:: /examples/usage/usage_data_flow_5.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -132,7 +132,7 @@ Instead of treating SQL as plain text, SQLSpec uses the AST to:
 
 The AST is compiled into the target SQL dialect:
 
-.. literalinclude:: /examples/usage/test_data_flow_6.py
+.. literalinclude:: /examples/usage/usage_data_flow_6.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -145,7 +145,7 @@ The AST is compiled into the target SQL dialect:
 
 Parameters are converted to the appropriate style for the target database:
 
-.. literalinclude:: /examples/usage/test_data_flow_7.py
+.. literalinclude:: /examples/usage/usage_data_flow_7.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -157,7 +157,7 @@ This ensures compatibility across different database drivers.
 
 The compiled SQL and processed parameters are sent to the database:
 
-.. literalinclude:: /examples/usage/test_data_flow_8.py
+.. literalinclude:: /examples/usage/usage_data_flow_8.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -170,7 +170,7 @@ Stage 3: Driver Execution
 
 Once the SQL is compiled, it's sent to the database-specific driver for execution:
 
-.. literalinclude:: /examples/usage/test_data_flow_9.py
+.. literalinclude:: /examples/usage/usage_data_flow_9.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -192,7 +192,7 @@ SQLSpec drivers use the Template Method pattern for consistent execution:
 
 **Example: SQLite Driver Execution**
 
-.. literalinclude:: /examples/usage/test_data_flow_10.py
+.. literalinclude:: /examples/usage/usage_data_flow_10.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -207,7 +207,7 @@ After database execution, raw results are transformed into typed Python objects.
 
 All query results are wrapped in a ``SQLResult`` object:
 
-.. literalinclude:: /examples/usage/test_data_flow_11.py
+.. literalinclude:: /examples/usage/usage_data_flow_11.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -215,7 +215,7 @@ All query results are wrapped in a ``SQLResult`` object:
 
 **Convenience Methods**
 
-.. literalinclude:: /examples/usage/test_data_flow_12.py
+.. literalinclude:: /examples/usage/usage_data_flow_12.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -225,7 +225,7 @@ All query results are wrapped in a ``SQLResult`` object:
 
 SQLSpec can automatically map results to typed objects:
 
-.. literalinclude:: /examples/usage/test_data_flow_13.py
+.. literalinclude:: /examples/usage/usage_data_flow_13.py
    :language: python
    :start-after: # start-example
    :end-before: # end-example
@@ -249,7 +249,7 @@ Multi-Tier Caching
 
 SQLSpec implements caching at multiple levels:
 
-.. literalinclude:: ../examples/usage/test_data_flow_14.py
+.. literalinclude:: ../examples/usage/usage_data_flow_14.py
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 2
@@ -278,7 +278,7 @@ Configuration-Driven Processing
 
 ``StatementConfig`` controls pipeline behavior:
 
-.. literalinclude:: ../examples/usage/test_data_flow_15.py
+.. literalinclude:: ../examples/usage/usage_data_flow_15.py
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 2

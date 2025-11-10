@@ -1,5 +1,7 @@
 """Example 2: Using the Query Builder."""
 
+__all__ = ("test_query_builder",)
+
 
 def test_query_builder() -> None:
     """Test building SQL programmatically."""
@@ -12,4 +14,3 @@ def test_query_builder() -> None:
 
     # Verify query object was created
     assert query is not None
-

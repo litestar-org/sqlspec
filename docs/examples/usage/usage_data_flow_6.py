@@ -1,5 +1,7 @@
 """Example 6: Compilation to target dialect."""
 
+__all__ = ("test_compilation",)
+
 
 def test_compilation() -> None:
     """Test compiling AST to target SQL dialect."""
@@ -14,4 +16,3 @@ def test_compilation() -> None:
     # Verify compilation produced a string
     assert isinstance(compiled_sql, str)
     assert "users" in compiled_sql
-

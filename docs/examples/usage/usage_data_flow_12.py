@@ -1,15 +1,17 @@
 """Example 12: Convenience Methods."""
 
+__all__ = ("test_convenience_methods",)
+
 
 def test_convenience_methods() -> None:
     """Test SQLResult convenience methods."""
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db_manager = SQLSpec()
+    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
-    with spec.provide_session(config) as session:
+    with db_manager.provide_session(db) as session:
         # Create a test table
         session.execute("CREATE TABLE test (id INTEGER, name TEXT)")
         session.execute("INSERT INTO test VALUES (1, 'Alice')")
@@ -31,4 +33,3 @@ def test_convenience_methods() -> None:
         # Verify results
         assert user is not None
         assert count == 1
-
