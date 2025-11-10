@@ -4,6 +4,9 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.loader import SQLFileLoader
 
+__all__ = ("test_index_3",)
+
+
 QUERIES_PATH = Path(__file__).parent.parent / "queries" / "users.sql"
 
 

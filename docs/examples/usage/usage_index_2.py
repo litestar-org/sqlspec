@@ -1,6 +1,8 @@
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.sqlite import SqliteConfig
 
+__all__ = ("test_index_2",)
+
 
 def test_index_2() -> None:
     db_manager = SQLSpec()
