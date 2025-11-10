@@ -570,6 +570,15 @@ duckdb
            "SELECT * FROM 'https://example.com/data.parquet' LIMIT 10"
        )
 
+**Community Extensions**:
+
+DuckDBConfig accepts the runtime flags DuckDB expects for community/unsigned extensions via
+``pool_config`` (for example ``allow_community_extensions=True``,
+``allow_unsigned_extensions=True``, ``enable_external_access=True``). SQLSpec applies those
+options with ``SET`` statements immediately after establishing each connection, so even older
+DuckDB builds that do not recognize the options during ``duckdb.connect()`` will still enable the
+required permissions before extensions are installed.
+
 **API Reference**:
 
 .. autoclass:: DuckDBConfig
