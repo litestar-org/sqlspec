@@ -60,35 +60,28 @@ The execution flow begins when you create a SQL object. SQLSpec accepts multiple
 
 **Direct SQL Creation**
 
-.. code-block:: python
-
-   from sqlspec.core import SQL
-
-   # Raw SQL string with positional parameters
-   sql = SQL("SELECT * FROM users WHERE id = ?", 1)
-
-   # Named parameters
-   sql = SQL("SELECT * FROM users WHERE email = :email", email="user@example.com")
+.. literalinclude:: /examples/usage/usage_data_flow_1.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 **Using the Query Builder**
 
-.. code-block:: python
-
-   from sqlspec import sql
-
-   # Build SQL programmatically
-   query = sql.select("id", "name", "email").from_("users").where("status = ?", "active")
+.. literalinclude:: /examples/usage/usage_data_flow_2.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 
 **From SQL Files**
 
-.. code-block:: python
-
-   from sqlspec.loader import SQLFileLoader
-
-   loader = SQLFileLoader()
-   loader.load_sql("queries/users.sql")
-   sql = loader.get_sql("get_user_by_id", user_id=123)
+.. literalinclude:: /examples/usage/usage_data_flow_3.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 During initialization, the SQL object:
 
@@ -106,15 +99,11 @@ When the SQL object is compiled for execution, it passes through a sophisticated
 
 The first step extracts and preserves parameter information before any SQL modifications:
 
-.. code-block:: python
-
-   # SQLSpec identifies parameter placeholders
-   # Input:  "SELECT * FROM users WHERE id = ? AND status = ?"
-   # Params: [1, 'active']
-   #
-   # Result: Positional parameter mapping created
-   #         Position 0 → value: 1
-   #         Position 1 → value: 'active'
+.. literalinclude:: /examples/usage/usage_data_flow_4.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 This step uses ``ParameterValidator`` to ensure parameters are properly formatted and positions are tracked.
 
@@ -122,15 +111,11 @@ This step uses ``ParameterValidator`` to ensure parameters are properly formatte
 
 The SQL string is parsed into an Abstract Syntax Tree (AST) using SQLGlot:
 
-.. code-block:: python
-
-   import sqlglot
-
-   # Parse SQL into structured AST
-   expression = sqlglot.parse_one(
-       "SELECT * FROM users WHERE id = ?",
-       dialect="sqlite"
-   )
+.. literalinclude:: /examples/usage/usage_data_flow_5.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 The AST represents your query as a tree structure that can be analyzed and modified programmatically. This is crucial for the validation and transformation steps.
 
@@ -147,13 +132,11 @@ Instead of treating SQL as plain text, SQLSpec uses the AST to:
 
 The AST is compiled into the target SQL dialect:
 
-.. code-block:: python
-
-   import sqlglot
-
-   # Compile AST to target dialect
-   compiled_sql = expression.sql(dialect="postgres")
-   # Result: "SELECT * FROM users WHERE id = $1"
+.. literalinclude:: /examples/usage/usage_data_flow_6.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 
 
@@ -162,11 +145,11 @@ The AST is compiled into the target SQL dialect:
 
 Parameters are converted to the appropriate style for the target database:
 
-.. code-block:: python
-
-   # Input parameters: [1, 'active']
-   # Target style: PostgreSQL numeric ($1, $2)
-   # Result: Parameters ready for execution
+.. literalinclude:: /examples/usage/usage_data_flow_7.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 This ensures compatibility across different database drivers.
 
@@ -174,11 +157,11 @@ This ensures compatibility across different database drivers.
 
 The compiled SQL and processed parameters are sent to the database:
 
-.. code-block:: python
-
-   # Driver executes compiled SQL with parameters
-   cursor.execute(compiled_sql, parameters)
-   results = cursor.fetchall()
+.. literalinclude:: /examples/usage/usage_data_flow_8.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 The driver handles database-specific execution patterns and result retrieval.
 
@@ -187,11 +170,11 @@ Stage 3: Driver Execution
 
 Once the SQL is compiled, it's sent to the database-specific driver for execution:
 
-.. code-block:: python
-
-   # Driver receives compiled SQL and parameters
-   with spec.provide_session(config) as session:
-       result = session.execute(compiled_sql, prepared_params)
+.. literalinclude:: /examples/usage/usage_data_flow_9.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 **Template Method Pattern**
 
@@ -209,18 +192,11 @@ SQLSpec drivers use the Template Method pattern for consistent execution:
 
 **Example: SQLite Driver Execution**
 
-.. code-block:: python
-
-   class SqliteDriver(SyncDriverAdapterBase):
-       def _execute_statement(self, cursor, statement):
-           sql, params = self._get_compiled_sql(statement)
-           cursor.execute(sql, params or ())
-           return self.create_execution_result(cursor)
-
-       def _execute_many(self, cursor, statement):
-           sql, params = self._get_compiled_sql(statement)
-           cursor.executemany(sql, params)
-           return self.create_execution_result(cursor)
+.. literalinclude:: /examples/usage/usage_data_flow_10.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 Stage 4: Result Handling
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -231,53 +207,29 @@ After database execution, raw results are transformed into typed Python objects.
 
 All query results are wrapped in a ``SQLResult`` object:
 
-.. code-block:: python
-
-   result = session.execute("SELECT * FROM users")
-
-   # Access result data
-   result.data              # List of dictionaries
-   result.rows_affected     # Number of rows modified (INSERT/UPDATE/DELETE)
-   result.column_names      # Column names for SELECT
-   result.operation_type    # "SELECT", "INSERT", "UPDATE", "DELETE", "SCRIPT"
+.. literalinclude:: /examples/usage/usage_data_flow_11.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 **Convenience Methods**
 
-.. code-block:: python
-
-   # Get exactly one row (raises if not exactly one)
-   user = result.one()
-
-   # Get one or None
-   user = result.one_or_none()
-
-   # Get scalar value (first column of first row)
-   count = result.scalar()
+.. literalinclude:: /examples/usage/usage_data_flow_12.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 **Schema Mapping**
 
 SQLSpec can automatically map results to typed objects:
 
-.. code-block:: python
-
-   from pydantic import BaseModel
-   from typing import Optional
-
-   class User(BaseModel):
-       id: int
-       name: str
-       email: str
-       is_active: Optional[bool] = True
-
-   # Execute query
-   result = session.execute("SELECT id, name, email, is_active FROM users")
-
-   # Map results to typed User instances
-   users: list[User] = result.all(schema_type=User)
-
-   # Or get single typed user
-   single_result = session.execute("SELECT id, name, email, is_active FROM users WHERE id = ?", 1)
-   user: User = single_result.one(schema_type=User)  # Type-safe!
+.. literalinclude:: /examples/usage/usage_data_flow_13.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 **Supported Schema Types**
 
@@ -297,14 +249,10 @@ Multi-Tier Caching
 
 SQLSpec implements caching at multiple levels:
 
-.. code-block:: python
-
-   # Cache types and their purposes:
-   sql_cache: dict[str, str]              # Compiled SQL strings
-   optimized_cache: dict[str, Expression] # Post-optimization AST
-   builder_cache: dict[str, bytes]        # QueryBuilder serialization
-   file_cache: dict[str, CachedSQLFile]   # File loading with checksums
-   analysis_cache: dict[str, Any]         # Pipeline step results
+.. literalinclude:: ../examples/usage/usage_data_flow_14.py
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 **Cache Benefits**
 
@@ -330,22 +278,10 @@ Configuration-Driven Processing
 
 ``StatementConfig`` controls pipeline behavior:
 
-.. code-block:: python
-
-   from sqlspec.core import StatementConfig
-   from sqlspec.core import ParameterStyle, ParameterStyleConfig
-
-   config = StatementConfig(
-       dialect="postgres",
-       enable_parsing=True,      # AST generation
-       enable_validation=True,   # Security/performance checks
-       enable_transformations=True,  # AST transformations
-       enable_caching=True,      # Multi-tier caching
-       parameter_config=ParameterStyleConfig(
-           default_parameter_style=ParameterStyle.NUMERIC,
-           has_native_list_expansion=False,
-       )
-   )
+.. literalinclude:: ../examples/usage/usage_data_flow_15.py
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 Disable features you don't need for maximum performance.
 
