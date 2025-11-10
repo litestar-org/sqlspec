@@ -3,7 +3,11 @@
 This module provides the main command interface for database migrations.
 """
 
-from typing import TYPE_CHECKING, Any, cast
+import functools
+import inspect
+import time
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from rich.console import Console
 from rich.table import Table
@@ -27,6 +31,127 @@ __all__ = ("AsyncMigrationCommands", "SyncMigrationCommands", "create_migration_
 
 logger = get_logger("migrations.commands")
 console = Console()
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+MetadataBuilder = Callable[[dict[str, Any]], tuple[str | None, dict[str, Any]]]
+
+
+def _bind_arguments(signature: inspect.Signature, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    bound = signature.bind_partial(*args, **kwargs)
+    arguments = dict(bound.arguments)
+    arguments.pop("self", None)
+    return arguments
+
+
+def _with_command_span(
+    event: str, metadata_fn: "MetadataBuilder | None" = None, *, dry_run_param: str | None = "dry_run"
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Attach span lifecycle and command metric management to command methods."""
+
+    metric_prefix = f"migrations.command.{event}"
+
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        signature = inspect.signature(func)
+
+        def _prepare(self: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, bool, Any]:
+            runtime = getattr(self, "_runtime", None)
+            metadata_args = _bind_arguments(signature, args, kwargs)
+            dry_run = False
+            if dry_run_param is not None:
+                dry_run = bool(metadata_args.get(dry_run_param, False))
+            metadata: dict[str, Any] | None = None
+            version: str | None = None
+            span = None
+            if runtime is not None:
+                runtime.increment_metric(f"{metric_prefix}.invocations")
+                if dry_run_param is not None and dry_run:
+                    runtime.increment_metric(f"{metric_prefix}.dry_run")
+                if metadata_fn is not None:
+                    version, metadata = metadata_fn(metadata_args)
+                span = runtime.start_migration_span(f"command.{event}", version=version, metadata=metadata)
+            return runtime, dry_run, span
+
+        def _finalize(
+            self: Any,
+            runtime: Any,
+            span: Any,
+            start: float,
+            error: "Exception | None",
+            recorded_error: bool,
+            dry_run: bool,
+        ) -> None:
+            command_error = getattr(self, "_last_command_error", None)
+            setattr(self, "_last_command_error", None)
+            command_metrics = getattr(self, "_last_command_metrics", None)
+            setattr(self, "_last_command_metrics", None)
+            if runtime is None:
+                return
+            if command_error is not None and not recorded_error:
+                runtime.increment_metric(f"{metric_prefix}.errors")
+            if not dry_run and command_metrics:
+                for metric, value in command_metrics.items():
+                    runtime.increment_metric(f"{metric_prefix}.{metric}", value)
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            runtime.end_migration_span(span, duration_ms=duration_ms, error=error or command_error)
+
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                self = args[0]
+                runtime, dry_run, span = _prepare(self, args, kwargs)
+                start = time.perf_counter()
+                error: Exception | None = None
+                error_recorded = False
+                try:
+                    async_func = cast("Callable[P, Awaitable[R]]", func)
+                    return await async_func(*args, **kwargs)
+                except Exception as exc:  # pragma: no cover - passthrough
+                    error = exc
+                    if runtime is not None:
+                        runtime.increment_metric(f"{metric_prefix}.errors")
+                        error_recorded = True
+                    raise
+                finally:
+                    _finalize(self, runtime, span, start, error, error_recorded, dry_run)
+
+            return cast("Callable[P, R]", async_wrapper)
+
+        @functools.wraps(func)
+        def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            self = args[0]
+            runtime, dry_run, span = _prepare(self, args, kwargs)
+            start = time.perf_counter()
+            error: Exception | None = None
+            error_recorded = False
+            try:
+                return func(*args, **kwargs)
+            except Exception as exc:  # pragma: no cover - passthrough
+                error = exc
+                if runtime is not None:
+                    runtime.increment_metric(f"{metric_prefix}.errors")
+                    error_recorded = True
+                raise
+            finally:
+                _finalize(self, runtime, span, start, error, error_recorded, dry_run)
+
+        return cast("Callable[P, R]", sync_wrapper)
+
+    return decorator
+
+
+def _upgrade_metadata(args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    revision = cast("str | None", args.get("revision"))
+    metadata = {"dry_run": str(args.get("dry_run", False)).lower()}
+    return revision, metadata
+
+
+def _downgrade_metadata(args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    revision = cast("str | None", args.get("revision"))
+    metadata = {"dry_run": str(args.get("dry_run", False)).lower()}
+    return revision, metadata
 
 
 class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
@@ -46,7 +171,11 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         context.extension_config = self.extension_configs
 
         self.runner = SyncMigrationRunner(
-            self.migrations_path, self._discover_extension_migrations(), context, self.extension_configs
+            self.migrations_path,
+            self._discover_extension_migrations(),
+            context,
+            self.extension_configs,
+            runtime=self._runtime,
         )
 
     def init(self, directory: str, package: bool = True) -> None:
@@ -193,6 +322,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
         return updated_count
 
+    @_with_command_span("upgrade", metadata_fn=_upgrade_metadata)
     def upgrade(
         self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
     ) -> None:
@@ -210,6 +340,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 Defaults to True. Can be disabled via --no-auto-sync flag.
             dry_run: If True, show what would be done without making changes.
         """
+        runtime = self._runtime
+        applied_count = 0
+
         if dry_run:
             console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
 
@@ -217,8 +350,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             self.tracker.ensure_tracking_table(driver)
 
             if auto_sync:
-                migration_config = getattr(self.config, "migration_config", {}) or {}
-                config_auto_sync = migration_config.get("auto_sync", True)
+                config_auto_sync = self.config.migration_config.get("auto_sync", True)
                 if config_auto_sync:
                     self._synchronize_version_records(driver)
 
@@ -227,6 +359,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             applied_set = set(applied_versions)
 
             all_migrations = self.runner.get_migration_files()
+            if runtime is not None:
+                runtime.increment_metric("migrations.command.upgrade.available", float(len(all_migrations)))
+
             pending = []
             for version, file_path in all_migrations:
                 if version not in applied_set:
@@ -239,6 +374,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         parsed_revision = parse_version(revision)
                         if parsed_version <= parsed_revision:
                             pending.append((version, file_path))
+
+            if runtime is not None:
+                runtime.increment_metric("migrations.command.upgrade.pending", float(len(pending)))
 
             if not pending:
                 if not all_migrations:
@@ -275,17 +413,22 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         )
 
                     _, execution_time = self.runner.execute_upgrade(driver, migration, on_success=record_version)
+                    applied_count += 1
                     console.print(f"[green]✓ Applied in {execution_time}ms[/]")
 
-                except Exception as e:
+                except Exception as exc:
                     use_txn = self.runner.should_use_transaction(migration, self.config)
                     rollback_msg = " (transaction rolled back)" if use_txn else ""
-                    console.print(f"[red]✗ Failed{rollback_msg}: {e}[/]")
+                    console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
+                    self._last_command_error = exc
                     return
 
-            if dry_run:
-                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+        if dry_run:
+            console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+        elif applied_count:
+            self._record_command_metric("applied", float(applied_count))
 
+    @_with_command_span("downgrade", metadata_fn=_downgrade_metadata)
     def downgrade(self, revision: str = "-1", *, dry_run: bool = False) -> None:
         """Downgrade to a target revision.
 
@@ -293,15 +436,21 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             revision: Target revision or "-1" for one step back.
             dry_run: If True, show what would be done without making changes.
         """
+        runtime = self._runtime
+        reverted_count = 0
+
         if dry_run:
             console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
 
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
             applied = self.tracker.get_applied_migrations(driver)
+            if runtime is not None:
+                runtime.increment_metric("migrations.command.downgrade.available", float(len(applied)))
             if not applied:
                 console.print("[yellow]No migrations to downgrade[/]")
                 return
+
             to_revert = []
             if revision == "-1":
                 to_revert = [applied[-1]]
@@ -316,6 +465,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     if parsed_migration_version > parsed_revision:
                         to_revert.append(migration)
 
+            if runtime is not None:
+                runtime.increment_metric("migrations.command.downgrade.pending", float(len(to_revert)))
+
             if not to_revert:
                 console.print("[yellow]Nothing to downgrade[/]")
                 return
@@ -326,6 +478,8 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 version = migration_record["version_num"]
                 if version not in all_files:
                     console.print(f"[red]Migration file not found for {version}[/]")
+                    if runtime is not None:
+                        runtime.increment_metric("migrations.command.downgrade.missing_files")
                     continue
                 migration = self.runner.load_migration(all_files[version], version)
 
@@ -342,15 +496,19 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         self.tracker.remove_migration(driver, version)
 
                     _, execution_time = self.runner.execute_downgrade(driver, migration, on_success=remove_version)
+                    reverted_count += 1
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
-                except Exception as e:
+                except Exception as exc:
                     use_txn = self.runner.should_use_transaction(migration, self.config)
                     rollback_msg = " (transaction rolled back)" if use_txn else ""
-                    console.print(f"[red]✗ Failed{rollback_msg}: {e}[/]")
+                    console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
+                    self._last_command_error = exc
                     return
 
-            if dry_run:
-                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+        if dry_run:
+            console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+        elif reverted_count:
+            self._record_command_metric("applied", float(reverted_count))
 
     def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
@@ -487,7 +645,11 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         context.extension_config = self.extension_configs
 
         self.runner = AsyncMigrationRunner(
-            self.migrations_path, self._discover_extension_migrations(), context, self.extension_configs
+            self.migrations_path,
+            self._discover_extension_migrations(),
+            context,
+            self.extension_configs,
+            runtime=self._runtime,
         )
 
     async def init(self, directory: str, package: bool = True) -> None:
@@ -634,6 +796,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
         return updated_count
 
+    @_with_command_span("upgrade", metadata_fn=_upgrade_metadata)
     async def upgrade(
         self, revision: str = "head", allow_missing: bool = False, auto_sync: bool = True, dry_run: bool = False
     ) -> None:
@@ -651,6 +814,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 Defaults to True. Can be disabled via --no-auto-sync flag.
             dry_run: If True, show what would be done without making changes.
         """
+        runtime = self._runtime
+        applied_count = 0
+
         if dry_run:
             console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
 
@@ -668,6 +834,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             applied_set = set(applied_versions)
 
             all_migrations = await self.runner.get_migration_files()
+            if runtime is not None:
+                runtime.increment_metric("migrations.command.upgrade.available", float(len(all_migrations)))
+
             pending = []
             for version, file_path in all_migrations:
                 if version not in applied_set:
@@ -680,6 +849,10 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         parsed_revision = parse_version(revision)
                         if parsed_version <= parsed_revision:
                             pending.append((version, file_path))
+
+            if runtime is not None:
+                runtime.increment_metric("migrations.command.upgrade.pending", float(len(pending)))
+
             if not pending:
                 if not all_migrations:
                     console.print(
@@ -714,16 +887,21 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         )
 
                     _, execution_time = await self.runner.execute_upgrade(driver, migration, on_success=record_version)
+                    applied_count += 1
                     console.print(f"[green]✓ Applied in {execution_time}ms[/]")
-                except Exception as e:
+                except Exception as exc:
                     use_txn = self.runner.should_use_transaction(migration, self.config)
                     rollback_msg = " (transaction rolled back)" if use_txn else ""
-                    console.print(f"[red]✗ Failed{rollback_msg}: {e}[/]")
+                    console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
+                    self._last_command_error = exc
                     return
 
-            if dry_run:
-                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+        if dry_run:
+            console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+        elif applied_count:
+            self._record_command_metric("applied", float(applied_count))
 
+    @_with_command_span("downgrade", metadata_fn=_downgrade_metadata)
     async def downgrade(self, revision: str = "-1", *, dry_run: bool = False) -> None:
         """Downgrade to a target revision.
 
@@ -731,6 +909,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             revision: Target revision or "-1" for one step back.
             dry_run: If True, show what would be done without making changes.
         """
+        runtime = self._runtime
+        reverted_count = 0
+
         if dry_run:
             console.print("[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n")
 
@@ -738,6 +919,8 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             await self.tracker.ensure_tracking_table(driver)
 
             applied = await self.tracker.get_applied_migrations(driver)
+            if runtime is not None:
+                runtime.increment_metric("migrations.command.downgrade.available", float(len(applied)))
             if not applied:
                 console.print("[yellow]No migrations to downgrade[/]")
                 return
@@ -754,6 +937,10 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     parsed_migration_version = parse_version(migration["version_num"])
                     if parsed_migration_version > parsed_revision:
                         to_revert.append(migration)
+
+            if runtime is not None:
+                runtime.increment_metric("migrations.command.downgrade.pending", float(len(to_revert)))
+
             if not to_revert:
                 console.print("[yellow]Nothing to downgrade[/]")
                 return
@@ -764,6 +951,8 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 version = migration_record["version_num"]
                 if version not in all_files:
                     console.print(f"[red]Migration file not found for {version}[/]")
+                    if runtime is not None:
+                        runtime.increment_metric("migrations.command.downgrade.missing_files")
                     continue
 
                 migration = await self.runner.load_migration(all_files[version], version)
@@ -783,15 +972,19 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     _, execution_time = await self.runner.execute_downgrade(
                         driver, migration, on_success=remove_version
                     )
+                    reverted_count += 1
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
-                except Exception as e:
+                except Exception as exc:
                     use_txn = self.runner.should_use_transaction(migration, self.config)
                     rollback_msg = " (transaction rolled back)" if use_txn else ""
-                    console.print(f"[red]✗ Failed{rollback_msg}: {e}[/]")
+                    console.print(f"[red]✗ Failed{rollback_msg}: {exc}[/]")
+                    self._last_command_error = exc
                     return
 
-            if dry_run:
-                console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+        if dry_run:
+            console.print("\n[bold yellow]Dry run complete.[/] No changes were made to the database.")
+        elif reverted_count:
+            self._record_command_metric("applied", float(reverted_count))
 
     async def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.

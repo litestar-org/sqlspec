@@ -95,7 +95,7 @@ def test_parse_invalid_version() -> None:
     with pytest.raises(ValueError, match="Invalid migration version format"):
         parse_version("abc")
 
-    with pytest.raises(ValueError, match="Invalid migration version format"):
+    with pytest.raises(ValueError, match="Invalid migration version"):
         parse_version("")
 
     with pytest.raises(ValueError, match="Invalid migration version format"):

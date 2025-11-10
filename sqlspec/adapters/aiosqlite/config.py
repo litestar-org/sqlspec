@@ -20,13 +20,14 @@ from sqlspec.adapters.aiosqlite.pool import (
     AiosqlitePoolConnection,
 )
 from sqlspec.adapters.sqlite._type_handlers import register_type_handlers
-from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
+from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
     from sqlspec.core import StatementConfig
+    from sqlspec.observability import ObservabilityConfig
 
 __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteDriverFeatures", "AiosqlitePoolParams")
 
@@ -94,7 +95,8 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         statement_config: "StatementConfig | None" = None,
         driver_features: "AiosqliteDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize AioSQLite configuration.
 
@@ -106,6 +108,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             driver_features: Optional driver feature configuration.
             bind_key: Optional unique identifier for this configuration.
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
         config_dict = dict(pool_config) if pool_config else {}
 
@@ -142,6 +145,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
+            observability_config=observability_config,
         )
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":
@@ -206,11 +210,12 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             An AiosqliteDriver instance.
         """
         async with self.provide_connection(*_args, **_kwargs) as connection:
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=connection,
                 statement_config=statement_config or self.statement_config,
                 driver_features=self.driver_features,
             )
+            yield self._prepare_driver(driver)
 
     async def _create_pool(self) -> AiosqliteConnectionPool:
         """Create the connection pool instance.

@@ -296,6 +296,18 @@ Litestar Plugin Configuration
    :lines: 2-26
    :dedent: 2
 
+Telemetry Snapshot
+~~~~~~~~~~~~~~~~~~
+
+Call ``SQLSpec.telemetry_snapshot()`` to inspect lifecycle counters, serializer metrics, and recent storage jobs:
+
+.. code-block:: python
+
+   snapshot = spec.telemetry_snapshot()
+   print(snapshot["storage_bridge.bytes_written"])
+   for job in snapshot.get("storage_bridge.recent_jobs", []):
+       print(job["destination"], job.get("correlation_id"))
+
 Environment-Based Configuration
 -------------------------------
 

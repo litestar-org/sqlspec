@@ -568,6 +568,9 @@ except ImportError:
         ) -> Tracer:
             return Tracer()  # type: ignore[abstract] # pragma: no cover
 
+        def get_tracer_provider(self) -> Any:  # pragma: no cover
+            return None
+
         TracerProvider = type(None)  # Shim for TracerProvider if needed elsewhere
         StatusCode = type(None)  # Shim for StatusCode
         Status = type(None)  # Shim for Status
@@ -600,6 +603,8 @@ except ImportError:
             unit: str = "",
             registry: Any = None,
             ejemplar_fn: Any = None,
+            buckets: Any = None,
+            **_: Any,
         ) -> None:
             return None
 

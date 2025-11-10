@@ -15,7 +15,7 @@ from sqlspec.adapters.psqlpy.driver import (
     PsqlpyExceptionHandler,
     build_psqlpy_statement_config,
 )
-from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
+from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core import StatementConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import to_json
@@ -119,7 +119,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         statement_config: StatementConfig | None = None,
         driver_features: "PsqlpyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
     ) -> None:
         """Initialize Psqlpy configuration.
 
@@ -236,11 +236,12 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             A PsqlpyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=conn,
                 statement_config=statement_config or self.statement_config,
                 driver_features=self.driver_features,
             )
+            yield self._prepare_driver(driver)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
         """Provide async pool instance.

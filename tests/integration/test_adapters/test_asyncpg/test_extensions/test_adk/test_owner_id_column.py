@@ -1,13 +1,14 @@
 """Tests for AsyncPG ADK store owner_id_column support."""
 
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, cast
 
 import asyncpg
 import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
+from sqlspec.config import ADKConfig, ExtensionConfigs
 
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncpg, pytest.mark.integration]
 
@@ -19,11 +20,10 @@ def _make_config_with_owner_id(
     events_table: str = "adk_events",
 ) -> AsyncpgConfig:
     """Helper to create config with ADK extension config."""
-    extension_config: dict[str, dict[str, Any]] = {
-        "adk": {"session_table": session_table, "events_table": events_table}
-    }
+    extension_config = cast("ExtensionConfigs", {"adk": {"session_table": session_table, "events_table": events_table}})
+    adk_settings = cast("ADKConfig", extension_config["adk"])
     if owner_id_column is not None:
-        extension_config["adk"]["owner_id_column"] = owner_id_column
+        adk_settings["owner_id_column"] = owner_id_column
 
     return AsyncpgConfig(
         pool_config={

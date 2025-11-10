@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
+from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQLResult
+from sqlspec.observability import ObservabilityConfig
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -178,6 +182,44 @@ async def test_config_with_kwargs_override(tmp_path: Path) -> None:
 
     finally:
         await config.close_pool()
+
+
+async def test_aiosqlite_disabled_observability_has_zero_counts() -> None:
+    """Lifecycle counters remain zero when observability hooks are disabled."""
+
+    spec = SQLSpec()
+    config = AiosqliteConfig()
+    spec.add_config(config)
+
+    async with spec.provide_session(config) as driver:
+        await driver.execute("SELECT 1")
+
+    runtime = config.get_observability_runtime()
+    assert all(value == 0 for value in runtime.lifecycle_snapshot().values())
+    await config.close_pool()
+
+
+async def test_aiosqlite_observability_hook_tracks_queries() -> None:
+    """Lifecycle hooks should record query counts in async drivers."""
+
+    captured: list[dict[str, Any]] = []
+
+    def hook(ctx: dict[str, Any]) -> None:
+        captured.append(ctx)
+
+    spec = SQLSpec()
+    config = AiosqliteConfig(
+        observability_config=ObservabilityConfig(lifecycle=cast("LifecycleConfig", {"on_query_start": [hook]}))
+    )
+    spec.add_config(config)
+
+    async with spec.provide_session(config) as driver:
+        await driver.execute("SELECT 1")
+
+    runtime = config.get_observability_runtime()
+    assert runtime.lifecycle_snapshot()["AiosqliteConfig.lifecycle.query_start"] == 1
+    assert captured
+    await config.close_pool()
 
 
 async def test_config_memory_database_conversion() -> None:

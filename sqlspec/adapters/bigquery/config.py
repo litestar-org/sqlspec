@@ -14,8 +14,9 @@ from sqlspec.adapters.bigquery.driver import (
     BigQueryExceptionHandler,
     build_bigquery_statement_config,
 )
-from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
+from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import Empty
 from sqlspec.utils.serializers import to_json
 
@@ -120,7 +121,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         statement_config: "StatementConfig | None" = None,
         driver_features: "BigQueryDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize BigQuery configuration.
 
@@ -131,6 +133,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             driver_features: BigQuery-specific driver features
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
 
         self.connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
@@ -138,25 +141,41 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             extras = self.connection_config.pop("extra")
             self.connection_config.update(extras)
 
-        self.driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        self.driver_features.setdefault("enable_uuid_conversion", True)
-        serializer = self.driver_features.setdefault("json_serializer", to_json)
+        processed_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        user_connection_hook = processed_driver_features.pop("on_connection_create", None)
+        processed_driver_features.setdefault("enable_uuid_conversion", True)
+        serializer = processed_driver_features.setdefault("json_serializer", to_json)
 
-        self._connection_instance: BigQueryConnection | None = self.driver_features.get("connection_instance")
+        self._connection_instance: BigQueryConnection | None = processed_driver_features.get("connection_instance")
 
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
 
         base_statement_config = statement_config or build_bigquery_statement_config(json_serializer=serializer)
 
+        local_observability = observability_config
+        if user_connection_hook is not None:
+
+            def _wrap_hook(context: dict[str, Any]) -> None:
+                connection = context.get("connection")
+                if connection is None:
+                    return
+                user_connection_hook(connection)
+
+            lifecycle_override = ObservabilityConfig(lifecycle={"on_connection_create": [_wrap_hook]})
+            local_observability = ObservabilityConfig.merge(local_observability, lifecycle_override)
+
         super().__init__(
             connection_config=self.connection_config,
             migration_config=migration_config,
             statement_config=base_statement_config,
-            driver_features=self.driver_features,
+            driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
+            observability_config=local_observability,
         )
+
+        self.driver_features = processed_driver_features
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration."""
@@ -217,10 +236,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             if default_load_job_config is not None:
                 self.driver_features["default_load_job_config"] = default_load_job_config
 
-            on_connection_create = self.driver_features.get("on_connection_create")
-            if on_connection_create:
-                on_connection_create(connection)
-
             self._connection_instance = connection
         except Exception as e:
             project = self.connection_config.get("project", "Unknown")
@@ -263,7 +278,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             driver = self.driver_type(
                 connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
             )
-            yield driver
+            yield self._prepare_driver(driver)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for BigQuery types.
