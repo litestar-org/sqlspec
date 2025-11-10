@@ -1,6 +1,6 @@
 """Test configuration example: Named database bindings."""
 
-__all__ = ("test_named_bindings", )
+__all__ = ("test_named_bindings",)
 
 
 def test_named_bindings() -> None:

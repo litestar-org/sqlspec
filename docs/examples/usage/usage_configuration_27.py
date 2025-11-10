@@ -1,6 +1,6 @@
 """Test configuration example: Best practice - Tune pool sizes."""
 
-__all__ = ("test_tune_pool_sizes_best_practice", )
+__all__ = ("test_tune_pool_sizes_best_practice",)
 
 
 MIN_POOL_SIZE_CPU = 5

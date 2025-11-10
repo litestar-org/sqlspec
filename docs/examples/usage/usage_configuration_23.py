@@ -1,6 +1,6 @@
 """Test configuration example: Environment-based configuration."""
 
-__all__ = ("test_extension_config", )
+__all__ = ("test_extension_config",)
 
 
 def test_extension_config() -> None:

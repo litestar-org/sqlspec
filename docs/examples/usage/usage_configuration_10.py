@@ -1,6 +1,5 @@
 POOL_INSTANCE = 20
-__all__ = ("test_manual_pool", )
-
+__all__ = ("test_manual_pool",)
 
 
 def test_manual_pool() -> None:

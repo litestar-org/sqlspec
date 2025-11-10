@@ -1,7 +1,4 @@
 def test_pool_lifecycle() -> None:
-__all__ = ("test_pool_lifecycle", )
-
-
     import os
 
     from sqlspec import SQLSpec

@@ -2,7 +2,7 @@
 
 import pytest
 
-__all__ = ("test_connection_pooling_best_practice", )
+__all__ = ("test_connection_pooling_best_practice",)
 
 
 MIN_POOL_SIZE = 10

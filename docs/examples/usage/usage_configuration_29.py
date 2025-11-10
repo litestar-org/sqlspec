@@ -2,7 +2,7 @@
 
 import pytest
 
-__all__ = ("test_cleanup_resources_best_practice", )
+__all__ = ("test_cleanup_resources_best_practice",)
 
 
 @pytest.mark.asyncio

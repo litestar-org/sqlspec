@@ -1,7 +1,4 @@
 def test_parameter_style_config() -> None:
-__all__ = ("test_parameter_style_config", )
-
-
     from sqlspec import ParameterStyle, ParameterStyleConfig, StatementConfig
 
     param_config = ParameterStyleConfig(

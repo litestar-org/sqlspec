@@ -1,6 +1,6 @@
 """Test configuration example: Per-instance cache configuration."""
 
-__all__ = ("test_per_instance_cache_config", )
+__all__ = ("test_per_instance_cache_config",)
 
 
 def test_per_instance_cache_config() -> None:

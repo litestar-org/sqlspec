@@ -1,6 +1,6 @@
 """Telemetry snapshot example."""
 
-__all__ = ("test_telemetry_snapshot", )
+__all__ = ("test_telemetry_snapshot",)
 
 
 def test_telemetry_snapshot() -> None:

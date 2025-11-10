@@ -1,7 +1,4 @@
 def test_asyncpg_config_setup() -> None:
-__all__ = ("test_asyncpg_config_setup", )
-
-
     import os
 
     from sqlspec.adapters.asyncpg import AsyncpgConfig

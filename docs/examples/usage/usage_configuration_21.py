@@ -2,7 +2,7 @@
 
 import pytest
 
-__all__ = ("test_basic_migration_config", )
+__all__ = ("test_basic_migration_config",)
 
 
 @pytest.mark.skipif(

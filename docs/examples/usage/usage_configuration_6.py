@@ -1,6 +1,5 @@
 MYSQL_PORT = 3306
-__all__ = ("test_asyncmy_config_setup", )
-
+__all__ = ("test_asyncmy_config_setup",)
 
 
 def test_asyncmy_config_setup() -> None:
