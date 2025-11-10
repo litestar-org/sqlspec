@@ -1,4 +1,6 @@
 MIN_POOL_SIZE = 10
+__all__ = ("test_asyncpg_pool_setup", )
+
 
 
 def test_asyncpg_pool_setup() -> None:

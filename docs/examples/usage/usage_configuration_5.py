@@ -1,4 +1,7 @@
 def test_psycopg_config_setup() -> None:
+__all__ = ("test_psycopg_config_setup", )
+
+
     import os
 
     from sqlspec.adapters.psycopg import PsycopgAsyncConfig
