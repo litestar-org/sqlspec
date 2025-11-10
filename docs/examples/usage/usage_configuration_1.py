@@ -1,3 +1,6 @@
+__all__ = ("test_sqlite_memory_db",)
+
+
 def test_sqlite_memory_db() -> None:
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig

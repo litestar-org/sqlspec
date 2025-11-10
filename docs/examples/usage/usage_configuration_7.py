@@ -1,3 +1,6 @@
+__all__ = ("test_duckdb_config_setup",)
+
+
 def test_duckdb_config_setup() -> None:
     from sqlspec.adapters.duckdb import DuckDBConfig
 

@@ -1,5 +1,7 @@
 """Test configuration example: Binding multiple database configurations."""
 
+__all__ = ("test_binding_multiple_configs", )
+
 
 def test_binding_multiple_configs() -> None:
     """Test binding multiple database configurations."""

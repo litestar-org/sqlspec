@@ -1,3 +1,6 @@
+__all__ = ("test_psycopg_config_setup",)
+
+
 def test_psycopg_config_setup() -> None:
     import os
 

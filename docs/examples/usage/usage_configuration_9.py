@@ -1,3 +1,6 @@
+__all__ = ("test_pool_lifecycle",)
+
+
 def test_pool_lifecycle() -> None:
     import os
 

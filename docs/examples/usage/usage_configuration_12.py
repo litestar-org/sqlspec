@@ -1,4 +1,7 @@
 def test_basic_statement_config() -> None:
+__all__ = ("test_basic_statement_config", )
+
+
     import os
 
     from sqlspec import StatementConfig
