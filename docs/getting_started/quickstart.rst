@@ -12,7 +12,8 @@ Let's start with the simplest possible example - executing a query and getting r
 .. literalinclude:: /examples/quickstart/test_quickstart_1.py
    :language: python
    :caption: ``first sqlspec query``
-   :lines: 1-11
+   :lines: 6-13
+   :dedent: 4
 
 What's happening here?
 
@@ -29,7 +30,8 @@ Let's create a table, insert some data, and query it:
 .. literalinclude:: /examples/quickstart/test_quickstart_2.py
    :language: python
    :caption: ``working with real data``
-   :lines: 1-36
+   :lines: 6-38
+   :dedent: 4
 
 Session Methods Cheat Sheet
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -52,7 +54,8 @@ The real power of SQLSpec comes from type-safe result mapping. Define your data 
 .. literalinclude:: /examples/quickstart/test_quickstart_3.py
    :language: python
    :caption: ``type-safe results``
-   :lines: 1-35
+   :lines: 15-34
+   :dedent: 4
 
 .. note::
 
@@ -99,7 +102,8 @@ Need to work with multiple databases? Register multiple configs:
 .. literalinclude:: /examples/quickstart/test_quickstart_6.py
    :language: python
    :caption: ``multiple databases``
-   :lines: 1-16
+   :lines: 7-18
+   :dedent: 4
 
 
 Transaction Support
@@ -110,7 +114,8 @@ SQLSpec automatically manages transactions. By default, each session is a transa
 .. literalinclude:: /examples/quickstart/test_quickstart_7.py
    :language: python
    :caption: ``transaction support``
-   :lines: 1-32
+   :lines: 9-39
+   :dedent: 4
 
 .. note::
 
@@ -124,7 +129,8 @@ For those who prefer programmatic query construction, SQLSpec includes an experi
 .. literalinclude:: /examples/quickstart/test_quickstart_8.py
    :language: python
    :caption: ``query builder``
-   :lines: 1-19
+   :lines: 6-21
+   :dedent: 4
 
 .. warning::
 
