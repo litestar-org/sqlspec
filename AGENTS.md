@@ -507,6 +507,23 @@ When processing user input that may be incomplete or malformed, use a two-tier a
 
 **Implementation Pattern:**
 
+## Recent edit: Configuration examples (2025-11-04)
+
+- Updated docs/examples/usage examples: consolidated example filenames to
+  docs/examples/usage/test_configuration_*.py and ensured the documentation
+  references match the renamed examples.
+- Added an explicit :lines: range and a :dedent: directive to the
+  literalinclude for test_configuration_23.py so Sphinx renders the snippet
+  with correct indentation.
+- Built the Sphinx documentation (make docs) and verified HTML output was
+  generated successfully. Two minor warnings were reported (dedent and a
+  missing stylesheet copy) but they did not prevent the build.
+- Updated project TODOs to reflect completed steps.
+
+This summary documents the small documentation and example maintenance
+performed on the configuration usage guide and can be expanded into a
+longer changelog entry if desired.
+
 ```python
 def parse_user_input(content: str, source: str) -> "dict[str, Result]":
     """Parse user input with two-tier error handling.
@@ -2022,6 +2039,14 @@ class GoodDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     enable_json_codecs: NotRequired[bool]
 ```
+
+### Compliance Table
+
+### Change log: configuration examples
+
+- Renamed documentation example references to use docs/examples/usage/test_configuration_*.py
+- Added explicit :lines: ranges and :dedent: directive for the literalinclude at the top of docs/usage/configuration.rst
+- Rebuilt documentation to verify the changes (make docs). Build completed with 2 warnings about dedent and a missing stylesheet; output HTML written to docs/_build/html
 
 ### Compliance Table
 

@@ -54,24 +54,30 @@ Quick Reference
 .. literalinclude:: /examples/usage/usage_index_1.py
    :language: python
    :caption: ``basic query execution``
-   :lines: 1-23
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 **Using the Query Builder**
 
 .. literalinclude:: /examples/usage/usage_index_2.py
    :language: python
    :caption: ``using the query builder``
-   :lines: 1-32
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 **Loading from SQL Files**
 
 .. literalinclude:: /examples/usage/usage_index_3.py
    :language: python
    :caption: ``loading from sql files``
-   :lines: 1-39
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 Next Steps
 ----------
