@@ -26,15 +26,7 @@ from sqlspec.adapters.oracledb.driver import (
     oracledb_statement_config,
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
-from sqlspec.config import (
-    ADKConfig,
-    AsyncDatabaseConfig,
-    FastAPIConfig,
-    FlaskConfig,
-    LitestarConfig,
-    StarletteConfig,
-    SyncDatabaseConfig,
-)
+from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.typing import NUMPY_INSTALLED
 
 if TYPE_CHECKING:
@@ -143,7 +135,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         statement_config: "StatementConfig | None" = None,
         driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
@@ -252,11 +244,12 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """
         _ = (args, kwargs)  # Mark as intentionally unused
         with self.provide_connection() as conn:
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=conn,
                 statement_config=statement_config or self.statement_config,
                 driver_features=self.driver_features,
             )
+            yield self._prepare_driver(driver)
 
     def provide_pool(self) -> "OracleSyncConnectionPool":
         """Provide pool instance.
@@ -319,7 +312,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         statement_config: "StatementConfig | None" = None,
         driver_features: "OracleDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 
@@ -431,11 +424,12 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """
         _ = (args, kwargs)  # Mark as intentionally unused
         async with self.provide_connection() as conn:
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=conn,
                 statement_config=statement_config or self.statement_config,
                 driver_features=self.driver_features,
             )
+            yield self._prepare_driver(driver)
 
     async def provide_pool(self) -> "OracleAsyncConnectionPool":
         """Provide async pool instance.

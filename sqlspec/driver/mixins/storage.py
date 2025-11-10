@@ -1,6 +1,7 @@
 """Storage bridge mixin shared by sync and async drivers."""
 
 from collections.abc import Iterable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import trait
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig, StatementFilter
     from sqlspec.core.result import ArrowResult
     from sqlspec.core.statement import SQL
+    from sqlspec.observability import ObservabilityRuntime
     from sqlspec.typing import ArrowTable, StatementParameters
 
 __all__ = ("StorageDriverMixin",)
@@ -44,6 +46,11 @@ class StorageDriverMixin:
     __slots__ = ()
     storage_pipeline_factory: "type[SyncStoragePipeline | AsyncStoragePipeline] | None" = None
     driver_features: dict[str, Any]
+
+    if TYPE_CHECKING:
+
+        @property
+        def observability(self) -> "ObservabilityRuntime": ...
 
     def storage_capabilities(self) -> StorageCapabilities:
         """Return cached storage capabilities for the active driver."""
@@ -170,17 +177,89 @@ class StorageDriverMixin:
             merged["extra"] = extra
         return create_storage_bridge_job(status, merged)
 
+    def _write_result_to_storage_sync(
+        self,
+        result: "ArrowResult",
+        destination: StorageDestination,
+        *,
+        format_hint: StorageFormat | None = None,
+        storage_options: "dict[str, Any] | None" = None,
+        pipeline: "SyncStoragePipeline | None" = None,
+    ) -> StorageTelemetry:
+        runtime = self.observability
+        span = runtime.start_storage_span(
+            "write", destination=self._stringify_storage_target(destination), format_label=format_hint
+        )
+        try:
+            telemetry = result.write_to_storage_sync(
+                destination, format_hint=format_hint, storage_options=storage_options, pipeline=pipeline
+            )
+        except Exception as exc:  # pragma: no cover - passthrough
+            runtime.end_storage_span(span, error=exc)
+            raise
+        telemetry = runtime.annotate_storage_telemetry(telemetry)
+        runtime.end_storage_span(span, telemetry=telemetry)
+        return telemetry
+
+    async def _write_result_to_storage_async(
+        self,
+        result: "ArrowResult",
+        destination: StorageDestination,
+        *,
+        format_hint: StorageFormat | None = None,
+        storage_options: "dict[str, Any] | None" = None,
+        pipeline: "AsyncStoragePipeline | None" = None,
+    ) -> StorageTelemetry:
+        runtime = self.observability
+        span = runtime.start_storage_span(
+            "write", destination=self._stringify_storage_target(destination), format_label=format_hint
+        )
+        try:
+            telemetry = await result.write_to_storage_async(
+                destination, format_hint=format_hint, storage_options=storage_options, pipeline=pipeline
+            )
+        except Exception as exc:  # pragma: no cover - passthrough
+            runtime.end_storage_span(span, error=exc)
+            raise
+        telemetry = runtime.annotate_storage_telemetry(telemetry)
+        runtime.end_storage_span(span, telemetry=telemetry)
+        return telemetry
+
     def _read_arrow_from_storage_sync(
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
+        runtime = self.observability
+        span = runtime.start_storage_span(
+            "read", destination=self._stringify_storage_target(source), format_label=file_format
+        )
         pipeline = cast("SyncStoragePipeline", self._storage_pipeline())
-        return pipeline.read_arrow(source, file_format=file_format, storage_options=storage_options)
+        try:
+            table, telemetry = pipeline.read_arrow(source, file_format=file_format, storage_options=storage_options)
+        except Exception as exc:  # pragma: no cover - passthrough
+            runtime.end_storage_span(span, error=exc)
+            raise
+        telemetry = runtime.annotate_storage_telemetry(telemetry)
+        runtime.end_storage_span(span, telemetry=telemetry)
+        return table, telemetry
 
     async def _read_arrow_from_storage_async(
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
+        runtime = self.observability
+        span = runtime.start_storage_span(
+            "read", destination=self._stringify_storage_target(source), format_label=file_format
+        )
         pipeline = cast("AsyncStoragePipeline", self._storage_pipeline())
-        return await pipeline.read_arrow_async(source, file_format=file_format, storage_options=storage_options)
+        try:
+            table, telemetry = await pipeline.read_arrow_async(
+                source, file_format=file_format, storage_options=storage_options
+            )
+        except Exception as exc:  # pragma: no cover - passthrough
+            runtime.end_storage_span(span, error=exc)
+            raise
+        telemetry = runtime.annotate_storage_telemetry(telemetry)
+        runtime.end_storage_span(span, telemetry=telemetry)
+        return table, telemetry
 
     @staticmethod
     def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> StorageTelemetry:
@@ -206,6 +285,14 @@ class StorageDriverMixin:
             return pa.Table.from_pylist(list(source))
         msg = f"Unsupported Arrow source type: {type(source).__name__}"
         raise TypeError(msg)
+
+    @staticmethod
+    def _stringify_storage_target(target: StorageDestination | None) -> str | None:
+        if target is None:
+            return None
+        if isinstance(target, Path):
+            return target.as_posix()
+        return str(target)
 
     @staticmethod
     def _arrow_table_to_rows(

@@ -1,6 +1,7 @@
 """Asynchronous driver protocol implementation."""
 
 from abc import abstractmethod
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
 from sqlspec.core import SQL, Statement, create_arrow_result
@@ -61,19 +62,58 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
         Returns:
             The result of the SQL execution
         """
-        async with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
-            special_result = await self._try_special_handling(cursor, statement)
-            if special_result is not None:
-                return special_result
+        runtime = self.observability
+        compiled_sql, execution_parameters = statement.compile()
+        processed_state = statement.get_processed_state()
+        operation = getattr(processed_state, "operation_type", statement.operation_type)
+        query_context = {
+            "sql": compiled_sql,
+            "parameters": execution_parameters,
+            "driver": type(self).__name__,
+            "operation": operation,
+            "is_many": statement.is_many,
+            "is_script": statement.is_script,
+        }
+        runtime.emit_query_start(**query_context)
+        span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
+        started = perf_counter()
 
-            if statement.is_script:
-                execution_result = await self._execute_script(cursor, statement)
-            elif statement.is_many:
-                execution_result = await self._execute_many(cursor, statement)
-            else:
-                execution_result = await self._execute_statement(cursor, statement)
+        try:
+            async with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
+                special_result = await self._try_special_handling(cursor, statement)
+                if special_result is not None:
+                    result = special_result
+                elif statement.is_script:
+                    execution_result = await self._execute_script(cursor, statement)
+                    result = self.build_statement_result(statement, execution_result)
+                elif statement.is_many:
+                    execution_result = await self._execute_many(cursor, statement)
+                    result = self.build_statement_result(statement, execution_result)
+                else:
+                    execution_result = await self._execute_statement(cursor, statement)
+                    result = self.build_statement_result(statement, execution_result)
+        except Exception as exc:  # pragma: no cover
+            runtime.span_manager.end_span(span, error=exc)
+            runtime.emit_error(exc, **query_context)
+            raise
 
-            return self.build_statement_result(statement, execution_result)
+        runtime.span_manager.end_span(span)
+        duration = perf_counter() - started
+        runtime.emit_query_complete(**{**query_context, "rows_affected": result.rows_affected})
+        runtime.emit_statement_event(
+            sql=compiled_sql,
+            parameters=execution_parameters,
+            driver=type(self).__name__,
+            operation=operation,
+            execution_mode=self.statement_config.execution_mode,
+            is_many=statement.is_many,
+            is_script=statement.is_script,
+            rows_affected=result.rows_affected,
+            duration_s=duration,
+            storage_backend=(result.metadata or {}).get("storage_backend") if hasattr(result, "metadata") else None,
+            started_at=started,
+        )
+        return result
 
     @abstractmethod
     def with_cursor(self, connection: Any) -> Any:

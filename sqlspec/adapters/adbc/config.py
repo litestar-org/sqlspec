@@ -9,7 +9,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.adbc._types import AdbcConnection
 from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, get_adbc_statement_config
-from sqlspec.config import ADKConfig, FastAPIConfig, FlaskConfig, LitestarConfig, NoPoolSyncConfig, StarletteConfig
+from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.module_loader import import_string
@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.observability import ObservabilityConfig
 
 logger = logging.getLogger("sqlspec.adapters.adbc")
 
@@ -116,7 +118,8 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         statement_config: StatementConfig | None = None,
         driver_features: "AdbcDriverFeatures | dict[str, Any] | None" = None,
         bind_key: str | None = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize configuration.
 
@@ -127,6 +130,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             driver_features: Driver feature configuration (AdbcDriverFeatures)
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
         if connection_config is None:
             connection_config = {}
@@ -168,6 +172,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
+            observability_config=observability_config,
         )
 
     def _resolve_driver_name(self) -> str:
@@ -366,9 +371,10 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                     or self.statement_config
                     or get_adbc_statement_config(str(self._get_dialect() or "sqlite"))
                 )
-                yield self.driver_type(
+                driver = self.driver_type(
                     connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
                 )
+                yield self._prepare_driver(driver)
 
         return session_manager()
 

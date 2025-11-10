@@ -18,7 +18,7 @@ from sqlspec.adapters.asyncmy.driver import (
     asyncmy_statement_config,
     build_asyncmy_statement_config,
 )
-from sqlspec.config import ADKConfig, AsyncDatabaseConfig, FastAPIConfig, FlaskConfig, LitestarConfig, StarletteConfig
+from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from asyncmy.pool import Pool  # pyright: ignore
 
     from sqlspec.core import StatementConfig
+    from sqlspec.observability import ObservabilityConfig
 
 
 __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", "AsyncmyPoolParams")
@@ -104,7 +105,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         statement_config: "StatementConfig | None" = None,
         driver_features: "AsyncmyDriverFeatures | dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
         """Initialize Asyncmy configuration.
 
@@ -116,6 +118,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             driver_features: Driver feature configuration (TypedDict or dict)
             bind_key: Optional unique identifier for this configuration
             extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            observability_config: Adapter-level observability overrides for lifecycle hooks and observers
         """
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
@@ -141,6 +144,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             driver_features=processed_driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
+            observability_config=observability_config,
         )
 
     async def _create_pool(self) -> "AsyncmyPool":  # pyright: ignore
@@ -206,9 +210,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """
         async with self.provide_connection(*args, **kwargs) as connection:
             final_statement_config = statement_config or self.statement_config or asyncmy_statement_config
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
             )
+            yield self._prepare_driver(driver)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":  # pyright: ignore
         """Provide async pool instance.

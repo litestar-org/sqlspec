@@ -1,7 +1,10 @@
+from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
 
 from litestar.di import Provide
+from litestar.middleware import DefineMiddleware
 from litestar.plugins import CLIPlugin, InitPluginProtocol
 
 from sqlspec.base import SQLSpec
@@ -16,7 +19,11 @@ from sqlspec.config import (
     SyncDatabaseConfig,
 )
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
+from sqlspec.extensions.litestar._utils import (
+    delete_sqlspec_scope_state,
+    get_sqlspec_scope_state,
+    set_sqlspec_scope_state,
+)
 from sqlspec.extensions.litestar.handlers import (
     autocommit_handler_maker,
     connection_provider_maker,
@@ -26,6 +33,7 @@ from sqlspec.extensions.litestar.handlers import (
     session_provider_maker,
 )
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT
+from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import numpy_array_dec_hook, numpy_array_enc_hook, numpy_array_predicate
 
@@ -36,7 +44,7 @@ if TYPE_CHECKING:
     from litestar import Litestar
     from litestar.config.app import AppConfig
     from litestar.datastructures.state import State
-    from litestar.types import BeforeMessageSendHookHandler, Scope
+    from litestar.types import ASGIApp, BeforeMessageSendHookHandler, Receive, Scope, Send
     from rich_click import Group
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -49,6 +57,18 @@ DEFAULT_COMMIT_MODE: CommitMode = "manual"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
+DEFAULT_CORRELATION_HEADER = "x-request-id"
+TRACE_CONTEXT_FALLBACK_HEADERS: tuple[str, ...] = (
+    DEFAULT_CORRELATION_HEADER,
+    "x-correlation-id",
+    "traceparent",
+    "x-cloud-trace-context",
+    "grpc-trace-bin",
+    "x-amzn-trace-id",
+    "x-b3-traceid",
+    "x-client-trace-id",
+)
+CORRELATION_STATE_KEY = "sqlspec_correlation_id"
 
 __all__ = (
     "DEFAULT_COMMIT_MODE",
@@ -58,6 +78,78 @@ __all__ = (
     "CommitMode",
     "SQLSpecPlugin",
 )
+
+
+def _normalize_header_list(headers: Any) -> list[str]:
+    if headers is None:
+        return []
+    if isinstance(headers, str):
+        return [headers.lower()]
+    if isinstance(headers, Iterable):
+        normalized: list[str] = []
+        for header in headers:
+            if not isinstance(header, str):
+                msg = "litestar correlation headers must be strings"
+                raise ImproperConfigurationError(msg)
+            normalized.append(header.lower())
+        return normalized
+    msg = "litestar correlation_headers must be a string or iterable of strings"
+    raise ImproperConfigurationError(msg)
+
+
+def _dedupe_headers(headers: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for header in headers:
+        lowered = header.lower()
+        if lowered in seen or not lowered:
+            continue
+        seen.add(lowered)
+        ordered.append(lowered)
+    return ordered
+
+
+def _build_correlation_headers(*, primary: str, configured: list[str], auto_trace_headers: bool) -> tuple[str, ...]:
+    header_order: list[str] = [primary.lower()]
+    header_order.extend(configured)
+    if auto_trace_headers:
+        header_order.extend(TRACE_CONTEXT_FALLBACK_HEADERS)
+    return tuple(_dedupe_headers(header_order))
+
+
+class _CorrelationMiddleware:
+    __slots__ = ("_app", "_headers")
+
+    def __init__(self, app: "ASGIApp", *, headers: tuple[str, ...]) -> None:
+        self._app = app
+        self._headers = headers
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        scope_type = scope.get("type")
+        if str(scope_type) != "http" or not self._headers:
+            await self._app(scope, receive, send)
+            return
+
+        header_value: str | None = None
+        raw_headers = scope.get("headers") or []
+        for header in self._headers:
+            for name, value in raw_headers:
+                if name.decode().lower() == header:
+                    header_value = value.decode()
+                    break
+            if header_value:
+                break
+        if not header_value:
+            header_value = CorrelationContext.generate()
+
+        CorrelationContext.set(header_value)
+        set_sqlspec_scope_state(scope, CORRELATION_STATE_KEY, header_value)
+        try:
+            await self._app(scope, receive, send)
+        finally:
+            with suppress(KeyError):
+                delete_sqlspec_scope_state(scope, CORRELATION_STATE_KEY)
+            CorrelationContext.clear()
 
 
 @dataclass
@@ -72,6 +164,8 @@ class _PluginConfigState:
     extra_commit_statuses: "set[int] | None"
     extra_rollback_statuses: "set[int] | None"
     enable_correlation_middleware: bool
+    correlation_header: str
+    correlation_headers: tuple[str, ...] = field(init=False)
     disable_di: bool
     connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]]" = field(init=False)
     pool_provider: "Callable[[State, Scope], Any]" = field(init=False)
@@ -114,7 +208,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         prevent version conflicts with application migrations.
     """
 
-    __slots__ = ("_plugin_configs", "_sqlspec")
+    __slots__ = ("_correlation_headers", "_plugin_configs", "_sqlspec")
 
     def __init__(self, sqlspec: SQLSpec, *, loader: "SQLFileLoader | None" = None) -> None:
         """Initialize SQLSpec plugin.
@@ -135,6 +229,15 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             state = self._create_config_state(config_union, settings)
             self._plugin_configs.append(state)
 
+        correlation_headers: list[str] = []
+        for state in self._plugin_configs:
+            if not state.enable_correlation_middleware:
+                continue
+            for header in state.correlation_headers:
+                if header not in correlation_headers:
+                    correlation_headers.append(header)
+        self._correlation_headers = tuple(correlation_headers)
+
     def _extract_litestar_settings(
         self,
         config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
@@ -150,6 +253,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
             pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
 
+        correlation_header = str(litestar_config.get("correlation_header", DEFAULT_CORRELATION_HEADER)).lower()
+        configured_headers = _normalize_header_list(litestar_config.get("correlation_headers"))
+        auto_trace_headers = bool(litestar_config.get("auto_trace_headers", True))
+
         return {
             "connection_key": connection_key,
             "pool_key": pool_key,
@@ -158,6 +265,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "extra_commit_statuses": litestar_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": litestar_config.get("extra_rollback_statuses"),
             "enable_correlation_middleware": litestar_config.get("enable_correlation_middleware", True),
+            "correlation_header": correlation_header,
+            "correlation_headers": _build_correlation_headers(
+                primary=correlation_header, configured=configured_headers, auto_trace_headers=auto_trace_headers
+            ),
             "disable_di": litestar_config.get("disable_di", False),
         }
 
@@ -176,8 +287,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             extra_commit_statuses=settings.get("extra_commit_statuses"),
             extra_rollback_statuses=settings.get("extra_rollback_statuses"),
             enable_correlation_middleware=settings["enable_correlation_middleware"],
+            correlation_header=settings["correlation_header"],
             disable_di=settings["disable_di"],
         )
+        state.correlation_headers = tuple(settings["correlation_headers"])
 
         if not state.disable_di:
             self._setup_handlers(state)
@@ -288,6 +401,12 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 decoders_list = list(app_config.type_decoders)
                 decoders_list.append((numpy_array_predicate, numpy_array_dec_hook))  # type: ignore[arg-type]
                 app_config.type_decoders = decoders_list
+
+        if self._correlation_headers:
+            middleware = DefineMiddleware(_CorrelationMiddleware, headers=self._correlation_headers)
+            existing_middleware = list(app_config.middleware or [])
+            existing_middleware.append(middleware)
+            app_config.middleware = existing_middleware
 
         return app_config
 

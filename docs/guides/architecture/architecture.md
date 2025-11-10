@@ -14,6 +14,7 @@ orphan: true
 4. [Driver Implementation](#driver-implementation)
 5. [Parameter Handling](#parameter-handling)
 6. [Testing & Development](#testing--development)
+7. [Observability Runtime](#observability-runtime)
 
 ---
 
@@ -308,3 +309,12 @@ make install     # Standard development installation
 2. Implement the `config.py` and `driver.py` files.
 3. Add integration tests for the new adapter.
 4. Document any special cases or configurations.
+
+## Observability Runtime
+
+The observability subsystem (lifecycle dispatcher, statement observers, span manager, diagnostics) now sits alongside the driver architecture. Refer to the dedicated [Observability Runtime guide](./observability.md) for:
+
+- configuration sources (`ObservabilityConfig`, adapter overrides, and `driver_features` compatibility),
+- the full list of lifecycle events emitted by SQLSpec,
+- guidance on statement observers, redaction, and OpenTelemetry spans,
+- the Phase 4/5 roadmap for spans + diagnostics.

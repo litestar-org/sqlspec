@@ -497,9 +497,24 @@ Litestar Plugin Configuration
                "pool_key": "db_pool",
                "commit_mode": "autocommit",
                "enable_correlation_middleware": True,
+               "correlation_header": "x-correlation-id",
+               "correlation_headers": ["x-custom-trace"],
+               "auto_trace_headers": True,  # Detect Traceparent, X-Cloud-Trace-Context, etc.
            }
        }
    )
+
+Telemetry Snapshot
+~~~~~~~~~~~~~~~~~~
+
+Call ``SQLSpec.telemetry_snapshot()`` to inspect lifecycle counters, serializer metrics, and recent storage jobs:
+
+.. code-block:: python
+
+   snapshot = spec.telemetry_snapshot()
+   print(snapshot["storage_bridge.bytes_written"])
+   for job in snapshot.get("storage_bridge.recent_jobs", []):
+       print(job["destination"], job.get("correlation_id"))
 
 Environment-Based Configuration
 -------------------------------

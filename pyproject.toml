@@ -7,7 +7,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.28.1"
+version = "0.29.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -179,6 +179,14 @@ include = [
   "sqlspec/utils/fixtures.py",            # File fixture loading
   "sqlspec/utils/data_transformation.py", # Data transformation utilities
 
+  # === OBSERVABILITY ===
+  "sqlspec/observability/_config.py",
+  "sqlspec/observability/_diagnostics.py",
+  "sqlspec/observability/_dispatcher.py",
+  "sqlspec/observability/_observer.py",
+  "sqlspec/observability/_runtime.py",
+  "sqlspec/observability/_spans.py",
+
   # === STORAGE LAYER ===
   "sqlspec/storage/_utils.py",
   "sqlspec/storage/registry.py",
@@ -209,7 +217,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.28.1"
+current_version = "0.29.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"
@@ -279,6 +287,7 @@ exclude_lines = [
 addopts = ["-q", "-ra"]
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "auto"
+python_files = ["test_*.py", "quickstart_*.py"]
 filterwarnings = [
   "ignore::DeprecationWarning:pkg_resources.*",
   "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
@@ -322,7 +331,7 @@ markers = [
   "pymysql: marks tests using pymysql",
   "psqlpy: marks tests using psqlpy",
 ]
-testpaths = ["tests", "docs/examples/usage"]
+testpaths = ["tests", "docs/examples/quickstart", "docs/examples/usage"]
 
 [tool.mypy]
 exclude = ["tmp/", ".tmp/", ".bugs/"]
