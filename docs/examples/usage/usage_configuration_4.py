@@ -1,4 +1,9 @@
+__all__ = ("test_asyncpg_config_setup",)
+
+
 def test_asyncpg_config_setup() -> None:
+
+    # start-example
     import os
 
     from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -7,7 +12,7 @@ def test_asyncpg_config_setup() -> None:
     port = int(os.getenv("SQLSPEC_USAGE_PG_PORT", "5432"))
     user = os.getenv("SQLSPEC_USAGE_PG_USER", "user")
     password = os.getenv("SQLSPEC_USAGE_PG_PASSWORD", "password")
-    database = os.getenv("SQLSPEC_USAGE_PG_DATABASE", "db" )
+    database = os.getenv("SQLSPEC_USAGE_PG_DATABASE", "db")
     dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", f"postgresql://{user}:{password}@{host}:{port}/{database}")
 
     config = AsyncpgConfig(
@@ -22,4 +27,6 @@ def test_asyncpg_config_setup() -> None:
             "database": database,
         }
     )
+    # end-example
     assert config.pool_config["host"] == host
+

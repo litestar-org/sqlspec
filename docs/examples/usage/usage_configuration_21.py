@@ -1,13 +1,11 @@
 """Test configuration example: Basic migration configuration."""
 
-import pytest
+__all__ = ("test_basic_migration_config",)
 
 
-@pytest.mark.skipif(
-    not pytest.importorskip("asyncpg", reason="AsyncPG not installed"), reason="AsyncPG integration tests disabled"
-)
 def test_basic_migration_config() -> None:
     """Test basic migration configuration."""
+    # start-example
     import os
 
     from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -25,5 +23,7 @@ def test_basic_migration_config() -> None:
         },
     )
 
+    # end-example
     assert config.migration_config["script_location"] == "migrations"
     assert "litestar" in config.migration_config["include_extensions"]
+

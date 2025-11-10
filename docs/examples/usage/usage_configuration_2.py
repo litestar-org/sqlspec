@@ -1,4 +1,9 @@
+__all__ = ("test_sqlite_config_setup",)
+
+
 def test_sqlite_config_setup() -> None:
+
+    # start-example
     from sqlspec.adapters.sqlite import SqliteConfig
 
     config = SqliteConfig(
@@ -10,4 +15,6 @@ def test_sqlite_config_setup() -> None:
             "uri": False,  # Enable URI mode
         }
     )
+    # end-example
     assert config.pool_config["database"] == "myapp.db"
+

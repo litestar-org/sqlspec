@@ -1,4 +1,9 @@
+__all__ = ("test_parameter_style_config",)
+
+
 def test_parameter_style_config() -> None:
+
+    # start-example
     from sqlspec import ParameterStyle, ParameterStyleConfig, StatementConfig
 
     param_config = ParameterStyleConfig(
@@ -12,4 +17,6 @@ def test_parameter_style_config() -> None:
     )
 
     statement_config = StatementConfig(dialect="postgres", parameter_config=param_config)
+    # end-example
     assert statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
+

@@ -1,4 +1,9 @@
+__all__ = ("test_parameter_styles",)
+
+
 def test_parameter_styles() -> None:
+
+    # start-example
     from sqlspec import ParameterStyle
 
     # Question mark (SQLite, DuckDB)
@@ -14,6 +19,8 @@ def test_parameter_styles() -> None:
 
     # Format/pyformat (psycopg, MySQL)
 
+    # end-example
     assert qmark == ParameterStyle.QMARK
     assert numeric == ParameterStyle.NUMERIC
     assert named_colon == ParameterStyle.NAMED_COLON
+

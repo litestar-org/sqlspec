@@ -1,4 +1,9 @@
+__all__ = ("test_psycopg_config_setup",)
+
+
 def test_psycopg_config_setup() -> None:
+
+    # start-example
     import os
 
     from sqlspec.adapters.psycopg import PsycopgAsyncConfig
@@ -26,4 +31,6 @@ def test_psycopg_config_setup() -> None:
             "timeout": 30.0,
         }
     )
+    # end-example
     assert config.pool_config is not None
+

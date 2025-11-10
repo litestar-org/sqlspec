@@ -1,4 +1,9 @@
+__all__ = ("test_pool_lifecycle",)
+
+
 def test_pool_lifecycle() -> None:
+
+    # start-example
     import os
 
     from sqlspec import SQLSpec
@@ -9,4 +14,6 @@ def test_pool_lifecycle() -> None:
     asyncpg_key = db_manager.add_config(AsyncpgConfig(pool_config={"dsn": dsn}))
 
     asyncpg_config = db_manager.get_config(asyncpg_key)
+    # end-example
     assert asyncpg_config.pool_config["dsn"] == dsn
+

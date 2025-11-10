@@ -1,13 +1,14 @@
 """Test configuration example: Environment-based configuration."""
 
-import os
-from unittest.mock import patch
-
-POSTGRES_PORT = 5433
+__all__ = ("test_environment_based_configuration",)
 
 
 def test_environment_based_configuration() -> None:
     """Test environment-based configuration pattern."""
+
+    # start-example
+    import os
+    from unittest.mock import patch
 
     # Mock environment variables
     env_vars = {
@@ -31,8 +32,10 @@ def test_environment_based_configuration() -> None:
             }
         )
 
+    # end-example
         assert config.pool_config["host"] == "testhost"
-        assert config.pool_config["port"] == POSTGRES_PORT
+        assert config.pool_config["port"] == 5433
         assert config.pool_config["user"] == "testuser"
         assert config.pool_config["password"] == "testpass"
         assert config.pool_config["database"] == "testdb"
+
