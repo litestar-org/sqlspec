@@ -1,43 +1,47 @@
-from sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig
-
 __all__ = ("test_quickstart_7",)
 
 
 def test_quickstart_7() -> None:
-    db_manager = SQLSpec()
+    # start-example
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.sqlite import SqliteConfig
 
+    db_manager = SQLSpec()
     db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
-    # Transaction committed on successful exit
     with db_manager.provide_session(db) as session:
         session.begin()
-        _ = session.execute("""
+        session.execute(
+            """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL
             )
-        """)
-        _ = session.execute("""
+            """
+        )
+        session.execute(
+            """
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY,
-                    user_name TEXT NOT NULL
-                )
-            """)
-        _ = session.execute("DELETE FROM users")
-        _ = session.execute("DELETE FROM orders")
-        _ = session.execute("INSERT INTO users (name) VALUES (?)", "Alice")
-        _ = session.execute("INSERT INTO orders (user_name) VALUES (?)", "Alice")
+                user_name TEXT NOT NULL
+            )
+            """
+        )
+        session.execute("DELETE FROM users")
+        session.execute("DELETE FROM orders")
+        session.execute("INSERT INTO users (name) VALUES (?)", "Alice")
+        session.execute("INSERT INTO orders (user_name) VALUES (?)", "Alice")
         session.commit()
 
     with db_manager.provide_session(db) as session:
         session.begin()
-        _ = session.execute("INSERT INTO users (name) VALUES (?)", "Bob")
+        session.execute("INSERT INTO users (name) VALUES (?)", "Bob")
         session.rollback()
 
     with db_manager.provide_session(db) as session:
         alice = session.select_one_or_none("SELECT * FROM users WHERE name = ?", "Alice")
         bob = session.select_one_or_none("SELECT * FROM users WHERE name = ?", "Bob")
+    # end-example
 
     assert alice is not None
     assert alice["name"] == "Alice"
