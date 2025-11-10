@@ -287,6 +287,7 @@ exclude_lines = [
 addopts = ["-q", "-ra"]
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "auto"
+python_files = ["test_*.py", "quickstart_*.py", "usage_*.py"]
 filterwarnings = [
   "ignore::DeprecationWarning:pkg_resources.*",
   "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
@@ -330,7 +331,7 @@ markers = [
   "pymysql: marks tests using pymysql",
   "psqlpy: marks tests using psqlpy",
 ]
-testpaths = ["tests", "docs/examples/usage"]
+testpaths = ["tests", "docs/examples/quickstart", "docs/examples/usage"]
 
 [tool.mypy]
 exclude = ["tmp/", ".tmp/", ".bugs/"]
