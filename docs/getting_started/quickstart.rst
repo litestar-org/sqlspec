@@ -9,7 +9,7 @@ Your First Query
 
 Let's start with the simplest possible example - executing a query and getting results:
 
-.. literalinclude:: /examples/quickstart/test_quickstart_1.py
+.. literalinclude:: /examples/quickstart/quickstart_1.py
    :language: python
    :caption: ``first sqlspec query``
    :lines: 6-13
@@ -27,7 +27,7 @@ Working with Real Data
 
 Let's create a table, insert some data, and query it:
 
-.. literalinclude:: /examples/quickstart/test_quickstart_2.py
+.. literalinclude:: /examples/quickstart/quickstart_2.py
    :language: python
    :caption: ``working with real data``
    :lines: 6-38
@@ -51,7 +51,7 @@ Type-Safe Results
 
 The real power of SQLSpec comes from type-safe result mapping. Define your data models and SQLSpec automatically maps query results to them:
 
-.. literalinclude:: /examples/quickstart/test_quickstart_3.py
+.. literalinclude:: /examples/quickstart/quickstart_3.py
    :language: python
    :caption: ``type-safe results``
    :lines: 15-34
@@ -66,7 +66,7 @@ Async Support
 
 SQLSpec supports async/await for non-blocking database operations. Here's the same example with async:
 
-.. literalinclude:: /examples/quickstart/test_quickstart_4.py
+.. literalinclude:: /examples/quickstart/quickstart_4.py
    :language: python
    :caption: ``async support``
    :lines: 15-30
@@ -79,7 +79,7 @@ Switching Databases
 
 One of SQLSpec's strengths is the consistent API across databases. Here's the same code using PostgreSQL:
 
-.. literalinclude:: /examples/quickstart/test_quickstart_5.py
+.. literalinclude:: /examples/quickstart/quickstart_5.py
    :language: python
    :caption: ``switching databases``
    :lines: 14-30
@@ -99,7 +99,7 @@ Multiple Databases
 
 Need to work with multiple databases? Register multiple configs:
 
-.. literalinclude:: /examples/quickstart/test_quickstart_6.py
+.. literalinclude:: /examples/quickstart/quickstart_6.py
    :language: python
    :caption: ``multiple databases``
    :lines: 7-18
@@ -109,13 +109,18 @@ Need to work with multiple databases? Register multiple configs:
 Transaction Support
 -------------------
 
-SQLSpec automatically manages transactions. By default, each session is a transaction:
+Sessions expose ``begin()``, ``commit()``, and ``rollback()`` so you can control transaction
+boundaries explicitly and keep examples deterministic:
 
-.. literalinclude:: /examples/quickstart/test_quickstart_7.py
+.. literalinclude:: /examples/quickstart/quickstart_7.py
    :language: python
    :caption: ``transaction support``
-   :lines: 9-39
+   :lines: 8-55
    :dedent: 4
+
+The snippet seeds data in a temporary SQLite database, intentionally triggers a failure,
+and uses ``contextlib.suppress`` so the docs stay readable while the companion test verifies
+that ``rollback()`` removes the failed insert.
 
 .. note::
 
@@ -126,7 +131,7 @@ Query Builder (Experimental)
 
 For those who prefer programmatic query construction, SQLSpec includes an experimental query builder:
 
-.. literalinclude:: /examples/quickstart/test_quickstart_8.py
+.. literalinclude:: /examples/quickstart/quickstart_8.py
    :language: python
    :caption: ``query builder``
    :lines: 6-21
