@@ -18,11 +18,11 @@
 ## Testing Command Examples
 
 ```bash
-uv run pytest docs/examples/quickstart -q
+uv run pytest docs/examples/quickstart docs/examples/usage -q
 ```
 
 - `docs/examples/quickstart/conftest.py` sets `SQLSPEC_QUICKSTART_PG_*` from `pytest-databases` so `quickstart_5.py` stays copy/paste friendly in the docs.
-- Async or adapter-specific samples no longer need separate commands—pytest collects `quickstart_4.py` and `quickstart_5.py` automatically via `python_files`.
+- Usage samples are function-based (`usage_*.py`) and collected automatically because `python_files` now includes that pattern.
 - Prefer smaller batches (per topic/section) to keep feedback loops fast.
 
 ## Review Checklist
