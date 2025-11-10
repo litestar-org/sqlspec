@@ -28,17 +28,9 @@ def test_duckdb_config_promotes_security_flags() -> None:
 
 def test_duckdb_config_merges_existing_extension_flags() -> None:
     config = DuckDBConfig(
-        pool_config={
-            "database": ":memory:",
-            "allow_community_extensions": True,
-        },
-        driver_features={
-            "extension_flags": {"custom": "value"},
-        },
+        pool_config={"database": ":memory:", "allow_community_extensions": True},
+        driver_features={"extension_flags": {"custom": "value"}},
     )
 
     flags = config.driver_features.get("extension_flags")
-    assert flags == {
-        "custom": "value",
-        "allow_community_extensions": True,
-    }
+    assert flags == {"custom": "value", "allow_community_extensions": True}
