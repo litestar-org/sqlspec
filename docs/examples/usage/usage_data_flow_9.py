@@ -1,6 +1,6 @@
 """Example 9: Driver Execution with session."""
 
-__all__ = ("test_driver_execution", )
+__all__ = ("test_driver_execution",)
 
 
 def test_driver_execution() -> None:
