@@ -51,39 +51,27 @@ Quick Reference
 
 **Basic Query Execution**
 
-.. code-block:: python
-
-   from sqlspec import SQLSpec
-   from sqlspec.adapters.sqlite import SqliteConfig
-
-   spec = SQLSpec()
-   db = spec.add_config(SqliteConfig())
-
-   with spec.provide_session(db) as session:
-       result = session.execute("SELECT * FROM users WHERE id = ?", 1)
-       user = result.one()
+.. literalinclude:: /examples/usage/usage_index_1.py
+   :language: python
+   :caption: ``basic query execution``
+   :lines: 1-23
+   :dedent: 4
 
 **Using the Query Builder**
 
-.. code-block:: python
-
-   from sqlspec import sql
-
-   query = sql.select("id", "name", "email").from_("users").where("active = ?")
-   result = session.execute(query, True)
-   users = result.all()
+.. literalinclude:: /examples/usage/usage_index_2.py
+   :language: python
+   :caption: ``using the query builder``
+   :lines: 1-32
+   :dedent: 4
 
 **Loading from SQL Files**
 
-.. code-block:: python
-
-   from sqlspec.loader import SQLFileLoader
-
-   loader = SQLFileLoader()
-   loader.load_sql("queries/users.sql")
-
-   user_query = loader.get_sql("get_user_by_id", user_id=123)
-   result = session.execute(user_query)
+.. literalinclude:: /examples/usage/usage_index_3.py
+   :language: python
+   :caption: ``loading from sql files``
+   :lines: 1-39
+   :dedent: 4
 
 Next Steps
 ----------
