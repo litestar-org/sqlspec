@@ -2,8 +2,6 @@
 
 import pytest
 
-__all__ = ("test_cleanup_resources_best_practice", )
-
 
 @pytest.mark.asyncio
 async def test_cleanup_resources_best_practice() -> None:

@@ -1,7 +1,5 @@
 """Test configuration example: Named database bindings."""
 
-__all__ = ("test_named_bindings", )
-
 
 def test_named_bindings() -> None:
     """Test named database bindings."""
@@ -16,7 +14,9 @@ def test_named_bindings() -> None:
         db_manager = SQLSpec()
 
         # Add with bind keys
-        cache_key = db_manager.add_config(SqliteConfig(pool_config={"database": tmp.name}, bind_key="cache_db"))
+        cache_key = db_manager.add_config(
+            SqliteConfig(pool_config={"database": tmp.name}, bind_key="cache_db")
+        )
         dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
         main_key = db_manager.add_config(AsyncpgConfig(pool_config={"dsn": dsn}, bind_key="main_db"))
 

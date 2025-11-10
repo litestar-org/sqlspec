@@ -1,7 +1,4 @@
 def test_memory_databases() -> None:
-__all__ = ("test_memory_databases", )
-
-
     from sqlspec.adapters.sqlite import SqliteConfig
 
     # In-memory database (isolated per connection)

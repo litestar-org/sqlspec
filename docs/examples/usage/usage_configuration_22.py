@@ -1,7 +1,4 @@
 def test_basic_migration_config() -> None:
-__all__ = ("test_basic_migration_config", )
-
-
     import os
 
     from sqlspec.adapters.asyncpg import AsyncpgConfig

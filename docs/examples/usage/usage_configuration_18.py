@@ -1,7 +1,5 @@
 """Test configuration example: Cache clearing operations."""
 
-__all__ = ("test_clear_cache", )
-
 
 def test_clear_cache() -> None:
     """Test cache clearing operations."""

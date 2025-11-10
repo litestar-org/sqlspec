@@ -1,7 +1,4 @@
 def test_parameter_styles() -> None:
-__all__ = ("test_parameter_styles", )
-
-
     from sqlspec import ParameterStyle
 
     # Question mark (SQLite, DuckDB)

@@ -1,7 +1,4 @@
 def test_duckdb_config_setup() -> None:
-__all__ = ("test_duckdb_config_setup", )
-
-
     from sqlspec.adapters.duckdb import DuckDBConfig
 
     in_memory_config = DuckDBConfig()

@@ -1,7 +1,5 @@
 """Test configuration example: Best practice - Tune pool sizes."""
 
-__all__ = ("test_disable_security_checks_best_practice", )
-
 
 def test_disable_security_checks_best_practice() -> None:
     """Test disabling security checks when necessary."""

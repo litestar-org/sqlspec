@@ -1,7 +1,5 @@
 """Test configuration example: Best practice - Enable caching."""
 
-__all__ = ("test_enable_caching_best_practice", )
-
 
 def test_enable_caching_best_practice() -> None:
     """Test caching best practice configuration."""

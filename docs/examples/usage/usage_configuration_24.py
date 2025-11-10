@@ -3,9 +3,6 @@
 import os
 from unittest.mock import patch
 
-__all__ = ("test_environment_based_configuration", )
-
-
 POSTGRES_PORT = 5433
 
 
