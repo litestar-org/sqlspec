@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
     from sqlspec.core import StatementConfig
-
 __all__ = (
     "DuckDBConfig",
     "DuckDBConnectionParams",
@@ -31,10 +30,21 @@ __all__ = (
     "DuckDBPoolParams",
     "DuckDBSecretConfig",
 )
+EXTENSION_FLAG_KEYS: "tuple[str, ...]" = (
+    "allow_community_extensions",
+    "allow_unsigned_extensions",
+    "enable_external_access",
+)
 
 
 class DuckDBConnectionParams(TypedDict):
-    """DuckDB connection parameters."""
+    """DuckDB connection parameters.
+
+    Mirrors the keyword arguments accepted by duckdb.connect so callers can drive every DuckDB
+    configuration switch directly through SQLSpec. All keys are optional and forwarded verbatim
+    to DuckDB, either as top-level parameters or via the nested ``config`` dictionary when DuckDB
+    expects them there.
+    """
 
     database: NotRequired[str]
     read_only: NotRequired[bool]
@@ -75,7 +85,8 @@ class DuckDBConnectionParams(TypedDict):
 class DuckDBPoolParams(DuckDBConnectionParams):
     """Complete pool configuration for DuckDB adapter.
 
-    Combines standardized pool parameters with DuckDB-specific connection parameters.
+    Extends DuckDBConnectionParams with pool sizing and lifecycle settings so SQLSpec can manage
+    per-thread DuckDB connections safely while honoring DuckDB's thread-safety constraints.
     """
 
     pool_min_size: NotRequired[int]
@@ -128,6 +139,8 @@ class DuckDBDriverFeatures(TypedDict):
         enable_uuid_conversion: Enable automatic UUID string conversion.
             When True (default), UUID strings are automatically converted to UUID objects.
             When False, UUID strings are treated as regular strings.
+        extension_flags: Connection-level flags (e.g., allow_community_extensions) applied
+            via SET statements immediately after connection creation.
     """
 
     extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
@@ -135,6 +148,7 @@ class DuckDBDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[[DuckDBConnection], DuckDBConnection | None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
+    extension_flags: NotRequired[dict[str, Any]]
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
@@ -222,12 +236,22 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         if pool_config.get("database") in {":memory:", ""}:
             pool_config["database"] = ":memory:shared_db"
 
-        processed_features = dict(driver_features) if driver_features else {}
+        extension_flags: dict[str, Any] = {}
+        for key in tuple(pool_config.keys()):
+            if key in EXTENSION_FLAG_KEYS:
+                extension_flags[key] = pool_config.pop(key)
+
+        processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         user_connection_hook = cast(
             "Callable[[Any], None] | None", processed_features.pop("on_connection_create", None)
         )
         processed_features.setdefault("enable_uuid_conversion", True)
         serializer = processed_features.setdefault("json_serializer", to_json)
+
+        if extension_flags:
+            existing_flags = cast("dict[str, Any]", processed_features.get("extension_flags", {}))
+            merged_flags = {**existing_flags, **extension_flags}
+            processed_features["extension_flags"] = merged_flags
 
         local_observability = observability_config
         if user_connection_hook is not None:
@@ -271,11 +295,17 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         extensions = self.driver_features.get("extensions", None)
         secrets = self.driver_features.get("secrets", None)
+        extension_flags = self.driver_features.get("extension_flags", None)
         extensions_dicts = [dict(ext) for ext in extensions] if extensions else None
         secrets_dicts = [dict(secret) for secret in secrets] if secrets else None
+        extension_flags_dict = dict(extension_flags) if extension_flags else None
 
         return DuckDBConnectionPool(
-            connection_config=connection_config, extensions=extensions_dicts, secrets=secrets_dicts, **self.pool_config
+            connection_config=connection_config,
+            extensions=extensions_dicts,
+            extension_flags=extension_flags_dict,
+            secrets=secrets_dicts,
+            **self.pool_config,
         )
 
     def _close_pool(self) -> None:
