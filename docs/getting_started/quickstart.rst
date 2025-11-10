@@ -12,8 +12,10 @@ Let's start with the simplest possible example - executing a query and getting r
 .. literalinclude:: /examples/quickstart/quickstart_1.py
    :language: python
    :caption: ``first sqlspec query``
-   :lines: 6-13
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 What's happening here?
 
@@ -30,8 +32,10 @@ Let's create a table, insert some data, and query it:
 .. literalinclude:: /examples/quickstart/quickstart_2.py
    :language: python
    :caption: ``working with real data``
-   :lines: 6-38
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 Session Methods Cheat Sheet
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -54,8 +58,10 @@ The real power of SQLSpec comes from type-safe result mapping. Define your data 
 .. literalinclude:: /examples/quickstart/quickstart_3.py
    :language: python
    :caption: ``type-safe results``
-   :lines: 15-34
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 .. note::
 
@@ -69,8 +75,10 @@ SQLSpec supports async/await for non-blocking database operations. Here's the sa
 .. literalinclude:: /examples/quickstart/quickstart_4.py
    :language: python
    :caption: ``async support``
-   :lines: 15-30
-   :dedent: 2
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
 
 The API is identical - just add ``await`` and use async config/drivers!
 
@@ -82,8 +90,10 @@ One of SQLSpec's strengths is the consistent API across databases. Here's the sa
 .. literalinclude:: /examples/quickstart/quickstart_5.py
    :language: python
    :caption: ``switching databases``
-   :lines: 18-58
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 .. note::
 
@@ -110,8 +120,10 @@ Need to work with multiple databases? Register multiple configs:
 .. literalinclude:: /examples/quickstart/quickstart_6.py
    :language: python
    :caption: ``multiple databases``
-   :lines: 7-18
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 
 Transaction Support
@@ -123,8 +135,10 @@ boundaries explicitly and keep examples deterministic:
 .. literalinclude:: /examples/quickstart/quickstart_7.py
    :language: python
    :caption: ``transaction support``
-   :lines: 8-55
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 The snippet seeds data in a temporary SQLite database, intentionally triggers a failure,
 and uses ``contextlib.suppress`` so the docs stay readable while the companion test verifies
@@ -142,8 +156,10 @@ For those who prefer programmatic query construction, SQLSpec includes an experi
 .. literalinclude:: /examples/quickstart/quickstart_8.py
    :language: python
    :caption: ``query builder``
-   :lines: 6-21
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 .. warning::
 
