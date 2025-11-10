@@ -1,35 +1,48 @@
 # Test module converted from docs example - code-block 12
 """Minimal smoke test for drivers_and_querying example 12."""
 
-from sqlspec.adapters.bigquery import BigQueryDriver
+from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
 
-def test_example_12_bigquery_config(bigquery_session: "BigQueryDriver") -> None:
+def test_example_12_bigquery_config(bigquery_service: BigQueryDriver) -> None:
     import datetime
 
+    from google.api_core.client_options import ClientOptions
+    from google.auth.credentials import AnonymousCredentials
+
     from sqlspec import SQLSpec
+    from sqlspec.adapters.bigquery.config import BigQueryConfig
 
-    SQLSpec()
-
-    bigquery_session.execute("SELECT 1 AS value")
-
-    # Create the test table
-
-    create_table_query = """
-    CREATE TABLE if not exists events (
-        timestamp TIMESTAMP,
-        event_type STRING
+    config = BigQueryConfig(
+        connection_config={
+            "project": bigquery_service.project,
+            "dataset_id": bigquery_service.dataset,
+            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
+            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
+        }
     )
-    """
-    bigquery_session.execute_script(create_table_query)
+    spec = SQLSpec()
+    with spec.provide_session(config) as bigquery_session:
+        bigquery_session.execute("SELECT 1 AS value")
 
-    bigquery_session.execute(
+        # Create the test table
+
+        create_table_query = """
+        CREATE or replace TABLE events (
+            timestamp TIMESTAMP,
+            event_type STRING
+        )
         """
-       SELECT DATE(timestamp) as date,
-              COUNT(*) as events
-       FROM events
-       WHERE timestamp >= @start_date
-       GROUP BY date
-   """,
-        start_date=datetime.date(2025, 1, 1),
-    )
+        bigquery_session.execute_script(create_table_query)
+
+        print("Executing test query...")
+        bigquery_session.execute(
+            """
+           SELECT DATE(timestamp) as date,
+                  COUNT(*) as events
+           FROM events
+           WHERE timestamp >= @start_date
+           GROUP BY date
+       """,
+            start_date=datetime.date(2025, 1, 1),
+        )
