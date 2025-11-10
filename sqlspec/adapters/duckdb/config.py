@@ -239,7 +239,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         extension_flags: dict[str, Any] = {}
         for key in tuple(pool_config.keys()):
             if key in EXTENSION_FLAG_KEYS:
-                extension_flags[key] = pool_config.pop(key)
+                extension_flags[key] = pool_config.pop(key)  # type: ignore[misc]
 
         processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
         user_connection_hook = cast(
