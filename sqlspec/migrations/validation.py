@@ -14,6 +14,8 @@ from sqlspec.exceptions import OutOfOrderMigrationError
 from sqlspec.utils.version import parse_version
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.utils.version import MigrationVersion
 
 __all__ = ("MigrationGap", "detect_out_of_order_migrations", "format_out_of_order_warning")
@@ -39,7 +41,7 @@ class MigrationGap:
 
 
 def detect_out_of_order_migrations(
-    pending_versions: "list[str]", applied_versions: "list[str]"
+    pending_versions: "Sequence[str | None]", applied_versions: "Sequence[str | None]"
 ) -> "list[MigrationGap]":
     """Detect migrations created before already-applied migrations.
 
@@ -51,29 +53,26 @@ def detect_out_of_order_migrations(
     independent sequences within their own namespaces.
 
     Args:
-        pending_versions: List of migration versions not yet applied.
-        applied_versions: List of migration versions already applied.
+        pending_versions: List of migration versions not yet applied (may contain None).
+        applied_versions: List of migration versions already applied (may contain None).
 
     Returns:
-        List of migration gaps representing out-of-order migrations.
-        Empty list if no out-of-order migrations detected.
-
-    Example:
-        Applied: [20251011120000, 20251012140000]
-        Pending: [20251011130000, 20251013090000]
-        Result: Gap for 20251011130000 (created between applied migrations)
-
-        Applied: [ext_litestar_0001, 0001, 0002]
-        Pending: [ext_adk_0001]
-        Result: [] (extensions excluded from out-of-order detection)
+        List of migration gaps where pending versions are older than applied.
     """
     if not applied_versions or not pending_versions:
         return []
 
     gaps: list[MigrationGap] = []
 
-    parsed_applied = [parse_version(v) for v in applied_versions]
-    parsed_pending = [parse_version(v) for v in pending_versions]
+    # Filter out None values, empty strings, and whitespace-only strings
+    valid_applied = [v for v in applied_versions if v is not None and v.strip()]
+    valid_pending = [v for v in pending_versions if v is not None and v.strip()]
+
+    if not valid_applied or not valid_pending:
+        return []
+
+    parsed_applied = [parse_version(v) for v in valid_applied]
+    parsed_pending = [parse_version(v) for v in valid_pending]
 
     core_applied = [v for v in parsed_applied if v.extension is None]
     core_pending = [v for v in parsed_pending if v.extension is None]

@@ -13,7 +13,7 @@ Explains how to wire SQLSpec into Litestar using the official plugin, covering d
 - Commit strategies: `manual`, `autocommit`, and `autocommit_include_redirect`, configured via `extension_config["litestar"]["commit_mode"]`.
 - Session storage uses adapter-specific stores built on `BaseSQLSpecStore` (e.g., `AsyncpgStore`, `AiosqliteStore`).
 - CLI support registers `litestar db ...` commands by including `database_group` in the Litestar CLI app.
-- Correlation middleware emits request IDs in query logs (`enable_correlation_middleware=True` by default).
+- Correlation middleware emits request IDs in query logs (`enable_correlation_middleware=True` by default). It auto-detects standard tracing headers (`X-Request-ID`, `Traceparent`, `X-Cloud-Trace-Context`, `X-Amzn-Trace-Id`, etc.) unless you override the set via `correlation_header` / `correlation_headers`.
 
 ## Installation
 
@@ -95,6 +95,10 @@ config = AsyncpgConfig(
         }
     },
 )
+
+## Correlation IDs
+
+Enable request-level correlation tracking (on by default) to thread Litestar requests into SQLSpec's observability runtime. The plugin inspects `X-Request-ID`, `Traceparent`, `X-Cloud-Trace-Context`, `X-Amzn-Trace-Id`, `grpc-trace-bin`, and `X-Correlation-ID` automatically, then falls back to generating a UUID if none are present. Override the primary header with `correlation_header`, append more via `correlation_headers`, or set `auto_trace_headers=False` to opt out of the auto-detection list entirely. Observers (print SQL, custom hooks, OpenTelemetry spans) automatically attach the current `correlation_id` to their payloads. Disable the middleware with `enable_correlation_middleware=False` when another piece of infrastructure manages IDs.
 ```
 
 ## Transaction Management
@@ -162,7 +166,7 @@ Commands include `db migrate`, `db upgrade`, `db downgrade`, and `db status`. Th
 
 ## Middleware and Observability
 
-- Correlation middleware annotates query logs with request-scoped IDs. Disable by setting `enable_correlation_middleware=False`.
+- Correlation middleware annotates query logs with request-scoped IDs. Disable by setting `enable_correlation_middleware=False`, override the primary header via `correlation_header`, add more with `correlation_headers`, or disable auto-detection using `auto_trace_headers=False`.
 - The plugin enforces graceful shutdown by closing pools during Litestar’s lifespan events.
 - Combine with Litestar’s `TelemetryConfig` to emit tracing spans around database calls.
 

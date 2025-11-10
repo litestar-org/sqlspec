@@ -160,6 +160,37 @@ def _format_identifiers(identifiers: "set[tuple[str, int | str]]") -> str:
     return "[" + ", ".join(formatted) + "]"
 
 
+def _normalize_index_identifiers(expected: "set[tuple[str, int | str]]", actual: "set[tuple[str, int | str]]") -> bool:
+    """Allow positional payloads to satisfy generated param_N identifiers."""
+
+    if not expected or not actual:
+        return False
+
+    expected_named = {value for kind, value in expected if kind == "named"}
+    actual_indexes = {value for kind, value in actual if kind == "index"}
+
+    if not expected_named or not actual_indexes:
+        return False
+
+    normalized_expected: set[int] = set()
+    for name in expected_named:
+        if not isinstance(name, str) or not name.startswith("param_"):
+            return False
+        suffix = name[6:]
+        if not suffix.isdigit():
+            return False
+        normalized_expected.add(int(suffix))
+
+    if not normalized_expected:
+        return False
+
+    if not all(isinstance(index, int) for index in actual_indexes):
+        return False
+
+    normalized_actual = {int(index) for index in actual_indexes}
+    return normalized_actual == normalized_expected
+
+
 def _validate_single_parameter_set(
     parameter_profile: "ParameterProfile", parameters: Any, batch_index: "int | None" = None
 ) -> None:
@@ -186,7 +217,11 @@ def _validate_single_parameter_set(
         msg = f"{prefix}: {actual_count} parameters provided but {expected_count} placeholders detected."
         raise sqlspec.exceptions.SQLSpecError(msg)
 
-    if expected_identifiers != actual_identifiers:
+    identifiers_match = expected_identifiers == actual_identifiers or _normalize_index_identifiers(
+        expected_identifiers, actual_identifiers
+    )
+
+    if not identifiers_match:
         msg = (
             f"{prefix}: expected identifiers {_format_identifiers(expected_identifiers)}, "
             f"received {_format_identifiers(actual_identifiers)}."

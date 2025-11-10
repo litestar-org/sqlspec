@@ -6,7 +6,7 @@ This module provides abstract base classes for migration components.
 import hashlib
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from sqlspec.builder import Delete, Insert, Select, Update, sql
 from sqlspec.builder._ddl import CreateTable
@@ -17,13 +17,16 @@ from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.sync_tools import await_
 from sqlspec.utils.version import parse_version
 
+if TYPE_CHECKING:
+    from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.observability import ObservabilityRuntime
+
 __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker")
 
+DriverT = TypeVar("DriverT")
+ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("migrations.base")
-
-DriverT = TypeVar("DriverT")
-ConfigT = TypeVar("ConfigT")
 
 
 class BaseMigrationTracker(ABC, Generic[DriverT]):
@@ -488,6 +491,9 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
         self.project_root = Path(migration_config["project_root"]) if "project_root" in migration_config else None
         self.include_extensions = migration_config.get("include_extensions", [])
         self.extension_configs = self._parse_extension_configs()
+        self._runtime: ObservabilityRuntime | None = self.config.get_observability_runtime()
+        self._last_command_error: Exception | None = None
+        self._last_command_metrics: dict[str, float] | None = None
 
     def _parse_extension_configs(self) -> "dict[str, dict[str, Any]]":
         """Parse extension configurations from include_extensions.
@@ -634,6 +640,13 @@ out-of-order migrations gracefully (e.g., from late-merging branches).
         readme.write_text(self._get_init_readme_content())
 
         console.print(f"[green]Initialized migrations in {directory}[/]")
+
+    def _record_command_metric(self, name: str, value: float) -> None:
+        """Accumulate per-command metrics for decorator flushing."""
+
+        if self._last_command_metrics is None:
+            self._last_command_metrics = {}
+        self._last_command_metrics[name] = self._last_command_metrics.get(name, 0.0) + value
 
     @abstractmethod
     def init(self, directory: str, package: bool = True) -> Any:

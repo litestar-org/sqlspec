@@ -1,7 +1,8 @@
 import asyncio
 import atexit
-from collections.abc import Awaitable, Coroutine
-from typing import TYPE_CHECKING, Any, Union, cast, overload
+from collections.abc import AsyncIterator, Awaitable, Coroutine, Iterator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, contextmanager
+from typing import TYPE_CHECKING, Any, TypeGuard, Union, cast, overload
 
 from sqlspec.config import (
     AsyncConfigT,
@@ -21,15 +22,16 @@ from sqlspec.core import (
     reset_cache_stats,
     update_cache_config,
 )
+from sqlspec.loader import SQLFileLoader
+from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime, TelemetryDiagnostics
+from sqlspec.typing import ConnectionT
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from pathlib import Path
 
     from sqlspec.core import SQL
-    from sqlspec.loader import SQLFileLoader
-    from sqlspec.typing import ConnectionT, PoolT
+    from sqlspec.typing import PoolT
 
 
 __all__ = ("SQLSpec",)
@@ -37,16 +39,30 @@ __all__ = ("SQLSpec",)
 logger = get_logger()
 
 
+def _is_async_context_manager(obj: Any) -> TypeGuard[AbstractAsyncContextManager[Any]]:
+    return hasattr(obj, "__aenter__")
+
+
+def _is_sync_context_manager(obj: Any) -> TypeGuard[AbstractContextManager[Any]]:
+    return hasattr(obj, "__enter__")
+
+
 class SQLSpec:
     """Configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_configs", "_instance_cache_config", "_sql_loader")
+    __slots__ = ("_configs", "_instance_cache_config", "_loader_runtime", "_observability_config", "_sql_loader")
 
-    def __init__(self, *, loader: "SQLFileLoader | None" = None) -> None:
+    def __init__(
+        self, *, loader: "SQLFileLoader | None" = None, observability_config: "ObservabilityConfig | None" = None
+    ) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
         atexit.register(self._cleanup_sync_pools)
         self._instance_cache_config: CacheConfig | None = None
         self._sql_loader: SQLFileLoader | None = loader
+        self._observability_config = observability_config
+        self._loader_runtime = ObservabilityRuntime(observability_config, config_name="SQLFileLoader")
+        if self._sql_loader is not None:
+            self._sql_loader.set_observability_runtime(self._loader_runtime)
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
@@ -129,6 +145,8 @@ class SQLSpec:
         config_type = type(config)
         if config_type in self._configs:
             logger.debug("Configuration for %s already exists. Overwriting.", config_type.__name__)
+        if hasattr(config, "attach_observability"):
+            config.attach_observability(self._observability_config)
         self._configs[config_type] = config
         return config_type
 
@@ -169,6 +187,30 @@ class SQLSpec:
             Dictionary mapping config types to config instances.
         """
         return self._configs
+
+    def telemetry_snapshot(self) -> "dict[str, Any]":
+        """Return aggregated diagnostics across all registered configurations."""
+
+        diagnostics = TelemetryDiagnostics()
+        loader_metrics = self._loader_runtime.metrics_snapshot()
+        if loader_metrics:
+            diagnostics.add_metric_snapshot(loader_metrics)
+        for config in self._configs.values():
+            runtime = config.get_observability_runtime()
+            diagnostics.add_lifecycle_snapshot(runtime.diagnostics_key, runtime.lifecycle_snapshot())
+            metrics_snapshot = runtime.metrics_snapshot()
+            if metrics_snapshot:
+                diagnostics.add_metric_snapshot(metrics_snapshot)
+        return diagnostics.snapshot()
+
+    def _ensure_sql_loader(self) -> SQLFileLoader:
+        """Return a SQLFileLoader instance configured with observability runtime."""
+
+        if self._sql_loader is None:
+            self._sql_loader = SQLFileLoader(runtime=self._loader_runtime)
+        else:
+            self._sql_loader.set_observability_runtime(self._loader_runtime)
+        return self._sql_loader
 
     @overload
     def get_connection(
@@ -281,25 +323,19 @@ class SQLSpec:
 
             async def _create_driver_async() -> "DriverT":
                 resolved_connection = await connection_obj  # pyright: ignore
-                return cast(  # pyright: ignore
-                    "DriverT",
-                    config.driver_type(
-                        connection=resolved_connection,
-                        statement_config=config.statement_config,
-                        driver_features=config.driver_features,
-                    ),
+                driver = config.driver_type(  # pyright: ignore
+                    connection=resolved_connection,
+                    statement_config=config.statement_config,
+                    driver_features=config.driver_features,
                 )
+                return config._prepare_driver(driver)  # pyright: ignore
 
             return _create_driver_async()
 
-        return cast(  # pyright: ignore
-            "DriverT",
-            config.driver_type(
-                connection=connection_obj,
-                statement_config=config.statement_config,
-                driver_features=config.driver_features,
-            ),
+        driver = config.driver_type(  # pyright: ignore
+            connection=connection_obj, statement_config=config.statement_config, driver_features=config.driver_features
         )
+        return config._prepare_driver(driver)  # pyright: ignore
 
     @overload
     def provide_connection(
@@ -360,7 +396,41 @@ class SQLSpec:
             config_name = self._get_config_name(name)
 
         logger.debug("Providing connection context for config: %s", config_name, extra={"config_type": config_name})
-        return config.provide_connection(*args, **kwargs)
+        connection_context = config.provide_connection(*args, **kwargs)
+        runtime = config.get_observability_runtime()
+
+        if _is_async_context_manager(connection_context):
+            async_context = cast("AbstractAsyncContextManager[ConnectionT]", connection_context)
+
+            @asynccontextmanager
+            async def _async_wrapper() -> AsyncIterator[ConnectionT]:
+                connection: ConnectionT | None = None
+                try:
+                    async with async_context as conn:
+                        connection = conn
+                        runtime.emit_connection_create(conn)
+                        yield conn
+                finally:
+                    if connection is not None:
+                        runtime.emit_connection_destroy(connection)
+
+            return _async_wrapper()
+
+        sync_context = cast("AbstractContextManager[ConnectionT]", connection_context)
+
+        @contextmanager
+        def _sync_wrapper() -> Iterator[ConnectionT]:
+            connection: ConnectionT | None = None
+            try:
+                with sync_context as conn:
+                    connection = conn
+                    runtime.emit_connection_create(conn)
+                    yield conn
+            finally:
+                if connection is not None:
+                    runtime.emit_connection_destroy(connection)
+
+        return _sync_wrapper()
 
     @overload
     def provide_session(
@@ -421,7 +491,53 @@ class SQLSpec:
             config_name = self._get_config_name(name)
 
         logger.debug("Providing session context for config: %s", config_name, extra={"config_type": config_name})
-        return config.provide_session(*args, **kwargs)
+        session_context = config.provide_session(*args, **kwargs)
+        runtime = config.get_observability_runtime()
+
+        if _is_async_context_manager(session_context):
+            async_session = cast("AbstractAsyncContextManager[DriverT]", session_context)
+
+            @asynccontextmanager
+            async def _async_session_wrapper() -> AsyncIterator[DriverT]:
+                driver: DriverT | None = None
+                try:
+                    async with async_session as session:
+                        driver = config._prepare_driver(session)  # pyright: ignore
+                        connection = getattr(driver, "connection", None)
+                        if connection is not None:
+                            runtime.emit_connection_create(connection)
+                        runtime.emit_session_start(driver)
+                        yield driver
+                finally:
+                    if driver is not None:
+                        runtime.emit_session_end(driver)
+                        connection = getattr(driver, "connection", None)
+                        if connection is not None:
+                            runtime.emit_connection_destroy(connection)
+
+            return _async_session_wrapper()
+
+        sync_session = cast("AbstractContextManager[DriverT]", session_context)
+
+        @contextmanager
+        def _sync_session_wrapper() -> Iterator[DriverT]:
+            driver: DriverT | None = None
+            try:
+                with sync_session as session:
+                    driver = config._prepare_driver(session)  # pyright: ignore
+                    connection = getattr(driver, "connection", None)
+                    if connection is not None:
+                        runtime.emit_connection_create(connection)
+                    runtime.emit_session_start(driver)
+                    yield driver
+            finally:
+                if driver is not None:
+                    runtime.emit_session_end(driver)
+                    connection = getattr(driver, "connection", None)
+                    if connection is not None:
+                        runtime.emit_connection_destroy(connection)
+
+        return _sync_session_wrapper()
 
     @overload
     def get_pool(
@@ -616,12 +732,8 @@ class SQLSpec:
         Args:
             *paths: One or more file paths or directory paths to load.
         """
-        if self._sql_loader is None:
-            from sqlspec.loader import SQLFileLoader
-
-            self._sql_loader = SQLFileLoader()
-
-        self._sql_loader.load_sql(*paths)
+        loader = self._ensure_sql_loader()
+        loader.load_sql(*paths)
         logger.debug("Loaded SQL files: %s", paths)
 
     def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
@@ -632,12 +744,8 @@ class SQLSpec:
             sql: Raw SQL content.
             dialect: Optional dialect for the SQL statement.
         """
-        if self._sql_loader is None:
-            from sqlspec.loader import SQLFileLoader
-
-            self._sql_loader = SQLFileLoader()
-
-        self._sql_loader.add_named_sql(name, sql, dialect)
+        loader = self._ensure_sql_loader()
+        loader.add_named_sql(name, sql, dialect)
         logger.debug("Added named SQL: %s", name)
 
     def get_sql(self, name: str) -> "SQL":
@@ -650,12 +758,8 @@ class SQLSpec:
         Returns:
             SQL object ready for execution.
         """
-        if self._sql_loader is None:
-            from sqlspec.loader import SQLFileLoader
-
-            self._sql_loader = SQLFileLoader()
-
-        return self._sql_loader.get_sql(name)
+        loader = self._ensure_sql_loader()
+        return loader.get_sql(name)
 
     def list_sql_queries(self) -> "list[str]":
         """List all available query names.
