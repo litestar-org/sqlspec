@@ -1,13 +1,15 @@
 """Test configuration example: Best practice - Clean up resources."""
 
-import pytest
-
 __all__ = ("test_cleanup_resources_best_practice",)
+
+
+import pytest
 
 
 @pytest.mark.asyncio
 async def test_cleanup_resources_best_practice() -> None:
     """Test resource cleanup best practice."""
+    # start-example
     import tempfile
 
     from sqlspec import SQLSpec
@@ -25,4 +27,5 @@ async def test_cleanup_resources_best_practice() -> None:
         await db_manager.close_all_pools()
 
         # Verify pools are closed
+        # end-example
         assert db.pool_instance is None or not hasattr(db.pool_instance, "_pool")

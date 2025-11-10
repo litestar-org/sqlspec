@@ -1,4 +1,9 @@
+__all__ = ("test_basic_migration_config",)
+
+
 def test_basic_migration_config() -> None:
+
+    # start-example
     import os
 
     from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -15,5 +20,6 @@ def test_basic_migration_config() -> None:
             "include_extensions": ["litestar"],  # Simple string list only
         },
     )
+    # end-example
     assert config.migration_config["script_location"] == "migrations"
     assert "litestar" in config.migration_config["include_extensions"]

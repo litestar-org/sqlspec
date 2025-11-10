@@ -4,6 +4,7 @@ __all__ = ("test_extension_config",)
 
 
 def test_extension_config() -> None:
+    # start-example
     import os
 
     from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -28,6 +29,7 @@ def test_extension_config() -> None:
         },
     )
 
+    # end-example
     assert config.extension_config["litestar"]["commit_mode"] == "autocommit_include_redirect"
     assert config.extension_config["litestar"]["extra_commit_statuses"] == {201}
     assert config.extension_config["litestar"]["correlation_header"] == "x-request-id"

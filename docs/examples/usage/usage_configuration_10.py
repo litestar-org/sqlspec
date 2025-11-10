@@ -1,13 +1,18 @@
-POOL_INSTANCE = 20
 __all__ = ("test_manual_pool",)
 
 
 def test_manual_pool() -> None:
+
+    # start-example
     import os
+
+    import asyncpg
 
     from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-    dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
-    pool = {"dsn": dsn, "min_size": 10, "max_size": POOL_INSTANCE}
+    pool = asyncpg.create_pool(
+        dsn=os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db"), min_size=10, max_size=20
+    )
     db = AsyncpgConfig(pool_instance=pool)
-    assert db.pool_instance["max_size"] == POOL_INSTANCE
+    # end-example
+    assert db.pool_instance is pool

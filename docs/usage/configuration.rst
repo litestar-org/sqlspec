@@ -21,7 +21,8 @@ The simplest way to use SQLSpec is with default configuration:
 .. literalinclude:: /examples/usage/usage_configuration_1.py
    :language: python
    :caption: `basic configuration`
-   :lines: 2-14
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Database Configurations
@@ -42,7 +43,8 @@ SQLite Configuration
 .. literalinclude:: /examples/usage/usage_configuration_2.py
    :language: python
    :caption: `sqlite configuration`
-   :lines: 2-11
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 **Memory Databases**
@@ -50,7 +52,8 @@ SQLite Configuration
 .. literalinclude:: /examples/usage/usage_configuration_3.py
    :language: python
    :caption: `memory sqlite configuration`
-   :lines: 2-13
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 PostgreSQL Configuration (asyncpg)
@@ -59,7 +62,8 @@ PostgreSQL Configuration (asyncpg)
 .. literalinclude:: /examples/usage/usage_configuration_4.py
    :language: python
    :caption: `postgres asyncpg configuration`
-   :lines: 2-16
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 PostgreSQL Configuration (psycopg)
@@ -68,7 +72,8 @@ PostgreSQL Configuration (psycopg)
 .. literalinclude:: /examples/usage/usage_configuration_5.py
    :language: python
    :caption: `psycopg async configuration`
-   :lines: 2-19
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 MySQL Configuration (asyncmy)
@@ -77,7 +82,8 @@ MySQL Configuration (asyncmy)
 .. literalinclude:: /examples/usage/usage_configuration_6.py
    :language: python
    :caption: `mysql asyncmy configuration`
-   :lines: 2-15
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 DuckDB Configuration
@@ -86,7 +92,8 @@ DuckDB Configuration
 .. literalinclude:: /examples/usage/usage_configuration_7.py
    :language: python
    :caption: `duckdb configuration`
-   :lines: 2-11
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Connection Pooling
@@ -100,7 +107,8 @@ Pool Configuration
 .. literalinclude:: /examples/usage/usage_configuration_8.py
    :language: python
    :caption: `pool configuration`
-   :lines: 2-11
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 **Pool Lifecycle Management**
@@ -108,7 +116,8 @@ Pool Configuration
 .. literalinclude:: /examples/usage/usage_configuration_9.py
    :language: python
    :caption: `pool lifecycle management`
-   :lines: 2-7
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Using Pre-Created Pools
@@ -117,7 +126,8 @@ Using Pre-Created Pools
 .. literalinclude:: /examples/usage/usage_configuration_10.py
    :language: python
    :caption: `using pre-created pools`
-   :lines: 2-9
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 No-Pooling Configuration
@@ -126,7 +136,8 @@ No-Pooling Configuration
 .. literalinclude:: /examples/usage/usage_configuration_11.py
    :language: python
    :caption: `no-pooling configuration`
-   :lines: 2-4
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Statement Configuration
@@ -140,7 +151,8 @@ Basic Statement Config
 .. literalinclude:: /examples/usage/usage_configuration_12.py
    :language: python
    :caption: `basic statement config`
-   :lines: 2-14
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Parameter Style Configuration
@@ -149,7 +161,8 @@ Parameter Style Configuration
 .. literalinclude:: /examples/usage/usage_configuration_13.py
    :language: python
    :caption: `parameter style configuration`
-   :lines: 2-17
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 **Parameter Styles**
@@ -159,7 +172,8 @@ SQLSpec supports multiple parameter placeholder styles:
 .. literalinclude:: /examples/usage/usage_configuration_14.py
    :language: python
    :caption: `parameter styles`
-   :lines: 2-21
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Validation Configuration
@@ -172,7 +186,8 @@ Disable validation for performance-critical paths where input is trusted:
 .. literalinclude:: /examples/usage/usage_configuration_15.py
    :language: python
    :caption: `validation configuration`
-   :lines: 5-17
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Cache Configuration
@@ -183,19 +198,21 @@ SQLSpec uses multi-tier caching to avoid recompiling SQL statements.
 Global Cache Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/usage_configuration_16.py
+.. literalinclude:: /examples/usage/usage_configuration_15.py
    :language: python
    :caption: `global cache configuration`
-   :lines: 6-28
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Per-Instance Cache Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/usage_configuration_17.py
+.. literalinclude:: /examples/usage/usage_configuration_16.py
    :language: python
    :caption: `per-instance cache configuration`
-   :lines: 6-27
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Cache Statistics
@@ -203,19 +220,21 @@ Cache Statistics
 
 Monitor cache statistics:
 
-.. literalinclude:: /examples/usage/usage_configuration_18.py
+.. literalinclude:: /examples/usage/usage_configuration_17.py
    :language: python
    :caption: `cache statistics`
-   :lines: 6-18
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Clear Cache
 ^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/usage_configuration_19.py
+.. literalinclude:: /examples/usage/usage_configuration_18.py
    :language: python
    :caption: `clear cache`
-   :lines: 6-24
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Multiple Database Configurations
@@ -229,7 +248,8 @@ Binding Multiple Configs
 .. literalinclude:: /examples/usage/usage_configuration_19.py
    :language: python
    :caption: `binding multiple configurations`
-   :lines: 4-27
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Named Bindings
@@ -240,7 +260,8 @@ Use bind keys for clearer configuration management:
 .. literalinclude:: /examples/usage/usage_configuration_20.py
    :language: python
    :caption: `named bindings`
-   :lines: 6-25
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 ``SQLSpec.add_config()`` returns a key for the registered configuration.
@@ -261,7 +282,8 @@ Basic Migration Config
 .. literalinclude:: /examples/usage/usage_configuration_22.py
    :language: python
    :caption: `basic migration config`
-   :lines: 2-15
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 **Migration CLI**
@@ -307,7 +329,8 @@ Litestar Plugin Configuration
 .. literalinclude:: /examples/usage/usage_configuration_23.py
    :language: python
    :caption: `litestar plugin configuration`
-   :lines: 4-28
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Telemetry Snapshot
@@ -318,8 +341,9 @@ Call ``SQLSpec.telemetry_snapshot()`` to inspect lifecycle counters, serializer 
 .. literalinclude:: /examples/usage/usage_configuration_30.py
    :language: python
    :caption: `telemetry snapshot`
-   :lines: 1-15
-   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 Environment-Based Configuration
 -------------------------------
@@ -329,8 +353,9 @@ Use environment variables for configuration:
 .. literalinclude:: /examples/usage/usage_configuration_24.py
    :language: python
    :caption: `environment-based configuration`
-   :lines: 25-41
-   :dedent: 4
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 Configuration Best Practices
 -----------------------------
@@ -342,7 +367,8 @@ Always use pooling in production:
 .. literalinclude:: /examples/usage/usage_configuration_25.py
    :language: python
    :caption: `connection pooling`
-   :lines: 11-13
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 **2. Enable Caching**
@@ -352,7 +378,8 @@ Enable caching to avoid recompiling SQL statements:
 .. literalinclude:: /examples/usage/usage_configuration_26.py
    :language: python
    :caption: `enable caching`
-   :lines: 6-8
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 **3. Tune Pool Sizes**
@@ -362,7 +389,8 @@ Size pools based on your workload:
 .. literalinclude:: /examples/usage/usage_configuration_27.py
    :language: python
    :caption: `tune pool sizes`
-   :lines: 3-20
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 **4. Disable Validation in Production**
@@ -372,7 +400,8 @@ For trusted, performance-critical queries:
 .. literalinclude:: /examples/usage/usage_configuration_28.py
    :language: python
    :caption: `no validation`
-   :lines: 6-12
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 
@@ -383,7 +412,8 @@ Always close pools on shutdown:
 .. literalinclude:: /examples/usage/usage_configuration_29.py
    :language: python
    :caption: `cleanup resources`
-   :lines: 10-27
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
 
 Next Steps

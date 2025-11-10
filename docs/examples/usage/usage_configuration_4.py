@@ -1,4 +1,9 @@
+__all__ = ("test_asyncpg_config_setup",)
+
+
 def test_asyncpg_config_setup() -> None:
+
+    # start-example
     import os
 
     from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -22,4 +27,5 @@ def test_asyncpg_config_setup() -> None:
             "database": database,
         }
     )
+    # end-example
     assert config.pool_config["host"] == host

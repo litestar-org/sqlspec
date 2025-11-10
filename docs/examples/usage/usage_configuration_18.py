@@ -5,10 +5,12 @@ __all__ = ("test_clear_cache",)
 
 def test_clear_cache() -> None:
     """Test cache clearing operations."""
-    from sqlspec.core.cache import clear_all_caches, get_cache_statistics
+    # start-example
+    from sqlspec.core import clear_all_caches, get_cache_statistics
 
     # Get initial statistics
     stats_before = get_cache_statistics()
+    # end-example
     assert isinstance(stats_before, dict)
 
     # Clear all caches and reset statistics

@@ -5,11 +5,12 @@ __all__ = ("test_cache_statistics",)
 
 def test_cache_statistics() -> None:
     """Test cache statistics tracking."""
+    # start-example
     import tempfile
 
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.core.cache import get_cache_statistics, log_cache_stats
+    from sqlspec.core import get_cache_statistics, log_cache_stats
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         db_manager = SQLSpec()
@@ -22,6 +23,7 @@ def test_cache_statistics() -> None:
 
         # Get statistics
         stats = get_cache_statistics()
+        # end-example
         assert isinstance(stats, dict)
         assert "multi_level" in stats
 

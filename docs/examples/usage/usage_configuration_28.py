@@ -6,6 +6,7 @@ __all__ = ("test_disable_security_checks_best_practice",)
 def test_disable_security_checks_best_practice() -> None:
     """Test disabling security checks when necessary."""
 
+    # start-example
     from sqlspec import StatementConfig
 
     # Example: Disabling security checks for trusted internal queries
@@ -13,4 +14,5 @@ def test_disable_security_checks_best_practice() -> None:
         dialect="postgres",
         enable_validation=False,  # Skip security checks
     )
+    # end-example
     assert statement_config.enable_validation is False
