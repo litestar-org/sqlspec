@@ -1,6 +1,8 @@
 from sqlspec import SQLSpec, sql
 from sqlspec.adapters.sqlite import SqliteConfig
 
+__all__ = ("test_quickstart_8",)
+
 
 def test_quickstart_8() -> None:
     # Build a query programmatically

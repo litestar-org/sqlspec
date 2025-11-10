@@ -82,8 +82,16 @@ One of SQLSpec's strengths is the consistent API across databases. Here's the sa
 .. literalinclude:: /examples/quickstart/quickstart_5.py
    :language: python
    :caption: ``switching databases``
-   :lines: 14-30
-   :dedent: 2
+   :lines: 18-58
+   :dedent: 4
+
+.. note::
+
+    For tests we surface the PostgreSQL connection info through the
+    ``SQLSPEC_QUICKSTART_PG_*`` environment variables (host, port, user,
+    password, database). When running the snippet outside pytest, export those
+    variables or inline your DSN in ``_pool_config()`` so the example keeps
+    working.
 
 
 .. tip::

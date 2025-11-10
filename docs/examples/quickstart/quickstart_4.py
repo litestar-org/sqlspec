@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
+__all__ = ("User", "test_quickstart_4")
+
 
 class User(BaseModel):
     id: int
