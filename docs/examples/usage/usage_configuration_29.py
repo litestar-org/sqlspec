@@ -27,6 +27,5 @@ async def test_cleanup_resources_best_practice() -> None:
         await db_manager.close_all_pools()
 
         # Verify pools are closed
-    # end-example
+        # end-example
         assert db.pool_instance is None or not hasattr(db.pool_instance, "_pool")
-

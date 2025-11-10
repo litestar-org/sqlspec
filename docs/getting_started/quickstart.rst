@@ -15,6 +15,7 @@ Let's start with the simplest possible example - executing a query and getting r
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 What's happening here?
 
@@ -34,6 +35,7 @@ Let's create a table, insert some data, and query it:
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 Session Methods Cheat Sheet
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -59,6 +61,7 @@ The real power of SQLSpec comes from type-safe result mapping. Define your data 
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 .. note::
 
@@ -75,6 +78,7 @@ SQLSpec supports async/await for non-blocking database operations. Here's the sa
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 The API is identical - just add ``await`` and use async config/drivers!
 
@@ -89,6 +93,7 @@ One of SQLSpec's strengths is the consistent API across databases. Here's the sa
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 .. note::
 
@@ -118,6 +123,7 @@ Need to work with multiple databases? Register multiple configs:
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 
 Transaction Support
@@ -132,6 +138,7 @@ boundaries explicitly and keep examples deterministic:
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 The snippet seeds data in a temporary SQLite database, intentionally triggers a failure,
 and uses ``contextlib.suppress`` so the docs stay readable while the companion test verifies
@@ -152,6 +159,7 @@ For those who prefer programmatic query construction, SQLSpec includes an experi
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 .. warning::
 

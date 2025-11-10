@@ -29,4 +29,3 @@ def test_asyncpg_config_setup() -> None:
     )
     # end-example
     assert config.pool_config["host"] == host
-

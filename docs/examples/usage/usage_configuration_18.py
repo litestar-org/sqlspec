@@ -20,4 +20,3 @@ def test_clear_cache() -> None:
     stats_after = get_cache_statistics()
     assert isinstance(stats_after, dict)
     assert "multi_level" in stats_after
-

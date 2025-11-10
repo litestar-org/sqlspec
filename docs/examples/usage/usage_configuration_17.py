@@ -23,10 +23,9 @@ def test_cache_statistics() -> None:
 
         # Get statistics
         stats = get_cache_statistics()
-    # end-example
+        # end-example
         assert isinstance(stats, dict)
         assert "multi_level" in stats
 
         # Log statistics (logs to configured logger)
         log_cache_stats()
-

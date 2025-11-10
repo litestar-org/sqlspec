@@ -19,4 +19,3 @@ def test_parameter_style_config() -> None:
     statement_config = StatementConfig(dialect="postgres", parameter_config=param_config)
     # end-example
     assert statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
-

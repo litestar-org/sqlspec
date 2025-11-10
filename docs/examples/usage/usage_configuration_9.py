@@ -16,4 +16,3 @@ def test_pool_lifecycle() -> None:
     asyncpg_config = db_manager.get_config(asyncpg_key)
     # end-example
     assert asyncpg_config.pool_config["dsn"] == dsn
-

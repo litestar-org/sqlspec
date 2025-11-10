@@ -16,6 +16,5 @@ def test_sqlite_memory_db() -> None:
     # Use the database
     with db_manager.provide_session(db) as session:
         result = session.execute("SELECT 1")
-    # end-example
+        # end-example
         assert result[0] == {"1": 1}
-

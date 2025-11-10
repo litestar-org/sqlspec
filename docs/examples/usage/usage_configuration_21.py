@@ -26,4 +26,3 @@ def test_basic_migration_config() -> None:
     # end-example
     assert config.migration_config["script_location"] == "migrations"
     assert "litestar" in config.migration_config["include_extensions"]
-

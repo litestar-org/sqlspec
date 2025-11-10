@@ -20,4 +20,3 @@ def test_asyncmy_config_setup() -> None:
     )
     # end-example
     assert config.pool_config["port"] == 3306
-

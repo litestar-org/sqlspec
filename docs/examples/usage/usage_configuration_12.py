@@ -23,4 +23,3 @@ def test_basic_statement_config() -> None:
     # end-example
     assert config.statement_config.dialect == "postgres"
     assert config.statement_config.enable_parsing is True
-

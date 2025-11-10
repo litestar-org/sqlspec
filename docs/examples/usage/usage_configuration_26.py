@@ -13,4 +13,3 @@ def test_enable_caching_best_practice() -> None:
     # end-example
     assert statement_config.enable_caching is True
     assert statement_config.dialect == "postgres"
-

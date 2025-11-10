@@ -9,4 +9,3 @@ def test_thread_local_connections() -> None:
     config = SqliteConfig(pool_config={"database": "test.db"})
     # end-example
     assert config.pool_config["database"] == "test.db"
-

@@ -17,4 +17,3 @@ def test_connection_pooling_best_practice() -> None:
     assert config.pool_config["min_size"] == 10
     assert config.pool_config["max_size"] == 20
     assert config.supports_connection_pooling is True
-

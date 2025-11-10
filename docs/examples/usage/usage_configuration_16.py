@@ -22,6 +22,5 @@ def test_per_instance_cache_config() -> None:
         # Use the configured spec
         with db_manager.provide_session(db) as session:
             result = session.execute("SELECT 1")
-    # end-example
+            # end-example
             assert result is not None
-

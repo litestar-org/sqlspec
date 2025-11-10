@@ -28,7 +28,6 @@ def test_named_bindings() -> None:
         cache_config = db_manager.get_config(cache_key)
         main_config = db_manager.get_config(main_key)
 
-    # end-example
+        # end-example
         assert cache_config.bind_key == "cache_db"
         assert main_config.bind_key == "main_db"
-

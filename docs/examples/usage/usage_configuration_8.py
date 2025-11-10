@@ -20,4 +20,3 @@ def test_asyncpg_pool_setup() -> None:
     )
     # end-example
     assert config.pool_config["min_size"] == 10
-

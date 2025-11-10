@@ -23,4 +23,3 @@ def test_parameter_styles() -> None:
     assert qmark == ParameterStyle.QMARK
     assert numeric == ParameterStyle.NUMERIC
     assert named_colon == ParameterStyle.NAMED_COLON
-

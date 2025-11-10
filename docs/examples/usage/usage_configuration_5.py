@@ -33,4 +33,3 @@ def test_psycopg_config_setup() -> None:
     )
     # end-example
     assert config.pool_config is not None
-

@@ -23,4 +23,3 @@ def test_global_cache_config() -> None:
     # end-example
     assert cache_config.sql_cache_enabled is True
     assert cache_config.sql_cache_size == 1000
-

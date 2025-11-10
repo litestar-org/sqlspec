@@ -32,10 +32,9 @@ def test_environment_based_configuration() -> None:
             }
         )
 
-    # end-example
+        # end-example
         assert config.pool_config["host"] == "testhost"
         assert config.pool_config["port"] == 5433
         assert config.pool_config["user"] == "testuser"
         assert config.pool_config["password"] == "testpass"
         assert config.pool_config["database"] == "testdb"
-

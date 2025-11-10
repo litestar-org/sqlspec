@@ -42,7 +42,9 @@ async def test_quickstart_5() -> None:
             """
         )
         await session.execute("TRUNCATE TABLE users")
-        await session.execute("INSERT INTO users (id, name, email) VALUES ($1, $2, $3)", 1, "Alice", "alice@example.com")
+        await session.execute(
+            "INSERT INTO users (id, name, email) VALUES ($1, $2, $3)", 1, "Alice", "alice@example.com"
+        )
 
     db_manager = SQLSpec()
     db = db_manager.add_config(AsyncpgConfig(pool_config=pool_config()))

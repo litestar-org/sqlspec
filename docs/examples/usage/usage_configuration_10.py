@@ -16,4 +16,3 @@ def test_manual_pool() -> None:
     db = AsyncpgConfig(pool_instance=pool)
     # end-example
     assert db.pool_instance is pool
-

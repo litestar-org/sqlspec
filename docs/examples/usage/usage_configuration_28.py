@@ -16,4 +16,3 @@ def test_disable_security_checks_best_practice() -> None:
     )
     # end-example
     assert statement_config.enable_validation is False
-

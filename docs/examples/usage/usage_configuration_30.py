@@ -19,4 +19,3 @@ def test_telemetry_snapshot() -> None:
     # end-example
     assert "SqliteConfig.lifecycle.query_start" in snapshot
     _ = snapshot.get("storage_bridge.bytes_written", 0)
-

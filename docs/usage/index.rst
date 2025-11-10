@@ -57,6 +57,7 @@ Quick Reference
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 **Using the Query Builder**
 
@@ -66,6 +67,7 @@ Quick Reference
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 **Loading from SQL Files**
 
@@ -75,6 +77,7 @@ Quick Reference
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
+   :no-upgrade:
 
 Next Steps
 ----------

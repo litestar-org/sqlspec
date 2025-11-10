@@ -33,4 +33,3 @@ def test_extension_config() -> None:
     assert config.extension_config["litestar"]["commit_mode"] == "autocommit_include_redirect"
     assert config.extension_config["litestar"]["extra_commit_statuses"] == {201}
     assert config.extension_config["litestar"]["correlation_header"] == "x-request-id"
-

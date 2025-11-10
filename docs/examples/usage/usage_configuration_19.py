@@ -28,7 +28,6 @@ def test_binding_multiple_configs() -> None:
         sqlite_config = db_manager.get_config(sqlite_key)
         pg_config = db_manager.get_config(asyncpg_key)
 
-    # end-example
+        # end-example
         assert sqlite_config.pool_config["database"] == tmp.name
         assert pg_config.pool_config["dsn"] == os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
-

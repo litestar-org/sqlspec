@@ -17,4 +17,3 @@ def test_sqlite_config_setup() -> None:
     )
     # end-example
     assert config.pool_config["database"] == "myapp.db"
-
