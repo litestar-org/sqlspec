@@ -1,4 +1,7 @@
 def test_sqlite_config_setup() -> None:
+__all__ = ("test_sqlite_config_setup", )
+
+
     from sqlspec.adapters.sqlite import SqliteConfig
 
     config = SqliteConfig(

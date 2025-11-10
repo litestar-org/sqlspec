@@ -2,6 +2,8 @@
 
 import pytest
 
+__all__ = ("test_basic_migration_config", )
+
 
 @pytest.mark.skipif(
     not pytest.importorskip("asyncpg", reason="AsyncPG not installed"), reason="AsyncPG integration tests disabled"

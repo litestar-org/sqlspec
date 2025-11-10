@@ -1,5 +1,8 @@
 """Test configuration example: Global cache configuration."""
 
+__all__ = ("test_global_cache_config", )
+
+
 SQL_CACHE_SIZE = 1000
 
 

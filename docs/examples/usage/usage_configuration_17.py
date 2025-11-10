@@ -1,5 +1,7 @@
 """Test configuration example: Cache statistics tracking."""
 
+__all__ = ("test_cache_statistics", )
+
 
 def test_cache_statistics() -> None:
     """Test cache statistics tracking."""

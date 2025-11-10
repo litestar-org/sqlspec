@@ -2,6 +2,9 @@
 
 import pytest
 
+__all__ = ("test_connection_pooling_best_practice", )
+
+
 MIN_POOL_SIZE = 10
 MAX_POOL_SIZE = 20
 
