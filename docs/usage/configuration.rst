@@ -18,7 +18,7 @@ Basic Configuration
 
 The simplest way to use SQLSpec is with default configuration:
 
-.. literalinclude:: /examples/usage/test_configuration_1.py
+.. literalinclude:: /examples/usage/usage_configuration_1.py
    :language: python
    :caption: `basic configuration`
    :lines: 2-14
@@ -29,10 +29,17 @@ Database Configurations
 
 Each database adapter has its own configuration class with adapter-specific settings.
 
+.. note::
+
+   Async PostgreSQL examples in this guide read their connection details from
+   ``SQLSPEC_USAGE_PG_*`` environment variables. The test suite populates these
+   variables (host, port, user, password, database, DSN) automatically so the
+   literalincluded snippets can stay identical to the documentation.
+
 SQLite Configuration
 ^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_2.py
+.. literalinclude:: /examples/usage/usage_configuration_2.py
    :language: python
    :caption: `sqlite configuration`
    :lines: 2-11
@@ -40,7 +47,7 @@ SQLite Configuration
 
 **Memory Databases**
 
-.. literalinclude:: /examples/usage/test_configuration_3.py
+.. literalinclude:: /examples/usage/usage_configuration_3.py
    :language: python
    :caption: `memory sqlite configuration`
    :lines: 2-13
@@ -49,7 +56,7 @@ SQLite Configuration
 PostgreSQL Configuration (asyncpg)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_4.py
+.. literalinclude:: /examples/usage/usage_configuration_4.py
    :language: python
    :caption: `postgres asyncpg configuration`
    :lines: 2-16
@@ -58,7 +65,7 @@ PostgreSQL Configuration (asyncpg)
 PostgreSQL Configuration (psycopg)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_5.py
+.. literalinclude:: /examples/usage/usage_configuration_5.py
    :language: python
    :caption: `psycopg async configuration`
    :lines: 2-19
@@ -67,7 +74,7 @@ PostgreSQL Configuration (psycopg)
 MySQL Configuration (asyncmy)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_6.py
+.. literalinclude:: /examples/usage/usage_configuration_6.py
    :language: python
    :caption: `mysql asyncmy configuration`
    :lines: 2-15
@@ -76,7 +83,7 @@ MySQL Configuration (asyncmy)
 DuckDB Configuration
 ^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_7.py
+.. literalinclude:: /examples/usage/usage_configuration_7.py
    :language: python
    :caption: `duckdb configuration`
    :lines: 2-11
@@ -90,7 +97,7 @@ Connection pooling improves performance by reusing database connections. SQLSpec
 Pool Configuration
 ^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_8.py
+.. literalinclude:: /examples/usage/usage_configuration_8.py
    :language: python
    :caption: `pool configuration`
    :lines: 2-11
@@ -98,7 +105,7 @@ Pool Configuration
 
 **Pool Lifecycle Management**
 
-.. literalinclude:: /examples/usage/test_configuration_9.py
+.. literalinclude:: /examples/usage/usage_configuration_9.py
    :language: python
    :caption: `pool lifecycle management`
    :lines: 2-7
@@ -107,7 +114,7 @@ Pool Configuration
 Using Pre-Created Pools
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_10.py
+.. literalinclude:: /examples/usage/usage_configuration_10.py
    :language: python
    :caption: `using pre-created pools`
    :lines: 2-9
@@ -116,7 +123,7 @@ Using Pre-Created Pools
 No-Pooling Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_11.py
+.. literalinclude:: /examples/usage/usage_configuration_11.py
    :language: python
    :caption: `no-pooling configuration`
    :lines: 2-4
@@ -130,7 +137,7 @@ Statement configuration controls SQL processing pipeline behavior.
 Basic Statement Config
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_12.py
+.. literalinclude:: /examples/usage/usage_configuration_12.py
    :language: python
    :caption: `basic statement config`
    :lines: 2-14
@@ -139,7 +146,7 @@ Basic Statement Config
 Parameter Style Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_13.py
+.. literalinclude:: /examples/usage/usage_configuration_13.py
    :language: python
    :caption: `parameter style configuration`
    :lines: 2-17
@@ -149,7 +156,7 @@ Parameter Style Configuration
 
 SQLSpec supports multiple parameter placeholder styles:
 
-.. literalinclude:: /examples/usage/test_configuration_14.py
+.. literalinclude:: /examples/usage/usage_configuration_14.py
    :language: python
    :caption: `parameter styles`
    :lines: 2-21
@@ -162,7 +169,7 @@ Configure security and performance validation.
 
 Disable validation for performance-critical paths where input is trusted:
 
-.. literalinclude:: /examples/usage/test_configuration_15.py
+.. literalinclude:: /examples/usage/usage_configuration_15.py
    :language: python
    :caption: `validation configuration`
    :lines: 5-17
@@ -176,7 +183,7 @@ SQLSpec uses multi-tier caching to avoid recompiling SQL statements.
 Global Cache Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_16.py
+.. literalinclude:: /examples/usage/usage_configuration_16.py
    :language: python
    :caption: `global cache configuration`
    :lines: 6-28
@@ -185,7 +192,7 @@ Global Cache Configuration
 Per-Instance Cache Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_17.py
+.. literalinclude:: /examples/usage/usage_configuration_17.py
    :language: python
    :caption: `per-instance cache configuration`
    :lines: 6-27
@@ -196,7 +203,7 @@ Cache Statistics
 
 Monitor cache statistics:
 
-.. literalinclude:: /examples/usage/test_configuration_18.py
+.. literalinclude:: /examples/usage/usage_configuration_18.py
    :language: python
    :caption: `cache statistics`
    :lines: 6-18
@@ -205,7 +212,7 @@ Monitor cache statistics:
 Clear Cache
 ^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_19.py
+.. literalinclude:: /examples/usage/usage_configuration_19.py
    :language: python
    :caption: `clear cache`
    :lines: 6-24
@@ -219,10 +226,10 @@ SQLSpec supports multiple database configurations in a single application.
 Binding Multiple Configs
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_20.py
+.. literalinclude:: /examples/usage/usage_configuration_19.py
    :language: python
    :caption: `binding multiple configurations`
-   :lines: 6-24
+   :lines: 4-27
    :dedent: 2
 
 Named Bindings
@@ -230,11 +237,18 @@ Named Bindings
 
 Use bind keys for clearer configuration management:
 
-.. literalinclude:: /examples/usage/test_configuration_21.py
+.. literalinclude:: /examples/usage/usage_configuration_20.py
    :language: python
    :caption: `named bindings`
-   :lines: 11-26
+   :lines: 6-25
    :dedent: 2
+
+``SQLSpec.add_config()`` returns a key for the registered configuration.
+Store that value (as shown above) and reuse it when calling
+``provide_session()`` or ``get_config()``. The config registry holds a single
+instance per config type, so creating multiple variants of the same adapter
+requires defining lightweight subclasses or binding unique config classes for
+each database.
 
 Migration Configuration
 -----------------------
@@ -244,7 +258,7 @@ SQLSpec includes a migration system for schema management.
 Basic Migration Config
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_22.py
+.. literalinclude:: /examples/usage/usage_configuration_22.py
    :language: python
    :caption: `basic migration config`
    :lines: 2-15
@@ -290,10 +304,10 @@ Framework integrations can be configured via ``extension_config``.
 Litestar Plugin Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. literalinclude:: /examples/usage/test_configuration_23.py
+.. literalinclude:: /examples/usage/usage_configuration_23.py
    :language: python
    :caption: `litestar plugin configuration`
-   :lines: 2-26
+   :lines: 4-28
    :dedent: 2
 
 Telemetry Snapshot
@@ -301,21 +315,20 @@ Telemetry Snapshot
 
 Call ``SQLSpec.telemetry_snapshot()`` to inspect lifecycle counters, serializer metrics, and recent storage jobs:
 
-.. code-block:: python
-
-   snapshot = spec.telemetry_snapshot()
-   print(snapshot["storage_bridge.bytes_written"])
-   for job in snapshot.get("storage_bridge.recent_jobs", []):
-       print(job["destination"], job.get("correlation_id"))
+.. literalinclude:: /examples/usage/usage_configuration_30.py
+   :language: python
+   :caption: `telemetry snapshot`
+   :lines: 1-15
+   :dedent: 0
 
 Environment-Based Configuration
 -------------------------------
 
 Use environment variables for configuration:
 
-.. literalinclude:: /examples/usage/test_configuration_24.py
+.. literalinclude:: /examples/usage/usage_configuration_24.py
    :language: python
-   :caption: `environnment-based configuration`
+   :caption: `environment-based configuration`
    :lines: 25-41
    :dedent: 4
 
@@ -326,7 +339,7 @@ Configuration Best Practices
 
 Always use pooling in production:
 
-.. literalinclude:: /examples/usage/test_configuration_25.py
+.. literalinclude:: /examples/usage/usage_configuration_25.py
    :language: python
    :caption: `connection pooling`
    :lines: 11-13
@@ -336,7 +349,7 @@ Always use pooling in production:
 
 Enable caching to avoid recompiling SQL statements:
 
-.. literalinclude:: /examples/usage/test_configuration_26.py
+.. literalinclude:: /examples/usage/usage_configuration_26.py
    :language: python
    :caption: `enable caching`
    :lines: 6-8
@@ -346,7 +359,7 @@ Enable caching to avoid recompiling SQL statements:
 
 Size pools based on your workload:
 
-.. literalinclude:: /examples/usage/test_configuration_27.py
+.. literalinclude:: /examples/usage/usage_configuration_27.py
    :language: python
    :caption: `tune pool sizes`
    :lines: 3-20
@@ -356,7 +369,7 @@ Size pools based on your workload:
 
 For trusted, performance-critical queries:
 
-.. literalinclude:: /examples/usage/test_configuration_28.py
+.. literalinclude:: /examples/usage/usage_configuration_28.py
    :language: python
    :caption: `no validation`
    :lines: 6-12
@@ -367,7 +380,7 @@ For trusted, performance-critical queries:
 
 Always close pools on shutdown:
 
-.. literalinclude:: /examples/usage/test_configuration_29.py
+.. literalinclude:: /examples/usage/usage_configuration_29.py
    :language: python
    :caption: `cleanup resources`
    :lines: 10-27

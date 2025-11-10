@@ -1,5 +1,5 @@
 def test_parameter_styles() -> None:
-    from sqlspec.core.parameters import ParameterStyle
+    from sqlspec import ParameterStyle
 
     # Question mark (SQLite, DuckDB)
     qmark = ParameterStyle.QMARK  # WHERE id = ?

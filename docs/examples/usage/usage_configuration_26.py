@@ -3,7 +3,7 @@
 
 def test_enable_caching_best_practice() -> None:
     """Test caching best practice configuration."""
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec import StatementConfig
 
     statement_config = StatementConfig(dialect="postgres", enable_caching=True)
 

@@ -2,11 +2,15 @@ MIN_POOL_SIZE = 10
 
 
 def test_asyncpg_pool_setup() -> None:
+    import os
+
     from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+    dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
 
     config = AsyncpgConfig(
         pool_config={
-            "dsn": "postgresql://localhost/db",
+            "dsn": dsn,
             "min_size": 10,
             "max_size": 20,
             "max_queries": 50000,

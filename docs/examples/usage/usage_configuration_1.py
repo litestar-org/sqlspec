@@ -3,12 +3,12 @@ def test_sqlite_memory_db() -> None:
     from sqlspec.adapters.sqlite import SqliteConfig
 
     # Create SQLSpec instance
-    spec = SQLSpec()
+    db_manager = SQLSpec()
 
     # Add database configuration
-    db = spec.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
+    db = db_manager.add_config(SqliteConfig(pool_config={"database": ":memory:"}))
 
     # Use the database
-    with spec.provide_session(db) as session:
+    with db_manager.provide_session(db) as session:
         result = session.execute("SELECT 1")
         assert result[0] == {"1": 1}

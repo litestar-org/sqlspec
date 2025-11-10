@@ -3,12 +3,9 @@
 import os
 from unittest.mock import patch
 
-import pytest
-
 POSTGRES_PORT = 5433
 
 
-@pytest.mark.skipif(os.getenv("TEST_ASYNCPG", "0") != "1", reason="AsyncPG integration tests disabled")
 def test_environment_based_configuration() -> None:
     """Test environment-based configuration pattern."""
 

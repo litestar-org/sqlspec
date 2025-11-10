@@ -8,10 +8,13 @@ import pytest
 )
 def test_basic_migration_config() -> None:
     """Test basic migration configuration."""
+    import os
+
     from sqlspec.adapters.asyncpg import AsyncpgConfig
 
+    dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
     config = AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/db"},
+        pool_config={"dsn": dsn},
         extension_config={
             "litestar": {"session_table": "custom_sessions"}  # Extension settings
         },

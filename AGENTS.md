@@ -524,7 +524,6 @@ This summary documents the small documentation and example maintenance
 performed on the configuration usage guide and can be expanded into a
 longer changelog entry if desired.
 
-
 ```python
 def parse_user_input(content: str, source: str) -> "dict[str, Result]":
     """Parse user input with two-tier error handling.

@@ -10,11 +10,11 @@ def test_cache_statistics() -> None:
     from sqlspec.core.cache import get_cache_statistics, log_cache_stats
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
-        spec = SQLSpec()
-        db = spec.add_config(SqliteConfig(pool_config={"database": tmp.name}))
+        db_manager = SQLSpec()
+        db = db_manager.add_config(SqliteConfig(pool_config={"database": tmp.name}))
 
         # Execute some queries to generate cache activity
-        with spec.provide_session(db) as session:
+        with db_manager.provide_session(db) as session:
             session.execute("SELECT 1")
             session.execute("SELECT 1")  # Should hit cache
 

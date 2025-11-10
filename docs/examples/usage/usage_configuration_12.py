@@ -1,6 +1,8 @@
 def test_basic_statement_config() -> None:
+    import os
+
+    from sqlspec import StatementConfig
     from sqlspec.adapters.asyncpg import AsyncpgConfig
-    from sqlspec.core import StatementConfig
 
     statement_config = StatementConfig(
         dialect="postgres",  # SQLGlot dialect
@@ -11,6 +13,7 @@ def test_basic_statement_config() -> None:
     )
 
     # Apply to adapter
-    config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"}, statement_config=statement_config)
+    dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
+    config = AsyncpgConfig(pool_config={"dsn": dsn}, statement_config=statement_config)
     assert config.statement_config.dialect == "postgres"
     assert config.statement_config.enable_parsing is True

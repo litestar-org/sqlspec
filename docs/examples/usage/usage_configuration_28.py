@@ -4,7 +4,7 @@
 def test_disable_security_checks_best_practice() -> None:
     """Test disabling security checks when necessary."""
 
-    from sqlspec.core.statement import StatementConfig
+    from sqlspec import StatementConfig
 
     # Example: Disabling security checks for trusted internal queries
     statement_config = StatementConfig(

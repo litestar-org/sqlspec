@@ -11,13 +11,13 @@ def test_per_instance_cache_config() -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         # Configure cache for specific SQLSpec instance
-        spec = SQLSpec()
-        spec.update_cache_config(CacheConfig(sql_cache_enabled=True, sql_cache_size=500))
+        db_manager = SQLSpec()
+        db_manager.update_cache_config(CacheConfig(sql_cache_enabled=True, sql_cache_size=500))
 
         # Add database config
-        db = spec.add_config(SqliteConfig(pool_config={"database": tmp.name}))
+        db = db_manager.add_config(SqliteConfig(pool_config={"database": tmp.name}))
 
         # Use the configured spec
-        with spec.provide_session(db) as session:
+        with db_manager.provide_session(db) as session:
             result = session.execute("SELECT 1")
             assert result is not None
