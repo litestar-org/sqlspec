@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.core import FilterTypeT, StatementFilter
+    from sqlspec.observability import ObservabilityRuntime
     from sqlspec.typing import StatementParameters
 
 
@@ -287,13 +288,17 @@ DEFAULT_EXECUTION_RESULT: Final[tuple[Any, int | None, Any]] = (None, None, None
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
-    __slots__ = ("connection", "driver_features", "statement_config")
+    __slots__ = ("_observability", "connection", "driver_features", "statement_config")
     connection: "Any"
     statement_config: "StatementConfig"
     driver_features: "dict[str, Any]"
 
     def __init__(
-        self, connection: "Any", statement_config: "StatementConfig", driver_features: "dict[str, Any] | None" = None
+        self,
+        connection: "Any",
+        statement_config: "StatementConfig",
+        driver_features: "dict[str, Any] | None" = None,
+        observability: "ObservabilityRuntime | None" = None,
     ) -> None:
         """Initialize driver adapter with connection and configuration.
 
@@ -301,10 +306,27 @@ class CommonDriverAttributesMixin:
             connection: Database connection instance
             statement_config: Statement configuration for the driver
             driver_features: Driver-specific features like extensions, secrets, and connection callbacks
+            observability: Optional runtime handling lifecycle hooks, observers, and spans
         """
         self.connection = connection
         self.statement_config = statement_config
         self.driver_features = driver_features or {}
+        self._observability = observability
+
+    def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
+        """Attach or replace the observability runtime."""
+
+        self._observability = runtime
+
+    @property
+    def observability(self) -> "ObservabilityRuntime":
+        """Return the observability runtime, creating a disabled instance when absent."""
+
+        if self._observability is None:
+            from sqlspec.observability import ObservabilityRuntime
+
+            self._observability = ObservabilityRuntime(config_name=type(self).__name__)
+        return self._observability
 
     def create_execution_result(
         self,

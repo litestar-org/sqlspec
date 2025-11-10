@@ -25,6 +25,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
+    from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage.registry import StorageRegistry
 
 __all__ = ("CachedSQLFile", "NamedStatement", "SQLFile", "SQLFileLoader")
@@ -161,14 +162,21 @@ class SQLFileLoader:
     and retrieves them by name.
     """
 
-    __slots__ = ("_files", "_queries", "_query_to_file", "encoding", "storage_registry")
+    __slots__ = ("_files", "_queries", "_query_to_file", "_runtime", "encoding", "storage_registry")
 
-    def __init__(self, *, encoding: str = "utf-8", storage_registry: "StorageRegistry | None" = None) -> None:
+    def __init__(
+        self,
+        *,
+        encoding: str = "utf-8",
+        storage_registry: "StorageRegistry | None" = None,
+        runtime: "ObservabilityRuntime | None" = None,
+    ) -> None:
         """Initialize the SQL file loader.
 
         Args:
             encoding: Text encoding for reading SQL files.
             storage_registry: Storage registry for handling file URIs.
+            runtime: Observability runtime for instrumentation.
         """
         self.encoding = encoding
 
@@ -176,6 +184,16 @@ class SQLFileLoader:
         self._queries: dict[str, NamedStatement] = {}
         self._files: dict[str, SQLFile] = {}
         self._query_to_file: dict[str, str] = {}
+        self._runtime = runtime
+
+    def set_observability_runtime(self, runtime: "ObservabilityRuntime | None") -> None:
+        """Attach an observability runtime used for instrumentation."""
+
+        self._runtime = runtime
+
+    def _metric(self, name: str, amount: float = 1.0) -> None:
+        if self._runtime is not None:
+            self._runtime.increment_metric(name, amount)
 
     def _raise_file_not_found(self, path: str) -> None:
         """Raise SQLFileNotFoundError for nonexistent file.
@@ -360,8 +378,20 @@ class SQLFileLoader:
         Args:
             *paths: One or more file paths or directory paths to load.
         """
-        correlation_id = CorrelationContext.get()
+        runtime = self._runtime
+        span = None
+        error: Exception | None = None
         start_time = time.perf_counter()
+        path_count = len(paths)
+        if runtime is not None:
+            runtime.increment_metric("loader.load.invocations")
+            runtime.increment_metric("loader.paths.requested", path_count)
+            span = runtime.start_span(
+                "sqlspec.loader.load",
+                attributes={"sqlspec.loader.path_count": path_count, "sqlspec.loader.encoding": self.encoding},
+            )
+
+        correlation_id = CorrelationContext.get()
 
         try:
             for path in paths:
@@ -377,18 +407,28 @@ class SQLFileLoader:
                     elif path_obj.suffix:
                         self._raise_file_not_found(str(path))
 
-        except Exception as e:
+        except Exception as exc:
+            error = exc
             duration = time.perf_counter() - start_time
             logger.exception(
                 "Failed to load SQL files after %.3fms",
                 duration * 1000,
                 extra={
-                    "error_type": type(e).__name__,
+                    "error_type": type(exc).__name__,
                     "duration_ms": duration * 1000,
                     "correlation_id": correlation_id,
                 },
             )
+            if runtime is not None:
+                runtime.increment_metric("loader.load.errors")
             raise
+        finally:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            if runtime is not None:
+                runtime.record_metric("loader.last_load_ms", duration_ms)
+                runtime.increment_metric("loader.load.duration_ms", duration_ms)
+                runtime.end_span(span, error=error)
+            CorrelationContext.clear()
 
     def _load_directory(self, dir_path: Path) -> None:
         """Load all SQL files from a directory.
@@ -396,6 +436,10 @@ class SQLFileLoader:
         Args:
             dir_path: Directory path to load SQL files from.
         """
+        runtime = self._runtime
+        if runtime is not None:
+            runtime.increment_metric("loader.directories.scanned")
+
         sql_files = list(dir_path.rglob("*.sql"))
         if not sql_files:
             return
@@ -416,13 +460,20 @@ class SQLFileLoader:
             True if file was newly loaded, False if already cached.
         """
         path_str = str(file_path)
+        runtime = self._runtime
+        if runtime is not None:
+            runtime.increment_metric("loader.files.considered")
 
         if path_str in self._files:
+            if runtime is not None:
+                runtime.increment_metric("loader.cache.hit")
             return False
 
         cache_config = get_cache_config()
         if not cache_config.compiled_cache_enabled:
             self._load_file_without_cache(file_path, namespace)
+            if runtime is not None:
+                runtime.increment_metric("loader.cache.miss")
             return True
 
         cache_key_str = self._generate_file_cache_key(file_path)
@@ -447,6 +498,8 @@ class SQLFileLoader:
                         )
                 self._queries[namespaced_name] = statement
                 self._query_to_file[namespaced_name] = path_str
+            if runtime is not None:
+                runtime.increment_metric("loader.cache.hit")
             return True
 
         self._load_file_without_cache(file_path, namespace)
@@ -463,6 +516,10 @@ class SQLFileLoader:
 
             cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_statements=file_statements)
             cache.put("file", cache_key_str, cached_file_data)
+            if runtime is not None:
+                runtime.increment_metric("loader.cache.miss")
+                runtime.increment_metric("loader.files.loaded")
+                runtime.increment_metric("loader.statements.loaded", len(file_statements))
 
         return True
 
@@ -474,7 +531,7 @@ class SQLFileLoader:
             namespace: Optional namespace prefix for queries.
         """
         path_str = str(file_path)
-
+        runtime = self._runtime
         content = self._read_file_content(file_path)
         statements = self._parse_sql_content(content, path_str)
 
@@ -501,6 +558,9 @@ class SQLFileLoader:
                     )
             self._queries[namespaced_name] = statement
             self._query_to_file[namespaced_name] = path_str
+        if runtime is not None:
+            runtime.increment_metric("loader.files.loaded")
+            runtime.increment_metric("loader.statements.loaded", len(statements))
 
     def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
         """Add a named SQL query directly without loading from a file.

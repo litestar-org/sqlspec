@@ -339,13 +339,16 @@ Enable request correlation tracking via ``extension_config``:
            pool_config={"dsn": "postgresql://..."},
            extension_config={
                "litestar": {
-                   "enable_correlation_middleware": True  # Default: True
-               }
-           }
-       )
-   )
+                   "enable_correlation_middleware": True,  # Default: True
+                   "correlation_header": "x-request-id",
+                   "correlation_headers": ["x-client-trace"],
+                   "auto_trace_headers": True,
+                }
+            }
+        )
+    )
 
-   # Queries will include correlation IDs in logs
+   # Queries will include correlation IDs in logs (header or generated UUID)
    # Format: [correlation_id=abc123] SELECT * FROM users
 
 FastAPI Integration

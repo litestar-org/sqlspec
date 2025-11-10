@@ -21,15 +21,7 @@ from sqlspec.adapters.psycopg.driver import (
     build_psycopg_statement_config,
     psycopg_statement_config,
 )
-from sqlspec.config import (
-    ADKConfig,
-    AsyncDatabaseConfig,
-    FastAPIConfig,
-    FlaskConfig,
-    LitestarConfig,
-    StarletteConfig,
-    SyncDatabaseConfig,
-)
+from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import to_json
 
@@ -127,7 +119,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
     ) -> None:
         """Initialize Psycopg synchronous configuration.
 
@@ -272,9 +264,10 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         with self.provide_connection(*args, **kwargs) as conn:
             final_statement_config = statement_config or self.statement_config
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=conn, statement_config=final_statement_config, driver_features=self.driver_features
             )
+            yield self._prepare_driver(driver)
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -327,7 +320,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
         bind_key: "str | None" = None,
-        extension_config: "dict[str, dict[str, Any]] | LitestarConfig | FastAPIConfig | StarletteConfig | FlaskConfig | ADKConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
@@ -462,9 +455,10 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """
         async with self.provide_connection(*args, **kwargs) as conn:
             final_statement_config = statement_config or psycopg_statement_config
-            yield self.driver_type(
+            driver = self.driver_type(
                 connection=conn, statement_config=final_statement_config, driver_features=self.driver_features
             )
+            yield self._prepare_driver(driver)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.
