@@ -171,7 +171,8 @@ from sqlspec.core.parameters import (
     validate_parameter_alignment,
     wrap_with_type,
 )
-from sqlspec.core.result import ArrowResult, SQLResult, StatementResult, create_arrow_result, create_sql_result
+from sqlspec.core.result import ArrowResult, SQLResult, StackResult, StatementResult, create_arrow_result, create_sql_result
+from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.core.splitter import split_sql_script
 from sqlspec.core.statement import (
     SQL,
@@ -230,6 +231,9 @@ __all__ = (
     "ProcessedState",
     "SQLProcessor",
     "SQLResult",
+    "StackOperation",
+    "StackResult",
+    "StatementStack",
     "SearchFilter",
     "Statement",
     "StatementConfig",

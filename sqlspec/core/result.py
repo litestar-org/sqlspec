@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
 
 
-__all__ = ("ArrowResult", "SQLResult", "StatementResult")
+__all__ = ("ArrowResult", "SQLResult", "StackResult", "StatementResult")
 
 T = TypeVar("T")
 
@@ -873,6 +873,85 @@ class ArrowResult(StatementResult):
             raise ValueError(msg)
 
         yield from self.data.to_pylist()
+
+
+class StackResult:
+    """Concrete stack result wrapper that preserves the original driver result."""
+
+    __slots__ = ("error", "metadata", "raw_result", "rowcount", "warning")
+
+    def __init__(
+        self,
+        raw_result: "StatementResult | ArrowResult | None" = None,
+        *,
+        rowcount: int | None = None,
+        error: Exception | None = None,
+        warning: Any | None = None,
+        metadata: "dict[str, Any] | None" = None,
+    ) -> None:
+        self.raw_result = raw_result
+        self.rowcount = rowcount if rowcount is not None else _infer_rowcount(raw_result)
+        self.error = error
+        self.warning = warning
+        self.metadata = dict(metadata) if metadata else None
+
+    def __iter__(self) -> "Iterator[Any]":
+        yield from self.rows
+
+    @property
+    def rows(self) -> "tuple[Any, ...]":
+        """Return cached rows from the underlying result when available."""
+
+        if self.raw_result is None:
+            return ()
+        try:
+            return tuple(self.raw_result)
+        except TypeError:  # pragma: no cover - defensive fallback
+            return ()
+
+    def is_error(self) -> bool:
+        """Return True when the stack operation captured an error."""
+
+        return self.error is not None
+
+    def with_error(self, error: Exception) -> "StackResult":
+        """Return a copy of the result that records the provided error."""
+
+        return StackResult(
+            raw_result=self.raw_result,
+            rowcount=self.rowcount,
+            warning=self.warning,
+            metadata=self.metadata,
+            error=error,
+        )
+
+    @classmethod
+    def from_sql_result(cls, result: "SQLResult") -> "StackResult":
+        """Convert a standard SQLResult into a stack-friendly representation."""
+
+        metadata = dict(result.metadata) if result.metadata else None
+        warning = metadata.get("warning") if metadata else None
+        return cls(raw_result=result, rowcount=result.rows_affected, warning=warning, metadata=metadata)
+
+    @classmethod
+    def from_arrow_result(cls, result: "ArrowResult") -> "StackResult":
+        """Create a stack result from an ArrowResult instance."""
+
+        metadata = dict(result.metadata) if result.metadata else None
+        return cls(raw_result=result, rowcount=result.rows_affected, metadata=metadata)
+
+    @classmethod
+    def from_error(cls, error: Exception) -> "StackResult":
+        """Create an error-only stack result."""
+
+        return cls(raw_result=None, rowcount=0, error=error)
+
+
+def _infer_rowcount(result: "StatementResult | ArrowResult | None") -> int:
+    if result is None:
+        return 0
+    rowcount = getattr(result, "rows_affected", None)
+    return int(rowcount) if isinstance(rowcount, int) else 0
 
 
 def create_sql_result(

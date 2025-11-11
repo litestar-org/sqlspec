@@ -7,6 +7,7 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     OperationalError,
     SQLSpecError,
+    StackExecutionError,
     TransactionError,
     UniqueViolationError,
 )
@@ -42,3 +43,21 @@ def test_exception_chaining() -> None:
     except UniqueViolationError as exc:
         assert exc.__cause__ is not None
         assert isinstance(exc.__cause__, ValueError)
+
+
+def test_stack_execution_error_includes_context() -> None:
+    base = StackExecutionError(
+        2,
+        "SELECT * FROM users",
+        ValueError("boom"),
+        adapter="asyncpg",
+        mode="continue-on-error",
+        native_pipeline=False,
+        downgrade_reason="operator_override",
+    )
+
+    detail = str(base)
+    assert "operation 2" in detail
+    assert "asyncpg" in detail
+    assert "pipeline=disabled" in detail
+    assert "boom" in detail

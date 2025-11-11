@@ -42,6 +42,7 @@ __all__ = (
     "ExecutionResult",
     "ScriptExecutionResult",
     "VersionInfo",
+    "describe_stack_statement",
     "handle_single_row_error",
     "make_cache_key_hashable",
 )
@@ -105,6 +106,20 @@ def make_cache_key_hashable(obj: Any) -> Any:
         else:
             return ("ndarray", dtype_str, shape)
     return obj
+
+
+def describe_stack_statement(statement: Any) -> str:
+    """Return a readable representation of a stack statement for diagnostics."""
+
+    if isinstance(statement, str):
+        return statement
+    raw_sql = getattr(statement, "raw_sql", None)
+    if isinstance(raw_sql, str):
+        return raw_sql
+    sql_attr = getattr(statement, "sql", None)
+    if isinstance(sql_attr, str):
+        return sql_attr
+    return repr(statement)
 
 
 def handle_single_row_error(error: ValueError) -> "NoReturn":
@@ -517,6 +532,31 @@ class CommonDriverAttributesMixin:
             sql_statement = filter_obj.append_to_statement(sql_statement)
 
         return sql_statement
+
+    def _connection_in_transaction(self) -> bool:
+        """Best-effort detection of whether the underlying connection is inside a transaction."""
+
+        connection = getattr(self, "connection", None)
+        if connection is None:
+            return False
+
+        indicator = getattr(connection, "in_transaction", None)
+        if isinstance(indicator, bool):
+            return indicator
+
+        checker = getattr(connection, "is_in_transaction", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:  # pragma: no cover - driver-specific edge cases
+                return False
+
+        status = getattr(connection, "transaction_status", None)
+        if isinstance(status, str):
+            lowered = status.lower()
+            return "idle" not in lowered
+
+        return False
 
     def split_script_statements(
         self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False
