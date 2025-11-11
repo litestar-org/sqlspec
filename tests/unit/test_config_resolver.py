@@ -165,6 +165,72 @@ class TestConfigResolver:
             with pytest.raises(ConfigResolverError, match="returned invalid type"):
                 await resolve_config_async("myapp.config.incomplete_config")
 
+    async def test_config_class_rejected(self) -> None:
+        """Test that config classes (not instances) are rejected.
+
+        Note: This test directly validates that _is_valid_config rejects classes.
+        When using resolve_config_*, classes are callable and get instantiated,
+        so they don't reach direct validation as classes.
+        """
+        from sqlspec.utils.config_resolver import _is_valid_config
+
+        class MockConfigClass:
+            """Mock config class to simulate config classes being passed."""
+
+            database_url = "sqlite:///test.db"
+            bind_key = "test"
+            migration_config: dict[str, Any] = {}
+
+        # Directly test that _is_valid_config rejects classes
+        assert isinstance(MockConfigClass, type), "Should be a class"
+        assert not _is_valid_config(MockConfigClass), "Classes should be rejected"
+
+        # But instances should be accepted
+        instance = MockConfigClass()
+        assert not isinstance(instance, type), "Should be an instance"
+        assert _is_valid_config(instance), "Instances should be accepted"
+
+    async def test_config_class_in_list_rejected(self) -> None:
+        """Test that config classes in a list are rejected."""
+        mock_instance = Mock()
+        mock_instance.database_url = "sqlite:///test.db"
+        mock_instance.bind_key = "test"
+        mock_instance.migration_config = {}
+
+        class MockConfigClass:
+            """Mock config class."""
+
+            database_url = "sqlite:///test.db"
+            bind_key = "test"
+            migration_config: dict[str, Any] = {}
+
+        def mixed_list() -> list[Any]:
+            return [mock_instance, MockConfigClass]  # Class, not instance
+
+        with patch("sqlspec.utils.config_resolver.import_string", return_value=mixed_list):
+            with pytest.raises(ConfigResolverError, match="returned invalid config at index"):
+                await resolve_config_async("myapp.config.mixed_list")
+
+    async def test_config_instance_accepted(self) -> None:
+        """Test that config instances (not classes) are accepted."""
+
+        class MockConfigClass:
+            """Mock config class."""
+
+            def __init__(self) -> None:
+                self.database_url = "sqlite:///test.db"
+                self.bind_key = "test"
+                self.migration_config: dict[str, Any] = {}
+
+        # Pass an instance, not the class
+        mock_instance = MockConfigClass()
+
+        with patch("sqlspec.utils.config_resolver.import_string", return_value=mock_instance):
+            result = await resolve_config_async("myapp.config.config_instance")
+            assert hasattr(result, "database_url")
+            assert hasattr(result, "bind_key")
+            assert hasattr(result, "migration_config")
+
 
 class TestConfigResolverSync:
     """Test the synchronous wrapper for config resolver."""
