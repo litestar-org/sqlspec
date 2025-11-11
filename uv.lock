@@ -4438,16 +4438,16 @@ wheels = [
 
 [[package]]
 name = "pydantic-settings"
-version = "2.11.0"
+version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/20/c5/dbbc27b814c71676593d1c3f718e6cd7d4f00652cefa24b75f7aa3efb25e/pydantic_settings-2.11.0.tar.gz", hash = "sha256:d0e87a1c7d33593beb7194adb8470fc426e95ba02af83a0f23474a04c9a08180", size = 188394, upload-time = "2025-09-24T14:19:11.764Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/4b/ac7e0aae12027748076d72a8764ff1c9d82ca75a7a52622e67ed3f765c54/pydantic_settings-2.12.0.tar.gz", hash = "sha256:005538ef951e3c2a68e1c08b292b5f2e71490def8589d4221b95dab00dafcfd0", size = 194184, upload-time = "2025-11-10T14:25:47.013Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/83/d6/887a1ff844e64aa823fb4905978d882a633cfe295c32eacad582b78a7d8b/pydantic_settings-2.11.0-py3-none-any.whl", hash = "sha256:fe2cea3413b9530d10f3a5875adffb17ada5c1e1bab0b2885546d7310415207c", size = 48608, upload-time = "2025-09-24T14:19:10.015Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/60/5d4751ba3f4a40a6891f24eec885f51afd78d208498268c734e256fb13c4/pydantic_settings-2.12.0-py3-none-any.whl", hash = "sha256:fddb9fd99a5b18da837b29710391e945b1e30c135477f484084ee513adb93809", size = 51880, upload-time = "2025-11-10T14:25:45.546Z" },
 ]
 
 [[package]]
@@ -5264,16 +5264,16 @@ wheels = [
 
 [[package]]
 name = "shibuya"
-version = "2025.11.4"
+version = "2025.11.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pygments-styles" },
     { name = "sphinx", version = "8.1.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "sphinx", version = "8.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fe/d5/d3e76a4cc05801106899a40e2103142cf3a98f480aa92e5a5ab430784115/shibuya-2025.11.4.tar.gz", hash = "sha256:8cae36c339c6c2d4d93ad1bb7241c4cf2549f192a43364de3d5e721955ca3d20", size = 82227, upload-time = "2025-11-04T06:22:44.193Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cf/e3/53fe8d84008aa0f0baea769973a3e8baa2fe2895e6994ba94767ba52bb14/shibuya-2025.11.10.tar.gz", hash = "sha256:7a8a2b4ac6c3fb8d2f75a15098458e376f5af33cfff45b21e5816e41dfcc5dd3", size = 82201, upload-time = "2025-11-10T09:13:54.308Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/29/28fe85dded5f52a1a9e559c676c5397433c17d491590c755eb37c5716269/shibuya-2025.11.4-py3-none-any.whl", hash = "sha256:ef4d4b96b817f4d46b5969a5960d14fc163978478eb5a4f66fc2aa5b0fae3960", size = 98128, upload-time = "2025-11-04T06:22:42.509Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/ca/1f713c8cbf777e9b2716a2c19a90e2c3fb91a111399dc05ec0b8082a8312/shibuya-2025.11.10-py3-none-any.whl", hash = "sha256:7d9116bcd14977e689c6048232bb42d739832c0dd861dc7be34dfb183edb511e", size = 98175, upload-time = "2025-11-10T09:13:52.612Z" },
 ]
 
 [[package]]
@@ -5539,15 +5539,15 @@ wheels = [
 
 [[package]]
 name = "sphinx-docsearch"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "sphinx", version = "8.1.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "sphinx", version = "8.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7c/3c/52eb72d3e837f269aed90b0ef1b4f7dd437d26cc6812209f839c91053d8f/sphinx_docsearch-0.1.0.tar.gz", hash = "sha256:76fd0695e115b76ebb9633acffc263bfd894caad7aa29e3c40bfe3171da41535", size = 40008, upload-time = "2024-10-04T12:04:40.757Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/3e/32849cb1154f936cfa387a29207a552162c8d6da9dfceb0aa1cfd8bbb04e/sphinx_docsearch-0.2.0.tar.gz", hash = "sha256:a96c97649453567c89ce2b37d714c10c4e829311e260e4b4d9ea980385aab117", size = 238214, upload-time = "2025-11-10T10:22:26.404Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2b/44/4e59ba1820e8190d1cb3bceb491d875da5f79fb3f61f5c2fe82037c3546e/sphinx_docsearch-0.1.0-py3-none-any.whl", hash = "sha256:799221b0b962e3d86d0e0f084d4998c3d9227ef0eb2883d70e41d6bd08b616dd", size = 41852, upload-time = "2024-10-04T12:04:38.933Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/53/d5a027db36576f515411353cf6be8b2b2aa74a65d520c706dab2cc2fc3d8/sphinx_docsearch-0.2.0-py3-none-any.whl", hash = "sha256:60e6062c2e4eb0a7320fec0ff6f014cba37f3b51c74f6a6f6a9212262f2fca2f", size = 140882, upload-time = "2025-11-10T10:22:23.218Z" },
 ]
 
 [[package]]
