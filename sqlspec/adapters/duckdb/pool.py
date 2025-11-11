@@ -39,6 +39,7 @@ class DuckDBConnectionPool:
         "_connection_config",
         "_connection_times",
         "_created_connections",
+        "_extension_flags",
         "_extensions",
         "_lock",
         "_on_connection_create",
@@ -52,6 +53,7 @@ class DuckDBConnectionPool:
         connection_config: "dict[str, Any]",
         pool_recycle_seconds: int = POOL_RECYCLE,
         extensions: "list[dict[str, Any]] | None" = None,
+        extension_flags: "dict[str, Any] | None" = None,
         secrets: "list[dict[str, Any]] | None" = None,
         on_connection_create: "Callable[[DuckDBConnection], None] | None" = None,
         **kwargs: Any,
@@ -62,6 +64,7 @@ class DuckDBConnectionPool:
             connection_config: DuckDB connection configuration
             pool_recycle_seconds: Connection recycle time in seconds
             extensions: List of extensions to install/load
+            extension_flags: Connection-level SET statements applied after creation
             secrets: List of secrets to create
             on_connection_create: Callback executed when connection is created
             **kwargs: Additional parameters ignored for compatibility
@@ -69,6 +72,7 @@ class DuckDBConnectionPool:
         self._connection_config = connection_config
         self._recycle = pool_recycle_seconds
         self._extensions = extensions or []
+        self._extension_flags = extension_flags or {}
         self._secrets = secrets or []
         self._on_connection_create = on_connection_create
         self._thread_local = threading.local()
@@ -91,6 +95,8 @@ class DuckDBConnectionPool:
             connect_parameters["config"] = config_dict
 
         connection = duckdb.connect(**connect_parameters)
+
+        self._apply_extension_flags(connection)
 
         for ext_config in self._extensions:
             ext_name = ext_config.get("name")
@@ -148,6 +154,33 @@ class DuckDBConnectionPool:
             self._connection_times[conn_id] = time.time()
 
         return connection
+
+    def _apply_extension_flags(self, connection: DuckDBConnection) -> None:
+        """Apply connection-level extension flags via SET statements."""
+
+        if not self._extension_flags:
+            return
+
+        for key, value in self._extension_flags.items():
+            if not key or not key.replace("_", "").isalnum():
+                continue
+
+            normalized = self._normalize_flag_value(value)
+            try:
+                connection.execute(f"SET {key} = {normalized}")
+            except Exception as exc:  # pragma: no cover - best-effort guard
+                logger.debug("Failed to set DuckDB flag %s: %s", key, exc)
+
+    @staticmethod
+    def _normalize_flag_value(value: Any) -> str:
+        """Convert Python value to DuckDB SET literal."""
+
+        if isinstance(value, bool):
+            return "TRUE" if value else "FALSE"
+        if isinstance(value, (int, float)):
+            return str(value)
+        escaped = str(value).replace("'", "''")
+        return f"'{escaped}'"
 
     def _get_thread_connection(self) -> DuckDBConnection:
         """Get or create a connection for the current thread.
