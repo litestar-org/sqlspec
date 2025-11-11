@@ -5,6 +5,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 
 async def test_example_2_importable(postgres_service: PostgresService) -> None:
+    # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.asyncpg import AsyncpgConfig
 
@@ -37,3 +38,4 @@ async def test_example_2_importable(postgres_service: PostgresService) -> None:
         result = await session.execute("SELECT * FROM users WHERE id = $1", 1)
         user = result.one()
         print(f"User: {user}")
+    # end-example

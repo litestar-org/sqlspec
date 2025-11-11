@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 def test_example_10_duckdb_config() -> None:
+    # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.duckdb import DuckDBConfig
 
@@ -30,3 +31,4 @@ def test_example_10_duckdb_config() -> None:
            GROUP BY day
            ORDER BY day
        """)
+    # end-example

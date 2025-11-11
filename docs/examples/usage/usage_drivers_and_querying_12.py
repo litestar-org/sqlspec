@@ -5,6 +5,7 @@ from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
 
 def test_example_12_bigquery_config(bigquery_service: BigQueryDriver) -> None:
+    # start-example
     import datetime
 
     from google.api_core.client_options import ClientOptions
@@ -46,3 +47,4 @@ def test_example_12_bigquery_config(bigquery_service: BigQueryDriver) -> None:
        """,
             start_date=datetime.date(2025, 1, 1),
         )
+    # end-example

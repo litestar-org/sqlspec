@@ -51,9 +51,10 @@ SQLSpec drivers follow a layered architecture:
 3. **Driver Layer**: Query execution and result handling
 4. **Session Layer**: Transaction management
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_1.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_1.py
    :language: python
-   :lines: 8-25
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
    :caption: `driver architecture`
 
@@ -65,9 +66,10 @@ asyncpg (Recommended for Async)
 
 Async PostgreSQL driver with native connection pooling.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_2.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_2.py
    :language: python
-   :lines: 8-39
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
    :caption: `asyncpg`
 
@@ -88,17 +90,19 @@ Official PostgreSQL adapter with both sync and async support.
 
    .. tab-item:: Sync
 
-      .. literalinclude:: /examples/usage/test_drivers_and_querying_3.py
+      .. literalinclude:: /examples/usage/usage_drivers_and_querying_3.py
          :language: python
-         :lines: 8-32
+         :start-after: # start-example
+         :end-before: # end-example
          :dedent: 2
          :caption: `psycopg sync`
 
    .. tab-item:: Async
 
-      .. literalinclude:: /examples/usage/test_drivers_and_querying_4.py
+      .. literalinclude:: /examples/usage/usage_drivers_and_querying_4.py
          :language: python
-         :lines: 8-34
+         :start-after: # start-example
+         :end-before: # end-example
          :dedent: 2
          :caption: `psycopg async`
 
@@ -115,9 +119,10 @@ psqlpy (High Performance Async)
 
 Rust-based async PostgreSQL driver for maximum performance.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_5.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_5.py
    :language: python
-   :lines: 11-29
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
    :caption: `psqlpy`
 
@@ -135,15 +140,17 @@ sqlite3 (Synchronous)
 
 Python's built-in SQLite adapter.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_6.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_6.py
    :language: python
-   :lines: 8-27
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
    :caption: `sqlite config`
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_7.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_7.py
    :language: python
-   :lines: 6-9
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
    :caption: `sqlite`
 
@@ -159,9 +166,10 @@ aiosqlite (Asynchronous)
 
 Async wrapper around sqlite3.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_8.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_8.py
    :language: python
-   :lines: 6-19
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
    :caption: `aiosqlite`
 
@@ -179,9 +187,10 @@ asyncmy (Asynchronous)
 
 Pure Python async MySQL/MariaDB driver.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_9.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_9.py
    :language: python
-   :lines: 8-37
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
    :caption: `asyncmy`
 
@@ -200,9 +209,10 @@ DuckDB (Analytical Database)
 
 In-process analytical database optimized for OLAP workloads.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_10.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_10.py
    :language: python
-   :lines: 8-32
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
    :caption: `duckdb`
 
@@ -218,9 +228,10 @@ Oracle Database
 
 Oracle database support with python-oracledb.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_11.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_11.py
    :language: python
-   :lines: 8-33
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
    :caption: `oracle`
 
@@ -273,9 +284,10 @@ execute()
 
 Execute any SQL statement and return results.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_13.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_13.py
    :language: python
-   :lines: 9-28
+   :start-after: # start-example
+   :end-before: # end-example
    :dedent: 2
    :caption: `execute`
 
@@ -284,9 +296,10 @@ execute_many()
 
 Execute a statement with multiple parameter sets (batch insert/update).
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_14.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
    :language: python
-   :lines: 6-27
+   :start-after: # start-example-1
+   :end-before: # end-example-1
    :dedent: 2
    :caption: `execute_many`
 
@@ -296,9 +309,10 @@ select()
 
 Execute a SELECT query and return all rows.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_14.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
    :language: python
-   :lines: 28-30
+   :start-after: # start-example-2
+   :end-before: # end-example-2
    :dedent: 4
    :caption: `select`
 
@@ -307,9 +321,10 @@ select_one()
 
 Execute a SELECT query expecting exactly one result.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_14.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
    :language: python
-   :lines: 31-35
+   :start-after: # start-example-3
+   :end-before: # end-example-3
    :dedent: 2
    :caption: `select_one`
 
@@ -318,9 +333,10 @@ select_one_or_none()
 
 Execute a SELECT query returning one or no results.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_14.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
    :language: python
-   :lines: 36-38
+   :start-after: # start-example-4
+   :end-before: # end-example-4
    :dedent: 2
    :caption: `select_one_or_none`
 
@@ -329,9 +345,10 @@ select_value()
 
 Execute a SELECT query returning a single scalar value.
 
-.. literalinclude:: /examples/usage/test_drivers_and_querying_14.py
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
    :language: python
-   :lines: 39-42
+   :start-after: # start-example-5
+   :end-before: # end-example-5
    :dedent: 2
    :caption: `select_value`
 
@@ -343,20 +360,12 @@ SQLResult Object
 
 All queries return a ``SQLResult`` object with rich result information.
 
-.. code-block:: python
-
-   result = session.execute("SELECT id, name, email FROM users")
-
-   # Access raw data
-   result.data              # List of dictionaries
-   result.column_names      # ["id", "name", "email"]
-   result.rows_affected     # For INSERT/UPDATE/DELETE
-   result.operation_type    # "SELECT", "INSERT", etc.
-
-   # Convenience methods
-   user = result.one()              # Single row (raises if not exactly 1)
-   user = result.one_or_none()      # Single row or None
-   value = result.scalar()          # First column of first row
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-6
+   :end-before: # end-example-6
+   :dedent: 2
+   :caption: `SQLResult object`
 
 Iterating Results
 ^^^^^^^^^^^^^^^^^

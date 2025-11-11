@@ -3,6 +3,7 @@
 
 
 def test_example_13_placeholder() -> None:
+    # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
 
@@ -26,3 +27,4 @@ def test_example_13_placeholder() -> None:
 
         # DELETE query
         result = session.execute("DELETE FROM users WHERE id = ?", 1)
+    # end-example

@@ -5,6 +5,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 
 async def test_importable_1(postgres_service: PostgresService) -> None:
+    # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
 
@@ -23,3 +24,4 @@ async def test_importable_1(postgres_service: PostgresService) -> None:
     )  # Config layer, registers pool
     async with spec.provide_session(db) as session:  # Session layer
         await session.execute("SELECT 1")  # Driver layer
+    # end-example

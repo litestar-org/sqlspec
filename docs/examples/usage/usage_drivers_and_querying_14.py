@@ -4,6 +4,7 @@ import pytest
 
 
 def test_example_14_placeholder() -> None:
+    # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
 
@@ -54,4 +55,4 @@ def test_example_14_placeholder() -> None:
             user = result.one_or_none()      # Single row or None
         with pytest.raises(ValueError):
             value = result.scalar()          # First column of first row
-
+    # end-example

@@ -5,6 +5,7 @@ from pytest_databases.docker.oracle import OracleService
 
 
 def test_example_11_oracledb_config(oracle_service: OracleService) -> None:
+    # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.oracledb import OracleSyncConfig
 
@@ -31,3 +32,4 @@ def test_example_11_oracledb_config(oracle_service: OracleService) -> None:
        """)
 
         session.execute("SELECT * FROM employees WHERE employee_id = :id", id=100)
+    # end-example
