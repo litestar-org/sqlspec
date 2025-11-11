@@ -91,6 +91,8 @@ Patterns
      - Routing requests to dedicated SQLite configs per tenant slug.
    * - ``patterns/configs/multi_adapter_registry.py``
      - Register multiple adapters on a single SQLSpec registry.
+   * - ``query_stack_example.py``
+     - Immutable StatementStack workflow executed against SQLite and AioSQLite drivers.
 
 Loaders
 -------
@@ -142,4 +144,5 @@ Shared Utilities
    frameworks/starlette/aiosqlite_app
    frameworks/flask/sqlite_app
    patterns/configs/multi_adapter_registry
+   query_stack_example
    README

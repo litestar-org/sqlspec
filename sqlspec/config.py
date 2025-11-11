@@ -8,7 +8,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
+from sqlspec.migrations import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -1208,6 +1208,8 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self._promote_driver_feature_hooks()
+        self._configure_observability_extensions()
 
     def create_pool(self) -> PoolT:
         """Create and return the connection pool.
@@ -1381,6 +1383,8 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self._promote_driver_feature_hooks()
+        self._configure_observability_extensions()
 
     async def create_pool(self) -> PoolT:
         """Create and return the connection pool.

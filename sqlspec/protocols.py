@@ -4,7 +4,8 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks.
 """
 
-from typing import TYPE_CHECKING, Any, Mapping, Protocol, Sequence, runtime_checkable
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from typing_extensions import Self
 
@@ -481,6 +482,8 @@ class SupportsArrowResults(Protocol):
             ArrowResult containing Arrow data.
         """
         ...
+
+
 @runtime_checkable
 class StackResultProtocol(Protocol):
     """Protocol describing stack execution results."""

@@ -10,6 +10,7 @@ from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
     DataDictionaryMixin,
     ExecutionResult,
+    StackExecutionObserver,
     VersionInfo,
     describe_stack_statement,
     handle_single_row_error,
@@ -202,61 +203,75 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
             raise ValueError(msg)
 
         results: list[StackResult] = []
-        started_transaction = False
         single_transaction = not continue_on_error
-        mode_label = "continue-on-error" if continue_on_error else "fail-fast"
-        logger.debug(
-            "Executing statement stack: driver=%s size=%s mode=%s in_tx=%s",
-            type(self).__name__,
-            len(stack.operations),
-            mode_label,
-            self._connection_in_transaction(),
-        )
 
-        try:
-            if single_transaction and not self._connection_in_transaction():
-                await self.begin()
-                started_transaction = True
+        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=False) as observer:
+            started_transaction = False
 
-            for index, operation in enumerate(stack.operations):
-                try:
-                    raw_result = await self._execute_stack_operation(operation)
-                except Exception as exc:  # pragma: no cover - exercised via tests
-                    stack_error = StackExecutionError(
-                        index,
-                        describe_stack_statement(operation.statement),
-                        exc,
-                        adapter=type(self).__name__,
-                        mode="continue-on-error" if continue_on_error else "fail-fast",
-                    )
+            try:
+                if single_transaction and not self._connection_in_transaction():
+                    await self.begin()
+                    started_transaction = True
 
-                    if started_transaction and not continue_on_error:
-                        try:
-                            await self.rollback()
-                        except Exception as rollback_error:  # pragma: no cover - diagnostics only
-                            logger.debug("Rollback after stack failure failed: %s", rollback_error)
-                        started_transaction = False
+                for index, operation in enumerate(stack.operations):
+                    try:
+                        raw_result = await self._execute_stack_operation(operation)
+                    except Exception as exc:  # pragma: no cover - exercised via tests
+                        stack_error = StackExecutionError(
+                            index,
+                            describe_stack_statement(operation.statement),
+                            exc,
+                            adapter=type(self).__name__,
+                            mode="continue-on-error" if continue_on_error else "fail-fast",
+                        )
+
+                        if started_transaction and not continue_on_error:
+                            try:
+                                await self.rollback()
+                            except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                                logger.debug("Rollback after stack failure failed: %s", rollback_error)
+                            started_transaction = False
+
+                        if continue_on_error:
+                            await self._rollback_after_stack_error_async()
+                            observer.record_operation_error(stack_error)
+                            results.append(StackResult.from_error(stack_error))
+                            continue
+
+                        raise stack_error from exc
+
+                    results.append(StackResult(raw_result=raw_result))
 
                     if continue_on_error:
-                        logger.debug("Stack operation %s failed in continue-on-error mode: %s", index, exc)
-                        results.append(StackResult.from_error(stack_error))
-                        continue
+                        await self._commit_after_stack_operation_async()
 
-                    raise stack_error from exc
-
-                results.append(StackResult(raw_result=raw_result))
-
-            if started_transaction:
-                await self.commit()
-        except Exception:
-            if started_transaction:
-                try:
-                    await self.rollback()
-                except Exception as rollback_error:  # pragma: no cover - diagnostics only
-                    logger.debug("Rollback after stack failure failed: %s", rollback_error)
-            raise
+                if started_transaction:
+                    await self.commit()
+            except Exception:
+                if started_transaction:
+                    try:
+                        await self.rollback()
+                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                        logger.debug("Rollback after stack failure failed: %s", rollback_error)
+                raise
 
         return tuple(results)
+
+    async def _rollback_after_stack_error_async(self) -> None:
+        """Attempt to rollback after a stack operation error (async)."""
+
+        try:
+            await self.rollback()
+        except Exception as rollback_error:  # pragma: no cover - driver-specific cleanup
+            logger.debug("Rollback after stack error failed: %s", rollback_error)
+
+    async def _commit_after_stack_operation_async(self) -> None:
+        """Attempt to commit after a successful stack operation when not batching (async)."""
+
+        try:
+            await self.commit()
+        except Exception as commit_error:  # pragma: no cover - driver-specific cleanup
+            logger.debug("Commit after stack operation failed: %s", commit_error)
 
     @abstractmethod
     async def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:

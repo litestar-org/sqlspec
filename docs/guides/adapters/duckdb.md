@@ -8,20 +8,27 @@ This guide provides specific instructions for the `duckdb` adapter.
 
 ## Key Information
 
--   **Driver:** `duckdb`
--   **Parameter Style:** `qmark` (e.g., `?`)
+- **Driver:** `duckdb`
+- **Parameter Style:** `qmark` (e.g., `?`)
 
 ## Parameter Profile
 
--   **Registry Key:** `"duckdb"`
--   **JSON Strategy:** `helper` (shared serializer covers dict/list/tuple)
--   **Extras:** None (profile preserves existing `allow_mixed_parameter_styles=False`)
+- **Registry Key:** `"duckdb"`
+- **JSON Strategy:** `helper` (shared serializer covers dict/list/tuple)
+- **Extras:** None (profile preserves existing `allow_mixed_parameter_styles=False`)
+
+## Query Stack Support
+
+- DuckDB does **not** expose a native multi-statement pipeline, so `StatementStack` always executes through the base sequential path. Transactions are created automatically when `continue_on_error=False`, matching the behavior of standalone `execute()` calls.
+- SQLSpec still emits `stack.native_pipeline.skip` DEBUG logs and `stack.execute.path.sequential` metrics so operators can confirm the adapter is intentionally running in fallback mode.
+- `continue_on_error=True` is supported: each failing statement records a `StackExecutionError` while later statements keep running, which is helpful when running analytical maintenance batches inside DuckDB.
+- `tests/integration/test_adapters/test_duckdb/test_driver.py::test_duckdb_statement_stack_*` exercises the sequential + continue-on-error paths to guard against regressions.
 
 ## Best Practices
 
--   **In-Memory vs. File:** DuckDB can run entirely in-memory (`:memory:`) or with a file-based database. In-memory is great for fast, temporary analytics. File-based is for persistence.
--   **Extensions:** DuckDB has a rich ecosystem of extensions (e.g., for reading Parquet files, JSON, etc.). These can be loaded via the `sqlspec` configuration.
--   **Vectorized Execution:** DuckDB is extremely fast for analytical queries due to its vectorized execution engine. Write queries that operate on columns rather than row-by-row.
+- **In-Memory vs. File:** DuckDB can run entirely in-memory (`:memory:`) or with a file-based database. In-memory is great for fast, temporary analytics. File-based is for persistence.
+- **Extensions:** DuckDB has a rich ecosystem of extensions (e.g., for reading Parquet files, JSON, etc.). These can be loaded via the `sqlspec` configuration.
+- **Vectorized Execution:** DuckDB is extremely fast for analytical queries due to its vectorized execution engine. Write queries that operate on columns rather than row-by-row.
 
 ## Arrow Support (Native)
 
@@ -53,12 +60,14 @@ with sql.provide_session() as session:
 ### Performance Characteristics
 
 **Native Arrow Benefits**:
+
 - **Columnar-native format** - DuckDB already uses columnar storage
 - **Zero-copy data transfer** - direct Arrow output
 - **Optimal for analytics** - Perfect for OLAP workloads
 - **Parquet integration** - Seamless Arrow ↔ Parquet conversion
 
 **Best for**:
+
 - Analytical queries on large datasets
 - Reading from Parquet, CSV, or JSON files
 - In-memory data transformations
@@ -283,6 +292,6 @@ ds.write_dataset(
 
 ## Common Issues
 
--   **`duckdb.IOException`**: Usually occurs when there are issues reading a file (e.g., a Parquet or CSV file). Check file paths and permissions.
--   **Memory Management:** While fast, DuckDB can be memory-intensive. For large datasets, monitor memory usage and consider using a file-based database to allow for out-of-core processing.
--   **`MissingDependencyError: pyarrow`**: Install Arrow support with `pip install sqlspec[arrow]`
+- **`duckdb.IOException`**: Usually occurs when there are issues reading a file (e.g., a Parquet or CSV file). Check file paths and permissions.
+- **Memory Management:** While fast, DuckDB can be memory-intensive. For large datasets, monitor memory usage and consider using a file-based database to allow for out-of-core processing.
+- **`MissingDependencyError: pyarrow`**: Install Arrow support with `pip install sqlspec[arrow]`

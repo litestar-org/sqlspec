@@ -172,7 +172,7 @@ class TestConfigResolver:
         When using resolve_config_*, classes are callable and get instantiated,
         so they don't reach direct validation as classes.
         """
-        from sqlspec.utils.config_resolver import _is_valid_config
+        from sqlspec.utils.config_resolver import _is_valid_config  # pyright: ignore[reportPrivateUsage]
 
         class MockConfigClass:
             """Mock config class to simulate config classes being passed."""

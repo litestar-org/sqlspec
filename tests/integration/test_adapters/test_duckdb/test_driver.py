@@ -6,7 +6,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBDriver
-from sqlspec.core import SQLResult
+from sqlspec.core import SQLResult, StatementStack
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 
@@ -603,3 +603,49 @@ def test_duckdb_for_share_locking(duckdb_session: DuckDBDriver) -> None:
         raise
     finally:
         duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+def test_duckdb_statement_stack_sequential(duckdb_session: DuckDBDriver) -> None:
+    """DuckDB drivers should use sequential stack execution."""
+
+    duckdb_session.execute("DELETE FROM test_table")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (1, "duckdb-stack-one"))
+        .push_execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (2, "duckdb-stack-two"))
+        .push_execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE ?", ("duckdb-stack-%",))
+    )
+
+    results = duckdb_session.execute_stack(stack)
+
+    assert len(results) == 3
+    assert results[0].rowcount == 1
+    assert results[1].rowcount == 1
+    assert results[2].raw_result is not None
+    assert results[2].raw_result.data is not None
+    assert results[2].raw_result.data[0]["total"] == 2
+
+
+def test_duckdb_statement_stack_continue_on_error(duckdb_session: DuckDBDriver) -> None:
+    """DuckDB sequential stack execution should honor continue-on-error."""
+
+    duckdb_session.execute("DELETE FROM test_table")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (1, "duckdb-initial"))
+        .push_execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (1, "duckdb-duplicate"))
+        .push_execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (2, "duckdb-final"))
+    )
+
+    results = duckdb_session.execute_stack(stack, continue_on_error=True)
+
+    assert len(results) == 3
+    assert results[0].rowcount == 1
+    assert results[1].error is not None
+    assert results[2].rowcount == 1
+
+    verify = duckdb_session.execute("SELECT COUNT(*) AS total FROM test_table")
+    assert verify.data is not None
+    assert verify.data[0]["total"] == 2

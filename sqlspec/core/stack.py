@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core.statement import Statement, StatementConfig, StatementFilter
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.statement import Statement, StatementConfig
     from sqlspec.typing import StatementParameters
 __all__ = ("StackOperation", "StatementStack")
 

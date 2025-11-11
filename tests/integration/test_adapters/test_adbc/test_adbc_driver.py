@@ -5,7 +5,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.adapters.adbc import AdbcDriver
-from sqlspec.core import SQLResult
+from sqlspec.core import SQLResult, StatementStack
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -198,6 +198,52 @@ def test_adbc_postgresql_execute_script(adbc_postgresql_session: AdbcDriver) -> 
     assert select_result.data[0]["value"] == 1000
     assert select_result.data[1]["name"] == "script_test2"
     assert select_result.data[1]["value"] == 888
+
+
+@pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
+def test_adbc_postgresql_statement_stack_sequential(adbc_postgresql_session: AdbcDriver) -> None:
+    """ADBC PostgreSQL should keep StatementStack execution sequential."""
+
+    adbc_postgresql_session.execute("TRUNCATE TABLE test_table")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "adbc-stack-one", 10))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (2, "adbc-stack-two", 20))
+        .push_execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE $1", ("adbc-stack-%",))
+    )
+
+    results = adbc_postgresql_session.execute_stack(stack)
+
+    assert len(results) == 3
+    assert results[2].raw_result is not None
+    assert results[2].raw_result.data is not None
+    assert results[2].raw_result.data[0]["total"] == 2
+
+
+@pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
+def test_adbc_postgresql_statement_stack_continue_on_error(adbc_postgresql_session: AdbcDriver) -> None:
+    """continue_on_error should surface failures but execute remaining operations."""
+
+    adbc_postgresql_session.execute("TRUNCATE TABLE test_table")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "adbc-initial", 5))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "adbc-duplicate", 15))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (2, "adbc-final", 25))
+    )
+
+    results = adbc_postgresql_session.execute_stack(stack, continue_on_error=True)
+
+    assert len(results) == 3
+    assert results[1].error is not None
+
+    verify = adbc_postgresql_session.execute("SELECT COUNT(*) AS total FROM test_table")
+    assert verify.data is not None
+    assert verify.data[0]["total"] == 2
 
 
 @pytest.mark.xdist_group("postgres")

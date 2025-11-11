@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.core import StackOperation, StatementStack
+from sqlspec.core import StackOperation, StatementConfig, StatementStack
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -38,16 +38,14 @@ def test_push_execute_script_requires_non_empty_sql() -> None:
 
 def test_push_execute_many_stores_filters_and_kwargs() -> None:
     stack = StatementStack().push_execute_many(
-        "INSERT",
-        [{"x": 1}],
-        {"filter": True},
-        statement_config=None,
-        chunk_size=50,
+        "INSERT", [{"x": 1}], {"filter": True}, statement_config=None, chunk_size=50
     )
     operation = stack.operations[0]
     assert operation.method == "execute_many"
-    assert operation.arguments[0] == ({"x": 1},)
-    assert operation.arguments[1] == {"filter": True}
+    arguments = operation.arguments
+    assert len(arguments) >= 2
+    assert arguments[0] == ({"x": 1},)
+    assert arguments[1] == {"filter": True}
     assert operation.keyword_arguments is not None
     assert operation.keyword_arguments["chunk_size"] == 50
 
@@ -65,14 +63,11 @@ def test_extend_and_from_operations() -> None:
 def test_reject_nested_stack() -> None:
     stack = StatementStack()
     with pytest.raises(TypeError, match="Nested StatementStack"):
-        stack.push_execute(stack)
+        stack.push_execute(stack)  # type: ignore[arg-type]
 
 
 def test_freeze_kwargs_includes_statement_config() -> None:
-    class DummyConfig:
-        pass
-
-    config = DummyConfig()
+    config = StatementConfig()
     stack = StatementStack().push_execute("SELECT 1", statement_config=config)
     operation = stack.operations[0]
     assert operation.keyword_arguments is not None
@@ -91,7 +86,9 @@ def test_push_execute_arrow_records_kwargs() -> None:
     )
     operation = stack.operations[0]
     assert operation.method == "execute_arrow"
-    assert operation.arguments[0] == {"limit": 10}
+    arguments = operation.arguments
+    assert arguments
+    assert arguments[0] == {"limit": 10}
     assert operation.keyword_arguments is not None
     assert operation.keyword_arguments["return_format"] == "batch"
     assert operation.keyword_arguments["native_only"] is True

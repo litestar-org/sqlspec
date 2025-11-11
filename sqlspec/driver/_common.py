@@ -1,8 +1,11 @@
 """Common driver attributes and utilities."""
 
+import hashlib
+import logging
 import re
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, NoReturn, Optional, TypeVar, cast
+from time import perf_counter
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn, Optional, TypeVar, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -20,14 +23,16 @@ from sqlspec.core import (
     get_cache_config,
     split_sql_script,
 )
+from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import is_statement_filter
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.core import FilterTypeT, StatementFilter
+    from sqlspec.core.stack import StatementStack
     from sqlspec.observability import ObservabilityRuntime
     from sqlspec.typing import StatementParameters
 
@@ -41,9 +46,11 @@ __all__ = (
     "DataDictionaryMixin",
     "ExecutionResult",
     "ScriptExecutionResult",
+    "StackExecutionObserver",
     "VersionInfo",
     "describe_stack_statement",
     "handle_single_row_error",
+    "hash_stack_operations",
     "make_cache_key_hashable",
 )
 
@@ -106,6 +113,108 @@ def make_cache_key_hashable(obj: Any) -> Any:
         else:
             return ("ndarray", dtype_str, shape)
     return obj
+
+
+def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
+    """Return SHA256 fingerprints for statements contained in the stack."""
+
+    hashes: list[str] = []
+    for operation in stack.operations:
+        summary = describe_stack_statement(operation.statement)
+        if not isinstance(summary, str):
+            summary = str(summary)
+        digest = hashlib.sha256(summary.encode("utf-8")).hexdigest()
+        hashes.append(digest[:16])
+    return tuple(hashes)
+
+
+class StackExecutionObserver:
+    """Context manager that aggregates telemetry for stack execution."""
+
+    __slots__ = (
+        "continue_on_error",
+        "driver",
+        "hashed_operations",
+        "metrics",
+        "native_pipeline",
+        "runtime",
+        "span",
+        "stack",
+        "started",
+    )
+
+    def __init__(
+        self,
+        driver: "CommonDriverAttributesMixin",
+        stack: "StatementStack",
+        continue_on_error: bool,
+        native_pipeline: bool,
+    ) -> None:
+        self.driver = driver
+        self.stack = stack
+        self.continue_on_error = continue_on_error
+        self.native_pipeline = native_pipeline
+        self.runtime = driver.observability
+        self.metrics = StackExecutionMetrics(
+            adapter=type(driver).__name__,
+            statement_count=len(stack.operations),
+            continue_on_error=continue_on_error,
+            native_pipeline=native_pipeline,
+            forced_disable=driver.stack_native_disabled,
+        )
+        self.hashed_operations = hash_stack_operations(stack)
+        self.span: Any | None = None
+        self.started = 0.0
+
+    def __enter__(self) -> "StackExecutionObserver":
+        self.started = perf_counter()
+        attributes = {
+            "sqlspec.stack.statement_count": len(self.stack.operations),
+            "sqlspec.stack.continue_on_error": self.continue_on_error,
+            "sqlspec.stack.native_pipeline": self.native_pipeline,
+            "sqlspec.stack.forced_disable": self.driver.stack_native_disabled,
+        }
+        self.span = self.runtime.start_span("sqlspec.stack.execute", attributes=attributes)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "stack.execute.start",
+            driver=type(self.driver).__name__,
+            stack_size=len(self.stack.operations),
+            continue_on_error=self.continue_on_error,
+            native_pipeline=self.native_pipeline,
+            forced_disable=self.driver.stack_native_disabled,
+            hashed_operations=self.hashed_operations,
+        )
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Exception | None, exc_tb: Any) -> Literal[False]:
+        duration = perf_counter() - self.started
+        self.metrics.record_duration(duration)
+        if exc is not None:
+            self.metrics.record_error(exc)
+        self.runtime.span_manager.end_span(self.span, error=exc if exc is not None else None)
+        self.metrics.emit(self.runtime)
+        level = logging.ERROR if exc is not None else logging.DEBUG
+        log_with_context(
+            logger,
+            level,
+            "stack.execute.failed" if exc is not None else "stack.execute.complete",
+            driver=type(self.driver).__name__,
+            stack_size=len(self.stack.operations),
+            continue_on_error=self.continue_on_error,
+            native_pipeline=self.native_pipeline,
+            forced_disable=self.driver.stack_native_disabled,
+            hashed_operations=self.hashed_operations,
+            duration_s=duration,
+            error_type=type(exc).__name__ if exc is not None else None,
+        )
+        return False
+
+    def record_operation_error(self, error: Exception) -> None:
+        """Record an operation error when continue-on-error is enabled."""
+
+        self.metrics.record_operation_error(error)
 
 
 def describe_stack_statement(statement: Any) -> str:
@@ -342,6 +451,12 @@ class CommonDriverAttributesMixin:
 
             self._observability = ObservabilityRuntime(config_name=type(self).__name__)
         return self._observability
+
+    @property
+    def stack_native_disabled(self) -> bool:
+        """Return True when native stack execution is disabled for this driver."""
+
+        return bool(self.driver_features.get("stack_native_disabled", False))
 
     def create_execution_result(
         self,

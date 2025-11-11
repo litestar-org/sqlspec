@@ -10,6 +10,14 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+Query Stack Documentation Suite
+--------------------------------
+
+- Expanded the :doc:`/reference/query-stack` API reference (``StatementStack``, ``StackResult``, driver hooks, and ``StackExecutionError``) with the high-level workflow, execution modes, telemetry, and troubleshooting tips.
+- Added :doc:`/examples/query_stack_example` that runs the same stack against SQLite and AioSQLite.
+- Captured the detailed architecture and performance guidance inside the internal specs workspace for future agent runs.
+- Updated every adapter reference with a **Query Stack Support** section so behavior is documented per database.
+
 Migration Convenience Methods on Config Classes
 ------------------------------------------------
 

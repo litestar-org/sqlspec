@@ -2,7 +2,13 @@
 
 from sqlspec.driver import mixins
 from sqlspec.driver._async import AsyncDataDictionaryBase, AsyncDriverAdapterBase
-from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult, VersionInfo
+from sqlspec.driver._common import (
+    CommonDriverAttributesMixin,
+    ExecutionResult,
+    StackExecutionObserver,
+    VersionInfo,
+    describe_stack_statement,
+)
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 
 __all__ = (
@@ -11,9 +17,11 @@ __all__ = (
     "CommonDriverAttributesMixin",
     "DriverAdapterProtocol",
     "ExecutionResult",
+    "StackExecutionObserver",
     "SyncDataDictionaryBase",
     "SyncDriverAdapterBase",
     "VersionInfo",
+    "describe_stack_statement",
     "mixins",
 )
 

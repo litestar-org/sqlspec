@@ -10,6 +10,7 @@ Classes:
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any, Optional, cast, overload
 
 from mypy_extensions import mypyc_attr
@@ -27,8 +28,6 @@ from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pya
 from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from sqlspec.core.statement import SQL
     from sqlspec.typing import ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
 
@@ -39,7 +38,7 @@ T = TypeVar("T")
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class StatementResult(ABC):
+class StatementResult(ABC, Iterable[Any]):
     """Abstract base class for SQL statement execution results.
 
     Provides a common interface for handling different types of SQL operation
@@ -82,6 +81,10 @@ class StatementResult(ABC):
         self.last_inserted_id = last_inserted_id
         self.execution_time = execution_time
         self.metadata = metadata if metadata is not None else {}
+
+    @abstractmethod
+    def __iter__(self) -> Iterator[Any]:
+        """Iterate over result rows."""
 
     @abstractmethod
     def is_success(self) -> bool:

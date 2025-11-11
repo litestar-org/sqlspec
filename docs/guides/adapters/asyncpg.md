@@ -134,6 +134,31 @@ pip install cloud-alloydb-python-connector
 
 For comprehensive configuration options and troubleshooting, see the [Google Cloud Connectors Guide](/guides/cloud/google-connectors.md).
 
+## Query Stack Support
+
+`StatementStack` calls execute in a single transaction when `continue_on_error=False`, leveraging asyncpg's fast extended-query protocol to minimize round-trips. When you need partial success handling (`continue_on_error=True`), the adapter automatically disables the shared transaction and reports individual failures via `StackResult.error`.
+
+- Telemetry spans (`sqlspec.stack.execute`), metrics (`stack.execute.*`), and hashed operation logging are emitted for every stack, so production monitoring captures adoption automatically.
+- The pipeline path preserves `StackResult.raw_result` for SELECT statements, so downstream helpers continue to operate on the original `SQLResult` objects.
+- To force the sequential fallback (for incident response or regression tests), pass `driver_features={"stack_native_disabled": True}` to the config.
+
+Example usage:
+
+```python
+from sqlspec.core import StatementStack
+
+stack = (
+    StatementStack()
+    .push_execute("INSERT INTO audit_log (message) VALUES ($1)", ("login",))
+    .push_execute("UPDATE users SET last_login = NOW() WHERE id = $1", (user_id,))
+    .push_execute("SELECT permissions FROM user_permissions WHERE user_id = $1", (user_id,))
+)
+
+results = await asyncpg_session.execute_stack(stack)
+```
+
+If you enable `continue_on_error=True`, the adapter returns three `StackResult` objects, each recording its own `error`/`warning` state without rolling the entire stack back.
+
 ## MERGE Operations (PostgreSQL 15+)
 
 AsyncPG supports high-performance MERGE operations for bulk upserts using PostgreSQL's native MERGE statement with `jsonb_to_recordset()`.

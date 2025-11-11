@@ -1,6 +1,8 @@
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Final
+
+STACK_SQL_PREVIEW_LIMIT: Final[int] = 120
 
 __all__ = (
     "CheckViolationError",
@@ -27,8 +29,8 @@ __all__ = (
     "SQLFileParseError",
     "SQLParsingError",
     "SQLSpecError",
-    "StackExecutionError",
     "SerializationError",
+    "StackExecutionError",
     "StorageCapabilityError",
     "StorageOperationFailedError",
     "TransactionError",
@@ -188,8 +190,8 @@ class StackExecutionError(SQLSpecError):
         pipeline_state = "enabled" if native_pipeline else "disabled"
         adapter_label = adapter or "unknown-adapter"
         preview = " ".join(sql.strip().split())
-        if len(preview) > 120:
-            preview = f"{preview[:117]}..."
+        if len(preview) > STACK_SQL_PREVIEW_LIMIT:
+            preview = f"{preview[: STACK_SQL_PREVIEW_LIMIT - 3]}..."
         detail = (
             f"Stack operation {operation_index} failed on {adapter_label} "
             f"(mode={mode}, pipeline={pipeline_state}) sql={preview}"

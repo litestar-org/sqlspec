@@ -12,7 +12,7 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
-from sqlspec.core import SQL, SQLResult
+from sqlspec.core import SQL, SQLResult, StatementStack
 from sqlspec.utils.serializers import from_json, to_json
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -161,6 +161,53 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     assert row["bool_col"] == 1
     assert isinstance(row["json_col"], dict)
     assert row["json_col"]["key"] == "value"
+
+
+async def test_asyncmy_statement_stack_sequential(asyncmy_driver: AsyncmyDriver) -> None:
+    """StatementStack should execute sequentially for asyncmy (no native batching)."""
+
+    await asyncmy_driver.execute_script("TRUNCATE TABLE test_table")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "mysql-stack-one", 11))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (2, "mysql-stack-two", 22))
+        .push_execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE ?", ("mysql-stack-%",))
+    )
+
+    results = await asyncmy_driver.execute_stack(stack)
+
+    assert len(results) == 3
+    assert results[0].rowcount == 1
+    assert results[1].rowcount == 1
+    final_result = results[2].raw_result
+    assert isinstance(final_result, SQLResult)
+    data = final_result.get_data()
+    assert data
+    assert data[0]["total"] == 2
+
+
+async def test_asyncmy_statement_stack_continue_on_error(asyncmy_driver: AsyncmyDriver) -> None:
+    """Continue-on-error should still work with sequential fallback."""
+
+    await asyncmy_driver.execute_script("TRUNCATE TABLE test_table")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "mysql-initial", 5))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "mysql-duplicate", 15))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (2, "mysql-final", 25))
+    )
+
+    results = await asyncmy_driver.execute_stack(stack, continue_on_error=True)
+
+    assert len(results) == 3
+    assert results[0].rowcount == 1
+    assert results[1].error is not None
+    assert results[2].rowcount == 1
+
+    verify = await asyncmy_driver.execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE ?", ("mysql-%",))
+    assert verify.get_data()[0]["total"] == 2
 
 
 async def test_asyncmy_driver_features_custom_serializers(mysql_service: MySQLService) -> None:

@@ -143,6 +143,7 @@ from sqlspec.core.hashing import (
     hash_parameters,
     hash_sql_statement,
 )
+from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import (
     DRIVER_PARAMETER_PROFILES,
     EXECUTE_MANY_MIN_ROWS,
@@ -171,9 +172,16 @@ from sqlspec.core.parameters import (
     validate_parameter_alignment,
     wrap_with_type,
 )
-from sqlspec.core.result import ArrowResult, SQLResult, StackResult, StatementResult, create_arrow_result, create_sql_result
-from sqlspec.core.stack import StackOperation, StatementStack
+from sqlspec.core.result import (
+    ArrowResult,
+    SQLResult,
+    StackResult,
+    StatementResult,
+    create_arrow_result,
+    create_sql_result,
+)
 from sqlspec.core.splitter import split_sql_script
+from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.core.statement import (
     SQL,
     ProcessedState,
@@ -193,6 +201,7 @@ from sqlspec.core.type_conversion import (
     format_datetime_rfc3339,
     parse_datetime_rfc3339,
 )
+from sqlspec.exceptions import StackExecutionError
 
 __all__ = (
     "DRIVER_PARAMETER_PROFILES",
@@ -231,14 +240,16 @@ __all__ = (
     "ProcessedState",
     "SQLProcessor",
     "SQLResult",
+    "SearchFilter",
+    "StackExecutionError",
+    "StackExecutionMetrics",
     "StackOperation",
     "StackResult",
-    "StatementStack",
-    "SearchFilter",
     "Statement",
     "StatementConfig",
     "StatementFilter",
     "StatementResult",
+    "StatementStack",
     "TypedParameter",
     "UnifiedCache",
     "apply_filter",
