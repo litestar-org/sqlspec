@@ -1,0 +1,72 @@
+<h2>🐍 Pyodide + SQLSpec Runner</h2>
+  <textarea id="editor-{{ uuid }}">
+# Try Python code here
+import sqlspec
+print("sqlspec version:", sqlspec.__version__)
+  </textarea>
+  <br>
+  <button id="run-button-{{ uuid }}">Loading...</button>
+
+  <pre id="output-{{ uuid }}"></pre>
+
+  <!-- ✅ Load Pyodide runtime -->
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
+
+  <!-- ✅ Your app logic -->
+  <script>
+    (async function() {
+      const editor = document.getElementById("editor-{{ uuid }}");
+      const output = document.getElementById("output-{{ uuid }}");
+      const runButton = document.getElementById("run-button-{{ uuid }}");
+
+      let pyodide = null;
+
+      function writeToOutput(s) {
+        output.textContent += s + "\n";
+        output.scrollTop = output.scrollHeight;
+      }
+
+      async function initPyodide() {
+        try {
+          pyodide = await loadPyodide();
+          pyodide.setStdout({ batched: writeToOutput });
+          pyodide.setStderr({ batched: writeToOutput });
+          output.textContent = "✅ Pyodide loaded.\nInstalling micropip...\n";
+
+          await pyodide.loadPackage("micropip");
+          const micropip = pyodide.pyimport("micropip");
+
+
+          output.textContent += "Installing sqlspec (this may take ~30s)...\n";
+          await micropip.install("sqlspec[aiosqlite]");
+          await micropip.install("sqlite3");
+
+          output.textContent += "✅ Ready! You can now run Python code.\n";
+          runButton.disabled = false;
+          runButton.textContent = "▶ Run";
+        } catch (err) {
+          output.textContent = "❌ Error loading Pyodide: " + err;
+          console.error(err);
+        }
+      }
+
+      runButton.disabled = true;
+      runButton.textContent = "Loading...";
+      runButton.onclick = async () => {
+        if (!pyodide) {
+          output.textContent = "Pyodide is not loaded yet.";
+          return;
+        }
+        const code = editor.value;
+        output.textContent = "Running code...\n";
+        try {
+          await pyodide.runPythonAsync(code);
+        } catch (err) {
+          writeToOutput("Python Error: " + err);
+          console.error(err);
+        }
+      };
+
+      initPyodide();
+    })();
+  </script>
