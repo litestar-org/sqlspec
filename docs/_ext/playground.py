@@ -10,7 +10,7 @@ from docutils.parsers.rst import Directive
 from jinja2 import Environment, FileSystemLoader
 from typing_extensions import Self
 
-__all__ = ("WasmPlayground", "setup", )
+__all__ = ("WasmPlayground", "setup")
 
 
 logger = logging.getLogger(__name__)
