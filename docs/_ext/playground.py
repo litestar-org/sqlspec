@@ -2,11 +2,16 @@
 
 import logging
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from docutils import nodes
 from docutils.parsers.rst import Directive
 from jinja2 import Environment, FileSystemLoader
+from typing_extensions import Self
+
+__all__ = ("WasmPlayground", "setup", )
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +24,7 @@ class WasmPlayground(Directive):
     logger.info("Initializing WasmPlayground directive")
     has_content = True
 
-    def run(self):
+    def run(self: Self) -> list[Any]:
         # Generate unique IDs for the HTML elements
         id = uuid4().hex
         env = Environment(loader=FileSystemLoader(Path(__file__).parent))
@@ -28,15 +33,10 @@ class WasmPlayground(Directive):
         return [nodes.raw(text=rendered, format="html")]
 
 
-def setup(app):
+def setup(app: Any) -> dict[str, Any]:
     """
     Register the directive with Sphinx.
     """
     app.add_js_file("https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js", priority=100)
     app.add_directive("wasm-playground", WasmPlayground)
-    return {
-        "version": "1.0",
-        "parallel_read_safe": True,
-        "parallel_write_safe": True,
-    }
-
+    return {"version": "1.0", "parallel_read_safe": True, "parallel_write_safe": True}
