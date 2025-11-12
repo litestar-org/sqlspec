@@ -36,7 +36,6 @@ print("sqlspec version:", sqlspec.__version__)
           await pyodide.loadPackage("micropip");
           const micropip = pyodide.pyimport("micropip");
 
-
           output.textContent += "Installing sqlspec (this may take ~30s)...\n";
           await micropip.install("sqlspec[aiosqlite]");
           await micropip.install("sqlite3");
