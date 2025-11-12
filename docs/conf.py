@@ -61,6 +61,7 @@ extensions = [
     "sphinx_togglebutton",
     "sphinx_paramlinks",
     "sphinxcontrib.mermaid",
+    "docs._ext.playground"
 ]
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
