@@ -22,7 +22,6 @@ class WasmPlayground(Directive):
     def run(self):
         # Generate unique IDs for the HTML elements
         id = uuid4().hex
-        print(id)
         env = Environment(loader=FileSystemLoader(Path(__file__).parent))
         template = env.get_template("playground_template.html")
         rendered = template.render(id=id)
