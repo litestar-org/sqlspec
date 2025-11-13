@@ -10,13 +10,13 @@ This example builds an immutable ``StatementStack`` and executes it against both
 
 .. literalinclude:: query_stack_example.py
    :language: python
-   :caption: ``docs/examples/query_stack_example.py``
+   :caption: ``docs/examples/patterns/stacks/query_stack_example.py``
    :linenos:
 
 Run the script:
 
 .. code-block:: console
 
-   uv run python docs/examples/query_stack_example.py
+   uv run python docs/examples/patterns/stacks/query_stack_example.py
 
 Expected output shows inserted/updated row counts plus the projected role list for each adapter.

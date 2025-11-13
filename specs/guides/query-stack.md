@@ -61,7 +61,7 @@ Adapters only need to report whether they used a native pipeline; the observer h
 ## Related Resources
 
 - [Query Stack API Reference](/reference/query-stack)
-- :doc:`/examples/query_stack_example`
+- :doc:`/examples/patterns/stacks/query_stack_example`
 - [Adapter Guides](/guides/adapters/) for native vs. fallback behavior per database
 
-Use the new :doc:`/reference/query-stack` page for low-level API details and :doc:`/examples/query_stack_example` to see the end-to-end workflow.
+Use the new :doc:`/reference/query-stack` page for low-level API details and :doc:`/examples/patterns/stacks/query_stack_example` to see the end-to-end workflow.
