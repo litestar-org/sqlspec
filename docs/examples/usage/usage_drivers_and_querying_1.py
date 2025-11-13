@@ -3,6 +3,8 @@
 
 from pytest_databases.docker.postgres import PostgresService
 
+__all__ = ("test_importable_1",)
+
 
 async def test_importable_1(postgres_service: PostgresService) -> None:
     # start-example

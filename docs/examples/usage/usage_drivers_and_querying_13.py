@@ -1,6 +1,8 @@
 # Test module converted from docs example - code-block 13
 """Minimal smoke test for drivers_and_querying example 13."""
 
+__all__ = ("test_example_13_placeholder",)
+
 
 def test_example_13_placeholder() -> None:
     # start-example

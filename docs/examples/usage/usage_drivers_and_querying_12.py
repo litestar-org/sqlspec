@@ -3,6 +3,8 @@
 
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
+__all__ = ("test_example_12_bigquery_config",)
+
 
 def test_example_12_bigquery_config(bigquery_service: BigQueryDriver) -> None:
     # start-example

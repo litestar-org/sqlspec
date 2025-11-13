@@ -1,8 +1,11 @@
 # Test module converted from docs example - code-block 8
 """Minimal smoke test for drivers_and_querying example 8."""
 
+__all__ = ("test_example_8_aiosqlite_config",)
+
 
 async def test_example_8_aiosqlite_config() -> None:
+    # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
@@ -17,3 +20,4 @@ async def test_example_8_aiosqlite_config() -> None:
         await session.execute(create_table_query)
         await session.execute("INSERT INTO users (name) VALUES (?)", "Bob")
         await session.execute("SELECT * FROM users")
+    # end-example

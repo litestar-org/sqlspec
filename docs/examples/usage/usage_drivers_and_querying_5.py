@@ -6,8 +6,11 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec import SQLSpec
 from sqlspec.adapters.psqlpy import PsqlpyConfig
 
+__all__ = ("test_example_5_construct_config",)
+
 
 async def test_example_5_construct_config(postgres_service: PostgresService) -> None:
+    # start-example
     spec = SQLSpec()
     config = PsqlpyConfig(
         pool_config={
@@ -23,7 +26,6 @@ async def test_example_5_construct_config(postgres_service: PostgresService) -> 
         );        """
         await session.execute(create_table_query)
         # Insert with RETURNING
-        await session.execute(
-            "INSERT INTO users (name, email) VALUES ($1, $2) ETURNING id", "Alice", "alice@example.com"
-        )
+        await session.execute("INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id", "Bob", "bob@example.com")
         await session.execute("SELECT * FROM users WHERE id = $1", 1)
+    # end-example

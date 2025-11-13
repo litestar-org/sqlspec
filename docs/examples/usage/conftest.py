@@ -5,7 +5,7 @@ from collections.abc import Generator
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-pytest_plugins = ["pytest_databases.docker.postgres"]
+pytest_plugins = ["pytest_databases.docker.postgres", "pytest_databases.docker.mysql", "pytest_databases.docker.oracle"]
 
 
 @pytest.fixture(scope="session", autouse=True)

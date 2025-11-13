@@ -3,8 +3,11 @@
 
 from pytest_databases.docker.mysql import MySQLService
 
+__all__ = ("test_example_9_asyncmy_config",)
+
 
 async def test_example_9_asyncmy_config(mysql_service: MySQLService) -> None:
+    # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.asyncmy import AsyncmyConfig
 
@@ -35,3 +38,4 @@ async def test_example_9_asyncmy_config(mysql_service: MySQLService) -> None:
         )
         # query the user
         await session.execute("SELECT * FROM users WHERE id = %s", 1)
+    # end-example

@@ -3,6 +3,8 @@
 
 from pydantic import BaseModel
 
+__all__ = ("User", "test_example_21_pydantic_model")
+
 
 class User(BaseModel):
     id: int

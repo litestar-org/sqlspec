@@ -325,7 +325,7 @@ Execute a SELECT query expecting exactly one result.
    :language: python
    :start-after: # start-example-3
    :end-before: # end-example-3
-   :dedent: 2
+   :dedent: 4
    :caption: `select_one`
 
 select_one_or_none()
@@ -337,7 +337,7 @@ Execute a SELECT query returning one or no results.
    :language: python
    :start-after: # start-example-4
    :end-before: # end-example-4
-   :dedent: 2
+   :dedent: 4
    :caption: `select_one_or_none`
 
 select_value()
@@ -349,7 +349,7 @@ Execute a SELECT query returning a single scalar value.
    :language: python
    :start-after: # start-example-5
    :end-before: # end-example-5
-   :dedent: 2
+   :dedent: 4
    :caption: `select_value`
 
 Working with Results
@@ -364,47 +364,30 @@ All queries return a ``SQLResult`` object with rich result information.
    :language: python
    :start-after: # start-example-6
    :end-before: # end-example-6
-   :dedent: 2
+   :dedent: 4
    :caption: `SQLResult object`
 
 Iterating Results
 ^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   result = session.execute("SELECT * FROM users")
-
-   # Get all rows and iterate
-   users = result.all()
-   for user in users:
-       print(f"{user['name']}: {user['email']}")
-
-   # List comprehension
-   names = [user['name'] for user in result.all()]
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-7
+   :end-before: # end-example-7
+   :dedent: 4
+   :caption: `iterating results`
 
 Schema Mapping
 ^^^^^^^^^^^^^^
 
-Map results to typed objects automatically.
+Map results to typed objects automatically.# end-example
 
-.. code-block:: python
-
-   from pydantic import BaseModel
-
-   class User(BaseModel):
-       id: int
-       name: str
-       email: str
-
-   # Execute query
-   result = session.execute("SELECT id, name, email FROM users")
-
-   # Map results to typed User instances
-   users: list[User] = result.all(schema_type=User)
-
-   # Or get single typed result
-   user_result = session.execute("SELECT id, name, email FROM users WHERE id = ?", 1)
-   user: User = user_result.one(schema_type=User)
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-8
+   :end-before: # end-example-8
+   :dedent: 4
+   :caption: `schema mapping`
 
 Transactions
 ------------

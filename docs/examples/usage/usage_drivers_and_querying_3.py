@@ -3,8 +3,11 @@
 
 from pytest_databases.docker.postgres import PostgresService
 
+__all__ = ("test_example_3_sync",)
+
 
 def test_example_3_sync(postgres_service: PostgresService) -> None:
+    # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.psycopg import PsycopgSyncConfig
 
@@ -28,5 +31,6 @@ def test_example_3_sync(postgres_service: PostgresService) -> None:
         """
         session.execute(create_table_query)
         # Insert with RETURNING
-        session.execute("INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id", "Alice", "alice@example.com")
+        session.execute("INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id", "Jane", "jane@example.com")
         session.execute("SELECT * FROM users")
+        # end-example

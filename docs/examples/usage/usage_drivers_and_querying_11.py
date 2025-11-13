@@ -3,6 +3,8 @@
 
 from pytest_databases.docker.oracle import OracleService
 
+__all__ = ("test_example_11_oracledb_config",)
+
 
 def test_example_11_oracledb_config(oracle_service: OracleService) -> None:
     # start-example

@@ -3,8 +3,11 @@
 
 from pytest_databases.docker.postgres import PostgresService
 
+__all__ = ("test_example_4_async",)
+
 
 async def test_example_4_async(postgres_service: PostgresService) -> None:
+    # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 
@@ -29,6 +32,7 @@ async def test_example_4_async(postgres_service: PostgresService) -> None:
         await session.execute(create_table_query)
         # Insert with RETURNING
         await session.execute(
-            "INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id", "Alice", "alice@example.com"
+            "INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id", "Bill", "bill@example.com"
         )
         await session.execute("SELECT * FROM users")
+    # end-example

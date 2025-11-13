@@ -3,6 +3,8 @@
 
 from pathlib import Path
 
+__all__ = ("test_example_10_duckdb_config",)
+
 
 def test_example_10_duckdb_config() -> None:
     # start-example

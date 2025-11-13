@@ -3,8 +3,11 @@
 
 from sqlspec import SQLSpec
 
+__all__ = ("test_example_6_sqlite_config",)
+
 
 def test_example_6_sqlite_config() -> None:
+    # start-example
     from sqlspec.adapters.sqlite import SqliteConfig
 
     spec = SQLSpec()
@@ -26,3 +29,4 @@ def test_example_6_sqlite_config() -> None:
         # Query
         result = session.execute("SELECT * FROM users")
         result.all()
+    # end-example
