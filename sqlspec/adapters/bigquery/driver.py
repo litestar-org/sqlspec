@@ -7,11 +7,13 @@ type coercion, error handling, and query job management.
 import datetime
 import io
 import logging
+import os
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlglot
+from google.api_core.retry import Retry
 from google.cloud.bigquery import ArrayQueryParameter, LoadJobConfig, QueryJob, QueryJobConfig, ScalarQueryParameter
 from google.cloud.exceptions import GoogleCloudError
 
@@ -355,9 +357,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
     __slots__ = (
         "_data_dictionary",
         "_default_query_job_config",
+        "_job_retry",
+        "_job_retry_deadline",
         "_json_serializer",
         "_literal_inliner",
         "_type_converter",
+        "_using_emulator",
     )
     dialect = "bigquery"
 
@@ -386,6 +391,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
         self._data_dictionary: SyncDataDictionaryBase | None = None
+        self._using_emulator = self._detect_emulator_endpoint(connection)
+        self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
+        self._job_retry = None if self._using_emulator else self._build_job_retry()
 
     def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
         """Create context manager for cursor management.
@@ -407,6 +415,51 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
         """Handle database-specific exceptions and wrap them appropriately."""
         return BigQueryExceptionHandler()
+
+    @staticmethod
+    def _detect_emulator_endpoint(connection: BigQueryConnection) -> bool:
+        """Detect whether the BigQuery client targets an emulator endpoint."""
+
+        emulator_host = os.getenv("BIGQUERY_EMULATOR_HOST") or os.getenv("BIGQUERY_EMULATOR_HOST_HTTP")
+        if emulator_host:
+            return True
+
+        api_base_url = getattr(getattr(connection, "_connection", None), "API_BASE_URL", "")
+        if not api_base_url:
+            return False
+        return "googleapis.com" not in api_base_url
+
+    def _build_job_retry(self) -> Retry:
+        """Build retry policy for job restarts based on error reason codes."""
+
+        return Retry(predicate=self._should_retry_job_exception, deadline=self._job_retry_deadline)
+
+    @staticmethod
+    def _should_retry_job_exception(exception: Exception) -> bool:
+        """Return True when a BigQuery job exception is safe to retry."""
+
+        if not isinstance(exception, GoogleCloudError):
+            return False
+
+        errors = getattr(exception, "errors", None) or []
+        retryable_reasons = {
+            "backendError",
+            "internalError",
+            "jobInternalError",
+            "rateLimitExceeded",
+            "jobRateLimitExceeded",
+        }
+
+        for err in errors:
+            if not isinstance(err, dict):
+                continue
+            reason = err.get("reason")
+            message = (err.get("message") or "").lower()
+            if reason in retryable_reasons:
+                # Emulator sometimes reports invalid DML as jobInternalError; guard with obvious syntax hints
+                return not ("nonexistent_column" in message or ("column" in message and "not present" in message))
+
+        return False
 
     def _should_copy_attribute(self, attr: str, source_config: QueryJobConfig) -> bool:
         """Check if attribute should be copied between job configs.
@@ -565,7 +618,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         for stmt in statements:
             job = self._run_query_job(stmt, prepared_parameters or {}, connection=cursor)
-            job.result()
+            job.result(job_retry=self._job_retry)
             last_job = job
             successful_count += 1
 
@@ -614,7 +667,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         script_sql = ";\n".join(script_statements)
 
         cursor.job = self._run_query_job(script_sql, None, connection=cursor)
-        cursor.job.result()
+        cursor.job.result(job_retry=self._job_retry)
 
         affected_rows = (
             cursor.job.num_dml_affected_rows if cursor.job.num_dml_affected_rows is not None else len(parameters_list)
@@ -635,7 +688,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         cursor.job = self._run_query_job(sql, parameters, connection=cursor)
 
         if statement.returns_rows():
-            job_result = cursor.job.result()
+            job_result = cursor.job.result(job_retry=self._job_retry)
             rows_list = self._rows_to_results(iter(job_result))
             column_names = [field.name for field in cursor.job.schema] if cursor.job.schema else []
 
@@ -647,7 +700,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        cursor.job.result()
+        cursor.job.result(job_retry=self._job_retry)
         affected_rows = cursor.job.num_dml_affected_rows or 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 

@@ -6,8 +6,8 @@ from typing import Any, Literal
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
-from sqlspec.core import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -818,3 +818,68 @@ async def test_for_update_of_tables(asyncpg_session: AsyncpgDriver) -> None:
         raise
     finally:
         await asyncpg_session.execute_script("DROP TABLE IF EXISTS test_users")
+
+
+async def test_asyncpg_statement_stack_batch(asyncpg_session: AsyncpgDriver) -> None:
+    """Ensure StatementStack batches operations under asyncpg native path."""
+
+    await asyncpg_session.execute_script("TRUNCATE TABLE test_table RESTART IDENTITY")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "stack-one", 10))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (2, "stack-two", 20))
+        .push_execute("SELECT COUNT(*) AS total_rows FROM test_table WHERE name LIKE $1", ("stack-%",))
+    )
+
+    results = await asyncpg_session.execute_stack(stack)
+
+    assert len(results) == 3
+    assert results[0].rows_affected == 1
+    assert results[1].rows_affected == 1
+    assert results[2].result is not None
+    assert results[2].result.data is not None
+    assert results[2].result.data[0]["total_rows"] == 2
+
+
+async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: AsyncpgDriver) -> None:
+    """Stack execution should surface errors while continuing operations when requested."""
+
+    await asyncpg_session.execute_script("TRUNCATE TABLE test_table RESTART IDENTITY")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "stack-initial", 5))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "stack-duplicate", 10))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (2, "stack-final", 15))
+    )
+
+    results = await asyncpg_session.execute_stack(stack, continue_on_error=True)
+
+    assert len(results) == 3
+    assert results[0].rows_affected == 1
+    assert results[1].error is not None
+    assert results[2].rows_affected == 1
+
+    verify = await asyncpg_session.execute("SELECT COUNT(*) AS total FROM test_table")
+    assert verify.data is not None
+    assert verify.data[0]["total"] == 2
+
+
+async def test_asyncpg_statement_stack_marks_prepared(asyncpg_session: AsyncpgDriver) -> None:
+    """Prepared statement metadata should be attached to stack results."""
+
+    await asyncpg_session.execute_script("TRUNCATE TABLE test_table RESTART IDENTITY")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES ($1, $2, $3)", (1, "stack-prepared", 50))
+        .push_execute("SELECT value FROM test_table WHERE id = $1", (1,))
+    )
+
+    results = await asyncpg_session.execute_stack(stack)
+
+    assert results[0].metadata is not None
+    assert results[0].metadata.get("prepared_statement") is True
+    assert results[1].metadata is not None
+    assert results[1].metadata.get("prepared_statement") is True

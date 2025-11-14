@@ -163,6 +163,15 @@ For comparison:
 - **oracledb**: Has `_numpy_handlers.py` with `register_numpy_handlers()`
 - **psqlpy**: **No type handlers file** - all handled in Rust
 
+## Query Stack Support
+
+`psqlpy` does **not** expose a pipeline or batch API beyond the standard execute/execute_many entry points, so SQLSpec intentionally keeps the base sequential stack implementation:
+
+- `execute_stack()` simply iterates operations using the shared transaction semantics from the driver base.
+- Telemetry/logging still fire for observability, so stack executions remain traceable even without a performance boost.
+
+If you need reduced round-trips on PostgreSQL, prefer the `asyncpg` or `psycopg` adapters, both of which provide native stack overrides.
+
 ## MERGE Operations (PostgreSQL 15+)
 
 Psqlpy supports MERGE operations for bulk upserts using PostgreSQL's native MERGE statement with `jsonb_to_recordset()`.

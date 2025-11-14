@@ -12,7 +12,7 @@ from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg._type_handlers import register_json_codecs, register_pgvector_support
-from sqlspec.adapters.asyncpg._types import AsyncpgConnection, AsyncpgPool
+from sqlspec.adapters.asyncpg._types import AsyncpgConnection, AsyncpgPool, AsyncpgPreparedStatement
 from sqlspec.adapters.asyncpg.driver import (
     AsyncpgCursor,
     AsyncpgDriver,
@@ -459,5 +459,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             "AsyncpgExceptionHandler": AsyncpgExceptionHandler,
             "AsyncpgPool": AsyncpgPool,
             "AsyncpgPoolConfig": AsyncpgPoolConfig,
+            "AsyncpgPreparedStatement": AsyncpgPreparedStatement,
         })
         return namespace

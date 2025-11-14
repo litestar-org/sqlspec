@@ -33,6 +33,9 @@ SQLSpec provides a unified interface for database operations across multiple bac
 **Query Builder**
    Explore the experimental fluent API for programmatically constructing SQL queries.
 
+**Query Stack**
+   Learn how to batch heterogeneous SQL statements with immutable stacks, choose between fail-fast and continue-on-error execution, and monitor native vs. sequential paths in :doc:`/reference/query-stack`.
+
 **SQL Files**
    Manage SQL statements from files using the aiosql-style loader.
 

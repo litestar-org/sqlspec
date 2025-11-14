@@ -185,6 +185,25 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
 - **Single-Pass Processing**: Parse once → transform once → validate once - SQL object is single source of truth
 - **Abstract Methods with Concrete Implementations**: Protocol defines abstract methods, base classes provide concrete sync/async implementations
 
+### Query Stack Implementation Guidelines
+
+- **Builder Discipline**
+    - `StatementStack` and `StackOperation` are immutable (`__slots__`, tuple storage). Every push helper returns a new stack; never mutate `_operations` in place.
+    - Validate inputs at push time (non-empty SQL, execute_many payloads, reject nested stacks) so drivers can assume well-formed operations.
+- **Adapter Responsibilities**
+    - Add a single capability gate per adapter (e.g., Oracle pipeline version check, `psycopg.capabilities.has_pipeline()`), return `super().execute_stack()` immediately when unsupported.
+    - Preserve `StackResult.result` by building SQL/Arrow results via `create_sql_result()` / `create_arrow_result()` instead of copying row data.
+    - Honor manual toggles via `driver_features={"stack_native_disabled": True}` and document the behavior in the adapter guide.
+- **Telemetry + Tracing**
+    - Always wrap adapter overrides with `StackExecutionObserver(self, stack, continue_on_error, native_pipeline=bool)`.
+    - Do **not** emit duplicate metrics; the observer already increments `stack.execute.*`, logs `stack.execute.start/complete/failed`, and publishes the `sqlspec.stack.execute` span.
+- **Error Handling**
+    - Wrap driver exceptions in `StackExecutionError` with `operation_index`, summarized SQL (`describe_stack_statement()`), adapter name, and execution mode.
+    - Continue-on-error stacks append `StackResult.from_error()` and keep executing. Fail-fast stacks roll back (if they started the transaction) before re-raising the wrapped error.
+- **Testing Expectations**
+    - Add integration tests under `tests/integration/test_adapters/<adapter>/test_driver.py::test_*statement_stack*` that cover native path, sequential fallback, and continue-on-error.
+    - Guard base behavior (empty stacks, large stacks, transaction boundaries) via `tests/integration/test_stack_edge_cases.py`.
+
 ### Driver Parameter Profile Registry
 
 - All adapter parameter defaults live in `DriverParameterProfile` entries inside `sqlspec/core/parameters.py`.

@@ -26,3 +26,12 @@ This guide covers `asyncmy`.
 
 -   **`PyMySQL.err.OperationalError: (1366, ...)`**: Incorrect string value for a column. This is often due to character set issues. Ensure your connection and tables are using `utf8mb4`.
 -   **Authentication Errors:** MySQL 8.0 and later use a different default authentication plugin (`caching_sha2_password`). If you have trouble connecting, you may need to configure the user account to use the older `mysql_native_password` plugin, though this is less secure.
+
+## Query Stack Support
+
+The MySQL wire protocol doesn't offer a pipeline/batch mode like Oracle or PostgreSQL, so `StatementStack` executions use the base sequential implementation:
+
+- All operations run one-by-one within the usual transaction rules (fail-fast stacks open a transaction, continue-on-error stacks stay in autocommit mode).
+- Telemetry spans/metrics/logs are still emitted so you can trace stack executions in production.
+
+If you need reduced round-trips for MySQL/MariaDB, consider consolidating statements into stored procedures or batching logic within application-side transactions.

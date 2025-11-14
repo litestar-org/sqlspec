@@ -17,6 +17,12 @@ This guide provides specific instructions for the `adbc` adapter.
 - **JSON Strategy:** `helper` (shared serializers wrap dict/list/tuple values)
 - **Extras:** `type_coercion_overrides` ensure Arrow arrays map to Python lists; PostgreSQL dialects attach a NULL-handling AST transformer
 
+## Query Stack Support
+
+- Each ADBC backend falls back to SQLSpec's sequential stack executor. There is no driver-agnostic pipeline API today, so stacks simply reuse the same cursor management that individual `execute()` calls use, wrapped in a transaction when the backend supports it (e.g., PostgreSQL) and as independent statements when it does not (e.g., SQLite, DuckDB).
+- Continue-on-error mode is supported on every backend. Successful statements commit as they finish, while failures populate `StackResult.error` for downstream inspection.
+- Telemetry spans (`sqlspec.stack.execute`) and `StackExecutionMetrics` counters emit for all stacks, enabling observability parity with adapters that do have native optimizations.
+
 ## Best Practices
 
 - **Arrow-Native:** The primary benefit of ADBC is its direct integration with Apache Arrow. Use it when you need to move large amounts of data efficiently between the database and data science tools like Pandas or Polars.

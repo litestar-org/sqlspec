@@ -5,8 +5,8 @@ from typing import Any, Literal
 
 import pytest
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.sqlite import SqliteDriver
-from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -203,6 +203,54 @@ def test_sqlite_data_types(sqlite_session: SqliteDriver) -> None:
     assert row["real_col"] == math.pi
     assert row["blob_col"] == b"binary_data"
     assert row["null_col"] is None
+
+
+def test_sqlite_statement_stack_sequential(sqlite_session: SqliteDriver) -> None:
+    """StatementStack should execute sequentially for SQLite."""
+
+    sqlite_session.execute("DELETE FROM test_table")
+    sqlite_session.commit()
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "sqlite-stack-one", 100))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (2, "sqlite-stack-two", 200))
+        .push_execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE ?", ("sqlite-stack-%",))
+    )
+
+    results = sqlite_session.execute_stack(stack)
+
+    assert len(results) == 3
+    assert results[0].rows_affected == 1
+    assert results[1].rows_affected == 1
+    assert results[2].result is not None
+    assert results[2].result.data is not None
+    assert results[2].result.data[0]["total"] == 2
+
+
+def test_sqlite_statement_stack_continue_on_error(sqlite_session: SqliteDriver) -> None:
+    """Sequential fallback should honor continue-on-error mode."""
+
+    sqlite_session.execute("DELETE FROM test_table")
+    sqlite_session.commit()
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "sqlite-initial", 5))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "sqlite-duplicate", 15))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (2, "sqlite-final", 25))
+    )
+
+    results = sqlite_session.execute_stack(stack, continue_on_error=True)
+
+    assert len(results) == 3
+    assert results[0].rows_affected == 1
+    assert results[1].error is not None
+    assert results[2].rows_affected == 1
+
+    verify = sqlite_session.execute("SELECT COUNT(*) AS total FROM test_table")
+    assert verify.data is not None
+    assert verify.data[0]["total"] == 2
 
 
 def test_sqlite_transactions(sqlite_session: SqliteDriver) -> None:

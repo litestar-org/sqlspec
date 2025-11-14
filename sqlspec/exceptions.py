@@ -1,6 +1,8 @@
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Final
+
+STACK_SQL_PREVIEW_LIMIT: Final[int] = 120
 
 __all__ = (
     "CheckViolationError",
@@ -28,6 +30,7 @@ __all__ = (
     "SQLParsingError",
     "SQLSpecError",
     "SerializationError",
+    "StackExecutionError",
     "StorageCapabilityError",
     "StorageOperationFailedError",
     "TransactionError",
@@ -168,6 +171,43 @@ class TransactionError(SQLSpecError):
 
 class DataError(SQLSpecError):
     """Invalid data type or format for database operation."""
+
+
+class StackExecutionError(SQLSpecError):
+    """Raised when a statement stack operation fails."""
+
+    def __init__(
+        self,
+        operation_index: int,
+        sql: str,
+        original_error: Exception,
+        *,
+        adapter: str | None = None,
+        mode: str = "fail-fast",
+        native_pipeline: bool | None = None,
+        downgrade_reason: str | None = None,
+    ) -> None:
+        pipeline_state = "enabled" if native_pipeline else "disabled"
+        adapter_label = adapter or "unknown-adapter"
+        preview = " ".join(sql.strip().split())
+        if len(preview) > STACK_SQL_PREVIEW_LIMIT:
+            preview = f"{preview[: STACK_SQL_PREVIEW_LIMIT - 3]}..."
+        detail = (
+            f"Stack operation {operation_index} failed on {adapter_label} "
+            f"(mode={mode}, pipeline={pipeline_state}) sql={preview}"
+        )
+        super().__init__(detail)
+        self.operation_index = operation_index
+        self.sql = sql
+        self.original_error = original_error
+        self.adapter = adapter
+        self.mode = mode
+        self.native_pipeline = native_pipeline
+        self.downgrade_reason = downgrade_reason
+
+    def __str__(self) -> str:
+        base = super().__str__()
+        return f"{base}: {self.original_error}" if self.original_error else base
 
 
 class OperationalError(SQLSpecError):

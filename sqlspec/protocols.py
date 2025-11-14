@@ -4,6 +4,7 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from typing_extensions import Self
@@ -39,6 +40,7 @@ __all__ = (
     "ParameterValueProtocol",
     "SQLBuilderProtocol",
     "SelectBuilderProtocol",
+    "StackResultProtocol",
     "SupportsArrowResults",
     "WithMethodProtocol",
 )
@@ -480,3 +482,26 @@ class SupportsArrowResults(Protocol):
             ArrowResult containing Arrow data.
         """
         ...
+
+
+@runtime_checkable
+class StackResultProtocol(Protocol):
+    """Protocol describing stack execution results."""
+
+    result: Any
+    rows_affected: int
+    error: Exception | None
+    warning: Any | None
+    metadata: Mapping[str, Any] | None
+    result_type: str
+
+    @property
+    def rows(self) -> Sequence[Any]: ...
+
+    def is_error(self) -> bool: ...
+
+    def is_sql_result(self) -> bool: ...
+
+    def is_arrow_result(self) -> bool: ...
+
+    def get_result(self) -> Any: ...

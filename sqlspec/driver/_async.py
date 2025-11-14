@@ -4,16 +4,19 @@ from abc import abstractmethod
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
-from sqlspec.core import SQL, Statement, create_arrow_result
+from sqlspec.core import SQL, StackResult, Statement, create_arrow_result
+from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
     DataDictionaryMixin,
     ExecutionResult,
+    StackExecutionObserver,
     VersionInfo,
+    describe_stack_statement,
     handle_single_row_error,
 )
 from sqlspec.driver.mixins import SQLTranslatorMixin, StorageDriverMixin
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -186,6 +189,89 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
         return self.create_execution_result(
             cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
         )
+
+    async def execute_stack(
+        self, stack: "StatementStack", *, continue_on_error: bool = False
+    ) -> "tuple[StackResult, ...]":
+        """Execute a StatementStack sequentially using the adapter's primitives."""
+
+        if not isinstance(stack, StatementStack):
+            msg = "execute_stack expects a StatementStack instance"
+            raise TypeError(msg)
+        if not stack:
+            msg = "Cannot execute an empty StatementStack"
+            raise ValueError(msg)
+
+        results: list[StackResult] = []
+        single_transaction = not continue_on_error
+
+        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=False) as observer:
+            started_transaction = False
+
+            try:
+                if single_transaction and not self._connection_in_transaction():
+                    await self.begin()
+                    started_transaction = True
+
+                for index, operation in enumerate(stack.operations):
+                    try:
+                        result = await self._execute_stack_operation(operation)
+                    except Exception as exc:  # pragma: no cover - exercised via tests
+                        stack_error = StackExecutionError(
+                            index,
+                            describe_stack_statement(operation.statement),
+                            exc,
+                            adapter=type(self).__name__,
+                            mode="continue-on-error" if continue_on_error else "fail-fast",
+                        )
+
+                        if started_transaction and not continue_on_error:
+                            try:
+                                await self.rollback()
+                            except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                                logger.debug("Rollback after stack failure failed: %s", rollback_error)
+                            started_transaction = False
+
+                        if continue_on_error:
+                            await self._rollback_after_stack_error_async()
+                            observer.record_operation_error(stack_error)
+                            results.append(StackResult.from_error(stack_error))
+                            continue
+
+                        raise stack_error from exc
+
+                    results.append(StackResult(result=result))
+
+                    if continue_on_error:
+                        await self._commit_after_stack_operation_async()
+
+                if started_transaction:
+                    await self.commit()
+            except Exception:
+                if started_transaction:
+                    try:
+                        await self.rollback()
+                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                        logger.debug("Rollback after stack failure failed: %s", rollback_error)
+                raise
+
+        return tuple(results)
+
+    async def _rollback_after_stack_error_async(self) -> None:
+        """Attempt to rollback after a stack operation error (async)."""
+
+        try:
+            await self.rollback()
+        except Exception as rollback_error:  # pragma: no cover - driver-specific cleanup
+            logger.debug("Rollback after stack error failed: %s", rollback_error)
+
+    async def _commit_after_stack_operation_async(self) -> None:
+        """Attempt to commit after a successful stack operation when not batching (async)."""
+
+        try:
+            await self.commit()
+        except Exception as commit_error:  # pragma: no cover - driver-specific cleanup
+            logger.debug("Commit after stack operation failed: %s", commit_error)
 
     @abstractmethod
     async def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
@@ -553,6 +639,29 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, St
         select_result = await self.execute(sql_statement)
 
         return (select_result.get_data(schema_type=schema_type), count_result.scalar())
+
+    async def _execute_stack_operation(self, operation: "StackOperation") -> "SQLResult | ArrowResult | None":
+        kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+
+        if operation.method == "execute":
+            return await self.execute(operation.statement, *operation.arguments, **kwargs)
+
+        if operation.method == "execute_many":
+            if not operation.arguments:
+                msg = "execute_many stack operation requires parameter sets"
+                raise ValueError(msg)
+            parameter_sets = operation.arguments[0]
+            filters = operation.arguments[1:]
+            return await self.execute_many(operation.statement, parameter_sets, *filters, **kwargs)
+
+        if operation.method == "execute_script":
+            return await self.execute_script(operation.statement, *operation.arguments, **kwargs)
+
+        if operation.method == "execute_arrow":
+            return await self.select_to_arrow(operation.statement, *operation.arguments, **kwargs)
+
+        msg = f"Unsupported stack operation method: {operation.method}"
+        raise ValueError(msg)
 
 
 class AsyncDataDictionaryBase(DataDictionaryMixin):

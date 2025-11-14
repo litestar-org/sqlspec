@@ -5,8 +5,8 @@ from typing import Any, Literal
 
 import pytest
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
-from sqlspec.core import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -18,6 +18,7 @@ def psycopg_session(psycopg_sync_config: PsycopgSyncConfig) -> Generator[Psycopg
     """Create a psycopg session with test table."""
 
     with psycopg_sync_config.provide_session() as session:
+        session.execute_script("DROP TABLE IF EXISTS test_table")
         session.execute_script(
             """
                 CREATE TABLE IF NOT EXISTS test_table (
@@ -198,6 +199,55 @@ def test_psycopg_error_handling(psycopg_session: PsycopgSyncDriver) -> None:
         psycopg_session.execute("SELECT nonexistent_column FROM test_table")
 
 
+def test_psycopg_statement_stack_pipeline(psycopg_session: PsycopgSyncDriver) -> None:
+    """StatementStack should leverage psycopg pipeline mode when available."""
+
+    psycopg_session.execute("TRUNCATE TABLE test_table RESTART IDENTITY")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (%s, %s, %s)", (1, "sync-stack-one", 5))
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (%s, %s, %s)", (2, "sync-stack-two", 15))
+        .push_execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE %s", ("sync-stack-%",))
+    )
+
+    results = psycopg_session.execute_stack(stack)
+
+    assert len(results) == 3
+    total_result = psycopg_session.execute(
+        "SELECT COUNT(*) AS total FROM test_table WHERE name LIKE %s", "sync-stack-%"
+    )
+    assert total_result.data is not None
+    assert total_result.data[0]["total"] == 2
+
+
+def test_psycopg_statement_stack_continue_on_error(psycopg_session: PsycopgSyncDriver) -> None:
+    """Pipeline execution should continue when instructed to handle errors."""
+
+    psycopg_session.execute("TRUNCATE TABLE test_table RESTART IDENTITY")
+    psycopg_session.commit()
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (%s, %s, %s)", (1, "sync-initial", 10))
+        .push_execute(  # duplicate PK triggers error
+            "INSERT INTO test_table (id, name, value) VALUES (%s, %s, %s)", (1, "sync-duplicate", 20)
+        )
+        .push_execute("INSERT INTO test_table (id, name, value) VALUES (%s, %s, %s)", (2, "sync-success-final", 30))
+    )
+
+    results = psycopg_session.execute_stack(stack, continue_on_error=True)
+
+    assert len(results) == 3
+    assert results[1].error is not None
+    assert results[0].error is None
+    assert results[2].error is None
+
+    verify = psycopg_session.execute("SELECT COUNT(*) AS total FROM test_table")
+    assert verify.data is not None
+    assert verify.data[0]["total"] == 2
+
+
 def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL data type handling with psycopg."""
 
@@ -255,6 +305,9 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
 def test_psycopg_transactions(psycopg_session: PsycopgSyncDriver) -> None:
     """Test transaction behavior."""
 
+    psycopg_session.execute("TRUNCATE TABLE test_table RESTART IDENTITY")
+    psycopg_session.commit()
+
     psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", "transaction_test", 100)
 
     result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name = %s", ("transaction_test"))
@@ -265,6 +318,9 @@ def test_psycopg_transactions(psycopg_session: PsycopgSyncDriver) -> None:
 
 def test_psycopg_complex_queries(psycopg_session: PsycopgSyncDriver) -> None:
     """Test complex SQL queries."""
+
+    psycopg_session.execute("TRUNCATE TABLE test_table RESTART IDENTITY")
+    psycopg_session.commit()
 
     test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 

@@ -91,6 +91,19 @@ Patterns
      - Routing requests to dedicated SQLite configs per tenant slug.
    * - ``patterns/configs/multi_adapter_registry.py``
      - Register multiple adapters on a single SQLSpec registry.
+   * - ``patterns/stacks/query_stack_example.py``
+     - Immutable StatementStack workflow executed against SQLite and AioSQLite drivers.
+
+Arrow
+-----
+
+.. list-table:: Arrow-powered exports
+   :header-rows: 1
+
+   * - File
+     - Scenario
+   * - ``arrow/arrow_basic_usage.py``
+     - ``select_to_arrow()`` walkthrough covering native Arrow, pandas, polars, and Parquet exports.
 
 Loaders
 -------
@@ -142,4 +155,6 @@ Shared Utilities
    frameworks/starlette/aiosqlite_app
    frameworks/flask/sqlite_app
    patterns/configs/multi_adapter_registry
+   patterns/stacks/query_stack_example
+   arrow/arrow_basic_usage
    README

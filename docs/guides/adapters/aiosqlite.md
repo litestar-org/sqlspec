@@ -17,6 +17,11 @@ This guide provides specific instructions for the `aiosqlite` adapter.
 - **JSON Strategy:** `helper` (shared serializer handles dict/list/tuple inputs)
 - **Extras:** None (profile applies bool→int and ISO datetime coercions automatically)
 
+## Query Stack Support
+
+- `StatementStack` executions always use the sequential fallback – SQLite has no notion of pipelined requests – so each operation runs one after another on the same connection. When `continue_on_error=False`, SQLSpec opens a transaction (if one is not already in progress) so the entire stack commits or rolls back together. With `continue_on_error=True`, statements are committed individually after each success.
+- Because pooled in-memory connections share state, prefer per-test temporary database files when running stacks under pytest-xdist (see `tests/integration/test_adapters/test_aiosqlite/test_driver.py::test_aiosqlite_statement_stack_*` for the reference pattern).
+
 ## Best Practices
 
 - **Async Only:** This is an asynchronous driver for SQLite. Use it in `asyncio` applications.
