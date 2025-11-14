@@ -206,25 +206,27 @@ def test_stack_result_from_sql_result() -> None:
 
     stack_result = StackResult.from_sql_result(sql_result)
 
-    assert stack_result.rowcount == 1
+    assert stack_result.rows_affected == 1
     assert stack_result.warning == "slow"
-    assert stack_result.raw_result is sql_result
-    assert list(stack_result.rows) == [{"id": 1}]
+    assert stack_result.result is sql_result
+    assert stack_result.get_result() is not None
+    assert stack_result.get_result().get_data() == [{"id": 1}]
 
 
 def test_stack_result_with_error_and_factory() -> None:
     sql_stmt = SQL("SELECT 1")
     sql_result = SQLResult(statement=sql_stmt, data=[{"value": 1}], rows_affected=1)
-    stack_result = StackResult(raw_result=sql_result)
+    stack_result = StackResult(result=sql_result)
 
     updated = stack_result.with_error(ValueError("boom"))
     assert updated.error is not None
-    assert updated.raw_result is sql_result
-    assert updated.rows == stack_result.rows
+    assert updated.result is sql_result
+    assert list(updated.get_result()) == list(stack_result.get_result())
 
     failure = StackResult.from_error(RuntimeError("stack"))
     assert failure.is_error()
-    assert list(failure) == []
+    assert failure.is_sql_result()
+    assert failure.get_result().get_data() == []
 
 
 def test_sql_result_all_with_schema_type() -> None:

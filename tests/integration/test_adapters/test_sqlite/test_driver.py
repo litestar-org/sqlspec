@@ -5,8 +5,8 @@ from typing import Any, Literal
 
 import pytest
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.sqlite import SqliteDriver
-from sqlspec.core import SQLResult, StatementStack
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -221,11 +221,11 @@ def test_sqlite_statement_stack_sequential(sqlite_session: SqliteDriver) -> None
     results = sqlite_session.execute_stack(stack)
 
     assert len(results) == 3
-    assert results[0].rowcount == 1
-    assert results[1].rowcount == 1
-    assert results[2].raw_result is not None
-    assert results[2].raw_result.data is not None
-    assert results[2].raw_result.data[0]["total"] == 2
+    assert results[0].rows_affected == 1
+    assert results[1].rows_affected == 1
+    assert results[2].result is not None
+    assert results[2].result.data is not None
+    assert results[2].result.data[0]["total"] == 2
 
 
 def test_sqlite_statement_stack_continue_on_error(sqlite_session: SqliteDriver) -> None:
@@ -244,9 +244,9 @@ def test_sqlite_statement_stack_continue_on_error(sqlite_session: SqliteDriver) 
     results = sqlite_session.execute_stack(stack, continue_on_error=True)
 
     assert len(results) == 3
-    assert results[0].rowcount == 1
+    assert results[0].rows_affected == 1
     assert results[1].error is not None
-    assert results[2].rowcount == 1
+    assert results[2].rows_affected == 1
 
     verify = sqlite_session.execute("SELECT COUNT(*) AS total FROM test_table")
     assert verify.data is not None

@@ -357,8 +357,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                     if normalized is not None and self._can_prepare_stack_operation(normalized):
                         stack_result = await self._execute_stack_operation_prepared(normalized)
                     else:
-                        raw_result = await self._execute_stack_operation(operation)
-                        stack_result = StackResult(raw_result=raw_result)
+                        result = await self._execute_stack_operation(operation)
+                        stack_result = StackResult(result=result)
                 except Exception as exc:
                     stack_error = StackExecutionError(
                         index,

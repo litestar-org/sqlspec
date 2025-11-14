@@ -488,13 +488,20 @@ class SupportsArrowResults(Protocol):
 class StackResultProtocol(Protocol):
     """Protocol describing stack execution results."""
 
-    raw_result: Any
-    rowcount: int
+    result: Any
+    rows_affected: int
     error: Exception | None
     warning: Any | None
     metadata: Mapping[str, Any] | None
+    result_type: str
 
     @property
     def rows(self) -> Sequence[Any]: ...
 
     def is_error(self) -> bool: ...
+
+    def is_sql_result(self) -> bool: ...
+
+    def is_arrow_result(self) -> bool: ...
+
+    def get_result(self) -> Any: ...

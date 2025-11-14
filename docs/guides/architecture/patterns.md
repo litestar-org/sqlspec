@@ -42,5 +42,5 @@ This guide captures the key patterns introduced by Query Stack. Use it as the ca
 1. **Version / capability gate** native execution.
 2. **Respect ``stack_native_disabled`` driver feature** if provided manually (useful for integration tests).
 3. **Never mutate stack operations**—always compile to driver-specific statements first.
-4. **Preserve ``StackResult.raw_result``** when possible (call ``StackResult.from_sql_result`` / ``from_arrow_result``).
+4. **Preserve ``StackResult.result``** when possible (call ``StackResult.from_sql_result`` / ``from_arrow_result``).
 5. **Guarantee cleanup** (`commit()`/`rollback()` in `finally` blocks) even for native pipelines.

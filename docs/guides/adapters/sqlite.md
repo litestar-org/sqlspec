@@ -20,7 +20,7 @@ This guide covers `sqlite3` (sync) and `aiosqlite` (async).
 ## Query Stack Support
 
 - Neither `sqlite3` nor `aiosqlite` exposes a native batching primitive, so `StatementStack` reuses the base sequential executor. When `continue_on_error=False`, SQLSpec opens a transaction (if one is not already active) so the full stack succeeds or fails atomically; when `continue_on_error=True`, each statement commits immediately to match SQLite’s autocommit semantics.
-- Integration coverage lives in `tests/integration/test_adapters/test_sqlite/test_driver.py::test_sqlite_statement_stack_*` and `tests/integration/test_adapters/test_aiosqlite/test_driver.py::test_aiosqlite_statement_stack_*`, ensuring both sync and async flows preserve `StackResult.raw_result` and surface per-statement errors.
+- Integration coverage lives in `tests/integration/test_adapters/test_sqlite/test_driver.py::test_sqlite_statement_stack_*` and `tests/integration/test_adapters/test_aiosqlite/test_driver.py::test_aiosqlite_statement_stack_*`, ensuring both sync and async flows preserve `StackResult.result` and surface per-statement errors.
 
 ## Best Practices
 

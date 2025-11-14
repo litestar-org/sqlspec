@@ -192,7 +192,7 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
     - Validate inputs at push time (non-empty SQL, execute_many payloads, reject nested stacks) so drivers can assume well-formed operations.
 - **Adapter Responsibilities**
     - Add a single capability gate per adapter (e.g., Oracle pipeline version check, `psycopg.capabilities.has_pipeline()`), return `super().execute_stack()` immediately when unsupported.
-    - Preserve `StackResult.raw_result` by building SQL/Arrow results via `create_sql_result()` / `create_arrow_result()` instead of copying row data.
+    - Preserve `StackResult.result` by building SQL/Arrow results via `create_sql_result()` / `create_arrow_result()` instead of copying row data.
     - Honor manual toggles via `driver_features={"stack_native_disabled": True}` and document the behavior in the adapter guide.
 - **Telemetry + Tracing**
     - Always wrap adapter overrides with `StackExecutionObserver(self, stack, continue_on_error, native_pipeline=bool)`.

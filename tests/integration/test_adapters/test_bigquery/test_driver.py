@@ -7,8 +7,8 @@ from typing import Literal
 import pytest
 from pytest_databases.docker.bigquery import BigQueryService
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.bigquery import BigQueryDriver
-from sqlspec.core import SQLResult, StatementStack
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -233,9 +233,9 @@ def test_bigquery_statement_stack_sequential(bigquery_session: BigQueryDriver, d
     results = bigquery_session.execute_stack(stack)
 
     assert len(results) == 3
-    assert results[2].raw_result is not None
-    assert results[2].raw_result.data is not None
-    assert results[2].raw_result.data[0]["total"] == 2
+    assert results[2].result is not None
+    assert results[2].result.data is not None
+    assert results[2].result.data[0]["total"] == 2
 
 
 def test_bigquery_statement_stack_continue_on_error(bigquery_session: BigQueryDriver, driver_test_table: str) -> None:

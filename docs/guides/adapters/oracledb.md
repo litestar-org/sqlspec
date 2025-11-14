@@ -19,7 +19,7 @@ This guide provides specific instructions and best practices for working with th
 
 ## Query Stack Support
 
-`StatementStack` executions automatically use python-oracledb's native pipeline APIs when the adapter detects a compatible runtime (Oracle Database 23ai+ and python-oracledb ≥ 2.4.0). The pipeline path batches every operation in a stack into a single round-trip while preserving the regular `StackResult.raw_result` semantics, so downstream helpers like `get_data()` or `rowcount` continue to work without code changes.
+`StatementStack` executions automatically use python-oracledb's native pipeline APIs when the adapter detects a compatible runtime (Oracle Database 23ai+ and python-oracledb ≥ 2.4.0). The pipeline path batches every operation in a stack into a single round-trip while preserving the regular `StackResult.result` semantics, so downstream helpers like `get_data()` or `rows_affected` continue to work without code changes.
 
 ### Requirements
 

@@ -6,9 +6,9 @@ import pytest
 
 pytest.importorskip("oracledb")
 
+from sqlspec import StatementStack
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, oracledb_statement_config
-from sqlspec.core import StatementStack
 from sqlspec.driver._common import StackExecutionObserver
 
 
@@ -87,12 +87,12 @@ def test_pipeline_result_to_stack_result_uses_rowcount_attr() -> None:
 
     stack_result = driver._pipeline_result_to_stack_result(compiled, pipeline_result)
 
-    assert stack_result.rowcount == 7
+    assert stack_result.rows_affected == 7
     assert stack_result.warning == "warn"
-    raw_result = stack_result.raw_result
-    assert raw_result is not None
-    assert raw_result.metadata is not None
-    assert raw_result.metadata["pipeline_operation"] == "execute"
+    result = stack_result.result
+    assert result is not None
+    assert result.metadata is not None
+    assert result.metadata["pipeline_operation"] == "execute"
 
 
 def test_pipeline_result_execute_many_rowcount_fallback() -> None:
@@ -103,7 +103,7 @@ def test_pipeline_result_execute_many_rowcount_fallback() -> None:
 
     stack_result = driver._pipeline_result_to_stack_result(compiled, pipeline_result)
 
-    assert stack_result.rowcount == 2
+    assert stack_result.rows_affected == 2
 
 
 def test_build_stack_results_records_errors() -> None:

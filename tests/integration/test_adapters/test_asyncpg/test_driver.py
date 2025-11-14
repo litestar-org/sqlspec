@@ -6,8 +6,8 @@ from typing import Any, Literal
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
-from sqlspec.core import SQLResult, StatementStack
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -835,11 +835,11 @@ async def test_asyncpg_statement_stack_batch(asyncpg_session: AsyncpgDriver) -> 
     results = await asyncpg_session.execute_stack(stack)
 
     assert len(results) == 3
-    assert results[0].rowcount == 1
-    assert results[1].rowcount == 1
-    assert results[2].raw_result is not None
-    assert results[2].raw_result.data is not None
-    assert results[2].raw_result.data[0]["total_rows"] == 2
+    assert results[0].rows_affected == 1
+    assert results[1].rows_affected == 1
+    assert results[2].result is not None
+    assert results[2].result.data is not None
+    assert results[2].result.data[0]["total_rows"] == 2
 
 
 async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: AsyncpgDriver) -> None:
@@ -857,9 +857,9 @@ async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: Asyncp
     results = await asyncpg_session.execute_stack(stack, continue_on_error=True)
 
     assert len(results) == 3
-    assert results[0].rowcount == 1
+    assert results[0].rows_affected == 1
     assert results[1].error is not None
-    assert results[2].rowcount == 1
+    assert results[2].rows_affected == 1
 
     verify = await asyncpg_session.execute("SELECT COUNT(*) AS total FROM test_table")
     assert verify.data is not None

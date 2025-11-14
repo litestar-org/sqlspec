@@ -213,7 +213,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
                 for index, operation in enumerate(stack.operations):
                     try:
-                        raw_result = self._execute_stack_operation(operation)
+                        result = self._execute_stack_operation(operation)
                     except Exception as exc:  # pragma: no cover - exercised via tests
                         stack_error = StackExecutionError(
                             index,
@@ -238,7 +238,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
 
                         raise stack_error from exc
 
-                    results.append(StackResult(raw_result=raw_result))
+                    results.append(StackResult(result=result))
 
                     if continue_on_error:
                         self._commit_after_stack_operation()

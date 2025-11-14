@@ -3,10 +3,9 @@
 import asyncio
 from typing import Any
 
-from sqlspec import SQLSpec
+from sqlspec import SQLSpec, StatementStack
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.core import StatementStack
 
 __all__ = ("build_stack", "main", "run_async_example", "run_sync_example")
 
@@ -70,10 +69,10 @@ def run_sync_example() -> None:
         _seed_sync_tables(session, 1, ("admin", "editor"))
         results = session.execute_stack(build_stack(user_id=1, action="sync-login"))
         audit_insert, user_update, role_select = results
-        print("[sync] rows inserted:", audit_insert.rowcount)
-        print("[sync] rows updated:", user_update.rowcount)
-        if role_select.raw_result is not None:
-            roles = [row["role"] for row in role_select.raw_result.data]
+        print("[sync] rows inserted:", audit_insert.rows_affected)
+        print("[sync] rows updated:", user_update.rows_affected)
+        if role_select.result is not None:
+            roles = [row["role"] for row in role_select.result.data]
             print("[sync] roles:", roles)
 
 
@@ -87,10 +86,10 @@ def run_async_example() -> None:
             await _seed_async_tables(session, 2, ("viewer",))
             results = await session.execute_stack(build_stack(user_id=2, action="async-login"))
             audit_insert, user_update, role_select = results
-            print("[async] rows inserted:", audit_insert.rowcount)
-            print("[async] rows updated:", user_update.rowcount)
-            if role_select.raw_result is not None:
-                roles = [row["role"] for row in role_select.raw_result.data]
+            print("[async] rows inserted:", audit_insert.rows_affected)
+            print("[async] rows updated:", user_update.rows_affected)
+            if role_select.result is not None:
+                roles = [row["role"] for row in role_select.result.data]
                 print("[async] roles:", roles)
 
     asyncio.run(_inner())

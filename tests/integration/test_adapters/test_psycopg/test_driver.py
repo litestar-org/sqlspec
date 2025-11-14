@@ -5,8 +5,8 @@ from typing import Any, Literal
 
 import pytest
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
-from sqlspec.core import SQLResult, StatementStack
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 

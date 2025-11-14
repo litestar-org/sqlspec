@@ -139,13 +139,13 @@ For comprehensive configuration options and troubleshooting, see the [Google Clo
 `StatementStack` calls execute in a single transaction when `continue_on_error=False`, leveraging asyncpg's fast extended-query protocol to minimize round-trips. When you need partial success handling (`continue_on_error=True`), the adapter automatically disables the shared transaction and reports individual failures via `StackResult.error`.
 
 - Telemetry spans (`sqlspec.stack.execute`), metrics (`stack.execute.*`), and hashed operation logging are emitted for every stack, so production monitoring captures adoption automatically.
-- The pipeline path preserves `StackResult.raw_result` for SELECT statements, so downstream helpers continue to operate on the original `SQLResult` objects.
+- The pipeline path preserves `StackResult.result` for SELECT statements, so downstream helpers continue to operate on the original `SQLResult` objects.
 - To force the sequential fallback (for incident response or regression tests), pass `driver_features={"stack_native_disabled": True}` to the config.
 
 Example usage:
 
 ```python
-from sqlspec.core import StatementStack
+from sqlspec import StatementStack
 
 stack = (
     StatementStack()

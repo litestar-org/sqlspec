@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.core import StackOperation, StatementConfig, StatementStack
+from sqlspec import StackOperation, StatementConfig, StatementStack
 
 pytestmark = pytest.mark.xdist_group("core")
 

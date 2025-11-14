@@ -17,6 +17,7 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 from sqlspec.core.compiler import OperationType
+from sqlspec.core.statement import SQL
 from sqlspec.storage import (
     AsyncStoragePipeline,
     StorageDestination,
@@ -28,11 +29,10 @@ from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pya
 from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
-    from sqlspec.core.statement import SQL
     from sqlspec.typing import ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
 
 
-__all__ = ("ArrowResult", "SQLResult", "StackResult", "StatementResult")
+__all__ = ("ArrowResult", "EmptyResult", "SQLResult", "StackResult", "StatementResult")
 
 T = TypeVar("T")
 
@@ -878,39 +878,69 @@ class ArrowResult(StatementResult):
         yield from self.data.to_pylist()
 
 
-class StackResult:
-    """Concrete stack result wrapper that preserves the original driver result."""
+class EmptyResult(StatementResult):
+    """Sentinel result used when a stack operation has no driver result."""
 
-    __slots__ = ("error", "metadata", "raw_result", "rowcount", "warning")
+    __slots__ = ()
+    _EMPTY_STATEMENT = SQL("-- empty stack result --")
+
+    def __init__(self) -> None:
+        super().__init__(statement=self._EMPTY_STATEMENT, data=[], rows_affected=0)
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(())
+
+    def is_success(self) -> bool:
+        return True
+
+    def get_data(self) -> list[Any]:
+        return []
+
+
+class StackResult:
+    """Wrapper for per-operation stack results that surfaces driver results directly."""
+
+    __slots__ = ("error", "metadata", "result", "rows_affected", "warning")
 
     def __init__(
         self,
-        raw_result: "StatementResult | ArrowResult | None" = None,
+        result: "StatementResult | ArrowResult | None" = None,
         *,
-        rowcount: int | None = None,
+        rows_affected: int | None = None,
         error: Exception | None = None,
         warning: Any | None = None,
         metadata: "dict[str, Any] | None" = None,
     ) -> None:
-        self.raw_result = raw_result
-        self.rowcount = rowcount if rowcount is not None else _infer_rowcount(raw_result)
+        self.result: StatementResult | ArrowResult = result if result is not None else EmptyResult()
+        self.rows_affected = rows_affected if rows_affected is not None else _infer_rows_affected(self.result)
         self.error = error
         self.warning = warning
         self.metadata = dict(metadata) if metadata else None
 
-    def __iter__(self) -> "Iterator[Any]":
-        yield from self.rows
+    def get_result(self) -> "StatementResult | ArrowResult":
+        """Return the underlying driver result."""
+
+        return self.result
 
     @property
-    def rows(self) -> "tuple[Any, ...]":
-        """Return cached rows from the underlying result when available."""
+    def result_type(self) -> str:
+        """Describe the underlying result type (SQL operation, Arrow, or custom)."""
 
-        if self.raw_result is None:
-            return ()
-        try:
-            return tuple(self.raw_result)
-        except TypeError:  # pragma: no cover - defensive fallback
-            return ()
+        if isinstance(self.result, ArrowResult):
+            return "ARROW"
+        if isinstance(self.result, SQLResult):
+            return self.result.operation_type.upper()
+        return type(self.result).__name__.upper()
+
+    def is_sql_result(self) -> bool:
+        """Return True when the underlying result is an SQLResult."""
+
+        return isinstance(self.result, StatementResult) and not isinstance(self.result, ArrowResult)
+
+    def is_arrow_result(self) -> bool:
+        """Return True when the underlying result is an ArrowResult."""
+
+        return isinstance(self.result, ArrowResult)
 
     def is_error(self) -> bool:
         """Return True when the stack operation captured an error."""
@@ -921,8 +951,8 @@ class StackResult:
         """Return a copy of the result that records the provided error."""
 
         return StackResult(
-            raw_result=self.raw_result,
-            rowcount=self.rowcount,
+            result=self.result,
+            rows_affected=self.rows_affected,
             warning=self.warning,
             metadata=self.metadata,
             error=error,
@@ -934,25 +964,23 @@ class StackResult:
 
         metadata = dict(result.metadata) if result.metadata else None
         warning = metadata.get("warning") if metadata else None
-        return cls(raw_result=result, rowcount=result.rows_affected, warning=warning, metadata=metadata)
+        return cls(result=result, rows_affected=result.rows_affected, warning=warning, metadata=metadata)
 
     @classmethod
     def from_arrow_result(cls, result: "ArrowResult") -> "StackResult":
         """Create a stack result from an ArrowResult instance."""
 
         metadata = dict(result.metadata) if result.metadata else None
-        return cls(raw_result=result, rowcount=result.rows_affected, metadata=metadata)
+        return cls(result=result, rows_affected=result.rows_affected, metadata=metadata)
 
     @classmethod
     def from_error(cls, error: Exception) -> "StackResult":
         """Create an error-only stack result."""
 
-        return cls(raw_result=None, rowcount=0, error=error)
+        return cls(result=EmptyResult(), rows_affected=0, error=error)
 
 
-def _infer_rowcount(result: "StatementResult | ArrowResult | None") -> int:
-    if result is None:
-        return 0
+def _infer_rows_affected(result: "StatementResult | ArrowResult") -> int:
     rowcount = getattr(result, "rows_affected", None)
     return int(rowcount) if isinstance(rowcount, int) else 0
 

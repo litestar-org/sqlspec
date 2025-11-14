@@ -11,8 +11,8 @@ from typing import Literal
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
+from sqlspec import SQL, SQLResult, StatementStack
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
-from sqlspec.core import SQL, SQLResult, StatementStack
 from sqlspec.utils.serializers import from_json, to_json
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -178,9 +178,9 @@ async def test_asyncmy_statement_stack_sequential(asyncmy_driver: AsyncmyDriver)
     results = await asyncmy_driver.execute_stack(stack)
 
     assert len(results) == 3
-    assert results[0].rowcount == 1
-    assert results[1].rowcount == 1
-    final_result = results[2].raw_result
+    assert results[0].rows_affected == 1
+    assert results[1].rows_affected == 1
+    final_result = results[2].result
     assert isinstance(final_result, SQLResult)
     data = final_result.get_data()
     assert data
@@ -202,9 +202,9 @@ async def test_asyncmy_statement_stack_continue_on_error(asyncmy_driver: Asyncmy
     results = await asyncmy_driver.execute_stack(stack, continue_on_error=True)
 
     assert len(results) == 3
-    assert results[0].rowcount == 1
+    assert results[0].rows_affected == 1
     assert results[1].error is not None
-    assert results[2].rowcount == 1
+    assert results[2].rows_affected == 1
 
     verify = await asyncmy_driver.execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE ?", ("mysql-%",))
     assert verify.get_data()[0]["total"] == 2

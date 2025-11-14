@@ -5,8 +5,8 @@ from typing import Any, Literal
 
 import pytest
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.duckdb import DuckDBDriver
-from sqlspec.core import SQLResult, StatementStack
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 
@@ -620,11 +620,11 @@ def test_duckdb_statement_stack_sequential(duckdb_session: DuckDBDriver) -> None
     results = duckdb_session.execute_stack(stack)
 
     assert len(results) == 3
-    assert results[0].rowcount == 1
-    assert results[1].rowcount == 1
-    assert results[2].raw_result is not None
-    assert results[2].raw_result.data is not None
-    assert results[2].raw_result.data[0]["total"] == 2
+    assert results[0].rows_affected == 1
+    assert results[1].rows_affected == 1
+    assert results[2].result is not None
+    assert results[2].result.data is not None
+    assert results[2].result.data[0]["total"] == 2
 
 
 def test_duckdb_statement_stack_continue_on_error(duckdb_session: DuckDBDriver) -> None:
@@ -642,9 +642,9 @@ def test_duckdb_statement_stack_continue_on_error(duckdb_session: DuckDBDriver) 
     results = duckdb_session.execute_stack(stack, continue_on_error=True)
 
     assert len(results) == 3
-    assert results[0].rowcount == 1
+    assert results[0].rows_affected == 1
     assert results[1].error is not None
-    assert results[2].rowcount == 1
+    assert results[2].rows_affected == 1
 
     verify = duckdb_session.execute("SELECT COUNT(*) AS total FROM test_table")
     assert verify.data is not None

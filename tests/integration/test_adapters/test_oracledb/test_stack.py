@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
+from sqlspec import StackExecutionError, StatementStack
 from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
-from sqlspec.core import StackExecutionError, StatementStack
 
 pytestmark = pytest.mark.xdist_group("oracle")
 
@@ -77,11 +77,11 @@ async def test_async_statement_stack_native_pipeline(
 
     assert call_counter["count"] == 1, "Native pipeline was not invoked"
     assert len(results) == 3
-    assert results[0].rowcount == 1
-    assert results[1].rowcount == 1
-    assert results[2].raw_result is not None
-    assert results[2].raw_result.data is not None
-    assert results[2].raw_result.data[0]["name"] == "beta"
+    assert results[0].rows_affected == 1
+    assert results[1].rows_affected == 1
+    assert results[2].result is not None
+    assert results[2].result.data is not None
+    assert results[2].result.data[0]["name"] == "beta"
 
     await oracle_async_session.execute_script(DROP_TEMPLATE.format(table_name=table_name))
 
@@ -108,9 +108,9 @@ async def test_async_statement_stack_continue_on_error_pipeline(oracle_async_ses
     results = await oracle_async_session.execute_stack(stack, continue_on_error=True)
 
     assert len(results) == 3
-    assert results[0].rowcount == 1
+    assert results[0].rows_affected == 1
     assert isinstance(results[1].error, StackExecutionError)
-    assert results[2].rowcount == 1
+    assert results[2].rows_affected == 1
 
     verify_result = await oracle_async_session.execute(
         f"SELECT COUNT(*) as total_rows FROM {table_name} WHERE id = :id", {"id": 2}
@@ -136,9 +136,9 @@ def test_sync_statement_stack_sequential_fallback(oracle_sync_session: OracleSyn
     results = oracle_sync_session.execute_stack(stack)
 
     assert len(results) == 2
-    assert results[0].rowcount == 1
-    assert results[1].raw_result is not None
-    assert results[1].raw_result.data is not None
-    assert results[1].raw_result.data[0]["name"] == "sync-alpha"
+    assert results[0].rows_affected == 1
+    assert results[1].result is not None
+    assert results[1].result.data is not None
+    assert results[1].result.data[0]["name"] == "sync-alpha"
 
     oracle_sync_session.execute_script(DROP_TEMPLATE.format(table_name=table_name))

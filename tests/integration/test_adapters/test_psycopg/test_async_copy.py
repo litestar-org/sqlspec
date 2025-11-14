@@ -7,8 +7,8 @@ from collections.abc import AsyncGenerator
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver
-from sqlspec.core import SQLResult, StatementStack
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -194,9 +194,9 @@ async def test_psycopg_async_statement_stack_continue_on_error(psycopg_async_ses
     results = await psycopg_async_session.execute_stack(stack, continue_on_error=True)
 
     assert len(results) == 3
-    assert results[0].rowcount == 1
+    assert results[0].rows_affected == 1
     assert results[1].error is not None
-    assert results[2].rowcount == 1
+    assert results[2].rows_affected == 1
 
     verify = await psycopg_async_session.execute("SELECT COUNT(*) AS total FROM test_table_async")
     assert verify.data is not None

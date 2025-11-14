@@ -15,7 +15,7 @@ The stack system is composed of:
 
 - ``StatementStack`` – immutable builder with push helpers for execute/execute_many/execute_script/execute_arrow
 - ``StackOperation`` – the tuple-like value object stored inside the stack (method, statement, arguments, keyword arguments)
-- ``StackResult`` – wraps the driver’s raw result while surfacing stack metadata (rowcount, warning, error)
+- ``StackResult`` – wraps the driver’s raw result while surfacing stack metadata (rows_affected, warning, error)
 - ``AsyncDriverAdapterBase.execute_stack`` / ``SyncDriverAdapterBase.execute_stack`` – adapter hooks that select native pipelines or the sequential fallback
 
 StatementStack
@@ -69,5 +69,5 @@ Usage Highlights
 
 - Build stacks once and reuse them across requests/tasks.
 - Call ``session.execute_stack(stack, continue_on_error=False)`` to run fail-fast or set ``continue_on_error=True`` to record per-operation errors.
-- Inspect ``StackResult.raw_result`` to call helpers like ``all()``, ``one()``, ``to_pandas()``, or ``to_arrow()``.
+- Inspect ``StackResult.result`` to call helpers like ``all()``, ``one()``, ``to_pandas()``, or ``to_arrow()``.
 - :doc:`/reference/adapters` lists per-adapter capabilities, including whether native pipelines or sequential fallback are used for stacks.

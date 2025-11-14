@@ -4,8 +4,8 @@ from collections.abc import Generator
 
 import pytest
 
+from sqlspec import StatementStack
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.core import StatementStack
 from sqlspec.exceptions import StackExecutionError
 
 pytestmark = pytest.mark.xdist_group("sqlite")
@@ -50,7 +50,7 @@ def test_single_operation_stack_matches_execute(sqlite_stack_session: "SqliteDri
     results = sqlite_stack_session.execute_stack(stack)
 
     assert len(results) == 1
-    assert results[0].rowcount == 1
+    assert results[0].rows_affected == 1
     assert _table_count(sqlite_stack_session) == 1
 
 
@@ -68,8 +68,8 @@ def test_stack_with_only_select_operations(sqlite_stack_session: "SqliteDriver")
 
     results = sqlite_stack_session.execute_stack(stack)
 
-    first_result = results[0].raw_result
-    second_result = results[1].raw_result
+    first_result = results[0].result
+    second_result = results[1].result
     assert first_result is not None
     assert second_result is not None
     assert first_result.data is not None
@@ -89,7 +89,7 @@ def test_large_stack_of_mixed_operations(sqlite_stack_session: "SqliteDriver") -
     results = sqlite_stack_session.execute_stack(stack)
 
     assert len(results) == 51
-    final_result = results[-1].raw_result
+    final_result = results[-1].result
     assert final_result is not None
     assert final_result.data is not None
     assert final_result.data[0]["total"] == 50
@@ -135,7 +135,7 @@ def test_parameter_edge_cases(sqlite_stack_session: "SqliteDriver") -> None:
     )
 
     results = sqlite_stack_session.execute_stack(stack)
-    third_result = results[2].raw_result
+    third_result = results[2].result
     assert third_result is not None
     assert third_result.data is not None
     assert third_result.data[0]["notes"] is None
@@ -175,7 +175,7 @@ def test_stack_single_statement_selects_inside_existing_transaction(sqlite_stack
     stack = StatementStack().push_execute("SELECT name FROM stack_edge_table WHERE id = ?", (1,))
 
     results = sqlite_stack_session.execute_stack(stack)
-    select_result = results[0].raw_result
+    select_result = results[0].result
     assert select_result is not None
     assert select_result.data is not None
     assert select_result.data[0]["name"] == "pre"

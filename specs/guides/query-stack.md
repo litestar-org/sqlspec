@@ -37,7 +37,7 @@ When using adapters with native pipelines (Oracle, psycopg, asyncpg), continue-o
 
 ## Arrow Operations
 
-`push_execute_arrow()` delegates to `select_to_arrow()` when the adapter implements Arrow support (DuckDB, BigQuery, ADBC, etc.). The returned `StackResult.raw_result` is an `ArrowResult`, so downstream helpers like `to_pandas()` or `to_polars()` continue to work.
+`push_execute_arrow()` delegates to `select_to_arrow()` when the adapter implements Arrow support (DuckDB, BigQuery, ADBC, etc.). The returned `StackResult.result` is an `ArrowResult`, so downstream helpers like `to_pandas()` or `to_polars()` continue to work.
 
 ## Telemetry and Tracing
 
@@ -54,7 +54,7 @@ Adapters only need to report whether they used a native pipeline; the observer h
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `ValueError: Cannot execute an empty StatementStack` | Stack has zero operations | Ensure you push at least one statement before calling `execute_stack()` |
-| `StackExecutionError(operation_index=1, ...)` | Driver error on a specific statement | Inspect `StackResult.error` to see the wrapped exception; use `StackResult.raw_result` to inspect partial data |
+| `StackExecutionError(operation_index=1, ...)` | Driver error on a specific statement | Inspect `StackResult.error` to see the wrapped exception; use `StackResult.result` to inspect partial data |
 | `push_execute_many` raising `TypeError` | Parameter payload not a sequence | Pass an actual list/tuple of parameter sets |
 | Continue-on-error seems to run sequentially on psycopg | Psycopg pipeline mode does not support partial failures | Expected—SQLSpec downgrades to sequential mode automatically |
 

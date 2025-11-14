@@ -63,7 +63,7 @@ async def test_async_execute_stack_execute_arrow(mock_async_driver) -> None:
     results = await mock_async_driver.execute_stack(stack)
 
     assert len(results) == 1
-    assert results[0].raw_result is sentinel
+    assert results[0].result is sentinel
 
 
 def test_sync_execute_stack_fail_fast_rolls_back(mock_sync_driver) -> None:
@@ -118,4 +118,4 @@ def test_sync_execute_stack_execute_arrow(mock_sync_driver) -> None:
     results = mock_sync_driver.execute_stack(stack)
 
     assert len(results) == 1
-    assert results[0].raw_result is sentinel
+    assert results[0].result is sentinel

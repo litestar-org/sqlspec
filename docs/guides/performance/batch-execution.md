@@ -37,7 +37,7 @@ Query Stack complements (not replaces) ``execute_many``. Use this guide to choos
 Use the following structure when adding performance tests (see Task 6.6):
 
 ```python
-from sqlspec.core import StatementStack
+from sqlspec import StatementStack
 
 stack = (
     StatementStack()

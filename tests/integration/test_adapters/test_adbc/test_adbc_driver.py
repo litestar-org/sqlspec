@@ -4,8 +4,8 @@ from typing import Any, Literal
 
 import pytest
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.adbc import AdbcDriver
-from sqlspec.core import SQLResult, StatementStack
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -217,9 +217,9 @@ def test_adbc_postgresql_statement_stack_sequential(adbc_postgresql_session: Adb
     results = adbc_postgresql_session.execute_stack(stack)
 
     assert len(results) == 3
-    assert results[2].raw_result is not None
-    assert results[2].raw_result.data is not None
-    assert results[2].raw_result.data[0]["total"] == 2
+    assert results[2].result is not None
+    assert results[2].result.data is not None
+    assert results[2].result.data[0]["total"] == 2
 
 
 @pytest.mark.xdist_group("postgres")
