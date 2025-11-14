@@ -500,7 +500,7 @@ split-on-trailing-comma = false
 
 [tool.ruff.lint.per-file-ignores]
 "docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127", "PLR2004"]
-"docs/examples/**" = ["T201"]
+"docs/examples/**" = ["T201", "PT011"]
 "sqlspec/builder/mixins/**/*.*" = ["SLF001"]
 "sqlspec/extensions/adk/converters.py" = ["S403"]
 "tests/**/*.*" = [

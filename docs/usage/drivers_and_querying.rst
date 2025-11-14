@@ -395,19 +395,13 @@ Transactions
 Manual Transaction Control
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_15.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `manual transaction control`
 
-   with spec.provide_session(config) as session:
-       try:
-           session.begin()
-
-           session.execute("INSERT INTO users (name) VALUES (?)", "Alice")
-           session.execute("INSERT INTO logs (action) VALUES (?)", "user_created")
-
-           session.commit()
-       except Exception:
-           session.rollback()
-           raise
 
 Context Manager Transactions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

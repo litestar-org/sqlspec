@@ -2,8 +2,6 @@
 
 import pytest
 
-from sqlspec.exceptions import SQLSpecError
-
 __all__ = ("test_example_14_placeholder",)
 
 
@@ -63,11 +61,11 @@ def test_example_14_placeholder() -> None:
         result.rows_affected  # For INSERT/UPDATE/DELETE
         result.operation_type  # "SELECT", "INSERT", etc.
         # Convenience methods
-        with pytest.raises(SQLSpecError):
+        with pytest.raises(ValueError):
             user = result.one()  # Single row (raises if not exactly 1)
-        with pytest.raises(SQLSpecError):
+        with pytest.raises(ValueError):
             user = result.one_or_none()  # Single row or None
-        with pytest.raises(SQLSpecError):
+        with pytest.raises(ValueError):
             result.scalar()  # First column of first row
         # end-example-6
         # start-example-7
