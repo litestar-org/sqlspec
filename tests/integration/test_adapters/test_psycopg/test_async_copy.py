@@ -7,8 +7,8 @@ from collections.abc import AsyncGenerator
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver
-from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -149,3 +149,55 @@ async def test_psycopg_async_copy_csv_format_keyword(psycopg_async_session: Psyc
     assert select_result.data[2]["value"] == 800
 
     await psycopg_async_session.execute_script("DROP TABLE copy_csv_async_kw")
+
+
+async def test_psycopg_async_statement_stack_pipeline(psycopg_async_session: PsycopgAsyncDriver) -> None:
+    """Validate that StatementStack leverages async pipeline mode."""
+
+    await psycopg_async_session.execute_script("TRUNCATE TABLE test_table_async RESTART IDENTITY")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table_async (id, name, value) VALUES (%s, %s, %s)", (1, "async-stack-one", 50))
+        .push_execute("INSERT INTO test_table_async (id, name, value) VALUES (%s, %s, %s)", (2, "async-stack-two", 60))
+        .push_execute("SELECT COUNT(*) AS total FROM test_table_async WHERE name LIKE %s", ("async-stack-%",))
+    )
+
+    results = await psycopg_async_session.execute_stack(stack)
+
+    assert len(results) == 3
+    verify = await psycopg_async_session.execute(
+        "SELECT COUNT(*) AS total FROM test_table_async WHERE name LIKE %s", ("async-stack-%",)
+    )
+    assert verify.data is not None
+    assert verify.data[0]["total"] == 2
+
+
+async def test_psycopg_async_statement_stack_continue_on_error(psycopg_async_session: PsycopgAsyncDriver) -> None:
+    """Ensure async pipeline honors continue-on-error semantics."""
+
+    await psycopg_async_session.execute_script("TRUNCATE TABLE test_table_async RESTART IDENTITY")
+
+    stack = (
+        StatementStack()
+        .push_execute(
+            "INSERT INTO test_table_async (id, name, value) VALUES (%s, %s, %s)", (1, "async-stack-initial", 15)
+        )
+        .push_execute(
+            "INSERT INTO test_table_async (id, name, value) VALUES (%s, %s, %s)", (1, "async-stack-duplicate", 25)
+        )
+        .push_execute(
+            "INSERT INTO test_table_async (id, name, value) VALUES (%s, %s, %s)", (2, "async-stack-final", 35)
+        )
+    )
+
+    results = await psycopg_async_session.execute_stack(stack, continue_on_error=True)
+
+    assert len(results) == 3
+    assert results[0].rows_affected == 1
+    assert results[1].error is not None
+    assert results[2].rows_affected == 1
+
+    verify = await psycopg_async_session.execute("SELECT COUNT(*) AS total FROM test_table_async")
+    assert verify.data is not None
+    assert verify.data[0]["total"] == 2

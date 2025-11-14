@@ -6,6 +6,7 @@ This directory now mirrors the way developers explore SQLSpec:
 - `frameworks/` groups runnable apps (Litestar for now) that rely on lightweight backends (aiosqlite, duckdb).
 - `adapters/` holds connection-focused snippets for production drivers such as asyncpg, psycopg, and oracledb.
 - `patterns/` demonstrates SQL builder usage, migrations, and multi-tenant routing.
+- `arrow/` collects Arrow integration demos so advanced exports stay discoverable without bloating other folders.
 - `loaders/` shows how to hydrate SQL from files for quick demos.
 - `extensions/` keeps integration-specific samples (Adapter Development Kit in this pass).
 

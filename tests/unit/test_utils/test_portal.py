@@ -95,6 +95,16 @@ def test_portal_provider_call(async_multiply: Callable[[int], Coroutine[Any, Any
     provider.stop()
 
 
+def test_portal_provider_call_after_stop(async_add: Callable[[int, int], Coroutine[Any, Any, int]]) -> None:
+    """PortalProvider.call raises once the provider has been stopped."""
+    provider = PortalProvider()
+    provider.start()
+    provider.stop()
+
+    with pytest.raises(ImproperConfigurationError, match="Portal provider not running"):
+        provider.call(async_add, 1, 2)
+
+
 def test_portal_provider_call_with_kwargs(async_add: Callable[[int, int], Coroutine[Any, Any, int]]) -> None:
     """PortalProvider.call supports keyword arguments."""
     provider = PortalProvider()
@@ -116,7 +126,7 @@ def test_portal_provider_call_not_started() -> None:
     async def dummy() -> int:
         return 42
 
-    with pytest.raises(ImproperConfigurationError, match="Portal provider not started"):
+    with pytest.raises(ImproperConfigurationError, match="Portal provider not running"):
         provider.call(dummy)
 
 
@@ -201,6 +211,26 @@ def test_portal_manager_lazy_initialization() -> None:
 
     assert manager.is_running
     assert isinstance(portal, Portal)
+
+    manager.stop()
+
+
+def test_portal_manager_restarts_after_pid_change(monkeypatch: Any) -> None:
+    """PortalManager rebuilds the portal when it detects a PID change."""
+    manager = PortalManager()
+    portal1 = manager.get_or_create_portal()
+    provider1 = manager._provider  # type: ignore[attr-defined]
+
+    assert manager.is_running
+    assert provider1 is not None
+
+    monkeypatch.setattr(manager, "_pid", -1)
+
+    portal2 = manager.get_or_create_portal()
+    provider2 = manager._provider  # type: ignore[attr-defined]
+
+    assert portal2 is not portal1
+    assert provider2 is not provider1
 
     manager.stop()
 

@@ -53,6 +53,12 @@ Quick Navigation
 
       Fluent API for building SQL queries programmatically with method chaining.
 
+   .. grid-item-card:: Query Stack
+      :link: query-stack
+      :link-type: doc
+
+      Immutable multi-statement execution with native pipelines, sequential fallbacks, and stack-aware telemetry.
+
    .. grid-item-card:: Core Components
       :link: core
       :link-type: doc
@@ -115,6 +121,7 @@ Available API References
    base
    adapters
    builder
+   query-stack
    core
    driver
    extensions

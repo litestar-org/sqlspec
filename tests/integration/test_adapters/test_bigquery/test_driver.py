@@ -7,8 +7,8 @@ from typing import Literal
 import pytest
 from pytest_databases.docker.bigquery import BigQueryService
 
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.bigquery import BigQueryDriver
-from sqlspec.core import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -216,6 +216,50 @@ def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, driver_test_
     assert len(subquery_result.data) == 2
     assert subquery_result.data[0]["name"] == "Bob"
     assert subquery_result.data[1]["name"] == "Charlie"
+
+
+def test_bigquery_statement_stack_sequential(bigquery_session: BigQueryDriver, driver_test_table: str) -> None:
+    """StatementStack executions should remain sequential on BigQuery."""
+
+    bigquery_session.execute(f"DELETE FROM {driver_test_table} WHERE id IS NOT NULL")
+
+    stack = (
+        StatementStack()
+        .push_execute(f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)", (1, "stack-one", 10))
+        .push_execute(f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)", (2, "stack-two", 20))
+        .push_execute(f"SELECT COUNT(*) AS total FROM {driver_test_table} WHERE name LIKE ?", ("stack-%",))
+    )
+
+    results = bigquery_session.execute_stack(stack)
+
+    assert len(results) == 3
+    assert results[2].result is not None
+    assert results[2].result.data is not None
+    assert results[2].result.data[0]["total"] == 2
+
+
+def test_bigquery_statement_stack_continue_on_error(bigquery_session: BigQueryDriver, driver_test_table: str) -> None:
+    """Continue-on-error should surface BigQuery failures but keep executing."""
+
+    bigquery_session.execute(f"DELETE FROM {driver_test_table} WHERE id IS NOT NULL")
+
+    stack = (
+        StatementStack()
+        .push_execute(f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)", (1, "stack-initial", 50))
+        .push_execute(  # invalid column triggers deterministic error
+            f"INSERT INTO {driver_test_table} (nonexistent_column) VALUES (1)"
+        )
+        .push_execute(f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)", (2, "stack-final", 75))
+    )
+
+    results = bigquery_session.execute_stack(stack, continue_on_error=True)
+
+    assert len(results) == 3
+    assert results[1].error is not None
+
+    verify = bigquery_session.execute(f"SELECT COUNT(*) AS total FROM {driver_test_table}")
+    assert verify.data is not None
+    assert verify.data[0]["total"] == 2
 
 
 def test_bigquery_schema_operations(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:

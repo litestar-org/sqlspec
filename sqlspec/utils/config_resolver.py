@@ -133,8 +133,12 @@ def _is_valid_config(config: Any) -> bool:
         config: Object to validate.
 
     Returns:
-        True if object appears to be a valid config.
+        True if object is a valid config instance (not a class).
     """
+    # Reject config classes - must be instances
+    if isinstance(config, type):
+        return False
+
     nested_config = getattr(config, "config", None)
     if nested_config is not None and hasattr(nested_config, "migration_config"):
         return True

@@ -36,6 +36,11 @@ Optimization guides for SQLSpec:
 
 - [**SQLglot Guide**](performance/sqlglot.md) - SQL parsing, transformation, and optimization with SQLglot
 - [**MyPyC Guide**](performance/mypyc.md) - Compilation strategies for high-performance Python code
+- [**Batch Execution**](performance/batch-execution.md) - Guidance for Query Stack vs. ``execute_many`` across adapters
+
+## Features
+
+- [**Query Stack Guide**](features/query-stack.md) - Multi-statement execution, execution modes, telemetry, and troubleshooting
 
 ## Migrations
 
@@ -55,6 +60,7 @@ Core architecture and design patterns:
 
 - [**Architecture Guide**](architecture/architecture.md) - SQLSpec architecture overview
 - [**Data Flow Guide**](architecture/data-flow.md) - How data flows through SQLSpec
+- [**Architecture Patterns**](architecture/patterns.md) - Immutable stack builder, native vs. sequential branching, and telemetry requirements
 
 ## Extensions
 

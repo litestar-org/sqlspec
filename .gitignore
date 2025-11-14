@@ -19,6 +19,7 @@ target/
 .vscode/
 .cursor/
 .zed/
+.cache
 .coverage*
 # files
 **/*.so

@@ -6,9 +6,10 @@ from sync frameworks like Flask. Based on the portal pattern from Advanced Alche
 
 import asyncio
 import functools
+import os
 import queue
 import threading
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
@@ -44,6 +45,7 @@ class PortalProvider:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready_event: threading.Event = threading.Event()
+        self._pid: int | None = None
 
     @property
     def portal(self) -> "Portal":
@@ -99,6 +101,7 @@ class PortalProvider:
         self._thread = threading.Thread(target=self._run_event_loop, daemon=True)
         self._thread.start()
         self._ready_event.wait()
+        self._pid = os.getpid()
         logger.debug("Portal provider started")
 
     def stop(self) -> None:
@@ -120,6 +123,7 @@ class PortalProvider:
         self._loop = None
         self._thread = None
         self._ready_event.clear()
+        self._pid = None
         logger.debug("Portal provider stopped")
 
     def _run_event_loop(self) -> None:
@@ -168,8 +172,8 @@ class PortalProvider:
         Raises:
             ImproperConfigurationError: If portal provider not started.
         """
-        if self._loop is None:
-            msg = "Portal provider not started. Call start() first."
+        if self._loop is None or not self.is_running:
+            msg = "Portal provider not running. Call start() first."
             raise ImproperConfigurationError(msg)
 
         local_result_queue: queue.Queue[tuple[_R | None, Exception | None]] = queue.Queue()
@@ -257,6 +261,7 @@ class PortalManager(metaclass=SingletonMeta):
         self._provider: PortalProvider | None = None
         self._portal: Portal | None = None
         self._lock = threading.Lock()
+        self._pid: int | None = None
 
     def get_or_create_portal(self) -> Portal:
         """Get or create the global portal instance.
@@ -267,15 +272,19 @@ class PortalManager(metaclass=SingletonMeta):
         Returns:
             Global portal instance.
         """
-        if self._portal is None:
+        current_pid = os.getpid()
+        if self._needs_restart(current_pid):
             with self._lock:
-                if self._portal is None:
+                if self._needs_restart(current_pid):
+                    if self._provider is not None:
+                        self._provider.stop()
                     self._provider = PortalProvider()
                     self._provider.start()
                     self._portal = Portal(self._provider)
+                    self._pid = current_pid
                     logger.debug("Global portal provider created and started")
 
-        return self._portal
+        return cast("Portal", self._portal)
 
     @property
     def is_running(self) -> bool:
@@ -295,7 +304,14 @@ class PortalManager(metaclass=SingletonMeta):
             self._provider.stop()
             self._provider = None
             self._portal = None
+            self._pid = None
             logger.debug("Global portal provider stopped")
+
+    def _needs_restart(self, current_pid: int) -> bool:
+        provider_missing = self._provider is None or not self._provider.is_running
+        portal_missing = self._portal is None
+        pid_changed = self._pid is not None and self._pid != current_pid
+        return portal_missing or provider_missing or pid_changed
 
 
 def get_global_portal() -> Portal:

@@ -6,16 +6,18 @@ if TYPE_CHECKING:
     from typing import TypeAlias
 
     from asyncpg import Connection, Pool, Record
+    from asyncpg.prepared_stmt import PreparedStatement
 
-
-if TYPE_CHECKING:
     AsyncpgConnection: TypeAlias = Connection[Record] | PoolConnectionProxy[Record]
     AsyncpgPool: TypeAlias = Pool[Record]
+    AsyncpgPreparedStatement: TypeAlias = PreparedStatement[Record]
 else:
     from asyncpg import Pool
+    from asyncpg.prepared_stmt import PreparedStatement
 
     AsyncpgConnection = PoolConnectionProxy
     AsyncpgPool = Pool
+    AsyncpgPreparedStatement = PreparedStatement
 
 
-__all__ = ("AsyncpgConnection", "AsyncpgPool")
+__all__ = ("AsyncpgConnection", "AsyncpgPool", "AsyncpgPreparedStatement")

@@ -17,6 +17,22 @@ This guide provides specific instructions and best practices for working with th
 - **JSON Strategy:** `helper` (shared JSON serializer applied through the profile)
 - **Extras:** None (uses defaults with native list expansion disabled)
 
+## Query Stack Support
+
+`StatementStack` executions automatically use python-oracledb's native pipeline APIs when the adapter detects a compatible runtime (Oracle Database 23ai+ and python-oracledb ≥ 2.4.0). The pipeline path batches every operation in a stack into a single round-trip while preserving the regular `StackResult.result` semantics, so downstream helpers like `get_data()` or `rows_affected` continue to work without code changes.
+
+### Requirements
+
+- Oracle Database 23ai or newer (`SELECT version FROM v$instance`)
+- python-oracledb 2.4.0 or newer (thin **or** thick mode)
+- Stacks that only contain `push_execute`/`push_execute_many` operations. `push_execute_arrow` and `push_execute_script` fall back to sequential execution automatically.
+
+### Telemetry and Overrides
+
+- Every stack execution emits `StackExecutionMetrics` counters (e.g., `stack.execute.invocations`, `stack.execute.path.native`, `stack.execute.partial_errors`) and a `sqlspec.stack.execute` tracing span whenever `ObservabilityRuntime` is enabled. These metrics include tags for the adapter, fail-fast vs. continue-on-error mode, native vs. sequential path, and the forced-disable flag so operators can chart adoption and error rates.
+- When the pipeline is disabled because of driver/database version constraints, the adapter logs `stack.native_pipeline.skip` at `DEBUG` with reason codes such as `driver_version`, `database_version`, or `driver_api_missing` to make diagnosis straightforward.
+- `driver_features={"stack_native_disabled": True}` forces sequential execution if you need to bypass the pipeline temporarily.
+
 ## Thick vs. Thin Client
 
 The `oracledb` driver supports two modes:

@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.core import SQL, SQLResult, create_sql_result
+from sqlspec.core import SQL, SQLResult, StackResult, create_sql_result
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -198,6 +198,35 @@ def test_sql_result_get_data_with_typeddict() -> None:
     assert isinstance(users[0], dict)  # TypedDict is still a dict at runtime
     assert users[0]["name"] == "Alice"
     assert users[1]["name"] == "Bob"
+
+
+def test_stack_result_from_sql_result() -> None:
+    sql_stmt = SQL("SELECT * FROM users")
+    sql_result = SQLResult(statement=sql_stmt, data=[{"id": 1}], rows_affected=1, metadata={"warning": "slow"})
+
+    stack_result = StackResult.from_sql_result(sql_result)
+
+    assert stack_result.rows_affected == 1
+    assert stack_result.warning == "slow"
+    assert stack_result.result is sql_result
+    assert stack_result.get_result() is not None
+    assert stack_result.get_result().get_data() == [{"id": 1}]
+
+
+def test_stack_result_with_error_and_factory() -> None:
+    sql_stmt = SQL("SELECT 1")
+    sql_result = SQLResult(statement=sql_stmt, data=[{"value": 1}], rows_affected=1)
+    stack_result = StackResult(result=sql_result)
+
+    updated = stack_result.with_error(ValueError("boom"))
+    assert updated.error is not None
+    assert updated.result is sql_result
+    assert list(updated.get_result()) == list(stack_result.get_result())
+
+    failure = StackResult.from_error(RuntimeError("stack"))
+    assert failure.is_error()
+    assert failure.is_sql_result()
+    assert failure.get_result().get_data() == []
 
 
 def test_sql_result_all_with_schema_type() -> None:

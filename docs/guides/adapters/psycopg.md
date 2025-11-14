@@ -27,6 +27,30 @@ The `psycopg` adapter supports the following driver features:
 
 -   `enable_pgvector`: A boolean to enable or disable `pgvector` support. Defaults to `True` if `pgvector` is installed.
 
+## Query Stack Support
+
+Psycopg 3 exposes libpq pipeline mode, and SQLSpec uses it automatically for `StatementStack` calls:
+
+- When `psycopg.capabilities.has_pipeline()` reports support (libpq 14+), `execute_stack()` wraps all operations in `with conn.pipeline():` to reduce round-trips.
+- Fail-fast stacks (`continue_on_error=False`) run inside a single transaction; continue-on-error stacks run in autocommit mode so later statements can proceed even if earlier ones fail.
+- All executions emit the standard stack telemetry metrics/spans/logs so you can observe adoption in production.
+- Pass `driver_features={"stack_native_disabled": True}` if you need to disable pipeline mode temporarily (the adapter will fall back to the sequential base implementation).
+
+Example:
+
+```python
+stack = (
+    StatementStack()
+    .push_execute("INSERT INTO events (name, payload) VALUES (%s, %s)", ("login", payload))
+    .push_execute("UPDATE users SET last_login = NOW() WHERE id = %s", (user_id,))
+    .push_execute("SELECT permissions FROM user_permissions WHERE user_id = %s", (user_id,))
+)
+
+results = psycopg_session.execute_stack(stack)
+```
+
+When a statement fails and `continue_on_error=True`, its corresponding `StackResult` sets `error` while the other operations still run within the same pipeline block.
+
 ## MERGE Operations (PostgreSQL 15+)
 
 Psycopg supports MERGE operations for bulk upserts using PostgreSQL's native MERGE statement with `jsonb_to_recordset()`.

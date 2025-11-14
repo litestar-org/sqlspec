@@ -29,11 +29,15 @@ from sqlspec.core import (
     ParameterStyle,
     ParameterStyleConfig,
     SQLResult,
+    StackOperation,
+    StackResult,
     Statement,
     StatementConfig,
+    StatementStack,
 )
 from sqlspec.core import filters as filters
 from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
+from sqlspec.exceptions import StackExecutionError
 from sqlspec.loader import SQLFile, SQLFileLoader
 from sqlspec.typing import ConnectionT, PoolT, SchemaT, StatementParameters, SupportedSchemaModel
 from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
@@ -70,9 +74,13 @@ __all__ = (
     "SQLSpec",
     "SchemaT",
     "Select",
+    "StackExecutionError",
+    "StackOperation",
+    "StackResult",
     "Statement",
     "StatementConfig",
     "StatementParameters",
+    "StatementStack",
     "SupportedSchemaModel",
     "SyncDatabaseConfig",
     "SyncDriverAdapterBase",

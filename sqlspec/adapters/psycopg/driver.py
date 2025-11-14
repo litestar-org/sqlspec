@@ -1,23 +1,9 @@
-"""PostgreSQL psycopg driver implementation.
-
-This driver provides PostgreSQL database connectivity using psycopg3:
-- SQL statement execution with parameter binding
-- Connection and transaction management
-- Row result processing with dictionary-based access
-- PostgreSQL-specific features (COPY, arrays, JSON types)
-
-PostgreSQL Features:
-- Parameter styles ($1, %s, %(name)s)
-- PostgreSQL array support
-- COPY operations for bulk data transfer
-- JSON/JSONB type handling
-- PostgreSQL-specific error handling
-"""
+"""PostgreSQL psycopg driver implementation."""
 
 import datetime
 import io
 from contextlib import AsyncExitStack, ExitStack
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast
 
 import psycopg
 from psycopg import sql as psycopg_sql
@@ -29,7 +15,11 @@ from sqlspec.core import (
     ParameterStyle,
     ParameterStyleConfig,
     SQLResult,
+    StackOperation,
+    StackResult,
+    Statement,
     StatementConfig,
+    StatementStack,
     build_statement_config_from_profile,
     get_cache_config,
     is_copy_from_operation,
@@ -38,6 +28,7 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.driver._common import StackExecutionObserver, describe_stack_statement
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -48,6 +39,7 @@ from sqlspec.exceptions import (
     OperationalError,
     SQLParsingError,
     SQLSpecError,
+    StackExecutionError,
     TransactionError,
     UniqueViolationError,
 )
@@ -59,6 +51,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
+    from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult
     from sqlspec.driver._async import AsyncDataDictionaryBase
     from sqlspec.driver._common import ExecutionResult
@@ -72,6 +65,21 @@ if TYPE_CHECKING:
         SyncStoragePipeline,
     )
 
+    class _PipelineDriver(Protocol):
+        statement_config: StatementConfig
+
+        def prepare_statement(
+            self,
+            statement: "SQL | Statement | QueryBuilder",
+            parameters: Any,
+            *,
+            statement_config: StatementConfig,
+            kwargs: dict[str, Any],
+        ) -> SQL: ...
+
+        def _get_compiled_sql(self, statement: SQL, statement_config: StatementConfig) -> tuple[str, Any]: ...
+
+
 __all__ = (
     "PsycopgAsyncCursor",
     "PsycopgAsyncDriver",
@@ -84,6 +92,79 @@ __all__ = (
 )
 
 logger = get_logger("adapters.psycopg")
+
+
+def _psycopg_pipeline_supported() -> bool:
+    """Return True when libpq pipeline support is available."""
+
+    capabilities = getattr(psycopg, "capabilities", None)
+    if capabilities is None:
+        return False
+    try:
+        return bool(capabilities.has_pipeline())
+    except Exception:  # pragma: no cover - defensive guard for unexpected capability implementations
+        return False
+
+
+class _PreparedStackOperation(NamedTuple):
+    """Precompiled stack operation metadata for psycopg pipeline execution."""
+
+    operation_index: int
+    operation: "StackOperation"
+    statement: "SQL"
+    sql: str
+    parameters: "tuple[Any, ...] | dict[str, Any] | None"
+
+
+class _PipelineCursorEntry(NamedTuple):
+    """Cursor pending result data for psycopg pipeline execution."""
+
+    prepared: "_PreparedStackOperation"
+    cursor: Any
+
+
+class PsycopgPipelineMixin:
+    """Shared helpers for psycopg sync/async pipeline execution."""
+
+    __slots__ = ()
+
+    def _prepare_pipeline_operations(self, stack: "StatementStack") -> "list[_PreparedStackOperation] | None":
+        prepared: list[_PreparedStackOperation] = []
+        for index, operation in enumerate(stack.operations):
+            normalized = self._normalize_stack_operation_for_pipeline(index, operation)
+            if normalized is None:
+                return None
+            prepared.append(normalized)
+        return prepared
+
+    def _normalize_stack_operation_for_pipeline(
+        self, index: int, operation: "StackOperation"
+    ) -> "_PreparedStackOperation | None":
+        if operation.method != "execute":
+            return None
+
+        kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+        statement_config = kwargs.pop("statement_config", None)
+        driver = cast("_PipelineDriver", self)
+        config = statement_config or driver.statement_config
+
+        sql_statement = driver.prepare_statement(
+            operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
+        )
+
+        if sql_statement.is_script or sql_statement.is_many:
+            return None
+
+        sql_text, prepared_parameters = driver._get_compiled_sql(  # pyright: ignore[reportPrivateUsage]
+            sql_statement, config
+        )
+        return _PreparedStackOperation(
+            operation_index=index,
+            operation=operation,
+            statement=sql_statement,
+            sql=sql_text,
+            parameters=prepared_parameters,
+        )
 
 
 TRANSACTION_STATUS_IDLE = 0
@@ -231,7 +312,7 @@ class PsycopgSyncExceptionHandler:
         raise SQLSpecError(msg) from e
 
 
-class PsycopgSyncDriver(SyncDriverAdapterBase):
+class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     """PostgreSQL psycopg synchronous driver.
 
     Provides synchronous database operations for PostgreSQL using psycopg3.
@@ -412,6 +493,99 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
+
+    def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
+        """Execute a StatementStack using psycopg pipeline mode when supported."""
+
+        if (
+            not isinstance(stack, StatementStack)
+            or not stack
+            or self.stack_native_disabled
+            or not _psycopg_pipeline_supported()
+            or continue_on_error
+        ):
+            return super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        prepared_ops = self._prepare_pipeline_operations(stack)
+        if prepared_ops is None:
+            return super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        return self._execute_stack_pipeline(stack, prepared_ops)
+
+    def _execute_stack_pipeline(
+        self, stack: "StatementStack", prepared_ops: "list[_PreparedStackOperation]"
+    ) -> "tuple[StackResult, ...]":
+        results: list[StackResult] = []
+        started_transaction = False
+
+        with StackExecutionObserver(self, stack, continue_on_error=False, native_pipeline=True):
+            try:
+                if not self._connection_in_transaction():
+                    self.begin()
+                    started_transaction = True
+
+                with ExitStack() as resource_stack:
+                    pipeline = resource_stack.enter_context(self.connection.pipeline())
+                    pending: list[_PipelineCursorEntry] = []
+
+                    for prepared in prepared_ops:
+                        exception_ctx = self.handle_database_exceptions()
+                        resource_stack.enter_context(exception_ctx)
+                        cursor = resource_stack.enter_context(self.with_cursor(self.connection))
+
+                        try:
+                            if prepared.parameters:
+                                cursor.execute(prepared.sql, prepared.parameters)
+                            else:
+                                cursor.execute(prepared.sql)
+                        except Exception as exc:
+                            stack_error = StackExecutionError(
+                                prepared.operation_index,
+                                describe_stack_statement(prepared.operation.statement),
+                                exc,
+                                adapter=type(self).__name__,
+                                mode="fail-fast",
+                            )
+                            raise stack_error from exc
+
+                        pending.append(_PipelineCursorEntry(prepared=prepared, cursor=cursor))
+
+                    pipeline.sync()
+
+                    results.extend(self._build_pipeline_stack_result(entry) for entry in pending)
+
+                if started_transaction:
+                    self.commit()
+            except Exception:
+                if started_transaction:
+                    try:
+                        self.rollback()
+                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                        logger.debug("Rollback after psycopg pipeline failure failed: %s", rollback_error)
+                raise
+
+        return tuple(results)
+
+    def _build_pipeline_stack_result(self, entry: "_PipelineCursorEntry") -> StackResult:
+        statement = entry.prepared.statement
+        cursor = entry.cursor
+
+        if statement.returns_rows():
+            fetched_data = cursor.fetchall()
+            column_names = [col.name for col in cursor.description or []]
+            execution_result = self.create_execution_result(
+                cursor,
+                selected_data=fetched_data,
+                column_names=column_names,
+                data_row_count=len(fetched_data),
+                is_select_result=True,
+            )
+        else:
+            affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+            execution_result = self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+        sql_result = self.build_statement_result(statement, execution_result)
+        return StackResult.from_sql_result(sql_result)
 
     def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
@@ -671,7 +845,7 @@ class PsycopgAsyncExceptionHandler:
         raise SQLSpecError(msg) from e
 
 
-class PsycopgAsyncDriver(AsyncDriverAdapterBase):
+class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     """PostgreSQL psycopg asynchronous driver.
 
     Provides asynchronous database operations for PostgreSQL using psycopg3.
@@ -711,10 +885,10 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     async def begin(self) -> None:
         """Begin a database transaction on the current connection."""
         try:
-            if hasattr(self.connection, "autocommit") and not self.connection.autocommit:
-                pass
-            else:
-                self.connection.autocommit = False
+            autocommit_flag = getattr(self.connection, "autocommit", None)
+            if isinstance(autocommit_flag, bool) and not autocommit_flag:
+                return
+            await self.connection.set_autocommit(False)
         except Exception as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -854,6 +1028,101 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
+
+    async def execute_stack(
+        self, stack: "StatementStack", *, continue_on_error: bool = False
+    ) -> "tuple[StackResult, ...]":
+        """Execute a StatementStack using psycopg async pipeline when supported."""
+
+        if (
+            not isinstance(stack, StatementStack)
+            or not stack
+            or self.stack_native_disabled
+            or not _psycopg_pipeline_supported()
+            or continue_on_error
+        ):
+            return await super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        prepared_ops = self._prepare_pipeline_operations(stack)
+        if prepared_ops is None:
+            return await super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        return await self._execute_stack_pipeline(stack, prepared_ops)
+
+    async def _execute_stack_pipeline(
+        self, stack: "StatementStack", prepared_ops: "list[_PreparedStackOperation]"
+    ) -> "tuple[StackResult, ...]":
+        results: list[StackResult] = []
+        started_transaction = False
+
+        with StackExecutionObserver(self, stack, continue_on_error=False, native_pipeline=True):
+            try:
+                if not self._connection_in_transaction():
+                    await self.begin()
+                    started_transaction = True
+
+                async with AsyncExitStack() as resource_stack:
+                    pipeline = await resource_stack.enter_async_context(self.connection.pipeline())
+                    pending: list[_PipelineCursorEntry] = []
+
+                    for prepared in prepared_ops:
+                        exception_ctx = self.handle_database_exceptions()
+                        await resource_stack.enter_async_context(exception_ctx)
+                        cursor = await resource_stack.enter_async_context(self.with_cursor(self.connection))
+
+                        try:
+                            if prepared.parameters:
+                                await cursor.execute(prepared.sql, prepared.parameters)
+                            else:
+                                await cursor.execute(prepared.sql)
+                        except Exception as exc:
+                            stack_error = StackExecutionError(
+                                prepared.operation_index,
+                                describe_stack_statement(prepared.operation.statement),
+                                exc,
+                                adapter=type(self).__name__,
+                                mode="fail-fast",
+                            )
+                            raise stack_error from exc
+
+                        pending.append(_PipelineCursorEntry(prepared=prepared, cursor=cursor))
+
+                    await pipeline.sync()
+
+                    results.extend([await self._build_pipeline_stack_result_async(entry) for entry in pending])
+
+                if started_transaction:
+                    await self.commit()
+            except Exception:
+                if started_transaction:
+                    try:
+                        await self.rollback()
+                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                        logger.debug("Rollback after psycopg pipeline failure failed: %s", rollback_error)
+                raise
+
+        return tuple(results)
+
+    async def _build_pipeline_stack_result_async(self, entry: "_PipelineCursorEntry") -> StackResult:
+        statement = entry.prepared.statement
+        cursor = entry.cursor
+
+        if statement.returns_rows():
+            fetched_data = await cursor.fetchall()
+            column_names = [col.name for col in cursor.description or []]
+            execution_result = self.create_execution_result(
+                cursor,
+                selected_data=fetched_data,
+                column_names=column_names,
+                data_row_count=len(fetched_data),
+                is_select_result=True,
+            )
+        else:
+            affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+            execution_result = self.create_execution_result(cursor, rowcount_override=affected_rows)
+
+        sql_result = self.build_statement_result(statement, execution_result)
+        return StackResult.from_sql_result(sql_result)
 
     async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets (async).
