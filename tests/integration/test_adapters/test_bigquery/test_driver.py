@@ -221,7 +221,7 @@ def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, driver_test_
 def test_bigquery_statement_stack_sequential(bigquery_session: BigQueryDriver, driver_test_table: str) -> None:
     """StatementStack executions should remain sequential on BigQuery."""
 
-    bigquery_session.execute(f"DELETE FROM {driver_test_table}")
+    bigquery_session.execute(f"DELETE FROM {driver_test_table} WHERE id IS NOT NULL")
 
     stack = (
         StatementStack()
@@ -241,7 +241,7 @@ def test_bigquery_statement_stack_sequential(bigquery_session: BigQueryDriver, d
 def test_bigquery_statement_stack_continue_on_error(bigquery_session: BigQueryDriver, driver_test_table: str) -> None:
     """Continue-on-error should surface BigQuery failures but keep executing."""
 
-    bigquery_session.execute(f"DELETE FROM {driver_test_table}")
+    bigquery_session.execute(f"DELETE FROM {driver_test_table} WHERE id IS NOT NULL")
 
     stack = (
         StatementStack()

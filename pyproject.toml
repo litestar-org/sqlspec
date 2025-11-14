@@ -188,12 +188,12 @@ include = [
   "sqlspec/observability/_spans.py",
 
   # === STORAGE LAYER ===
-  "sqlspec/storage/_utils.py",
-  "sqlspec/storage/registry.py",
-  "sqlspec/storage/backends/base.py",
-  "sqlspec/storage/backends/obstore.py",
-  "sqlspec/storage/backends/fsspec.py",
-  "sqlspec/storage/backends/local.py",
+  # "sqlspec/storage/_utils.py",
+  # "sqlspec/storage/registry.py",
+  # "sqlspec/storage/backends/base.py",
+  # "sqlspec/storage/backends/obstore.py",
+  # "sqlspec/storage/backends/fsspec.py",
+  # "sqlspec/storage/backends/local.py",
 ]
 mypy-args = [
   "--ignore-missing-imports",
