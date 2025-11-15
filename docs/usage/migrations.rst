@@ -139,6 +139,81 @@ All database configs (sync and async) provide these migration methods:
 ``get_current_migration(verbose=False)``
    Get the current migration version.
 
+Template Profiles & Author Metadata
+===================================
+
+Migrations inherit their header text, metadata comments, and default file format
+from ``migration_config["templates"]``. Each project can define multiple
+profiles and select one globally:
+
+.. code-block:: python
+
+   migration_config={
+       "default_format": "py",      # CLI default when --format omitted
+       "title": "Acme Migration",    # Shared title for all templates
+       "author": "env:SQLSPEC_AUTHOR",  # Read from environment variable
+       "templates": {
+           "sql": {
+               "header": "-- {title} - {message}",
+               "metadata": ["-- Version: {version}", "-- Owner: {author}"],
+               "body": "-- custom SQL body"
+           },
+           "py": {
+               "docstring": """{title}\nDescription: {description}""",
+               "imports": ["from typing import Iterable"],
+               "body": """def up(context: object | None = None) -> str | Iterable[str]:
+    return "SELECT 1"
+
+def down(context: object | None = None) -> str | Iterable[str]:
+    return "DROP TABLE example;"
+"""
+           }
+       }
+   }
+
+Template fragments accept the following variables:
+
+- ``{title}`` – shared template title
+- ``{version}`` – generated revision identifier
+- ``{message}`` – CLI/command message
+- ``{description}`` – message fallback used in logs and docstrings
+- ``{created_at}`` – UTC timestamp in ISO 8601 format
+- ``{author}`` – resolved author string
+- ``{adapter}`` – config driver class (useful for docstrings)
+- ``{project_slug}`` / ``{slug}`` – sanitized project and message slugs
+
+Missing placeholders raise ``TemplateValidationError`` so mistakes are caught
+immediately. SQL templates list metadata rows (``metadata``) and a ``body``
+block. Python templates expose ``docstring``, optional ``imports``, and ``body``.
+
+Author attribution can be controlled via ``migration_config["author"]``:
+
+- Literal strings (``"Data Platform"``) are stamped verbatim
+- ``"env:VAR_NAME"`` pulls from the environment and fails fast if unset
+- ``"callable:pkg.module:get_author"`` invokes a helper that can inspect the
+  config or environment when determining the author string
+- ``"git"`` reads git user.name/email; ``"system"`` uses ``$USER``
+
+CLI Enhancements
+----------------
+
+``sqlspec create-migration`` (and ``litestar database create-migration``)
+accept ``--format`` / ``--file-type`` flags:
+
+.. code-block:: bash
+
+   sqlspec --config myapp.config create-migration -m "Add seed data" --format py
+
+When omitted, the CLI uses ``migration_config["default_format"]`` (``"sql"`` by default).
+Upgrade/downgrade commands now echo ``{version}: {description}``, so the rich
+description captured in templates is visible during deployments and matches the
+continue-on-error logs.
+
+The default Python template ships with both ``up`` and ``down`` functions that
+accept an optional ``context`` argument. When migrations run via SQLSpec, that
+parameter receives the active ``MigrationContext`` so you can reach the config
+or connection objects directly inside your migration logic.
+
 ``create_migration(message, file_type="sql")``
    Create a new migration file.
 
@@ -452,7 +527,8 @@ SQLSpec uses a tracking table to record applied migrations:
    renamed migrations (e.g., timestamp → sequential conversion).
 
 ``applied_by``
-   Unix username of user who applied the migration.
+   Author string recorded for the migration. Defaults to the git user/system
+   account but can be overridden via ``migration_config["author"]``.
 
 Schema Migration
 ----------------

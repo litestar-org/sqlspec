@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import rich_click as click
+from click.core import ParameterSource
 
 if TYPE_CHECKING:
     from rich_click import Group
@@ -519,9 +520,17 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     )
     @bind_key_option
     @click.option("-m", "--message", default=None, help="Revision message")
+    @click.option(
+        "--format",
+        "--file-type",
+        "file_format",
+        type=click.Choice(["sql", "py"]),
+        default=None,
+        help="File format for the generated migration (defaults to template profile)",
+    )
     @no_prompt_option
     def create_revision(  # pyright: ignore[reportUnusedFunction]
-        bind_key: str | None, message: str | None, no_prompt: bool
+        bind_key: str | None, message: str | None, file_format: str | None, no_prompt: bool
     ) -> None:
         """Create a new database revision."""
         from rich.prompt import Prompt
@@ -540,8 +549,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 )
 
             sqlspec_config = get_config_by_bind_key(cast("click.Context", ctx), bind_key)
+            param_source = ctx.get_parameter_source("file_format")
+            effective_format = None if param_source is ParameterSource.DEFAULT else file_format
             migration_commands = create_migration_commands(config=sqlspec_config)
-            await maybe_await(migration_commands.revision(message=message_text))
+            await maybe_await(migration_commands.revision(message=message_text, file_type=effective_format))
 
         run_(_create_revision)()
 

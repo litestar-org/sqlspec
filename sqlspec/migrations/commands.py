@@ -176,6 +176,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             context,
             self.extension_configs,
             runtime=self._runtime,
+            description_hints=self._template_settings.description_hints,
         )
 
     def init(self, directory: str, package: bool = True) -> None:
@@ -538,7 +539,14 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             file_type: Type of migration file to create ('sql' or 'py').
         """
         version = generate_timestamp_version()
-        file_path = create_migration_file(self.migrations_path, version, message, file_type)
+        file_path = create_migration_file(
+            self.migrations_path,
+            version,
+            message,
+            file_type,
+            config=self.config,
+            template_settings=self._template_settings,
+        )
         console.print(f"[green]Created migration:[/] {file_path}")
 
     def fix(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
@@ -650,6 +658,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             context,
             self.extension_configs,
             runtime=self._runtime,
+            description_hints=self._template_settings.description_hints,
         )
 
     async def init(self, directory: str, package: bool = True) -> None:
@@ -1016,7 +1025,14 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             file_type: Type of migration file to create ('sql' or 'py').
         """
         version = generate_timestamp_version()
-        file_path = create_migration_file(self.migrations_path, version, message, file_type)
+        file_path = create_migration_file(
+            self.migrations_path,
+            version,
+            message,
+            file_type,
+            config=self.config,
+            template_settings=self._template_settings,
+        )
         console.print(f"[green]Created migration:[/] {file_path}")
 
     async def fix(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
