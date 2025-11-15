@@ -1,6 +1,8 @@
 # Test module converted from docs example - code-block 5
 """Minimal smoke test for drivers_and_querying example 5."""
 
+import os
+
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import SQLSpec
@@ -12,11 +14,8 @@ __all__ = ("test_example_5_construct_config",)
 async def test_example_5_construct_config(postgres_service: PostgresService) -> None:
     # start-example
     spec = SQLSpec()
-    config = PsqlpyConfig(
-        pool_config={
-            "dsn": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
-    )
+    dsn = os.environ.get("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/test")
+    config = PsqlpyConfig(pool_config={"dsn": dsn})
     assert config is not None
     async with spec.provide_session(config) as session:
         create_table_query = """CREATE TABLE IF NOT EXISTS users (
