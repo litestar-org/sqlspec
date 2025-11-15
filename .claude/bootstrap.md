@@ -1290,6 +1290,226 @@ if not exists(".claude/agents/sync-guides.md"):
 
 ---
 
+## PHASE 4.6: SQLSPEC SKILLS CREATION (If SQLSpec Project)
+
+**Objective**: Auto-create comprehensive SQLSpec usage skills for database-focused projects.
+
+### Step 4.6.1: Detect if SQLSpec Project
+
+```python
+is_sqlspec_project = (
+    Grep(pattern=r'from sqlspec|import sqlspec', path='.', output_mode='count') > 5 or
+    exists("sqlspec/") or
+    (exists("pyproject.toml") and "sqlspec" in Read("pyproject.toml"))
+)
+
+if not is_sqlspec_project:
+    print("Not a SQLSpec project - skipping SQLSpec skills creation")
+    # Skip to Phase 5
+```
+
+### Step 4.6.2: Create SQLSpec Skills Directory
+
+```bash
+mkdir -p .claude/skills/sqlspec-usage/patterns
+mkdir -p .claude/skills/sqlspec-usage/examples
+mkdir -p .claude/skills/sqlspec-adapters
+```
+
+### Step 4.6.3: Generate Main SQLSpec Skill
+
+```python
+sqlspec_skill = '''# SQLSpec Usage Expert Skill
+
+**Version:** 1.0.0
+**Category:** Database, Python, SQLSpec
+**Status:** Active
+
+## Description
+
+Comprehensive guidance on using SQLSpec - a type-safe SQL query mapper for Python.
+Covers configuration, query execution, framework integration, migrations, testing,
+and performance optimization across all supported database adapters.
+
+## Activation Triggers
+
+- SQLSpec configuration or setup questions
+- Database connection management
+- Query execution patterns
+- Framework integration (Litestar, FastAPI, Starlette, Flask)
+- Migration management
+- Testing with SQLSpec
+- Performance optimization
+- Multi-database setups
+
+## Quick Reference
+
+See pattern guides for detailed information:
+- [Configuration Patterns](patterns/configuration.md)
+- [Query Execution Patterns](patterns/queries.md)
+- [Framework Integration](patterns/frameworks.md)
+- [Migration Patterns](patterns/migrations.md)
+- [Testing Best Practices](patterns/testing.md)
+- [Performance Optimization](patterns/performance.md)
+- [Troubleshooting Guide](patterns/troubleshooting.md)
+
+Working examples in `examples/` directory.
+'''
+
+Write(file_path=".claude/skills/sqlspec-usage/skill.md", content=sqlspec_skill)
+print("✓ Created .claude/skills/sqlspec-usage/skill.md")
+```
+
+### Step 4.6.4: Generate Pattern Guides
+
+Create comprehensive pattern guides:
+
+```python
+# Configuration patterns
+Write(file_path=".claude/skills/sqlspec-usage/patterns/configuration.md", content=config_patterns)
+
+# Query patterns
+Write(file_path=".claude/skills/sqlspec-usage/patterns/queries.md", content=query_patterns)
+
+# Framework integration
+Write(file_path=".claude/skills/sqlspec-usage/patterns/frameworks.md", content=framework_patterns)
+
+# Migration patterns
+Write(file_path=".claude/skills/sqlspec-usage/patterns/migrations.md", content=migration_patterns)
+
+# Testing patterns
+Write(file_path=".claude/skills/sqlspec-usage/patterns/testing.md", content=testing_patterns)
+
+# Performance patterns
+Write(file_path=".claude/skills/sqlspec-usage/patterns/performance.md", content=performance_patterns)
+
+# Troubleshooting
+Write(file_path=".claude/skills/sqlspec-usage/patterns/troubleshooting.md", content=troubleshooting_guide)
+
+print("✓ Created all SQLSpec pattern guides")
+```
+
+### Step 4.6.5: Generate Working Examples
+
+```python
+# Litestar integration example
+Write(file_path=".claude/skills/sqlspec-usage/examples/litestar-integration.py", content=litestar_example)
+
+# FastAPI integration example
+Write(file_path=".claude/skills/sqlspec-usage/examples/fastapi-integration.py", content=fastapi_example)
+
+# Multi-database example
+Write(file_path=".claude/skills/sqlspec-usage/examples/multi-database.py", content=multi_db_example)
+
+# Testing patterns example
+Write(file_path=".claude/skills/sqlspec-usage/examples/testing-patterns.py", content=testing_example)
+
+# Migration workflow shell script
+Write(file_path=".claude/skills/sqlspec-usage/examples/migration-workflow.sh", content=migration_script)
+
+print("✓ Created all SQLSpec example files")
+```
+
+### Step 4.6.6: Detect Project Adapters and Create Adapter Skills
+
+```python
+# Detect which adapters are used in this project
+adapters_used = []
+
+if Grep(pattern=r'from sqlspec.adapters.asyncpg', path='.', output_mode='count') > 0:
+    adapters_used.append("asyncpg")
+if Grep(pattern=r'from sqlspec.adapters.psycopg', path='.', output_mode='count') > 0:
+    adapters_used.append("psycopg")
+if Grep(pattern=r'from sqlspec.adapters.duckdb', path='.', output_mode='count') > 0:
+    adapters_used.append("duckdb")
+if Grep(pattern=r'from sqlspec.adapters.sqlite', path='.', output_mode='count') > 0:
+    adapters_used.append("sqlite")
+if Grep(pattern=r'from sqlspec.adapters.aiosqlite', path='.', output_mode='count') > 0:
+    adapters_used.append("aiosqlite")
+if Grep(pattern=r'from sqlspec.adapters.oracledb', path='.', output_mode='count') > 0:
+    adapters_used.append("oracledb")
+
+print(f"Detected adapters: {', '.join(adapters_used)}")
+
+# Create adapter-specific skills
+for adapter in adapters_used:
+    adapter_skill_content = generate_adapter_skill(adapter)
+    Write(file_path=f".claude/skills/sqlspec-adapters/{adapter}.md", content=adapter_skill_content)
+    print(f"✓ Created .claude/skills/sqlspec-adapters/{adapter}.md")
+
+# Create adapters README
+adapters_readme = '''# SQLSpec Adapter Skills
+
+Adapter-specific guidance for each database adapter used in this project.
+
+## Detected Adapters
+
+''' + '\n'.join([f'- [{adapter}.md]({adapter}.md)' for adapter in adapters_used]) + '''
+
+## Adapter Selection Guide
+
+See main skill documentation for complete adapter comparison.
+'''
+
+Write(file_path=".claude/skills/sqlspec-adapters/README.md", content=adapters_readme)
+print("✓ Created .claude/skills/sqlspec-adapters/README.md")
+```
+
+### Step 4.6.7: Update Agent Files to Reference Skills
+
+```python
+# Add skills reference to expert.md
+expert_skills_section = '''
+**Use SQLSpec skills for guidance:**
+
+```python
+# Main SQLSpec usage skill
+Read(".claude/skills/sqlspec-usage/skill.md")
+
+# Pattern guides
+Read(".claude/skills/sqlspec-usage/patterns/configuration.md")
+Read(".claude/skills/sqlspec-usage/patterns/queries.md")
+Read(".claude/skills/sqlspec-usage/patterns/frameworks.md")
+Read(".claude/skills/sqlspec-usage/patterns/testing.md")
+
+# Adapter-specific skills
+Read(f".claude/skills/sqlspec-adapters/{adapter}.md")
+
+# Working examples
+Read(".claude/skills/sqlspec-usage/examples/litestar-integration.py")
+```
+'''
+
+# Insert into expert.md after guides section
+# (Implementation details...)
+
+# Add skills reference to testing.md
+testing_skills_section = '''
+```python
+Read(".claude/skills/sqlspec-usage/patterns/testing.md")
+Read(".claude/skills/sqlspec-usage/examples/testing-patterns.py")
+```
+'''
+
+# Insert into testing.md
+# (Implementation details...)
+
+print("✓ Updated agent files to reference SQLSpec skills")
+```
+
+### Step 4.6.8: Summary
+
+```python
+print("\n=== SQLSPEC SKILLS CREATED ===\n")
+print("Main skill: .claude/skills/sqlspec-usage/skill.md")
+print("Pattern guides: .claude/skills/sqlspec-usage/patterns/")
+print("Examples: .claude/skills/sqlspec-usage/examples/")
+print(f"Adapter skills: {len(adapters_used)} adapters detected")
+print("\nAgents updated to reference skills automatically.")
+```
+
+---
+
 ## PHASE 5: PROJECT GUIDES CREATION
 
 ### Step 5.1: Create Architecture Guide

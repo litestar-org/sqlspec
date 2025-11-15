@@ -62,6 +62,31 @@ Read("AGENTS.md")
 Read("docs/guides/quick-reference/quick-reference.md")
 ```
 
+**Use SQLSpec skills for guidance:**
+
+```python
+# Main SQLSpec usage skill - configuration, queries, frameworks, migrations, testing
+Read(".claude/skills/sqlspec-usage/skill.md")
+
+# Detailed pattern guides
+Read(".claude/skills/sqlspec-usage/patterns/configuration.md")
+Read(".claude/skills/sqlspec-usage/patterns/queries.md")
+Read(".claude/skills/sqlspec-usage/patterns/frameworks.md")
+Read(".claude/skills/sqlspec-usage/patterns/migrations.md")
+Read(".claude/skills/sqlspec-usage/patterns/testing.md")
+Read(".claude/skills/sqlspec-usage/patterns/performance.md")
+Read(".claude/skills/sqlspec-usage/patterns/troubleshooting.md")
+
+# Adapter-specific skills
+Read(f".claude/skills/sqlspec-adapters/{adapter}.md")  # e.g., asyncpg.md
+
+# Working examples
+Read(".claude/skills/sqlspec-usage/examples/litestar-integration.py")
+Read(".claude/skills/sqlspec-usage/examples/fastapi-integration.py")
+Read(".claude/skills/sqlspec-usage/examples/multi-database.py")
+Read(".claude/skills/sqlspec-usage/examples/testing-patterns.py")
+```
+
 **Get library docs when needed:**
 
 ```python
