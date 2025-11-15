@@ -7,12 +7,14 @@ import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateValidationError, build_template_settings
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.driver import AsyncDriverAdapterBase
 
@@ -172,21 +174,21 @@ def _resolve_author_callable(import_path: str, config: "DatabaseConfigProtocol[A
     if not module_name or not attr_name:
         _raise_callable_error("Callable author path must be in 'module:function' format")
     module = importlib.import_module(module_name)
-    candidate = getattr(module, attr_name, None)
-    if not callable(candidate):
+    candidate_obj = getattr(module, attr_name, None)
+    if candidate_obj is None or not callable(candidate_obj):
         _raise_callable_error(f"Callable '{import_path}' is not callable")
+    candidate = cast("Callable[..., Any]", candidate_obj)
     signature = inspect.signature(candidate)
+    param_count = len(signature.parameters)
+    if param_count > 1:
+        _raise_callable_error("Author callable must accept zero or one positional argument")
     try:
-        if len(signature.parameters) == 0:
-            result = candidate()
-        elif len(signature.parameters) == 1:
-            result = candidate(config)
-        else:
-            _raise_callable_error("Author callable must accept zero or one positional argument")
+        result_value: object = candidate() if param_count == 0 else candidate(config)
     except Exception as exc:  # pragma: no cover - passthrough
         msg = f"Author callable '{import_path}' raised an error: {exc}"
         raise TemplateValidationError(msg) from exc
-    return str(result)
+    result_str: str = str(result_value)
+    return result_str
 
 
 def _build_template_context(
@@ -230,7 +232,7 @@ def _resolve_adapter_name(config: "DatabaseConfigProtocol[Any, Any, Any] | None"
         return "UnknownAdapter"
     driver_type = getattr(config, "driver_type", None)
     if driver_type is not None and hasattr(driver_type, "__name__"):
-        return driver_type.__name__
+        return str(driver_type.__name__)
     return type(config).__name__
 
 

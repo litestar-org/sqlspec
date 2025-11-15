@@ -72,6 +72,7 @@ class BaseMigrationRunner(ABC):
             context: Optional migration context for Python migrations.
             extension_configs: Optional mapping of extension names to their configurations.
             runtime: Observability runtime shared with command/context consumers.
+            description_hints: Hints for extracting migration descriptions.
         """
         self.migrations_path = migrations_path
         self.extension_migrations = extension_migrations or {}

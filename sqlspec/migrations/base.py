@@ -269,6 +269,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         extension_migrations: "dict[str, Path] | None" = None,
         context: "Any | None" = None,
         extension_configs: "dict[str, dict[str, Any]] | None" = None,
+        description_hints: "TemplateDescriptionHints | None" = None,
     ) -> None:
         """Initialize the migration runner.
 
@@ -277,6 +278,8 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             extension_migrations: Optional mapping of extension names to their migration paths.
             context: Optional migration context for Python migrations.
             extension_configs: Optional mapping of extension names to their configurations.
+            description_hints: Preferred metadata keys for extracting human descriptions
+                from SQL comments and Python docstrings.
         """
         self.migrations_path = migrations_path
         self.extension_migrations = extension_migrations or {}
@@ -284,7 +287,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         self.project_root: Path | None = None
         self.context = context
         self.extension_configs = extension_configs or {}
-        self.description_hints = TemplateDescriptionHints()
+        self.description_hints = description_hints or TemplateDescriptionHints()
 
     def _extract_version(self, filename: str) -> str | None:
         """Extract version from filename.

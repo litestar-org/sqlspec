@@ -528,7 +528,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             self.tracker.record_migration(driver, revision, f"Stamped to {revision}", 0, "manual-stamp")
             console.print(f"[green]Database stamped at revision {revision}[/]")
 
-    def revision(self, message: str, file_type: str = "sql") -> None:
+    def revision(self, message: str, file_type: str | None = None) -> None:
         """Create a new migration file with timestamp-based versioning.
 
         Generates a unique timestamp version (YYYYMMDDHHmmss format) to avoid
@@ -539,11 +539,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             file_type: Type of migration file to create ('sql' or 'py').
         """
         version = generate_timestamp_version()
+        selected_format = file_type or self._template_settings.default_format
         file_path = create_migration_file(
             self.migrations_path,
             version,
             message,
-            file_type,
+            selected_format,
             config=self.config,
             template_settings=self._template_settings,
         )
@@ -1014,7 +1015,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             await self.tracker.record_migration(driver, revision, f"Stamped to {revision}", 0, "manual-stamp")
             console.print(f"[green]Database stamped at revision {revision}[/]")
 
-    async def revision(self, message: str, file_type: str = "sql") -> None:
+    async def revision(self, message: str, file_type: str | None = None) -> None:
         """Create a new migration file with timestamp-based versioning.
 
         Generates a unique timestamp version (YYYYMMDDHHmmss format) to avoid
@@ -1025,11 +1026,12 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             file_type: Type of migration file to create ('sql' or 'py').
         """
         version = generate_timestamp_version()
+        selected_format = file_type or self._template_settings.default_format
         file_path = create_migration_file(
             self.migrations_path,
             version,
             message,
-            file_type,
+            selected_format,
             config=self.config,
             template_settings=self._template_settings,
         )

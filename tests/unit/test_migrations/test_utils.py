@@ -10,11 +10,12 @@ Tests for migration utilities including:
 import os
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
 
+from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.migrations.templates import TemplateValidationError
 from sqlspec.migrations.utils import _get_git_config, _get_system_username, create_migration_file, get_author
 
@@ -253,7 +254,9 @@ def test_create_migration_file_respects_default_format(tmp_path: Path) -> None:
         bind_key = None
         driver_type = None
 
-    file_path = create_migration_file(migrations_dir, "0001", "custom", None, config=DummyConfig())
+    file_path = create_migration_file(
+        migrations_dir, "0001", "custom", None, config=cast(DatabaseConfigProtocol[Any, Any, Any], DummyConfig())
+    )
 
     assert file_path.suffix == ".py"
 
@@ -273,7 +276,9 @@ def test_create_migration_file_uses_custom_sql_template(tmp_path: Path) -> None:
         bind_key = None
         driver_type = None
 
-    file_path = create_migration_file(migrations_dir, "0001", "custom", "sql", config=DummyConfig())
+    file_path = create_migration_file(
+        migrations_dir, "0001", "custom", "sql", config=cast(DatabaseConfigProtocol[Any, Any, Any], DummyConfig())
+    )
     content = file_path.read_text()
 
     assert "-- Acme Migration [ACME]" in content
