@@ -182,6 +182,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         features_dict.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
         features_dict.setdefault("enable_cloud_sql", False)
         features_dict.setdefault("enable_alloydb", False)
+        features_dict.setdefault("events_backend", "native_postgres")
 
         base_statement_config = statement_config or build_asyncpg_statement_config(
             json_serializer=serializer, json_deserializer=deserializer

@@ -39,6 +39,7 @@ from sqlspec.core import (
 from sqlspec.core import filters as filters
 from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import StackExecutionError
+from sqlspec.extensions.events import AsyncEventListener, EventChannel, EventMessage, SyncEventListener
 from sqlspec.loader import SQLFile, SQLFileLoader
 from sqlspec.typing import ConnectionT, PoolT, SchemaT, StatementParameters, SupportedSchemaModel
 from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
@@ -50,6 +51,7 @@ __all__ = (
     "ArrowResult",
     "AsyncDatabaseConfig",
     "AsyncDriverAdapterBase",
+    "AsyncEventListener",
     "CacheConfig",
     "CacheStats",
     "Column",
@@ -58,6 +60,8 @@ __all__ = (
     "CreateTable",
     "Delete",
     "DropTable",
+    "EventChannel",
+    "EventMessage",
     "ExecutionResult",
     "FunctionColumn",
     "Insert",
@@ -86,6 +90,7 @@ __all__ = (
     "SupportedSchemaModel",
     "SyncDatabaseConfig",
     "SyncDriverAdapterBase",
+    "SyncEventListener",
     "Update",
     "__version__",
     "adapters",

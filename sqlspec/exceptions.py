@@ -10,6 +10,7 @@ __all__ = (
     "DataError",
     "DatabaseConnectionError",
     "DialectNotSupportedError",
+    "EventChannelError",
     "FileNotFoundInStorageError",
     "ForeignKeyViolationError",
     "ImproperConfigurationError",
@@ -84,6 +85,10 @@ class BackendNotRegisteredError(SQLSpecError):
 
     def __init__(self, backend_key: str) -> None:
         super().__init__(f"Storage backend '{backend_key}' is not registered. Please register it before use.")
+
+
+class EventChannelError(SQLSpecError):
+    """Raised when event channel operations fail."""
 
 
 class ConfigResolverError(SQLSpecError):

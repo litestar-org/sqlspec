@@ -10,6 +10,17 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+Database Event Channels
+-----------------------
+
+- Added ``sqlspec.extensions.events.EventChannel`` with queue-backed publish/listen APIs that work uniformly across sync and async adapters.
+- Exposed ``SQLSpec.event_channel(config)`` so applications and agents can build channels directly from registered configs.
+- Introduced the ``events`` extension migrations (``ext_events_0001``) which create the durable queue table plus composite index.
+- Added the first native backend (AsyncPG LISTEN/NOTIFY) enabled via ``driver_features["events_backend"] = "native_postgres"``; the API automatically falls back to the queue backend for other adapters.
+- Introduced experimental Oracle Advanced Queuing support (sync adapters) via ``driver_features["events_backend"] = "oracle_aq"`` with automatic fallback when AQ is unavailable.
+- Documented configuration patterns (queue table naming, lease/retention windows, Oracle ``INMEMORY`` toggle, Postgres native mode) in :doc:`/guides/events/database-event-channels`.
+- Event telemetry now tracks ``events.publish``, ``events.publish.native``, ``events.deliver`` and listener lifecycle, so Prometheus/Otel exporters see event workloads alongside query metrics.
+
 v0.33.0 - Configuration Parameter Standardization (BREAKING CHANGE)
 --------------------------------------------------------------------
 

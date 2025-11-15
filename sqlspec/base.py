@@ -22,6 +22,7 @@ from sqlspec.core import (
     reset_cache_stats,
     update_cache_config,
 )
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime, TelemetryDiagnostics
 from sqlspec.typing import ConnectionT
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlspec.core import SQL
+    from sqlspec.extensions.events import EventChannel
     from sqlspec.typing import PoolT
 
 
@@ -156,6 +158,19 @@ class SQLSpec:
             Dictionary mapping config instance IDs to config instances.
         """
         return self._configs
+
+    def event_channel(self, config: "type[SyncConfigT | AsyncConfigT] | SyncConfigT | AsyncConfigT") -> "EventChannel":
+        """Create an EventChannel for the provided configuration."""
+
+        from sqlspec.extensions.events import EventChannel
+
+        if isinstance(config, type):
+            config_obj = self._configs.get(config)
+            if config_obj is None:
+                msg = f"Configuration {self._get_config_name(config)} is not registered"
+                raise ImproperConfigurationError(msg)
+            return EventChannel(config_obj)
+        return EventChannel(config)
 
     def telemetry_snapshot(self) -> "dict[str, Any]":
         """Return aggregated diagnostics across all registered configurations."""
