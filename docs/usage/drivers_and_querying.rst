@@ -1,7 +1,5 @@
 Drivers and Querying
 =====================
-Drivers and Querying
-=====================
 
 SQLSpec provides unified database drivers for multiple database systems, both synchronous and asynchronous. This guide covers all available drivers and query execution methods.
 
@@ -406,13 +404,14 @@ Manual Transaction Control
 Context Manager Transactions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+``session.begin()`` returns a coroutine, so wrap it in your own helper if you
+prefer context manager semantics.
 
-   async with spec.provide_session(config) as session:
-       async with session.begin():
-           await session.execute("UPDATE accounts SET balance = balance - 100 WHERE id = ?", 1)
-           await session.execute("UPDATE accounts SET balance = balance + 100 WHERE id = ?", 2)
-           # Auto-commits on success, auto-rollbacks on exception
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_16.py
+   :language: python
+   :caption: ``async transaction helper``
+   :start-after: # start-example
+   :end-before: # end-example
 
 Parameter Binding
 -----------------
@@ -420,101 +419,63 @@ Parameter Binding
 Positional Parameters
 ^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   # SQLite, DuckDB (?)
-   session.execute("SELECT * FROM users WHERE id = ?", 1)
-
-   # PostgreSQL (asyncpg) ($1, $2, ...)
-   session.execute("SELECT * FROM users WHERE id = $1 AND status = $2", 1, "active")
-
-   # MySQL (%s)
-   session.execute("SELECT * FROM users WHERE id = %s", 1)
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_17.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``positional parameters``
 
 Named Parameters
 ^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   # SQLite, Oracle (:name)
-   session.execute(
-       "SELECT * FROM users WHERE id = :id AND status = :status",
-       id=1,
-       status="active"
-   )
-
-   # BigQuery (@name)
-   session.execute(
-       "SELECT * FROM users WHERE created_at >= @start_date",
-       start_date=datetime.date(2025, 1, 1)
-   )
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_18.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``named parameters``
 
 Type Coercion
 ^^^^^^^^^^^^^
 
 SQLSpec automatically coerces types based on driver requirements:
 
-.. code-block:: python
-
-   # Booleans to integers (SQLite)
-   session.execute("INSERT INTO users (is_active) VALUES (?)", True)
-   # SQLite receives: 1
-
-   # Datetime to ISO format (JSON databases)
-   session.execute(
-       "INSERT INTO events (timestamp) VALUES (?)",
-       datetime.datetime.now()
-   )
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_19.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``type coercion``
 
 Script Execution
 ----------------
 
 Execute multiple SQL statements in one call:
 
-.. code-block:: python
-
-   session.execute("""
-       CREATE TABLE users (
-           id INTEGER PRIMARY KEY,
-           name TEXT NOT NULL
-       );
-
-       CREATE TABLE posts (
-           id INTEGER PRIMARY KEY,
-           user_id INTEGER,
-           title TEXT,
-           FOREIGN KEY (user_id) REFERENCES users(id)
-       );
-
-       CREATE INDEX idx_posts_user_id ON posts(user_id);
-   """)
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_20.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``script execution``
 
 Performance Tips
 ----------------
 
 **1. Use Connection Pooling**
 
-.. code-block:: python
-
-   config = AsyncpgConfig(
-       pool_config={
-           "dsn": "postgresql://localhost/db",
-           "min_size": 10,
-           "max_size": 20,
-       }
-   )
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_21.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``asyncpg connection pooling``
 
 **2. Batch Operations**
 
 Use ``execute_many()`` for bulk inserts:
 
-.. code-block:: python
-
-   # Fast batch insert
-   session.execute_many(
-       "INSERT INTO users (name) VALUES (?)",
-       [(name,) for name in large_list]
-   )
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_22.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``batch inserts``
 
 **3. Prepared Statements**
 

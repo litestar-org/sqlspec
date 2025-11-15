@@ -1,6 +1,8 @@
 # Test module converted from docs example - code-block 4
 """Minimal smoke test for drivers_and_querying example 4."""
 
+import os
+
 from pytest_databases.docker.postgres import PostgresService
 
 __all__ = ("test_example_4_async",)
@@ -12,16 +14,13 @@ async def test_example_4_async(postgres_service: PostgresService) -> None:
     from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 
     spec = SQLSpec()
-    # Async version
-    config = PsycopgAsyncConfig(
-        pool_config={
-            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "min_size": 5,
-            "max_size": 10,
-        }
-    )
+    dsn = os.environ.get("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/test")
 
-    async with spec.provide_session(config) as session:
+    # Async version
+    config = PsycopgAsyncConfig(pool_config={"conninfo": dsn, "min_size": 5, "max_size": 10})
+    db = spec.add_config(config)
+
+    async with spec.provide_session(db) as session:
         create_table_query = """
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -36,3 +35,5 @@ async def test_example_4_async(postgres_service: PostgresService) -> None:
         )
         await session.execute("SELECT * FROM users")
     # end-example
+
+    await spec.close_pool(db)
