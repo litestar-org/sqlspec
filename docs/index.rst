@@ -1,4 +1,4 @@
-:title: SQLSpec
+.. title:: SQLSpec
 
 .. meta::
    :description: A type-safe SQL query mapper designed for minimal abstraction between Python and SQL

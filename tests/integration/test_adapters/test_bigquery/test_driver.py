@@ -1,6 +1,7 @@
 """Integration tests for BigQuery driver implementation."""
 
 import operator
+import os
 from collections.abc import Generator
 from typing import Literal
 
@@ -12,7 +13,14 @@ from sqlspec.adapters.bigquery import BigQueryDriver
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
-pytestmark = pytest.mark.xdist_group("bigquery")
+BIGQUERY_ENABLED = os.environ.get("SQLSPEC_ENABLE_BIGQUERY_TESTS") == "1"
+
+pytestmark = [
+    pytest.mark.xdist_group("bigquery"),
+    pytest.mark.skipif(
+        not BIGQUERY_ENABLED, reason="BigQuery emulator is optional; set SQLSPEC_ENABLE_BIGQUERY_TESTS=1 to enable"
+    ),
+]
 
 
 @pytest.fixture
