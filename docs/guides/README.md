@@ -41,6 +41,7 @@ Optimization guides for SQLSpec:
 ## Features
 
 - [**Query Stack Guide**](features/query-stack.md) - Multi-statement execution, execution modes, telemetry, and troubleshooting
+- [**Database Event Channels**](events/database-event-channels.md) - Queue fallback, migrations, and handler patterns
 
 ## Migrations
 

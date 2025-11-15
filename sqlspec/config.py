@@ -31,6 +31,7 @@ __all__ = (
     "ConfigT",
     "DatabaseConfigProtocol",
     "DriverT",
+    "EventsConfig",
     "ExtensionConfigs",
     "FastAPIConfig",
     "FlaskConfig",
@@ -404,6 +405,22 @@ class ADKConfig(TypedDict):
     """
 
 
+class EventsConfig(TypedDict):
+    """Configuration options for the events extension queue fallback."""
+
+    queue_table: NotRequired[str]
+    """Name of the fallback queue table. Defaults to 'sqlspec_event_queue'."""
+
+    lease_seconds: NotRequired[int]
+    """Lease duration for claimed events before they can be retried. Defaults to 30 seconds."""
+
+    retention_seconds: NotRequired[int]
+    """Retention window for acknowledged events before cleanup. Defaults to 86400 seconds (24 hours)."""
+
+    in_memory: NotRequired[bool]
+    """Enable Oracle INMEMORY clause for the queue table. Ignored by other adapters. Defaults to False."""
+
+
 class OpenTelemetryConfig(TypedDict):
     """Configuration options for OpenTelemetry integration.
 
@@ -459,6 +476,7 @@ ExtensionConfigs: TypeAlias = dict[
     | StarletteConfig
     | FlaskConfig
     | ADKConfig
+    | EventsConfig
     | OpenTelemetryConfig
     | PrometheusConfig,
 ]
@@ -529,6 +547,26 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Clear the cached capability snapshot."""
 
         self._storage_capabilities = None
+
+    def _ensure_extension_migrations(self) -> None:
+        """Auto-include extension migrations when extension_config requests them."""
+
+        extension_settings = cast("dict[str, Any]", self.extension_config)
+        events_settings = extension_settings.get("events")
+        if events_settings is None:
+            return
+        migration_config = cast("dict[str, Any]", self.migration_config)
+        include_extensions = migration_config.get("include_extensions")
+        if include_extensions is None:
+            include_list: list[str] = []
+            migration_config["include_extensions"] = include_list
+        elif isinstance(include_extensions, tuple):
+            include_list = list(include_extensions)
+            migration_config["include_extensions"] = include_list
+        else:
+            include_list = cast("list[str]", include_extensions)
+        if "events" not in include_list:
+            include_list.append("events")
 
     def _build_storage_capabilities(self) -> "StorageCapabilities":
         arrow_dependency_needed = self.supports_native_arrow_export or self.supports_native_arrow_import
@@ -906,6 +944,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
+        self._ensure_extension_migrations()
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
@@ -919,6 +958,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self.driver_features.setdefault("events_backend", "queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1051,6 +1091,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
+        self._ensure_extension_migrations()
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
@@ -1062,6 +1103,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
+        self.driver_features.setdefault("events_backend", "queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1195,6 +1237,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.pool_config = pool_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
+        self._ensure_extension_migrations()
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
@@ -1208,6 +1251,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self.driver_features.setdefault("events_backend", "queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1368,6 +1412,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.pool_config = pool_config or {}
         self.extension_config = extension_config or {}
         self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
+        self._ensure_extension_migrations()
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
@@ -1383,6 +1428,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self.driver_features.setdefault("events_backend", "queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
