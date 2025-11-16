@@ -15,6 +15,7 @@ from sqlspec.adapters.duckdb.driver import (
 )
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.serializers import to_json
 
@@ -394,3 +395,8 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             "DuckDBSecretConfig": DuckDBSecretConfig,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults optimized for DuckDB."""
+
+        return EventRuntimeHints(poll_interval=0.15, lease_seconds=15)

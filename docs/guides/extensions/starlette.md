@@ -39,15 +39,13 @@ config = AsyncpgConfig(
 )
 sqlspec.add_config(config, name="default")
 
-app = Starlette()
-db_ext = SQLSpecPlugin(sqlspec, app)
-
-
-@app.route("/users")
-async def list_users(request):
+async def list_users(request: Request):
     db = db_ext.get_session(request)
     result = await db.execute("SELECT id, email FROM users ORDER BY id")
     return JSONResponse({"users": result.all()})
+
+app = Starlette(routes=[Route("/users", list_users)])
+db_ext = SQLSpecPlugin(sqlspec, app)
 ```
 
 The plugin automatically:
@@ -176,11 +174,8 @@ config = AsyncpgConfig(
 )
 
 sqlspec.add_config(config)
-db_ext = SQLSpecPlugin(sqlspec, app)
 
-
-@app.route("/users", methods=["POST"])
-async def create_user(request):
+async def create_user(request: Request):
     db = db_ext.get_session(request)
     data = await request.json()
 
@@ -193,6 +188,9 @@ async def create_user(request):
     await conn.commit()
 
     return JSONResponse({"created": True}, status_code=201)
+
+app = Starlette(routes=[Route("/users", create_user, methods=["POST"])])
+db_ext = SQLSpecPlugin(sqlspec, app)
 ```
 
 Use manual mode when you need fine-grained control over transaction boundaries.
@@ -208,11 +206,8 @@ config = AsyncpgConfig(
 )
 
 sqlspec.add_config(config)
-db_ext = SQLSpecPlugin(sqlspec, app)
 
-
-@app.route("/users", methods=["POST"])
-async def create_user(request):
+async def create_user(request: Request):
     db = db_ext.get_session(request)
     data = await request.json()
 
@@ -222,6 +217,9 @@ async def create_user(request):
     )
 
     return JSONResponse({"created": True}, status_code=201)
+
+app = Starlette(routes=[Route("/users", create_user, methods=["POST"])])
+db_ext = SQLSpecPlugin(sqlspec, app)
 ```
 
 Automatically commits because status is 201 (2xx range).
@@ -237,11 +235,8 @@ config = AsyncpgConfig(
 )
 
 sqlspec.add_config(config)
-db_ext = SQLSpecPlugin(sqlspec, app)
 
-
-@app.route("/users", methods=["POST"])
-async def create_user(request):
+async def create_user(request: Request):
     db = db_ext.get_session(request)
     data = await request.json()
 
@@ -251,6 +246,9 @@ async def create_user(request):
     )
 
     return RedirectResponse(url="/users", status_code=303)
+
+app = Starlette(routes=[Route("/users", create_user, methods=["POST"])])
+db_ext = SQLSpecPlugin(sqlspec, app)
 ```
 
 Automatically commits because status is 303 (3xx range).
@@ -290,12 +288,7 @@ mysql_config = AsyncmyConfig(
 sqlspec.add_config(pg_config, name="postgres")
 sqlspec.add_config(mysql_config, name="mysql")
 
-app = Starlette()
-db_ext = SQLSpecPlugin(sqlspec, app)
-
-
-@app.route("/dashboard")
-async def dashboard(request):
+async def dashboard(request: Request):
     pg_db = db_ext.get_session(request, key="pg_db")
     mysql_db = db_ext.get_session(request, key="mysql_db")
 
@@ -306,6 +299,9 @@ async def dashboard(request):
         "users": users.scalar(),
         "events": events.scalar()
     })
+
+app = Starlette(routes=[Route("/dashboard", dashboard)])
+db_ext = SQLSpecPlugin(sqlspec, app)
 ```
 
 Each database maintains its own pool, session cache, and transaction handling.
@@ -315,8 +311,7 @@ Each database maintains its own pool, session cache, and transaction handling.
 Sessions are cached per request to ensure consistency:
 
 ```python
-@app.route("/example")
-async def example(request):
+async def example(request: Request):
     db1 = db_ext.get_session(request)
     db2 = db_ext.get_session(request)
 
@@ -327,6 +322,8 @@ async def example(request):
     result = await db2.execute("SELECT * FROM users WHERE email = $1", "test@example.com")
 
     return JSONResponse({"user": result.get_first()})
+
+app = Starlette(routes=[Route("/example", example)])
 ```
 
 Both `db1` and `db2` reference the same session object, ensuring transactional consistency.
@@ -336,8 +333,7 @@ Both `db1` and `db2` reference the same session object, ensuring transactional c
 Access raw database connections when needed:
 
 ```python
-@app.route("/raw")
-async def raw_query(request):
+async def raw_query(request: Request):
     conn = db_ext.get_connection(request)
 
     cursor = await conn.cursor()
@@ -345,6 +341,8 @@ async def raw_query(request):
     result = await cursor.fetchone()
 
     return JSONResponse({"result": result})
+
+app = Starlette(routes=[Route("/raw", raw_query)])
 ```
 
 Use `get_connection()` for driver-specific operations not exposed by the SQLSpec session API.
@@ -396,17 +394,15 @@ def test_users_endpoint():
     )
     sqlspec.add_config(config)
 
-    app = Starlette()
-    db_ext = SQLSpecPlugin(sqlspec, app)
-
-    @app.route("/users")
-    async def list_users(request):
+    async def list_users(request: Request):
         db = db_ext.get_session(request)
         await db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)")
         await db.execute("INSERT INTO users (email) VALUES (?)", ("test@example.com",))
         result = await db.execute("SELECT * FROM users")
         return JSONResponse({"users": result.all()})
 
+    app = Starlette(routes=[Route("/users", list_users)])
+    db_ext = SQLSpecPlugin(sqlspec, app)
     db_ext.init_app(app)
 
     with TestClient(app) as client:
@@ -431,8 +427,7 @@ async def send_email(email: str, config, sqlspec):
         )
 
 
-@app.route("/signup", methods=["POST"])
-async def signup(request):
+async def signup(request: Request):
     data = await request.json()
     db = db_ext.get_session(request)
 
@@ -449,6 +444,8 @@ async def signup(request):
     )
 
     return JSONResponse({"created": True}, status_code=201, background=task)
+
+app = Starlette(routes=[Route("/signup", signup, methods=["POST"])])
 ```
 
 Background tasks use `sqlspec.provide_session()` to create independent sessions.
@@ -482,8 +479,7 @@ WebSocket handlers use `provide_session()` directly since they don't have HTTP r
 The plugin automatically rolls back transactions on exceptions in autocommit mode:
 
 ```python
-@app.route("/users", methods=["POST"])
-async def create_user(request):
+async def create_user(request: Request):
     db = db_ext.get_session(request)
     data = await request.json()
 
@@ -496,6 +492,8 @@ async def create_user(request):
         raise ValueError("Email must be verified")
 
     return JSONResponse({"created": True}, status_code=201)
+
+app = Starlette(routes=[Route("/users", create_user, methods=["POST"])])
 ```
 
 If the `ValueError` is raised, the middleware automatically rolls back the INSERT.
@@ -547,15 +545,13 @@ config = AsyncpgConfig(
 )
 sqlspec.add_config(config)
 
-app = Starlette()
-db_ext = SQLSpecPlugin(sqlspec, app)
-
-
-@app.route("/users")
-async def list_users(request):
+async def list_users(request: Request):
     db = db_ext.get_session(request)
     result = await db.execute("SELECT * FROM users")
     return JSONResponse({"users": result.all()})
+
+app = Starlette(routes=[Route("/users", list_users)])
+db_ext = SQLSpecPlugin(sqlspec, app)
 ```
 
 Benefits:

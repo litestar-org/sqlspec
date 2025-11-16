@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
-    from .channel import EventMessage
+    from sqlspec.extensions.events.channel import EventMessage
 
 __all__ = ("AsyncEventHandler", "SyncEventHandler")
 

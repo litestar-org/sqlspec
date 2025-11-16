@@ -204,6 +204,15 @@ SQLSpec is a type-safe SQL query mapper designed for minimal abstraction between
     - Add integration tests under `tests/integration/test_adapters/<adapter>/test_driver.py::test_*statement_stack*` that cover native path, sequential fallback, and continue-on-error.
     - Guard base behavior (empty stacks, large stacks, transaction boundaries) via `tests/integration/test_stack_edge_cases.py`.
 
+### Event Channel Implementation Guidelines
+
+- **Extension plumbing**: `SQLSpec.event_channel()` expects the adapter config to opt into the `events` extension. Always route through `_ensure_extension_migrations()` so `include_extensions` contains `"events"` when `extension_config["events"]` is set.
+- **Backend selection**: default to the queue backend and gate native backends behind `driver_features["events_backend"]`. Never import adapter backends lazily from elsewhere—`EventChannel._load_native_backend()` handles detection + fallbacks.
+- **Runtime hints**: use `get_runtime_hints(adapter_name)` to derive defaults for `poll_interval`, `lease_seconds`, and locking hints (e.g., enable `FOR UPDATE SKIP LOCKED` for MySQL). Expose overrides via `extension_config["events"]`.
+- **Observability**: increment metrics (`events.publish`, `events.deliver`, `events.ack`, listener start/stop) via the adapter's `ObservabilityRuntime`. Wrap publish/dequeue/ack paths in spans named `sqlspec.events.*` so OpenTelemetry exporters receive structured traces whenever `extension_config["otel"]` is enabled.
+- **Portal bridge**: async adapters should set `extension_config["events"]["portal_bridge"] = True` by default so sync APIs (`publish`, `iter_events`, `listen`) can delegate through `sqlspec.utils.portal`. Provide an opt-out toggle for applications that want explicit async-only usage.
+- **Testing**: write unit tests for queue operations (publish/iter/ack), backend selection/fallback, runtime hints, and telemetry counters. Add at least one integration test per adapter family (e.g., AsyncPG native path, DuckDB queue fallback) under `tests/integration/test_extensions/test_events/`.
+
 ### Driver Parameter Profile Registry
 
 - All adapter parameter defaults live in `DriverParameterProfile` entries inside `sqlspec/core/parameters.py`.
@@ -366,6 +375,45 @@ def test_starlette_autocommit_mode() -> None:
 - `CREATE TABLE IF NOT EXISTS` - Masks test isolation issues
 - Disabling pooling - Tests don't reflect production configuration
 - Running tests serially - Slows down CI significantly
+
+### Starlette/FastAPI Routing Patterns in Tests
+
+When writing tests for Starlette or FastAPI extensions, always use the modern `Route` object pattern, not the deprecated `@app.route()` decorator.
+
+**DEPRECATED** (causes Starlette 0.39+ deprecation warnings):
+```python
+@app.route("/test")
+async def test_route(request):
+    db = plugin.get_session(request)
+    return JSONResponse({"result": "data"})
+```
+
+**CORRECT** (modern routing pattern):
+```python
+from starlette.routing import Route
+
+async def test_route(request: Request):
+    db = plugin.get_session(request)
+    return JSONResponse({"result": "data"})
+
+app = Starlette(routes=[Route("/test", test_route)])
+plugin = SQLSpecPlugin(sqlspec, app)
+```
+
+**Key differences**:
+- Define route handler function first (no decorator)
+- Pass routes to `Starlette()` constructor using `Route` objects
+- Initialize plugin after app creation
+- Use explicit type hints on request parameter
+
+**For POST/PUT routes with methods**:
+```python
+async def create_user(request: Request):
+    # handler code
+    pass
+
+app = Starlette(routes=[Route("/users", create_user, methods=["POST"])])
+```
 
 ### CLI Config Loader Isolation Pattern
 

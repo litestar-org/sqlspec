@@ -252,6 +252,15 @@ For comprehensive examples and migration guides, see:
 - [MERGE Statement Builder Guide](/guides/builder/merge.md)
 - [Unified Upsert API Guide](/guides/upsert.md)
 
+## Event Channels
+
+- Psqlpy adapters use the queue-backed event channel today. Include the
+  `events` extension migrations and call `spec.event_channel(config)` to
+  publish/consume with retryable leases.
+- Psqlpy exposes a built-in `Listener` class. When the native backend ships,
+  SQLSpec will wrap that listener automatically; until then, prefer the durable
+  queue backend for portability across adapters.
+
 ## Best Practices
 
 -   **Rust-Based:** `psqlpy` is a modern, Rust-based driver for PostgreSQL, which can offer significant performance advantages.

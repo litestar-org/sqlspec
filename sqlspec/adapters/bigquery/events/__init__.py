@@ -1,1 +1,5 @@
-"""Events helpers for bigquery/events adapter."""
+"""Events helpers for the BigQuery adapter."""
+
+from sqlspec.adapters.bigquery.events.store import BigQueryEventQueueStore
+
+__all__ = ("BigQueryEventQueueStore",)

@@ -1,1 +1,5 @@
-"""Events helpers for psycopg/events adapter."""
+"""Events helpers for the psycopg adapter."""
+
+from sqlspec.adapters.psycopg.events.store import PsycopgAsyncEventQueueStore, PsycopgSyncEventQueueStore
+
+__all__ = ("PsycopgAsyncEventQueueStore", "PsycopgSyncEventQueueStore")

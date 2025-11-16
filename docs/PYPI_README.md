@@ -42,6 +42,7 @@ SQLSpec is currently in active development. The public API may change. Follow th
 
 - SQL validation and caching via sqlglot AST parsing
 - OpenTelemetry and Prometheus instrumentation hooks
+- Database event channels with native LISTEN/NOTIFY, Oracle AQ, and a portable queue fallback
 - Structured logging with correlation ID support
 - Migration CLI for schema versioning
 

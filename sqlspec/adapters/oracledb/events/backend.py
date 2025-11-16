@@ -5,12 +5,14 @@ from __future__ import annotations
 import contextlib
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from sqlspec.config import DatabaseConfigProtocol
 
 try:  # pragma: no cover - optional dependency path
     import oracledb
@@ -29,10 +31,9 @@ class OracleAQEventBackend:
 
     supports_sync = True
     supports_async = False
+    backend_name = "oracle_aq"
 
-    def __init__(
-        self, config: "DatabaseConfigProtocol[Any, Any, Any]", settings: "dict[str, Any] | None" = None
-    ) -> None:
+    def __init__(self, config: DatabaseConfigProtocol[Any, Any, Any], settings: dict[str, Any] | None = None) -> None:
         if "oracledb" not in type(config).__module__:
             msg = "Oracle AQ backend requires an Oracle adapter"
             raise ImproperConfigurationError(msg)
@@ -40,7 +41,8 @@ class OracleAQEventBackend:
             msg = "Oracle AQ backend requires a synchronous Oracle configuration"
             raise ImproperConfigurationError(msg)
         if oracledb is None:
-            raise MissingDependencyError("oracledb", install_package="oracledb")
+            msg = "oracledb"
+            raise MissingDependencyError(msg, install_package="oracledb")
         self._config = config
         self._runtime = config.get_observability_runtime()
         settings = settings or {}
@@ -48,7 +50,7 @@ class OracleAQEventBackend:
         self._visibility: str | None = settings.get("aq_visibility")
         self._wait_seconds: int = int(settings.get("aq_wait_seconds", 5))
 
-    def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    def publish(self, channel: str, payload: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
         event_id = uuid.uuid4().hex
         envelope = self._build_envelope(channel, event_id, payload, metadata)
         with self._config.provide_session() as driver:
@@ -66,7 +68,7 @@ class OracleAQEventBackend:
         msg = "Oracle AQ backend does not support async adapters"
         raise ImproperConfigurationError(msg)
 
-    def dequeue(self, channel: str, poll_interval: float) -> "EventMessage | None":
+    def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         with self._config.provide_session() as driver:
             connection = getattr(driver, "connection", None)
             if connection is None:
@@ -111,7 +113,7 @@ class OracleAQEventBackend:
             created_at=timestamp,
         )
 
-    async def dequeue_async(self, *_: Any, **__: Any) -> "EventMessage | None":  # pragma: no cover - guarded
+    async def dequeue_async(self, *_: Any, **__: Any) -> EventMessage | None:  # pragma: no cover - guarded
         msg = "Oracle AQ backend does not support async adapters"
         raise ImproperConfigurationError(msg)
 
@@ -127,15 +129,11 @@ class OracleAQEventBackend:
         payload_type = getattr(oracledb, "DB_TYPE_JSON", None)
         if payload_type is None:
             payload_type = getattr(oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
-        queue = connection.queue(self._queue_name, payload_type=payload_type)
-        return queue
+        return connection.queue(self._queue_name, payload_type=payload_type)
 
     @staticmethod
     def _build_envelope(
-        channel: str,
-        event_id: str,
-        payload: "dict[str, Any]",
-        metadata: "dict[str, Any] | None",
+        channel: str, event_id: str, payload: dict[str, Any], metadata: dict[str, Any] | None
     ) -> dict[str, Any]:
         timestamp = datetime.now(timezone.utc).isoformat()
         return {
@@ -160,10 +158,8 @@ class OracleAQEventBackend:
 
 
 def create_event_backend(
-    config: "DatabaseConfigProtocol[Any, Any, Any]",
-    backend_name: str,
-    extension_settings: dict[str, Any],
-) -> "OracleAQEventBackend | None":
+    config: DatabaseConfigProtocol[Any, Any, Any], backend_name: str, extension_settings: dict[str, Any]
+) -> OracleAQEventBackend | None:
     if backend_name != "oracle_aq":
         return None
     try:

@@ -1,24 +1,19 @@
 """Oracle event queue stores."""
 
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import Generic, TypeVar
 
+from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.extensions.events._store import BaseEventQueueStore
 
-if TYPE_CHECKING:
-    from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
+ConfigT = TypeVar("ConfigT", bound=OracleSyncConfig | OracleAsyncConfig)
 
-ConfigT = TypeVar("ConfigT", bound="OracleSyncConfig | OracleAsyncConfig")
-
-__all__ = (
-    "OracleAsyncEventQueueStore",
-    "OracleSyncEventQueueStore",
-)
+__all__ = ("OracleAsyncEventQueueStore", "OracleSyncEventQueueStore")
 
 
 class _OracleEventQueueStore(BaseEventQueueStore[ConfigT], Generic[ConfigT]):
     __slots__ = ()
 
-    def _column_types(self) -> "tuple[str, str, str]":
+    def _column_types(self) -> tuple[str, str, str]:
         return "CLOB", "CLOB", "TIMESTAMP"
 
     def _table_clause(self) -> str:
@@ -35,33 +30,32 @@ class _OracleEventQueueStore(BaseEventQueueStore[ConfigT], Generic[ConfigT]):
         escaped = statement.replace("'", "''")
         return (
             "BEGIN\n"
-            "    EXECUTE IMMEDIATE '{ddl}';\n"
+            f"    EXECUTE IMMEDIATE '{escaped}';\n"
             "EXCEPTION\n"
             "    WHEN OTHERS THEN\n"
-            "        IF SQLCODE != {code} THEN\n"
+            f"        IF SQLCODE != {sqlcode} THEN\n"
             "            RAISE;\n"
             "        END IF;\n"
             "END;"
-        ).format(ddl=escaped, code=sqlcode)
+        )
 
     def _wrap_drop_statement(self, statement: str) -> str:
         escaped = statement.replace("'", "''")
         return (
             "BEGIN\n"
-            "    EXECUTE IMMEDIATE '{ddl}';\n"
+            f"    EXECUTE IMMEDIATE '{escaped}';\n"
             "EXCEPTION\n"
             "    WHEN OTHERS THEN\n"
             "        IF SQLCODE != -942 THEN\n"
             "            RAISE;\n"
             "        END IF;\n"
             "END;"
-        ).format(ddl=escaped)
+        )
 
 
-class OracleSyncEventQueueStore(_OracleEventQueueStore["OracleSyncConfig"]):
+class OracleSyncEventQueueStore(_OracleEventQueueStore[OracleSyncConfig]):
     __slots__ = ()
 
 
-class OracleAsyncEventQueueStore(_OracleEventQueueStore["OracleAsyncConfig"]):
+class OracleAsyncEventQueueStore(_OracleEventQueueStore[OracleAsyncConfig]):
     __slots__ = ()
-

@@ -6,6 +6,7 @@ pytest.importorskip("starlette")
 
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from sqlspec import SQLSpec
@@ -54,14 +55,13 @@ def test_get_session_works_in_route() -> None:
     )
     sqlspec.add_config(config)
 
-    app = Starlette()
-    plugin = SQLSpecPlugin(sqlspec, app)
-
-    @app.route("/test")
     async def test_route(request):
         db = plugin.get_session(request)
         result = await db.execute("SELECT 1 as value")
         return JSONResponse({"value": result.scalar()})
+
+    app = Starlette(routes=[Route("/test", test_route)])
+    plugin = SQLSpecPlugin(sqlspec, app)
 
     with TestClient(app) as client:
         response = client.get("/test")

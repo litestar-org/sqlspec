@@ -200,16 +200,64 @@ against accidental sync usage.
 | `queue_table`      | `sqlspec_event_queue`   | Table name used by migrations and runtime. |
 | `lease_seconds`    | `30`                    | How long a consumer owns a message before it can be retried. |
 | `retention_seconds`| `86400`                 | How long acknowledged rows remain before automatic cleanup. |
+| `poll_interval`    | adapter-specific        | Default sleep window between dequeue attempts; see table below. |
 | `in_memory`        | `False`                 | Oracle-only flag that adds `INMEMORY PRIORITY HIGH` to the queue table. |
 | `aq_queue`         | `SQLSPEC_EVENTS_QUEUE`  | Native AQ queue name when `events_backend="oracle_aq"`. |
 | `aq_wait_seconds`  | `5`                     | Wait timeout (seconds) for AQ dequeue operations. |
 | `aq_visibility`    | *unset*                 | Optional visibility constant (e.g., `AQMSG_VISIBLE`). |
+
+### Adapter defaults
+
+`EventChannel` ships with tuned defaults per adapter so you rarely have to tweak the queue knobs. Override any value via `extension_config["events"]` when your workload differs from the defaults.
+
+| Adapter | Backend | Default poll interval | Lease window | Locking hints |
+| --- | --- | --- | --- | --- |
+| AsyncPG / Psycopg / Psqlpy | Native LISTEN/NOTIFY | `N/A` (native notifications) | `N/A` | Dedicated listener connections reuse the driver's native APIs. |
+| Oracle | `oracle_aq` (sync adapters) | `aq_wait_seconds` (default `5s`) | `N/A` – AQ removes messages when dequeued | Exposes AQ dequeue options via `extension_config`. |
+| Asyncmy (MySQL) | Queue fallback | `0.25s` | `5s` | Adds `FOR UPDATE SKIP LOCKED` to reduce contention. |
+| DuckDB | Queue fallback | `0.15s` | `15s` | Favor short leases/poll windows so embedded engines do not spin. |
+| BigQuery / ADBC | Queue fallback | `2.0s` | `60s` | Coarser cadence avoids hammering remote warehouses; still safe to override. |
+| SQLite / AioSQLite | Queue fallback | `1.0s` | `30s` | General-purpose defaults that suit most local deployments. |
 
 ## Telemetry & observability
 
 `EventChannel` reuses the adapter's observability runtime. Publishing and acking
 increment `events.publish` / `events.ack` counters (native backends emit
 `events.publish.native`), consumers add `events.deliver`, and listener lifecycle
-is tracked via `events.listener.start/stop`. These show up automatically inside
-`SQLSpec.telemetry_snapshot()` and flow through the Prometheus and OTEL
-extensions alongside the usual query metrics.
+is tracked via `events.listener.start/stop`. Each publish/dequeue/ack operation
+also opens a span (`sqlspec.events.publish`, `sqlspec.events.dequeue`,
+`sqlspec.events.ack`) so enabling `extension_config["otel"]` automatically
+exports structured traces. The counters and spans flow through
+`SQLSpec.telemetry_snapshot()` plus the Prometheus helper when
+`extension_config["prometheus"]` is enabled.
+
+## Litestar/ADK integration
+
+- The Litestar and ADK plugins already call `SQLSpec.event_channel()` for you.
+  Enable the extension in your adapter config, then rely on dependency
+  injection to pull channels into handlers:
+
+```python
+from litestar import Litestar, Router
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.extensions.litestar import SQLSpecPlugin
+
+sql = SQLSpec()
+config = sql.add_config(
+    AsyncpgConfig(
+        pool_config={"dsn": "postgresql://localhost/db"},
+        extension_config={"events": {"queue_table": "app_events"}},
+    )
+)
+
+plugin = SQLSpecPlugin(sql)
+
+async def broadcast_refresh(channel=sql.event_channel(config)) -> None:
+    await channel.publish_async("notifications", {"action": "refresh"})
+
+app = Litestar(route_handlers=[Router(after_request=[broadcast_refresh])], plugins=[plugin])
+```
+
+- Litestar automatically populates `CorrelationContext`, so listener spans and
+  metrics inherit the same correlation IDs as the rest of the request.
