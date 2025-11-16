@@ -8,6 +8,7 @@ staging and production environments.
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
 from rich.console import Console
 
 from sqlspec.exceptions import OutOfOrderMigrationError
@@ -18,11 +19,16 @@ if TYPE_CHECKING:
 
     from sqlspec.utils.version import MigrationVersion
 
-__all__ = ("MigrationGap", "detect_out_of_order_migrations", "format_out_of_order_warning")
+__all__ = (
+    "MigrationGap",
+    "detect_out_of_order_migrations",
+    "format_out_of_order_warning",
+)
 
 console = Console()
 
 
+@mypyc_attr(native_class=False)
 @dataclass(frozen=True)
 class MigrationGap:
     """Represents a migration that is out of order.
@@ -34,6 +40,7 @@ class MigrationGap:
     Attributes:
         missing_version: The out-of-order migration version.
         applied_after: List of already-applied migrations with later timestamps.
+
     """
 
     missing_version: "MigrationVersion"
@@ -41,7 +48,8 @@ class MigrationGap:
 
 
 def detect_out_of_order_migrations(
-    pending_versions: "Sequence[str | None]", applied_versions: "Sequence[str | None]"
+    pending_versions: "Sequence[str | None]",
+    applied_versions: "Sequence[str | None]",
 ) -> "list[MigrationGap]":
     """Detect migrations created before already-applied migrations.
 
@@ -58,6 +66,7 @@ def detect_out_of_order_migrations(
 
     Returns:
         List of migration gaps where pending versions are older than applied.
+
     """
     if not applied_versions or not pending_versions:
         return []
@@ -86,7 +95,9 @@ def detect_out_of_order_migrations(
         if pending < latest_applied:
             applied_after = [a for a in core_applied if a > pending]
             if applied_after:
-                gaps.append(MigrationGap(missing_version=pending, applied_after=applied_after))
+                gaps.append(
+                    MigrationGap(missing_version=pending, applied_after=applied_after)
+                )
 
     return gaps
 
@@ -111,6 +122,7 @@ def format_out_of_order_warning(gaps: "list[MigrationGap]") -> str:
         - 20251011130000 created before:
           - 20251012140000
           - 20251013090000
+
     """
     if not gaps:
         return ""
@@ -134,7 +146,9 @@ def format_out_of_order_warning(gaps: "list[MigrationGap]") -> str:
 
 
 def validate_migration_order(
-    pending_versions: "list[str]", applied_versions: "list[str]", strict_ordering: bool = False
+    pending_versions: "list[str]",
+    applied_versions: "list[str]",
+    strict_ordering: bool = False,
 ) -> None:
     """Validate migration order and raise error if out-of-order in strict mode.
 
@@ -158,6 +172,7 @@ def validate_migration_order(
         ...     strict_ordering=True,
         ... )
         OutOfOrderMigrationError: Out-of-order migrations detected...
+
     """
     gaps = detect_out_of_order_migrations(pending_versions, applied_versions)
 
