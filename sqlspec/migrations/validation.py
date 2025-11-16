@@ -5,7 +5,7 @@ which can occur when branches with migrations merge in different orders across
 staging and production environments.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from rich.console import Console
 
@@ -35,11 +35,12 @@ class MigrationGap:
 
     """
 
-    __slots__ = ("applied_after", "missing_version")
+    __slots__ = ("_initialized", "applied_after", "missing_version")
 
     def __init__(self, missing_version: "MigrationVersion", applied_after: "list[MigrationVersion]") -> None:
-        self.missing_version = missing_version
-        self.applied_after = list(applied_after)
+        object.__setattr__(self, "missing_version", missing_version)
+        object.__setattr__(self, "applied_after", list(applied_after))
+        object.__setattr__(self, "_initialized", True)
 
     def __repr__(self) -> str:
         return f"MigrationGap(missing_version={self.missing_version!r}, applied_after={self.applied_after!r})"
@@ -47,10 +48,19 @@ class MigrationGap:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MigrationGap):
             return NotImplemented
-        return self.missing_version == other.missing_version and self.applied_after == other.applied_after
+        return cast("bool", self.missing_version == other.missing_version and self.applied_after == other.applied_after)
 
     def __hash__(self) -> int:
         return hash((self.missing_version, tuple(self.applied_after)))
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "_initialized":
+            object.__setattr__(self, name, value)
+            return
+        if getattr(self, "_initialized", False):
+            msg = "MigrationGap is immutable"
+            raise AttributeError(msg)
+        object.__setattr__(self, name, value)
 
 
 def detect_out_of_order_migrations(
