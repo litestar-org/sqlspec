@@ -5,7 +5,7 @@ which can occur when branches with migrations merge in different orders across
 staging and production environments.
 """
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 
@@ -36,6 +36,9 @@ class MigrationGap:
     """
 
     __slots__ = ("_initialized", "applied_after", "missing_version")
+    applied_after: "list[MigrationVersion]"
+    missing_version: "MigrationVersion"
+    _initialized: bool
 
     def __init__(self, missing_version: "MigrationVersion", applied_after: "list[MigrationVersion]") -> None:
         object.__setattr__(self, "missing_version", missing_version)
@@ -48,7 +51,7 @@ class MigrationGap:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MigrationGap):
             return NotImplemented
-        return cast("bool", self.missing_version == other.missing_version and self.applied_after == other.applied_after)
+        return self.missing_version == other.missing_version and self.applied_after == other.applied_after
 
     def __hash__(self) -> int:
         return hash((self.missing_version, tuple(self.applied_after)))
