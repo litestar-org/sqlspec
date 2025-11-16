@@ -543,6 +543,14 @@ This summary documents the small documentation and example maintenance
 performed on the configuration usage guide and can be expanded into a
 longer changelog entry if desired.
 
+## Recent edit: Migration template customization (2025-11-15)
+
+- Added `sqlspec/migrations/templates.py` plus `build_template_settings()` to make SQL/Python migration headers fully configurable. Always fetch template data through this helper so every caller inherits validation + description hints.
+- `create_migration_file()` now accepts optional `config`/`template_settings`; pass a config whenever you need migration_config-aware rendering so authors, titles, and default formats follow user preferences.
+- CLI format selection must respect config defaults: only forward `--format/--file-type` to `revision()` when the flag was explicitly provided so automated workflows stay deterministic.
+- When logging migration activity, prefer the parsed description emitted by `MigrationTemplateSettings.description_hints` instead of filename slugs—this keeps upgrade/downgrade output aligned with the template metadata surfaced to operators.
+- Author overrides support literal strings, `env:` tokens, callable references, `git`, and `system`. Reject missing env vars or malformed callable paths with `TemplateValidationError` so CI jobs fail fast instead of silently stamping incorrect metadata.
+
 ```python
 def parse_user_input(content: str, source: str) -> "dict[str, Result]":
     """Parse user input with two-tier error handling.

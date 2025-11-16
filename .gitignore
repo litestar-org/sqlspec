@@ -54,6 +54,7 @@ docs-build
 .claude/archive/*
 !.claude/archive/.gitkeep
 !.claude/commands
+!.claude/skills
 !.claude/agents
 !.claude/AGENTS.md
 !.claude/README.md

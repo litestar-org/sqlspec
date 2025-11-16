@@ -46,6 +46,10 @@ Glob("tests/**/test_asyncpg*.py")
 
 ```python
 Read("docs/guides/testing/testing.md")
+
+# SQLSpec testing skills
+Read(".claude/skills/sqlspec-usage/patterns/testing.md")
+Read(".claude/skills/sqlspec-usage/examples/testing-patterns.py")
 ```
 
 **Key testing principles from guide:**
