@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.config import NoPoolSyncConfig
+from sqlspec.utils import module_loader
 
 
 class _DummySyncConfig(NoPoolSyncConfig[Any, AsyncpgDriver]):
@@ -19,9 +20,19 @@ class _DummySyncConfig(NoPoolSyncConfig[Any, AsyncpgDriver]):
     def provide_session(self, *args: Any, **kwargs: Any):  # type: ignore[override]
         raise NotImplementedError
 
+def _force_dependency(monkeypatch, module_name: str) -> None:
+    original = module_loader.module_available
+
+    def _fake(name: str) -> bool:
+        if name == module_name:
+            return True
+        return original(name)
+
+    monkeypatch.setattr(module_loader, "module_available", _fake)
+
 
 def test_otel_extension_config_enables_spans(monkeypatch):
-    monkeypatch.setattr("sqlspec.utils.module_loader.OPENTELEMETRY_INSTALLED", True, raising=False)
+    _force_dependency(monkeypatch, "opentelemetry")
 
     config = _DummySyncConfig(extension_config={"otel": {"resource_attributes": {"service.name": "api"}}})
 
@@ -32,7 +43,7 @@ def test_otel_extension_config_enables_spans(monkeypatch):
 
 
 def test_prometheus_extension_registers_observer(monkeypatch):
-    monkeypatch.setattr("sqlspec.utils.module_loader.PROMETHEUS_INSTALLED", True, raising=False)
+    _force_dependency(monkeypatch, "prometheus_client")
 
     config = _DummySyncConfig(
         extension_config={"prometheus": {"namespace": "custom", "label_names": ("driver", "operation", "adapter")}}
@@ -44,6 +55,6 @@ def test_prometheus_extension_registers_observer(monkeypatch):
 
 
 def test_disabled_extensions_are_ignored(monkeypatch):
-    monkeypatch.setattr("sqlspec.utils.module_loader.OPENTELEMETRY_INSTALLED", True, raising=False)
+    _force_dependency(monkeypatch, "opentelemetry")
     config = _DummySyncConfig(extension_config={"otel": {"enabled": False}})
     assert config.observability_config is None

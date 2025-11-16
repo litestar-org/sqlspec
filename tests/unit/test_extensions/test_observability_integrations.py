@@ -1,10 +1,22 @@
 """Unit tests for observability helper extensions."""
 
 from sqlspec.observability._observer import create_event
+from sqlspec.utils import module_loader
+
+
+def _force_dependency(monkeypatch, module_name: str) -> None:
+    original = module_loader.module_available
+
+    def _fake(name: str) -> bool:
+        if name == module_name:
+            return True
+        return original(name)
+
+    monkeypatch.setattr(module_loader, "module_available", _fake)
 
 
 def test_enable_tracing_sets_telemetry(monkeypatch):
-    monkeypatch.setattr("sqlspec.utils.module_loader.OPENTELEMETRY_INSTALLED", True, raising=False)
+    _force_dependency(monkeypatch, "opentelemetry")
 
     from sqlspec.extensions import otel
 
@@ -16,7 +28,7 @@ def test_enable_tracing_sets_telemetry(monkeypatch):
 
 
 def test_enable_metrics_registers_observer(monkeypatch):
-    monkeypatch.setattr("sqlspec.utils.module_loader.PROMETHEUS_INSTALLED", True, raising=False)
+    _force_dependency(monkeypatch, "prometheus_client")
 
     from sqlspec.extensions import prometheus
 

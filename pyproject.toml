@@ -139,7 +139,6 @@ exclude = ["/.github", "/docs"]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-include = ["NOTICE"]
 packages = ["sqlspec"]
 
 
@@ -162,9 +161,10 @@ exclude = [
 
 ]
 include = [
-  "sqlspec/core/**/*.py", # Core module
-  "sqlspec/loader.py",    # Loader module
-
+  "sqlspec/core/**/*.py",          # Core module
+  "sqlspec/loader.py",             # Loader module
+  "sqlspec/storage/**/*.py",       # Storage layer
+  "sqlspec/observability/**/*.py", # Storage layer
   # === ADAPTER TYPE CONVERTERS ===
   "sqlspec/adapters/adbc/type_converter.py",     # ADBC type converter
   "sqlspec/adapters/bigquery/type_converter.py", # BigQuery type converter
@@ -179,21 +179,6 @@ include = [
   "sqlspec/utils/fixtures.py",            # File fixture loading
   "sqlspec/utils/data_transformation.py", # Data transformation utilities
 
-  # === OBSERVABILITY ===
-  "sqlspec/observability/_config.py",
-  "sqlspec/observability/_diagnostics.py",
-  "sqlspec/observability/_dispatcher.py",
-  "sqlspec/observability/_observer.py",
-  "sqlspec/observability/_runtime.py",
-  "sqlspec/observability/_spans.py",
-
-  # === STORAGE LAYER ===
-  # "sqlspec/storage/_utils.py",
-  # "sqlspec/storage/registry.py",
-  # "sqlspec/storage/backends/base.py",
-  # "sqlspec/storage/backends/obstore.py",
-  # "sqlspec/storage/backends/fsspec.py",
-  # "sqlspec/storage/backends/local.py",
 ]
 mypy-args = [
   "--ignore-missing-imports",
