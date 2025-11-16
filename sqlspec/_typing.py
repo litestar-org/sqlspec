@@ -11,6 +11,7 @@ from typing_extensions import TypeVar, dataclass_transform
 
 from sqlspec.utils.dependencies import dependency_flag, module_available
 
+
 @runtime_checkable
 class DataclassProtocol(Protocol):
     """Protocol for instance checking dataclasses."""
@@ -674,7 +675,6 @@ except ImportError:
         async def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: Any) -> None: ...
         async def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: Any) -> None: ...
         async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Any | None": ...
-
 
 
 AIOSQL_INSTALLED = dependency_flag("aiosql")

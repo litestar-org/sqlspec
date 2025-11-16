@@ -5,14 +5,11 @@ database operations, enabling distributed tracing and debugging.
 """
 
 import uuid
-from collections.abc import Generator
+from collections.abc import Generator, MutableMapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from collections.abc import MutableMapping
-    from logging import LoggerAdapter
+from logging import Logger, LoggerAdapter
+from typing import Any, ClassVar
 
 __all__ = ("CorrelationContext", "correlation_context", "get_correlation_adapter")
 
@@ -24,7 +21,7 @@ class CorrelationContext:
     across async and sync operations.
     """
 
-    _correlation_id: ContextVar[str | None] = ContextVar("sqlspec_correlation_id", default=None)
+    _correlation_id: ClassVar[ContextVar[str | None]] = ContextVar("sqlspec_correlation_id", default=None)
 
     @classmethod
     def get(cls) -> str | None:
@@ -114,36 +111,22 @@ def correlation_context(correlation_id: str | None = None) -> Generator[str, Non
         yield cid
 
 
-def get_correlation_adapter(logger: Any) -> "LoggerAdapter":
-    """Get a logger adapter that automatically includes correlation ID.
+class _CorrelationAdapter(LoggerAdapter):  # pyright: ignore
+    """Logger adapter that adds correlation ID to all logs."""
 
-    Args:
-        logger: The base logger to wrap
+    def process(self, msg: str, kwargs: MutableMapping[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Add correlation ID to the log record."""
 
-    Returns:
-        LoggerAdapter that includes correlation ID in all logs
-    """
-    from logging import LoggerAdapter
+        extra = kwargs.get("extra", {})
 
-    class CorrelationAdapter(LoggerAdapter):
-        """Logger adapter that adds correlation ID to all logs."""
+        if correlation_id := CorrelationContext.get():
+            extra["correlation_id"] = correlation_id
 
-        def process(self, msg: str, kwargs: "MutableMapping[str, Any]") -> tuple[str, dict[str, Any]]:
-            """Add correlation ID to the log record.
+        kwargs["extra"] = extra
+        return msg, dict(kwargs)
 
-            Args:
-                msg: The log message
-                kwargs: Keyword arguments for the log record
 
-            Returns:
-                The message and updated kwargs
-            """
-            extra = kwargs.get("extra", {})
+def get_correlation_adapter(logger: Logger | LoggerAdapter) -> LoggerAdapter:  # pyright: ignore
+    """Get a logger adapter that automatically includes correlation ID."""
 
-            if correlation_id := CorrelationContext.get():
-                extra["correlation_id"] = correlation_id
-
-            kwargs["extra"] = extra
-            return msg, dict(kwargs)
-
-    return CorrelationAdapter(logger, {})
+    return _CorrelationAdapter(logger, {})

@@ -2,7 +2,6 @@
 
 from importlib.util import find_spec
 
-
 _dependency_cache: dict[str, bool] = {}
 
 

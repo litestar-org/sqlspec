@@ -20,6 +20,7 @@ class _DummySyncConfig(NoPoolSyncConfig[Any, AsyncpgDriver]):
     def provide_session(self, *args: Any, **kwargs: Any):  # type: ignore[override]
         raise NotImplementedError
 
+
 def _force_dependency(monkeypatch, module_name: str) -> None:
     original = module_loader.module_available
 

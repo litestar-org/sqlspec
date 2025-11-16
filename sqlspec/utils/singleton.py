@@ -7,12 +7,15 @@ Used for creating classes that should have only one instance per class type.
 import threading
 from typing import Any, TypeVar
 
+from mypy_extensions import mypyc_attr
+
 __all__ = ("SingletonMeta",)
 
 
 _T = TypeVar("_T")
 
 
+@mypyc_attr(native_class=False)
 class SingletonMeta(type):
     """Metaclass for singleton pattern."""
 
