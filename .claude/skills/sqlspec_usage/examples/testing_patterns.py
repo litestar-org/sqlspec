@@ -134,11 +134,7 @@ async def test_transaction_rollback(asyncpg_session: AsyncpgDriver) -> None:
 
     # Simulate error - transaction will auto-rollback
     with suppress(Exception):
-        await asyncpg_session.execute(
-            "INSERT INTO users (name, email) VALUES ($1, $2)",
-            "Bob",
-            "bob@example.com",
-        )
+        await asyncpg_session.execute("INSERT INTO users (name, email) VALUES ($1, $2)", "Bob", "bob@example.com")
 
     # Verify nothing was inserted
     count = await asyncpg_session.select_value("SELECT COUNT(*) FROM users")

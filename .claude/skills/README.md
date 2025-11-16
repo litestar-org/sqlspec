@@ -5,6 +5,7 @@ Comprehensive skills library for proper SQLSpec usage, ensuring consistent best 
 ## Overview
 
 This skills library was created by analyzing:
+
 - **SQLSpec documentation** - Official usage guides
 - **SQLSpec source code** - Implementation patterns and standards
 - **AGENTS.md** - Project-specific conventions
@@ -17,6 +18,7 @@ This skills library was created by analyzing:
 **Location:** [sqlspec-usage/skill.md](sqlspec-usage/skill.md)
 
 **Purpose:** Primary skill for all SQLSpec-related queries. Provides guidance on:
+
 - Configuration (all adapters)
 - Query execution patterns
 - Framework integration (Litestar, FastAPI, Starlette, Flask)
@@ -113,6 +115,7 @@ Read(".claude/skills/sqlspec-usage/examples/testing-patterns.py")
 The `.claude/bootstrap.md` includes automatic skill creation for SQLSpec projects:
 
 **Phase 4.6:** Detects SQLSpec projects and auto-generates:
+
 1. Main SQLSpec skill
 2. All pattern guides
 3. Working examples
@@ -193,6 +196,7 @@ Skills incorporate patterns from:
 ## Skill Activation
 
 Skills activate automatically when:
+
 - User asks about SQLSpec configuration
 - Database connection issues arise
 - Query execution questions occur
