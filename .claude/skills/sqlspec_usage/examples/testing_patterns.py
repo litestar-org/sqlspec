@@ -1,16 +1,8 @@
-"""SQLSpec testing patterns with pytest.
-
-Demonstrates:
-- Session-scoped fixtures for containers
-- Test isolation with temp files
-- Idempotent DDL
-- Parallel execution safety
-- Transaction rollback pattern
-"""
+"""SQLSpec testing patterns with pytest."""
 
 import tempfile
 from collections.abc import AsyncGenerator, Generator
-from typing import Any
+from contextlib import suppress
 
 import pytest
 from pydantic import BaseModel
@@ -19,6 +11,9 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.exceptions import NotFoundError
+
+EXPECTED_BATCH_SIZE = 3
 
 
 # Models
@@ -30,7 +25,7 @@ class User(BaseModel):
 
 # Session-scoped database fixtures
 @pytest.fixture(scope="session")
-def asyncpg_config():
+def asyncpg_config() -> AsyncpgConfig:
     """PostgreSQL config using pytest-databases."""
     # pytest-databases automatically provides postgres_service fixture
 
@@ -71,7 +66,7 @@ async def asyncpg_session(asyncpg_db: type[AsyncpgConfig]) -> AsyncGenerator[Asy
 
 # SQLite fixtures with proper test isolation
 @pytest.fixture
-def sqlite_config() -> Generator[Any, Any, None]:
+def sqlite_config() -> Generator[type[SqliteConfig], None, None]:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         # IMPORTANT: Use temp file for isolation in parallel tests
         config = SqliteConfig(pool_config={"database": tmp.name})
@@ -138,14 +133,12 @@ async def test_transaction_rollback(asyncpg_session: AsyncpgDriver) -> None:
     await asyncpg_session.execute("INSERT INTO users (name, email) VALUES ($1, $2)", "Bob", "bob@example.com")
 
     # Simulate error - transaction will auto-rollback
-    try:
+    with suppress(Exception):
         await asyncpg_session.execute(
             "INSERT INTO users (name, email) VALUES ($1, $2)",
             "Bob",
-            "bob@example.com",  # Duplicate email
+            "bob@example.com",
         )
-    except Exception:
-        pass  # Transaction auto-rolls back
 
     # Verify nothing was inserted
     count = await asyncpg_session.select_value("SELECT COUNT(*) FROM users")
@@ -153,21 +146,21 @@ async def test_transaction_rollback(asyncpg_session: AsyncpgDriver) -> None:
 
 
 @pytest.mark.asyncio
-async def test_batch_insert(asyncpg_session) -> None:
+async def test_batch_insert(asyncpg_session: AsyncpgDriver) -> None:
     """Test batch insert with execute_many."""
     users = [("Alice", "alice@example.com"), ("Bob", "bob@example.com"), ("Charlie", "charlie@example.com")]
 
     result = await asyncpg_session.execute_many("INSERT INTO users (name, email) VALUES ($1, $2)", users)
 
-    assert result.rows_affected == 3
+    assert result.rows_affected == EXPECTED_BATCH_SIZE
 
     # Verify all inserted
     count = await asyncpg_session.select_value("SELECT COUNT(*) FROM users")
-    assert count == 3
+    assert count == EXPECTED_BATCH_SIZE
 
 
 @pytest.mark.asyncio
-async def test_type_safe_mapping(asyncpg_session) -> None:
+async def test_type_safe_mapping(asyncpg_session: AsyncpgDriver) -> None:
     """Test type-safe schema mapping with Pydantic."""
     await asyncpg_session.execute("INSERT INTO users (name, email) VALUES ($1, $2)", "Alice", "alice@example.com")
 
@@ -210,7 +203,7 @@ def test_sqlite_isolation() -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_basic_query(adapter_name, config) -> None:
+async def test_basic_query(adapter_name: str, config: AsyncpgConfig) -> None:
     """Test basic query execution across adapters."""
     spec = SQLSpec()
     db = spec.add_config(config)
@@ -226,10 +219,9 @@ async def test_basic_query(adapter_name, config) -> None:
 
 
 @pytest.fixture(autouse=True)
-async def cleanup_between_tests(asyncpg_session):
+async def cleanup_between_tests(asyncpg_session: AsyncpgDriver) -> AsyncGenerator[None, None]:
     """Auto-cleanup between tests."""
     yield
-    # Cleanup after each test
     await asyncpg_session.execute("DELETE FROM users")
 
 
