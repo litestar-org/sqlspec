@@ -27,12 +27,14 @@ ORACLE_MIN_JSON_BLOB_VERSION = 12
 ORACLE_MIN_OSON_VERSION = 19
 
 # Compiled regex patterns
-ORACLE_VERSION_PATTERN = re.compile(r"Oracle Database (\d+)c?.* Release (\d+)\.(\d+)\.(\d+)")
+VERSION_NUMBER_PATTERN = re.compile(r"(\d+)")
+VERSION_COMPONENT_COUNT = 3
 
 COMPONENT_VERSION_SQL = (
-    "SELECT product || ' Release ' || version AS \"banner\" "
+    'SELECT product AS "product", version AS "version", status AS "status" '
     "FROM product_component_version WHERE product LIKE 'Oracle%' "
-    "ORDER BY version DESC FETCH FIRST 1 ROWS ONLY"
+    "ORDER BY TO_NUMBER(REGEXP_SUBSTR(version, '^[0-9]+')) DESC, version DESC "
+    "FETCH FIRST 1 ROWS ONLY"
 )
 
 AUTONOMOUS_SERVICE_SQL = "SELECT sys_context('USERENV','CLOUD_SERVICE') AS \"service\" FROM dual"
@@ -137,12 +139,73 @@ class OracleDataDictionaryMixin:
             ORDER BY column_id
         """
 
-    def _select_version_banner(self, driver: "OracleSyncDriver") -> str:
-        return str(driver.select_value(COMPONENT_VERSION_SQL))
+    def _select_component_version_row(self, driver: "OracleSyncDriver") -> "dict[str, Any] | None":
+        """Fetch the latest Oracle component version row.
 
-    async def _select_version_banner_async(self, driver: "OracleAsyncDriver") -> str:
-        result = await driver.select_value(COMPONENT_VERSION_SQL)
-        return str(result)
+        Args:
+            driver: Oracle sync driver instance.
+
+        Returns:
+            First matching row from product_component_version or None.
+        """
+
+        result = driver.execute(COMPONENT_VERSION_SQL)
+        data = result.get_data()
+        if not data:
+            logger.warning("No rows returned from product_component_version")
+            return None
+        return data[0]
+
+    async def _select_component_version_row_async(self, driver: "OracleAsyncDriver") -> "dict[str, Any] | None":
+        """Async helper to fetch the latest Oracle component version row.
+
+        Args:
+            driver: Oracle async driver instance.
+
+        Returns:
+            First matching row from product_component_version or None.
+        """
+
+        result = await driver.execute(COMPONENT_VERSION_SQL)
+        data = result.get_data()
+        if not data:
+            logger.warning("No rows returned from product_component_version")
+            return None
+        return data[0]
+
+    def _build_version_info_from_row(self, row: "dict[str, Any] | None") -> "OracleVersionInfo | None":
+        """Build Oracle version metadata from a component version row.
+
+        Args:
+            row: Data dictionary row containing product/version fields.
+
+        Returns:
+            OracleVersionInfo if parsing succeeds, otherwise None.
+        """
+
+        if not row:
+            logger.warning("Unable to determine Oracle version without component data")
+            return None
+
+        version_value = row.get("version_full") or row.get("VERSION_FULL") or row.get("version") or row.get("VERSION")
+
+        if version_value is None:
+            logger.warning("Component version row missing VERSION column: %s", row)
+            return None
+
+        matches = VERSION_NUMBER_PATTERN.findall(str(version_value))
+        if not matches:
+            logger.warning("Unable to parse Oracle version from value: %s", version_value)
+            return None
+
+        numbers = [int(match) for match in matches[:VERSION_COMPONENT_COUNT]]
+        while len(numbers) < VERSION_COMPONENT_COUNT:
+            numbers.append(0)
+
+        version_info = OracleVersionInfo(numbers[0], numbers[1], numbers[2])
+        product_name = row.get("product") or row.get("PRODUCT") or "Oracle Database"
+        logger.debug("Detected Oracle component version for %s: %s", product_name, version_info)
+        return version_info
 
     def _get_oracle_version(self, driver: "OracleAsyncDriver | OracleSyncDriver") -> "OracleVersionInfo | None":
         """Get Oracle database version information.
@@ -153,30 +216,8 @@ class OracleDataDictionaryMixin:
         Returns:
             Oracle version information or None if detection fails
         """
-        banner = self._select_version_banner(cast("OracleSyncDriver", driver))
-
-        # Parse version from banner like "Oracle Database 21c Enterprise Edition Release 21.0.0.0.0 - Production"
-        # or "Oracle Database 19c Standard Edition 2 Release 19.0.0.0.0 - Production"
-        version_match = ORACLE_VERSION_PATTERN.search(str(banner))
-
-        if not version_match:
-            logger.warning("Could not parse Oracle version from banner: %s", banner)
-            return None
-
-        major = int(version_match.group(1))
-        release_major = int(version_match.group(2))
-        minor = int(version_match.group(3))
-        patch = int(version_match.group(4))
-
-        # For Oracle 21c+, the major version is in the first group
-        # For Oracle 19c and earlier, use the release version
-        if major >= ORACLE_MIN_JSON_NATIVE_VERSION:
-            version_info = OracleVersionInfo(major, minor, patch)
-        else:
-            version_info = OracleVersionInfo(release_major, minor, patch)
-
-        logger.debug("Detected Oracle version: %s", version_info)
-        return version_info
+        row = self._select_component_version_row(cast("OracleSyncDriver", driver))
+        return self._build_version_info_from_row(row)
 
     def _get_oracle_compatible(self, driver: "OracleAsyncDriver | OracleSyncDriver") -> "str | None":
         """Get Oracle compatible parameter value.
@@ -372,25 +413,12 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
             Oracle version information or None if detection fails
         """
         oracle_driver = cast("OracleAsyncDriver", driver)
-        banner = await self._select_version_banner_async(oracle_driver)
+        row = await self._select_component_version_row_async(oracle_driver)
+        version_info = self._build_version_info_from_row(row)
 
-        version_match = ORACLE_VERSION_PATTERN.search(str(banner))
-
-        if not version_match:
-            logger.warning("Could not parse Oracle version from banner: %s", banner)
+        if not version_info:
             return None
 
-        major = int(version_match.group(1))
-        release_major = int(version_match.group(2))
-        minor = int(version_match.group(3))
-        patch = int(version_match.group(4))
-
-        if major >= ORACLE_MIN_JSON_NATIVE_VERSION:
-            version_info = OracleVersionInfo(major, minor, patch)
-        else:
-            version_info = OracleVersionInfo(release_major, minor, patch)
-
-        # Enhance with additional information
         compatible = await self._get_oracle_compatible_async(oracle_driver)
         is_autonomous = await self._is_oracle_autonomous_async(oracle_driver)
 
