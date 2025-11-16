@@ -1,7 +1,7 @@
 import contextlib
 import inspect
 from collections.abc import AsyncGenerator, Callable
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar.constants import HTTP_DISCONNECT, HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
@@ -13,7 +13,7 @@ from sqlspec.extensions.litestar._utils import (
     get_sqlspec_scope_state,
     set_sqlspec_scope_state,
 )
-from sqlspec.utils.sync_tools import ensure_async_
+from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Coroutine
@@ -239,8 +239,14 @@ def connection_provider_maker(
             raise ImproperConfigurationError(msg)
 
         connection_cm: Any = config.provide_connection(db_pool)
+        context_manager: AbstractAsyncContextManager[ConnectionT] | None = None
 
-        if not isinstance(connection_cm, AbstractAsyncContextManager):
+        if isinstance(connection_cm, AbstractAsyncContextManager):
+            context_manager = connection_cm
+        elif isinstance(connection_cm, AbstractContextManager):
+            context_manager = with_ensure_async_(connection_cm)
+
+        if context_manager is None:
             conn_instance: ConnectionT
             if inspect.isawaitable(connection_cm):
                 conn_instance = await cast("Awaitable[ConnectionT]", connection_cm)
@@ -250,12 +256,12 @@ def connection_provider_maker(
             yield conn_instance
             return
 
-        entered_connection = await connection_cm.__aenter__()
+        entered_connection = await context_manager.__aenter__()
         try:
             set_sqlspec_scope_state(scope, connection_key, entered_connection)
             yield entered_connection
         finally:
-            await connection_cm.__aexit__(None, None, None)
+            await context_manager.__aexit__(None, None, None)
             delete_sqlspec_scope_state(scope, connection_key)
 
     return provide_connection
