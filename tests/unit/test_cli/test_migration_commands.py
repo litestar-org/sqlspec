@@ -325,7 +325,7 @@ def get_config():
             os.chdir(original_dir)
 
         assert result.exit_code == 0
-        mock_commands.revision.assert_called_once_with(message="test migration")
+        mock_commands.revision.assert_called_once_with(message="test migration", file_type=None)
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -361,7 +361,97 @@ def get_config():
             os.chdir(original_dir)
 
         assert result.exit_code == 0
-        mock_commands.revision.assert_called_once_with(message="test migration")
+        mock_commands.revision.assert_called_once_with(message="test migration", file_type=None)
+
+
+@patch("sqlspec.migrations.commands.create_migration_commands")
+def test_create_migration_command_with_format(mock_create_commands: "Mock", cleanup_test_modules: None) -> None:
+    runner = CliRunner()
+
+    mock_commands = Mock()
+    mock_commands.revision = Mock(return_value=None)
+    mock_create_commands.return_value = mock_commands
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_dir = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            config_module = """
+from sqlspec.adapters.sqlite.config import SqliteConfig
+
+def get_config():
+    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config.bind_key = "revision_test"
+    config.migration_config = {"enabled": True}
+    return config
+"""
+            module_name = _create_module(config_module, Path(temp_dir))
+
+            result = runner.invoke(
+                add_migration_commands(),
+                [
+                    "--config",
+                    f"{module_name}.get_config",
+                    "create-migration",
+                    "-m",
+                    "test migration",
+                    "--format",
+                    "py",
+                    "--no-prompt",
+                ],
+            )
+
+        finally:
+            os.chdir(original_dir)
+
+        assert result.exit_code == 0
+        mock_commands.revision.assert_called_once_with(message="test migration", file_type="py")
+
+
+@patch("sqlspec.migrations.commands.create_migration_commands")
+def test_create_migration_command_with_file_type_alias(
+    mock_create_commands: "Mock", cleanup_test_modules: None
+) -> None:
+    runner = CliRunner()
+
+    mock_commands = Mock()
+    mock_commands.revision = Mock(return_value=None)
+    mock_create_commands.return_value = mock_commands
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_dir = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            config_module = """
+from sqlspec.adapters.sqlite.config import SqliteConfig
+
+def get_config():
+    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config.bind_key = "revision_test"
+    config.migration_config = {"enabled": True}
+    return config
+"""
+            module_name = _create_module(config_module, Path(temp_dir))
+
+            result = runner.invoke(
+                add_migration_commands(),
+                [
+                    "--config",
+                    f"{module_name}.get_config",
+                    "create-migration",
+                    "-m",
+                    "test migration",
+                    "--file-type",
+                    "sql",
+                    "--no-prompt",
+                ],
+            )
+
+        finally:
+            os.chdir(original_dir)
+
+        assert result.exit_code == 0
+        mock_commands.revision.assert_called_once_with(message="test migration", file_type="sql")
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")

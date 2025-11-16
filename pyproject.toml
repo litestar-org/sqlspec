@@ -503,6 +503,7 @@ split-on-trailing-comma = false
 "docs/examples/**" = ["T201", "PT011"]
 "sqlspec/builder/mixins/**/*.*" = ["SLF001"]
 "sqlspec/extensions/adk/converters.py" = ["S403"]
+"sqlspec/migrations/utils.py" = ["S404"]
 "tests/**/*.*" = [
   "A",
   "ARG",

@@ -1,8 +1,6 @@
-"""Base classes for SQLSpec migrations.
+"""Base classes for SQLSpec migrations."""
 
-This module provides abstract base classes for migration components.
-"""
-
+import ast
 import hashlib
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -12,6 +10,7 @@ from sqlspec.builder import Delete, Insert, Select, Update, sql
 from sqlspec.builder._ddl import CreateTable
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.loaders import get_migration_loader
+from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateDescriptionHints, build_template_settings
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.sync_tools import await_
@@ -270,6 +269,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         extension_migrations: "dict[str, Path] | None" = None,
         context: "Any | None" = None,
         extension_configs: "dict[str, dict[str, Any]] | None" = None,
+        description_hints: "TemplateDescriptionHints | None" = None,
     ) -> None:
         """Initialize the migration runner.
 
@@ -278,6 +278,8 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             extension_migrations: Optional mapping of extension names to their migration paths.
             context: Optional migration context for Python migrations.
             extension_configs: Optional mapping of extension names to their configurations.
+            description_hints: Preferred metadata keys for extracting human descriptions
+                from SQL comments and Python docstrings.
         """
         self.migrations_path = migrations_path
         self.extension_migrations = extension_migrations or {}
@@ -285,6 +287,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         self.project_root: Path | None = None
         self.context = context
         self.extension_configs = extension_configs or {}
+        self.description_hints = description_hints or TemplateDescriptionHints()
 
     def _extract_version(self, filename: str) -> str | None:
         """Extract version from filename.
@@ -387,7 +390,9 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         loader.validate_migration_file(file_path)
         content = file_path.read_text(encoding="utf-8")
         checksum = self._calculate_checksum(content)
-        description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
+        description = self._extract_description(content, file_path)
+        if not description:
+            description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
 
         has_upgrade, has_downgrade = True, False
 
@@ -411,6 +416,49 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             "has_downgrade": has_downgrade,
             "loader": loader,
         }
+
+    def _extract_description(self, content: str, file_path: Path) -> str:
+        if file_path.suffix == ".sql":
+            return self._extract_sql_description(content)
+        if file_path.suffix == ".py":
+            return self._extract_python_description(content)
+        return ""
+
+    def _extract_sql_description(self, content: str) -> str:
+        keys = self.description_hints.sql_keys
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("--"):
+                body = stripped.lstrip("-").strip()
+                if not body:
+                    continue
+                if ":" in body:
+                    key, value = body.split(":", 1)
+                    if key.strip() in keys:
+                        return value.strip()
+                continue
+            break
+        return ""
+
+    def _extract_python_description(self, content: str) -> str:
+        try:
+            module = ast.parse(content)
+        except SyntaxError:
+            return ""
+        docstring = ast.get_docstring(module) or ""
+        keys = self.description_hints.python_keys
+        for line in docstring.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if ":" in stripped:
+                key, value = stripped.split(":", 1)
+                if key.strip() in keys:
+                    return value.strip()
+            return stripped
+        return ""
 
     def _get_migration_sql(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction.
@@ -491,6 +539,7 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
         self.project_root = Path(migration_config["project_root"]) if "project_root" in migration_config else None
         self.include_extensions = migration_config.get("include_extensions", [])
         self.extension_configs = self._parse_extension_configs()
+        self._template_settings: MigrationTemplateSettings = build_template_settings(migration_config)
         self._runtime: ObservabilityRuntime | None = self.config.get_observability_runtime()
         self._last_command_error: Exception | None = None
         self._last_command_metrics: dict[str, float] | None = None

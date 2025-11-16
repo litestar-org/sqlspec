@@ -274,6 +274,57 @@ DROP TABLE users;
             assert "loader" in metadata
 
 
+def test_load_migration_metadata_prefers_sql_description() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        migrations_path = Path(temp_dir)
+        migration_file = migrations_path / "0001_custom.sql"
+        migration_file.write_text(
+            """
+-- SQLSpec Migration
+-- Description: Custom summary
+-- Author: Example
+
+-- name: migrate-0001-up
+SELECT 1;
+"""
+        )
+
+        runner = create_migration_runner_with_metadata(migrations_path)
+
+        with (
+            patch.object(type(runner.loader), "clear_cache"),
+            patch.object(type(runner.loader), "load_sql"),
+            patch.object(type(runner.loader), "has_query", return_value=True),
+        ):
+            metadata = runner.load_migration(migration_file)
+
+        assert metadata["description"] == "Custom summary"
+
+
+def test_load_migration_metadata_prefers_python_docstring() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        migrations_path = Path(temp_dir)
+        migration_file = migrations_path / "0002_feature.py"
+        migration_file.write_text('"""Description: Add feature"""\n\ndef up():\n    return "SELECT 1"\n')
+
+        runner = create_migration_runner_with_metadata(migrations_path)
+
+        with (
+            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+            patch("sqlspec.migrations.base.await_") as mock_await,
+        ):
+            mock_loader = Mock()
+            mock_loader.validate_migration_file = Mock()
+            mock_loader.get_up_sql = Mock(return_value=["SELECT 1"])
+            mock_loader.get_down_sql = Mock(return_value=None)
+            mock_get_loader.return_value = mock_loader
+            mock_await.return_value = Mock(return_value=True)
+
+            metadata = runner.load_migration(migration_file)
+
+        assert metadata["description"] == "Add feature"
+
+
 def test_load_migration_metadata_python_file() -> None:
     """Test metadata loading for Python migration files."""
     with tempfile.TemporaryDirectory() as temp_dir:

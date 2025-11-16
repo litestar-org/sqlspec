@@ -10,9 +10,18 @@ Tests for migration utilities including:
 import os
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
+import pytest
+
+from sqlspec.config import DatabaseConfigProtocol
+from sqlspec.migrations.templates import TemplateValidationError
 from sqlspec.migrations.utils import _get_git_config, _get_system_username, create_migration_file, get_author
+
+
+def _callable_author(_: Any | None = None) -> str:
+    return "callable-user"
 
 
 def test_get_git_config_success() -> None:
@@ -226,6 +235,67 @@ def test_create_migration_file_python_includes_git_author(tmp_path: Path) -> Non
     assert "Author: Python Dev <dev@example.com>" in content
 
 
+def test_create_migration_file_slugifies_message(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+
+    with patch("sqlspec.migrations.utils.get_author", return_value="Author <author@example.com>"):
+        file_path = create_migration_file(migrations_dir, "0001", "Test Migration!!!", "sql")
+
+    assert file_path.name.startswith("0001_test_migration")
+
+
+def test_create_migration_file_respects_default_format(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+
+    class DummyConfig:
+        migration_config = {"default_format": "py", "author": "Static"}
+        bind_key = None
+        driver_type = None
+
+    file_path = create_migration_file(
+        migrations_dir, "0001", "custom", None, config=cast(DatabaseConfigProtocol[Any, Any, Any], DummyConfig())
+    )
+
+    assert file_path.suffix == ".py"
+
+
+def test_create_migration_file_uses_custom_sql_template(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+
+    class DummyConfig:
+        migration_config = {
+            "author": "Acme Ops",
+            "title": "Acme Migration",
+            "templates": {
+                "sql": {"header": "-- {title} [ACME]", "metadata": ["-- Owner: {author}"], "body": "-- custom body"}
+            },
+        }
+        bind_key = None
+        driver_type = None
+
+    file_path = create_migration_file(
+        migrations_dir, "0001", "custom", "sql", config=cast(DatabaseConfigProtocol[Any, Any, Any], DummyConfig())
+    )
+    content = file_path.read_text()
+
+    assert "-- Acme Migration [ACME]" in content
+    assert "-- Owner: Acme Ops" in content
+
+
+def test_python_template_includes_down_and_context(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+
+    file_path = create_migration_file(migrations_dir, "0001", "ctx", "py")
+    content = file_path.read_text()
+
+    assert "def up(context: object | None = None)" in content
+    assert "def down(context: object | None = None)" in content
+
+
 def test_git_config_with_special_characters() -> None:
     """Test git config with special characters in name."""
     mock_result = Mock()
@@ -272,3 +342,44 @@ def test_get_author_with_whitespace_in_git_config() -> None:
         result = get_author()
 
     assert result == "John Doe <john@example.com>"
+
+
+def test_get_author_env_string_mode() -> None:
+    with patch.dict(os.environ, {"CI_AUTHOR": "CI User"}):
+        result = get_author("env:CI_AUTHOR")
+
+    assert result == "CI User"
+
+
+def test_get_author_env_mode_dict() -> None:
+    with patch.dict(os.environ, {"CI_AUTHOR": "CI User"}):
+        result = get_author({"mode": "env", "value": "CI_AUTHOR"})
+
+    assert result == "CI User"
+
+
+def test_get_author_env_missing_raises() -> None:
+    with pytest.raises(TemplateValidationError):
+        get_author({"mode": "env", "value": "MISSING_VAR"})
+
+
+def test_get_author_callable_string() -> None:
+    result = get_author(f"{__name__}:_callable_author")
+
+    assert result == "callable-user"
+
+
+def test_get_author_callable_dict_with_config() -> None:
+    result = get_author({"mode": "callable", "value": f"{__name__}:_callable_author"})
+
+    assert result == "callable-user"
+
+
+def test_get_author_invalid_callable_path() -> None:
+    with pytest.raises(TemplateValidationError):
+        get_author("callable:badpath")
+
+
+def test_get_author_invalid_mode() -> None:
+    with pytest.raises(TemplateValidationError):
+        get_author({"mode": "unknown"})
