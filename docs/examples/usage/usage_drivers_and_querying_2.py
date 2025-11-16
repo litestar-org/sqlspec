@@ -15,15 +15,7 @@ async def test_example_2_importable(postgres_service: PostgresService) -> None:
 
     spec = SQLSpec()
     dsn = os.environ.get("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/test")
-    db = spec.add_config(
-        AsyncpgConfig(
-            pool_config={
-                "dsn": dsn,
-                "min_size": 10,
-                "max_size": 20,
-            }
-        )
-    )
+    db = spec.add_config(AsyncpgConfig(pool_config={"dsn": dsn, "min_size": 10, "max_size": 20}))
     async with spec.provide_session(db) as session:
         create_table_query = """
         CREATE TABLE IF NOT EXISTS users (

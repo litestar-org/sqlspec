@@ -23,13 +23,7 @@ async def test_importable_1(postgres_service: PostgresService) -> None:
 
     db = spec.add_config(
         AsyncpgConfig(
-            pool_config=AsyncpgPoolConfig(
-                host=host,
-                port=port,
-                user=user,
-                password=password,
-                database=database,
-            )
+            pool_config=AsyncpgPoolConfig(host=host, port=port, user=user, password=password, database=database)
         )
     )  # Config layer, registers pool
     async with spec.provide_session(db) as session:  # Session layer
