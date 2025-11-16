@@ -38,7 +38,7 @@ for message in channel.iter_events("notifications"):
 ## PostgreSQL native notifications
 
 Async PostgreSQL adapters (AsyncPG today, with psycopg/psqlpy on deck) default
-to `events_backend="native_postgres"`, which means no migrations are required;
+to `events_backend="listen_notify"`, which means no migrations are required;
 events flow directly through `LISTEN/NOTIFY`.
 
 ```python
@@ -64,7 +64,7 @@ enabled as described below.
 
 ## Oracle Advanced Queuing (sync adapters)
 
-Set ``config.driver_features["events_backend"] = "oracle_aq"`` to opt into native AQ.
+Set ``config.driver_features["events_backend"] = "advanced_queue"`` to opt into native AQ.
 When enabled, ``EventChannel`` publishes JSON payloads via ``connection.queue`` and
 skips the durable table migrations. The backend currently targets synchronous drivers
 (async configs fall back to the queue extension automatically).
@@ -202,7 +202,7 @@ against accidental sync usage.
 | `retention_seconds`| `86400`                 | How long acknowledged rows remain before automatic cleanup. |
 | `poll_interval`    | adapter-specific        | Default sleep window between dequeue attempts; see table below. |
 | `in_memory`        | `False`                 | Oracle-only flag that adds `INMEMORY PRIORITY HIGH` to the queue table. |
-| `aq_queue`         | `SQLSPEC_EVENTS_QUEUE`  | Native AQ queue name when `events_backend="oracle_aq"`. |
+| `aq_queue`         | `SQLSPEC_EVENTS_QUEUE`  | Native AQ queue name when `events_backend="advanced_queue"`. |
 | `aq_wait_seconds`  | `5`                     | Wait timeout (seconds) for AQ dequeue operations. |
 | `aq_visibility`    | *unset*                 | Optional visibility constant (e.g., `AQMSG_VISIBLE`). |
 
@@ -213,7 +213,7 @@ against accidental sync usage.
 | Adapter | Backend | Default poll interval | Lease window | Locking hints |
 | --- | --- | --- | --- | --- |
 | AsyncPG / Psycopg / Psqlpy | Native LISTEN/NOTIFY | `N/A` (native notifications) | `N/A` | Dedicated listener connections reuse the driver's native APIs. |
-| Oracle | `oracle_aq` (sync adapters) | `aq_wait_seconds` (default `5s`) | `N/A` – AQ removes messages when dequeued | Exposes AQ dequeue options via `extension_config`. |
+| Oracle | `advanced_queue` (sync adapters) | `aq_wait_seconds` (default `5s`) | `N/A` – AQ removes messages when dequeued | Exposes AQ dequeue options via `extension_config`. |
 | Asyncmy (MySQL) | Queue fallback | `0.25s` | `5s` | Adds `FOR UPDATE SKIP LOCKED` to reduce contention. |
 | DuckDB | Queue fallback | `0.15s` | `15s` | Favor short leases/poll windows so embedded engines do not spin. |
 | BigQuery / ADBC | Queue fallback | `2.0s` | `60s` | Coarser cadence avoids hammering remote warehouses; still safe to override. |

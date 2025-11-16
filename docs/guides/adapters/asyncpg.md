@@ -242,14 +242,14 @@ For comprehensive examples and migration guides, see:
 ## Event Channels
 
 - AsyncPG enables native LISTEN/NOTIFY support automatically by setting
-  `driver_features["events_backend"] = "native_postgres"` during config
+  `driver_features["events_backend"] = "listen_notify"` during config
   construction. Call `spec.event_channel(config)` to obtain a channel—no
   migrations are required.
 - Publishing uses `connection.notify()` under the hood; consumers rely on
   `connection.add_listener()` with dedicated connections so the shared pool
   stays available for transactional work.
 - Force the durable queue fallback (for deterministic testing or multi-tenant
-  workloads) by overriding `driver_features["events_backend"] = "queue"`.
+  workloads) by overriding `driver_features["events_backend"] = "table_queue"`.
 
 ## Common Issues
 

@@ -964,7 +964,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
-        self.driver_features.setdefault("events_backend", "queue")
+        self.driver_features.setdefault("events_backend", "table_queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1109,7 +1109,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
-        self.driver_features.setdefault("events_backend", "queue")
+        self.driver_features.setdefault("events_backend", "table_queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1257,7 +1257,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
-        self.driver_features.setdefault("events_backend", "queue")
+        self.driver_features.setdefault("events_backend", "table_queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1434,7 +1434,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
         self._storage_capabilities = None
         self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
-        self.driver_features.setdefault("events_backend", "queue")
+        self.driver_features.setdefault("events_backend", "table_queue")
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 

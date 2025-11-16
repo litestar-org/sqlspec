@@ -31,7 +31,7 @@ class OracleAQEventBackend:
 
     supports_sync = True
     supports_async = False
-    backend_name = "oracle_aq"
+    backend_name = "advanced_queue"
 
     def __init__(self, config: DatabaseConfigProtocol[Any, Any, Any], settings: dict[str, Any] | None = None) -> None:
         if "oracledb" not in type(config).__module__:
@@ -160,7 +160,7 @@ class OracleAQEventBackend:
 def create_event_backend(
     config: DatabaseConfigProtocol[Any, Any, Any], backend_name: str, extension_settings: dict[str, Any]
 ) -> OracleAQEventBackend | None:
-    if backend_name != "oracle_aq":
+    if backend_name != "advanced_queue":
         return None
     try:
         return OracleAQEventBackend(config, extension_settings)

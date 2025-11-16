@@ -370,7 +370,7 @@ class QueueEventBackend:
 
     supports_sync = True
     supports_async = True
-    backend_name = "queue"
+    backend_name = "table_queue"
 
     def __init__(self, table_queue: TableEventQueue) -> None:
         self._queue = table_queue
