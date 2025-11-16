@@ -83,6 +83,14 @@ class BigQueryDriverFeatures(TypedDict):
         enable_uuid_conversion: Enable automatic UUID string conversion.
             When True (default), UUID strings are automatically converted to UUID objects.
             When False, UUID strings are treated as regular strings.
+        enable_events: Enable database event channel support.
+            Defaults to True when extension_config["events"] is configured.
+            Provides pub/sub capabilities via table-backed queue (BigQuery has no native pub/sub).
+            Requires extension_config["events"] for migration setup.
+        events_backend: Event channel backend selection.
+            Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+            BigQuery does not have native pub/sub, so table_queue is the only backend.
+            Defaults to "table_queue".
     """
 
     connection_instance: NotRequired["BigQueryConnection"]
@@ -91,6 +99,8 @@ class BigQueryDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[[Any], None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
@@ -144,6 +154,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         user_connection_hook = processed_driver_features.pop("on_connection_create", None)
         processed_driver_features.setdefault("enable_uuid_conversion", True)
         serializer = processed_driver_features.setdefault("json_serializer", to_json)
+
+        # Auto-detect events support based on extension_config
+        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_driver_features.setdefault("events_backend", "table_queue")
 
         self._connection_instance: BigQueryConnection | None = processed_driver_features.get("connection_instance")
 

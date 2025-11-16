@@ -902,7 +902,7 @@ For comprehensive examples and migration guides, see:
 
 ## Event Channels
 
-- Set `driver_features["events_backend"] = "oracle_aq"` to enable native
+- Set `driver_features["events_backend"] = "advanced_queue"` to enable native
   Advanced Queuing support. Event publishing uses `connection.queue()` and
   inherits the AQ options surfaced via `extension_config["events"]`
   (`aq_queue`, `aq_wait_seconds`, `aq_visibility`).

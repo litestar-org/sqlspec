@@ -143,6 +143,14 @@ class DuckDBDriverFeatures(TypedDict):
             When False, UUID strings are treated as regular strings.
         extension_flags: Connection-level flags (e.g., allow_community_extensions) applied
             via SET statements immediately after connection creation.
+        enable_events: Enable database event channel support.
+            Defaults to True when extension_config["events"] is configured.
+            Provides pub/sub capabilities via table-backed queue (DuckDB has no native pub/sub).
+            Requires extension_config["events"] for migration setup.
+        events_backend: Event channel backend selection.
+            Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+            DuckDB does not have native pub/sub, so table_queue is the only backend.
+            Defaults to "table_queue".
     """
 
     extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
@@ -151,6 +159,8 @@ class DuckDBDriverFeatures(TypedDict):
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
     extension_flags: NotRequired[dict[str, Any]]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
@@ -250,6 +260,10 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         )
         processed_features.setdefault("enable_uuid_conversion", True)
         serializer = processed_features.setdefault("json_serializer", to_json)
+
+        # Auto-detect events support based on extension_config
+        processed_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_features.setdefault("events_backend", "table_queue")
 
         if extension_flags:
             existing_flags = cast("dict[str, Any]", processed_features.get("extension_flags", {}))

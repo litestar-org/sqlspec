@@ -134,14 +134,14 @@ For comprehensive examples and migration guides, see:
 ## Event Channels
 
 - Psycopg currently routes `EventChannel` through the durable queue backend by
-  default (`driver_features["events_backend"] = "queue"`). Include the
+  default (`driver_features["events_backend"] = "table_queue"`). Include the
   `events` extension migrations, then call `spec.event_channel(config)` to
   publish/consume events.
 - Native LISTEN/NOTIFY support is coming soon; until then you can still
   subscribe to channels via the durable queue and rely on leases/acks for retry
   safety.
 - When you migrate to the native backend, set
-  `driver_features["events_backend"] = "native_postgres"` to opt in once the
+  `driver_features["events_backend"] = "listen_notify"` to opt in once the
   backend lands.
 
 ## Common Issues

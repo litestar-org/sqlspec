@@ -117,6 +117,17 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_ip_type: IP address type for connection.
         Options: "PUBLIC", "PRIVATE", "PSC"
         Defaults to "PRIVATE".
+    enable_events: Enable database event channel support.
+        Defaults to True when extension_config["events"] is configured.
+        Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
+        Requires extension_config["events"] for migration setup when using table_queue backend.
+    events_backend: Event channel backend selection.
+        Options: "listen_notify", "table_queue", "listen_notify_durable"
+        - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time)
+        - "table_queue": Durable table-backed queue with retries and exactly-once delivery
+        - "listen_notify_durable": Hybrid - combines real-time LISTEN/NOTIFY with table durability (recommended for production)
+        Defaults to "listen_notify" for backward compatibility.
+        Note: "listen_notify_durable" provides best of both worlds - <100ms latency with full durability.
     """
 
     json_serializer: NotRequired[Callable[[Any], str]]
@@ -131,6 +142,8 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_instance_uri: NotRequired[str]
     alloydb_enable_iam_auth: NotRequired[bool]
     alloydb_ip_type: NotRequired[str]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
@@ -182,7 +195,10 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         features_dict.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
         features_dict.setdefault("enable_cloud_sql", False)
         features_dict.setdefault("enable_alloydb", False)
-        features_dict.setdefault("events_backend", "native_postgres")
+
+        # Auto-detect events support based on extension_config
+        features_dict.setdefault("enable_events", "events" in (extension_config or {}))
+        features_dict.setdefault("events_backend", "listen_notify")
 
         base_statement_config = statement_config or build_asyncpg_statement_config(
             json_serializer=serializer, json_deserializer=deserializer

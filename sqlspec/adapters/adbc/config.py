@@ -127,12 +127,22 @@ class AdbcDriverFeatures(TypedDict):
             When True, preserves Arrow extension type metadata when reading data.
             When False, falls back to storage types.
             Default: True
+        enable_events: Enable database event channel support.
+            Defaults to True when extension_config["events"] is configured.
+            Provides pub/sub capabilities via table-backed queue (ADBC has no native pub/sub).
+            Requires extension_config["events"] for migration setup.
+        events_backend: Event channel backend selection.
+            Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+            ADBC does not have native pub/sub, so table_queue is the only backend.
+            Defaults to "table_queue".
     """
 
     json_serializer: "NotRequired[Callable[[Any], str]]"
     enable_cast_detection: NotRequired[bool]
     strict_type_coercion: NotRequired[bool]
     arrow_extension_types: NotRequired[bool]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 __all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
@@ -194,6 +204,10 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         processed_driver_features.setdefault("enable_cast_detection", True)
         processed_driver_features.setdefault("strict_type_coercion", False)
         processed_driver_features.setdefault("arrow_extension_types", True)
+
+        # Auto-detect events support based on extension_config
+        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_driver_features.setdefault("events_backend", "table_queue")
 
         if json_serializer is not None:
             statement_config = _apply_json_serializer_to_statement_config(statement_config, json_serializer)

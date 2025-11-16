@@ -100,16 +100,16 @@ class EventChannel:
                 json_passthrough=hints.json_passthrough,
             )
         )
-        backend_name = config.driver_features.get("events_backend") or "queue"
+        backend_name = config.driver_features.get("events_backend") or "table_queue"
         native_backend = self._load_native_backend(config, backend_name, extension_settings)
         if native_backend is None:
-            if backend_name not in (None, "queue"):
-                logger.warning("Events backend %s unavailable; defaulting to queue", backend_name)
+            if backend_name not in (None, "table_queue"):
+                logger.warning("Events backend %s unavailable; defaulting to table_queue", backend_name)
             self._backend = queue_backend
-            backend_label = "queue"
+            backend_label = "table_queue"
         else:
             self._backend = native_backend
-            backend_label = getattr(native_backend, "backend_name", backend_name or "queue")
+            backend_label = getattr(native_backend, "backend_name", backend_name or "table_queue")
         self._config = config
         self._backend_name = backend_label
         self._is_async = bool(config.is_async)
@@ -393,7 +393,7 @@ class EventChannel:
     def _load_native_backend(
         config: "DatabaseConfigProtocol[Any, Any, Any]", backend_name: str | None, extension_settings: dict[str, Any]
     ) -> Any | None:
-        if backend_name in (None, "queue"):
+        if backend_name in (None, "table_queue"):
             return None
         module_name = type(config).__module__
         parts = module_name.split(".")

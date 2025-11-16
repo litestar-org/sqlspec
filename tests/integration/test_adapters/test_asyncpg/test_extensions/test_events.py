@@ -28,7 +28,7 @@ async def test_asyncpg_native_event_channel(postgres_service: PostgresService) -
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    assert channel._backend_name == "native_postgres"
+    assert channel._backend_name == "listen_notify"
 
     event_id = await channel.publish_async("notifications", {"action": "native"})
     await channel.ack_async(event_id)

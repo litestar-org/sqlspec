@@ -122,7 +122,7 @@ def test_event_channel_backend_fallback(tmp_path) -> None:
     config = SqliteConfig(
         pool_config={"database": str(db_path)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
-        driver_features={"events_backend": "oracle_aq"},
+        driver_features={"events_backend": "advanced_queue"},
     )
 
     commands = SyncMigrationCommands(config)

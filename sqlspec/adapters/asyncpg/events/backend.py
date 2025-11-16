@@ -29,7 +29,7 @@ class AsyncpgEventsBackend:
 
     supports_sync = False
     supports_async = True
-    backend_name = "native_postgres"
+    backend_name = "listen_notify"
 
     def __init__(self, config: AsyncpgConfig) -> None:
         if not config.is_async:
@@ -168,7 +168,7 @@ def create_event_backend(
 ) -> AsyncpgEventsBackend | None:
     """Factory used by EventChannel to create the native backend."""
 
-    if backend_name != "native_postgres":
+    if backend_name != "listen_notify":
         return None
     try:
         return AsyncpgEventsBackend(config)

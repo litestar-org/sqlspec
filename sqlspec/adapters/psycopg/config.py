@@ -78,11 +78,23 @@ class PsycopgDriverFeatures(TypedDict):
         Set to False to disable pgvector support even when package is available.
     json_serializer: Custom JSON serializer for StatementConfig parameter handling.
     json_deserializer: Custom JSON deserializer reference stored alongside the serializer for parity with asyncpg.
+    enable_events: Enable database event channel support.
+        Defaults to True when extension_config["events"] is configured.
+        Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
+        Requires extension_config["events"] for migration setup when using table_queue backend.
+    events_backend: Event channel backend selection.
+        Options: "listen_notify", "table_queue", "listen_notify_durable"
+        - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time) - coming soon
+        - "table_queue": Durable table-backed queue with retries and exactly-once delivery (current default)
+        - "listen_notify_durable": Hybrid - real-time + durable (available when native support lands)
+        Defaults to "table_queue" until native LISTEN/NOTIFY support is implemented.
     """
 
     enable_pgvector: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    enable_events: NotRequired[bool]
+    events_backend: NotRequired[str]
 
 
 __all__ = (
@@ -141,6 +153,10 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
         processed_driver_features.setdefault("json_serializer", serializer)
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+
+        # Auto-detect events support based on extension_config
+        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_driver_features.setdefault("events_backend", "table_queue")
 
         super().__init__(
             connection_config=processed_connection_config,
@@ -329,6 +345,10 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         serializer = cast("Callable[[Any], str]", processed_driver_features.get("json_serializer", to_json))
         processed_driver_features.setdefault("json_serializer", serializer)
         processed_driver_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
+
+        # Auto-detect events support based on extension_config
+        processed_driver_features.setdefault("enable_events", "events" in (extension_config or {}))
+        processed_driver_features.setdefault("events_backend", "table_queue")
 
         super().__init__(
             connection_config=processed_connection_config,
