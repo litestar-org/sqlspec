@@ -7,6 +7,7 @@ import pytest
 from litestar.constants import HTTP_RESPONSE_START
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
 from sqlspec.extensions.litestar.handlers import (
@@ -243,6 +244,29 @@ async def test_async_connection_provider_raises_when_pool_missing() -> None:
             pass
 
     assert pool_key in str(exc_info.value)
+
+
+async def test_sync_connection_provider_supports_context_manager() -> None:
+    """Test sync connection provider wraps sync context managers."""
+    config = SqliteConfig(pool_config={"database": ":memory:"})
+    pool_key = "test_pool"
+    connection_key = "test_connection"
+
+    provider = connection_provider_maker(config, pool_key, connection_key)
+
+    pool = config.create_pool()
+    state = MagicMock()
+    state.get.return_value = pool
+    scope = cast("Scope", {})
+
+    try:
+        async for connection in provider(state, scope):
+            assert connection is not None
+            assert get_sqlspec_scope_state(scope, connection_key) is connection
+    finally:
+        pool.close()
+
+    assert get_sqlspec_scope_state(scope, connection_key) is None
 
 
 async def test_async_session_provider_creates_session() -> None:
