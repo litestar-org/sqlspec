@@ -11,6 +11,7 @@ from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHa
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.utils.config_normalization import normalize_connection_config
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_string
@@ -403,6 +404,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             "AdbcExceptionHandler": AdbcExceptionHandler,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults suitable for ADBC warehouses."""
+
+        return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
 
 
 def _apply_json_serializer_to_statement_config(

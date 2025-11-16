@@ -8,6 +8,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
 from sqlspec.exceptions import MissingDependencyError
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.migrations import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.logging import get_logger
@@ -594,6 +595,11 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             include_list = cast("list[str]", include_extensions)
         if "events" not in include_list:
             include_list.append("events")
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return default event runtime hints for this configuration."""
+
+        return EventRuntimeHints()
 
     def _build_storage_capabilities(self) -> "StorageCapabilities":
         arrow_dependency_needed = self.supports_native_arrow_export or self.supports_native_arrow_import

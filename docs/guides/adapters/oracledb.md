@@ -900,6 +900,19 @@ For comprehensive examples and migration guides, see:
 - [MERGE Statement Builder Guide](/guides/builder/merge.md)
 - [Unified Upsert API Guide](/guides/upsert.md)
 
+## Event Channels
+
+- Set `driver_features["events_backend"] = "oracle_aq"` to enable native
+  Advanced Queuing support. Event publishing uses `connection.queue()` and
+  inherits the AQ options surfaced via `extension_config["events"]`
+  (`aq_queue`, `aq_wait_seconds`, `aq_visibility`).
+- AQ requires DBA-provisioned queues plus enqueue/dequeue privileges. When the
+  driver detects missing privileges it logs a warning and falls back to the
+  durable queue backend automatically.
+- The queue fallback uses the same hints as other adapters, so you can reuse
+  `extension_config["events"]["lease_seconds"]`, `poll_interval`, etc., when
+  AQ cannot be enabled.
+
 ## Common Issues & Troubleshooting
 
 - **`ORA-12154: TNS:could not resolve the connect identifier specified`**: This usually means the `tnsnames.ora` file is not found or the DSN is incorrect. Ensure the wallet path is correct.

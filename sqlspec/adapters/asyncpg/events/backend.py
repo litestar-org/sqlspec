@@ -29,6 +29,7 @@ class AsyncpgEventsBackend:
 
     supports_sync = False
     supports_async = True
+    backend_name = "native_postgres"
 
     def __init__(self, config: AsyncpgConfig) -> None:
         if not config.is_async:

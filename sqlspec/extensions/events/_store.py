@@ -1,7 +1,7 @@
 """Base classes for adapter-specific event queue stores."""
 
-from abc import ABC, abstractmethod
 import re
+from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 if TYPE_CHECKING:
@@ -9,10 +9,7 @@ if TYPE_CHECKING:
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
-__all__ = (
-    "BaseEventQueueStore",
-    "normalize_queue_table_name",
-)
+__all__ = ("BaseEventQueueStore", "normalize_queue_table_name")
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -70,19 +67,19 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         payload_type, metadata_type, timestamp_type = self._column_types()
         table_clause = self._table_clause()
         return (
-            "CREATE TABLE {table} ("
+            f"CREATE TABLE {self.table_name} ("
             "event_id VARCHAR(64) PRIMARY KEY,"
             " channel VARCHAR(128) NOT NULL,"
-            " payload_json {payload} NOT NULL,"
-            " metadata_json {metadata},"
+            f" payload_json {payload_type} NOT NULL,"
+            f" metadata_json {metadata_type},"
             " status VARCHAR(32) NOT NULL DEFAULT 'pending',"
-            " available_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-            " lease_expires_at {ts},"
+            f" available_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+            f" lease_expires_at {timestamp_type},"
             " attempts INTEGER NOT NULL DEFAULT 0,"
-            " created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-            " acknowledged_at {ts}"
-            ") {clause}"
-        ).format(table=self.table_name, payload=payload_type, metadata=metadata_type, ts=timestamp_type, clause=table_clause)
+            f" created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+            f" acknowledged_at {timestamp_type}"
+            f") {table_clause}"
+        )
 
     def _build_index_sql(self) -> str | None:
         index_name = self._index_name()

@@ -239,6 +239,18 @@ For comprehensive examples and migration guides, see:
 - [MERGE Statement Builder Guide](/guides/builder/merge.md)
 - [Unified Upsert API Guide](/guides/upsert.md)
 
+## Event Channels
+
+- AsyncPG enables native LISTEN/NOTIFY support automatically by setting
+  `driver_features["events_backend"] = "native_postgres"` during config
+  construction. Call `spec.event_channel(config)` to obtain a channel—no
+  migrations are required.
+- Publishing uses `connection.notify()` under the hood; consumers rely on
+  `connection.add_listener()` with dedicated connections so the shared pool
+  stays available for transactional work.
+- Force the durable queue fallback (for deterministic testing or multi-tenant
+  workloads) by overriding `driver_features["events_backend"] = "queue"`.
+
 ## Common Issues
 
 - **`asyncpg.exceptions.PostgresSyntaxError`**: Check your SQL syntax and parameter styles. `asyncpg` uses the `$` numeric style for parameters.

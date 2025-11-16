@@ -16,6 +16,7 @@ from sqlspec.adapters.psqlpy.driver import (
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core import StatementConfig
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import to_json
@@ -254,3 +255,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             "PsqlpyPoolParams": PsqlpyPoolParams,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return LISTEN/NOTIFY defaults for Psqlpy adapters."""
+
+        return EventRuntimeHints(json_passthrough=True)

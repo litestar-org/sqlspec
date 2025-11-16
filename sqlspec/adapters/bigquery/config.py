@@ -15,6 +15,7 @@ from sqlspec.adapters.bigquery.driver import (
 )
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import Empty
 from sqlspec.utils.config_normalization import normalize_connection_config
@@ -296,3 +297,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             "BigQueryExceptionHandler": BigQueryExceptionHandler,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults tuned for BigQuery latency."""
+
+        return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)

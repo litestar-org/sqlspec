@@ -52,7 +52,7 @@ def _load_store(context: "MigrationContext | None") -> "BaseEventQueueStore[Any]
         msg = f"Adapter {adapter_name} missing events store {store_class_name}"
         raise SQLSpecError(msg) from error
     try:
-        store: "BaseEventQueueStore[Any]" = store_class(config)
+        store: BaseEventQueueStore[Any] = store_class(config)
     except ValueError as error:  # pragma: no cover - invalid identifier path
         raise SQLSpecError(str(error)) from error
     return store

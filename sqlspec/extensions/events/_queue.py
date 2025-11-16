@@ -1,18 +1,20 @@
 """Fallback table-backed queue implementation for EventChannel."""
 
+import uuid
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.core import SQL, StatementConfig
-from ._models import EventMessage
-from ._store import normalize_queue_table_name
 from sqlspec.exceptions import EventChannelError
+from sqlspec.extensions.events._models import EventMessage
+from sqlspec.extensions.events._store import normalize_queue_table_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+
+if TYPE_CHECKING:
+    from sqlspec.config import DatabaseConfigProtocol
 
 logger = get_logger("events.queue")
 
@@ -42,16 +44,19 @@ class TableEventQueue:
     """Queue backend that stores events inside a managed table."""
 
     __slots__ = (
-        "_acked_cleanup_sql",
         "_ack_sql",
+        "_acked_cleanup_sql",
         "_claim_sql",
         "_config",
         "_dialect",
+        "_json_passthrough",
         "_lease_seconds",
         "_max_claim_attempts",
         "_retention_seconds",
         "_runtime",
+        "_select_for_update",
         "_select_sql",
+        "_skip_locked",
         "_statement_config",
         "_table_name",
         "_upsert_sql",
@@ -64,6 +69,9 @@ class TableEventQueue:
         queue_table: str | None = None,
         lease_seconds: int | None = None,
         retention_seconds: int | None = None,
+        select_for_update: bool | None = None,
+        skip_locked: bool | None = None,
+        json_passthrough: bool | None = None,
     ) -> None:
         """Initialize the queue backend with configuration defaults."""
 
@@ -78,6 +86,9 @@ class TableEventQueue:
         self._lease_seconds = lease_seconds or 30
         self._retention_seconds = retention_seconds or 86_400
         self._max_claim_attempts = 5
+        self._select_for_update = bool(select_for_update)
+        self._skip_locked = bool(skip_locked)
+        self._json_passthrough = bool(json_passthrough)
         self._upsert_sql = self._build_insert_sql()
         self._select_sql = self._build_select_sql()
         self._claim_sql = self._build_claim_sql()
@@ -92,9 +103,7 @@ class TableEventQueue:
 
     def _build_insert_sql(self) -> str:
         columns = "event_id, channel, payload_json, metadata_json, status, available_at, lease_expires_at, attempts, created_at"
-        values = (
-            ":event_id, :channel, :payload_json, :metadata_json, :status, :available_at, :lease_expires_at, :attempts, :created_at"
-        )
+        values = ":event_id, :channel, :payload_json, :metadata_json, :status, :available_at, :lease_expires_at, :attempts, :created_at"
         return f"INSERT INTO {self._table_name} ({columns}) VALUES ({values})"
 
     def _build_select_sql(self) -> str:
@@ -106,7 +115,12 @@ class TableEventQueue:
             "status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))"
             ") ORDER BY created_at ASC"
         )
-        return base + limit_clause
+        locking_clause = ""
+        if self._select_for_update:
+            locking_clause = " FOR UPDATE"
+            if self._skip_locked:
+                locking_clause += " SKIP LOCKED"
+        return base + limit_clause + locking_clause
 
     def _build_claim_sql(self) -> str:
         return (
@@ -126,7 +140,9 @@ class TableEventQueue:
     def _utcnow() -> "datetime":
         return datetime.now(timezone.utc)
 
-    async def publish_async(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    async def publish_async(
+        self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
+    ) -> str:
         """Insert a new event row asynchronously and return its identifier."""
 
         event_id = uuid.uuid4().hex
@@ -136,8 +152,8 @@ class TableEventQueue:
             {
                 "event_id": event_id,
                 "channel": channel,
-                "payload_json": to_json(payload),
-                "metadata_json": to_json(metadata) if metadata is not None else None,
+                "payload_json": self._encode_json(payload),
+                "metadata_json": self._encode_json(metadata),
                 "status": _PENDING_STATUS,
                 "available_at": now,
                 "lease_expires_at": None,
@@ -158,8 +174,8 @@ class TableEventQueue:
             {
                 "event_id": event_id,
                 "channel": channel,
-                "payload_json": to_json(payload),
-                "metadata_json": to_json(metadata) if metadata is not None else None,
+                "payload_json": self._encode_json(payload),
+                "metadata_json": self._encode_json(metadata),
                 "status": _PENDING_STATUS,
                 "available_at": now,
                 "lease_expires_at": None,
@@ -247,7 +263,7 @@ class TableEventQueue:
     async def _fetch_candidate_async(self, channel: str) -> "dict[str, Any] | None":
         current_time = self._utcnow()
         async with self._config.provide_session() as driver:
-            result = await driver.select_one_or_none(
+            return await driver.select_one_or_none(
                 SQL(
                     self._select_sql,
                     {
@@ -260,12 +276,11 @@ class TableEventQueue:
                     statement_config=self._statement_config,
                 )
             )
-        return result
 
     def _fetch_candidate_sync(self, channel: str) -> "dict[str, Any] | None":
         current_time = self._utcnow()
         with self._config.provide_session() as driver:
-            result = driver.select_one_or_none(
+            return driver.select_one_or_none(
                 SQL(
                     self._select_sql,
                     {
@@ -278,7 +293,6 @@ class TableEventQueue:
                     statement_config=self._statement_config,
                 )
             )
-        return result
 
     async def _execute_async(self, sql: str, parameters: "dict[str, Any]") -> int:
         async with self._config.provide_session() as driver:
@@ -312,10 +326,22 @@ class TableEventQueue:
     def _hydrate_event(cls, row: "dict[str, Any]", lease_expires_at: "datetime | None") -> QueueEvent:
         payload_raw = row.get("payload_json")
         metadata_raw = row.get("metadata_json")
-        payload_obj = from_json(payload_raw) if payload_raw is not None else {}
-        metadata_obj = from_json(metadata_raw) if metadata_raw is not None else None
+        if isinstance(payload_raw, dict):
+            payload_obj = payload_raw
+        elif payload_raw is not None:
+            payload_obj = from_json(payload_raw)
+        else:
+            payload_obj = {}
+        if isinstance(metadata_raw, dict):
+            metadata_obj = metadata_raw
+        elif metadata_raw is not None:
+            metadata_obj = from_json(metadata_raw)
+        else:
+            metadata_obj = None
         payload_value = payload_obj if isinstance(payload_obj, dict) else {"value": payload_obj}
-        metadata_value = metadata_obj if isinstance(metadata_obj, dict) or metadata_obj is None else {"value": metadata_obj}
+        metadata_value = (
+            metadata_obj if isinstance(metadata_obj, dict) or metadata_obj is None else {"value": metadata_obj}
+        )
         available_at = cls._coerce_datetime(row.get("available_at"))
         created_at = cls._coerce_datetime(row.get("created_at"))
         lease_value = lease_expires_at or row.get("lease_expires_at")
@@ -331,17 +357,27 @@ class TableEventQueue:
             created_at=created_at,
         )
 
+    def _encode_json(self, value: "dict[str, Any] | None") -> "dict[str, Any] | str | None":
+        if value is None:
+            return None
+        if self._json_passthrough:
+            return value
+        return to_json(value)
+
 
 class QueueEventBackend:
     """Adapter-facing wrapper that exposes TableEventQueue via EventMessage objects."""
 
     supports_sync = True
     supports_async = True
+    backend_name = "queue"
 
     def __init__(self, table_queue: TableEventQueue) -> None:
         self._queue = table_queue
 
-    async def publish_async(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+    async def publish_async(
+        self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
+    ) -> str:
         return await self._queue.publish_async(channel, payload, metadata)
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:

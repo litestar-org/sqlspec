@@ -18,6 +18,7 @@ from sqlspec.adapters.asyncmy.driver import (
     build_asyncmy_statement_config,
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.extensions.events._hints import EventRuntimeHints
 from sqlspec.utils.config_normalization import apply_pool_deprecations, normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -246,3 +247,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             "AsyncmyPoolParams": AsyncmyPoolParams,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return queue polling defaults for Asyncmy adapters."""
+
+        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)

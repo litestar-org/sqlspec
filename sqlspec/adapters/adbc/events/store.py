@@ -1,21 +1,17 @@
 """ADBC event queue store with multi-dialect support."""
 
-from typing import TYPE_CHECKING
-
+from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.extensions.events._store import BaseEventQueueStore
-
-if TYPE_CHECKING:
-    from sqlspec.adapters.adbc.config import AdbcConfig
 
 __all__ = ("AdbcEventQueueStore",)
 
 
-class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
+class AdbcEventQueueStore(BaseEventQueueStore[AdbcConfig]):
     """Map queue column types based on the configured dialect."""
 
     __slots__ = ()
 
-    def _column_types(self) -> "tuple[str, str, str]":
+    def _column_types(self) -> tuple[str, str, str]:
         dialect = self._dialect()
         if "postgres" in dialect or "pg" in dialect:
             return "JSONB", "JSONB", "TIMESTAMPTZ"
@@ -31,8 +27,8 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
 
     def _dialect(self) -> str:
         statement_config = self._config.statement_config
-        dialect_value = getattr(statement_config, "dialect", None)
-        if dialect_value:
-            return str(dialect_value).lower()
-        return "sqlite"
-
+        return (
+            str(statement_config.dialect).lower()
+            if statement_config and statement_config.dialect is not None
+            else "sqlite"
+        )
