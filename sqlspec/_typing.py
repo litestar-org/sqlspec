@@ -5,26 +5,11 @@ import enum
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from importlib.util import find_spec
 from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
 
 from typing_extensions import TypeVar, dataclass_transform
 
-
-def module_available(module_name: str) -> bool:
-    """Return True if the given module spec can be resolved.
-
-    Args:
-        module_name: Dotted path for the module to locate.
-
-    Returns:
-        True if the module can be resolved, False otherwise.
-    """
-
-    try:
-        return find_spec(module_name) is not None
-    except ModuleNotFoundError:
-        return False
+from sqlspec.utils.dependencies import dependency_flag, module_available
 
 
 @runtime_checkable
@@ -131,12 +116,10 @@ try:
     BaseModel = _RealBaseModel
     TypeAdapter = _RealTypeAdapter
     FailFast = _RealFailFast
-    PYDANTIC_INSTALLED = True  # pyright: ignore[reportConstantRedefinition]
 except ImportError:
     BaseModel = BaseModelStub  # type: ignore[assignment,misc]
     TypeAdapter = TypeAdapterStub  # type: ignore[assignment,misc]
     FailFast = FailFastStub  # type: ignore[assignment,misc]
-    PYDANTIC_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 # Always define stub types for msgspec
 
@@ -184,21 +167,17 @@ try:
     UnsetType = _RealUnsetType
     UNSET = _REAL_UNSET
     convert = _real_convert
-    MSGSPEC_INSTALLED = True  # pyright: ignore[reportConstantRedefinition]
 except ImportError:
     Struct = StructStub  # type: ignore[assignment,misc]
     UnsetType = UnsetTypeStub  # type: ignore[assignment,misc]
     UNSET = UNSET_STUB  # type: ignore[assignment] # pyright: ignore[reportConstantRedefinition]
     convert = convert_stub
-    MSGSPEC_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
 try:
     import orjson  # noqa: F401
-
-    ORJSON_INSTALLED = True  # pyright: ignore[reportConstantRedefinition]
 except ImportError:
-    ORJSON_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
+    orjson = None  # type: ignore[assignment]
 
 
 # Always define stub type for DTOData
@@ -228,10 +207,8 @@ try:
     from litestar.dto.data_structures import DTOData as _RealDTOData  # pyright: ignore[reportUnknownVariableType]
 
     DTOData = _RealDTOData
-    LITESTAR_INSTALLED = True  # pyright: ignore[reportConstantRedefinition]
 except ImportError:
     DTOData = DTODataStub  # type: ignore[assignment,misc]
-    LITESTAR_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
 # Always define stub types for attrs
@@ -290,7 +267,6 @@ try:
     attrs_field = _real_attrs_field
     attrs_fields = _real_attrs_fields
     attrs_has = _real_attrs_has
-    ATTRS_INSTALLED = True  # pyright: ignore[reportConstantRedefinition]
 except ImportError:
     AttrsInstance = AttrsInstanceStub  # type: ignore[misc]
     attrs_asdict = attrs_asdict_stub
@@ -298,13 +274,10 @@ except ImportError:
     attrs_field = attrs_field_stub
     attrs_fields = attrs_fields_stub
     attrs_has = attrs_has_stub  # type: ignore[assignment]
-    ATTRS_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 try:
     from cattrs import structure as cattrs_structure
     from cattrs import unstructure as cattrs_unstructure
-
-    CATTRS_INSTALLED = True  # pyright: ignore[reportConstantRedefinition]
 except ImportError:
 
     def cattrs_unstructure(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
@@ -314,8 +287,6 @@ except ImportError:
     def cattrs_structure(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
         """Placeholder implementation"""
         return {}
-
-    CATTRS_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]  # pyright: ignore[reportConstantRedefinition]
 
 
 class EmptyEnum(Enum):
@@ -433,15 +404,11 @@ try:
     from pyarrow import RecordBatchReader as ArrowRecordBatchReader
     from pyarrow import Schema as ArrowSchema
     from pyarrow import Table as ArrowTable
-
-    PYARROW_INSTALLED = True
 except ImportError:
     ArrowTable = ArrowTableResult  # type: ignore[assignment,misc]
     ArrowRecordBatch = ArrowRecordBatchResult  # type: ignore[assignment,misc]
     ArrowSchema = ArrowSchemaProtocol  # type: ignore[assignment,misc]
     ArrowRecordBatchReader = ArrowRecordBatchReaderProtocol  # type: ignore[assignment,misc]
-
-    PYARROW_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
 @runtime_checkable
@@ -472,20 +439,15 @@ class PolarsDataFrameProtocol(Protocol):
 
 try:
     from pandas import DataFrame as PandasDataFrame
-
-    PANDAS_INSTALLED = True
 except ImportError:
     PandasDataFrame = PandasDataFrameProtocol  # type: ignore[assignment,misc]
-    PANDAS_INSTALLED = False
 
 
 try:
     from polars import DataFrame as PolarsDataFrame
 
-    POLARS_INSTALLED = True
 except ImportError:
     PolarsDataFrame = PolarsDataFrameProtocol  # type: ignore[assignment,misc]
-    POLARS_INSTALLED = False
 
 
 @runtime_checkable
@@ -514,8 +476,6 @@ try:
         StatusCode,
         Tracer,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
-
-    OPENTELEMETRY_INSTALLED = True  # pyright: ignore[reportConstantRedefinition]
 except ImportError:
     # Define shims for when opentelemetry is not installed
 
@@ -578,7 +538,6 @@ except ImportError:
     trace = _TraceModule()  # type: ignore[assignment]
     StatusCode = trace.StatusCode  # type: ignore[misc]
     Status = trace.Status  # type: ignore[misc]
-    OPENTELEMETRY_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]  # pyright: ignore[reportConstantRedefinition]
 
 
 try:
@@ -587,8 +546,6 @@ try:
         Gauge,  # pyright: ignore[reportAssignmentType]
         Histogram,  # pyright: ignore[reportAssignmentType]
     )
-
-    PROMETHEUS_INSTALLED = True  # pyright: ignore[reportConstantRedefinition]
 except ImportError:
     # Define shims for when prometheus_client is not installed
 
@@ -636,8 +593,6 @@ except ImportError:
         def labels(self, *labelvalues: str, **labelkwargs: str) -> _MetricInstance:
             return _MetricInstance()  # pragma: no cover
 
-    PROMETHEUS_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]  # pyright: ignore[reportConstantRedefinition]
-
 
 try:
     import aiosql  # pyright: ignore[reportMissingImports, reportAssignmentType]
@@ -651,8 +606,6 @@ try:
     from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
         SyncDriverAdapterProtocol as AiosqlSyncProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
-
-    AIOSQL_INSTALLED = True  # pyright: ignore[reportConstantRedefinition]
 except ImportError:
     # Define shims for when aiosql is not installed
 
@@ -723,16 +676,25 @@ except ImportError:
         async def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: Any) -> None: ...
         async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Any | None": ...
 
-    AIOSQL_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]  # pyright: ignore[reportConstantRedefinition]
 
-
-FSSPEC_INSTALLED = module_available("fsspec")
-NUMPY_INSTALLED = module_available("numpy")
-OBSTORE_INSTALLED = module_available("obstore")
-PGVECTOR_INSTALLED = module_available("pgvector")
-
-CLOUD_SQL_CONNECTOR_INSTALLED = module_available("google.cloud.sql.connector")
-ALLOYDB_CONNECTOR_INSTALLED = module_available("google.cloud.alloydb.connector")
+AIOSQL_INSTALLED = dependency_flag("aiosql")
+ATTRS_INSTALLED = dependency_flag("attrs")
+CATTRS_INSTALLED = dependency_flag("cattrs")
+CLOUD_SQL_CONNECTOR_INSTALLED = dependency_flag("google.cloud.sql.connector")
+FSSPEC_INSTALLED = dependency_flag("fsspec")
+LITESTAR_INSTALLED = dependency_flag("litestar")
+MSGSPEC_INSTALLED = dependency_flag("msgspec")
+NUMPY_INSTALLED = dependency_flag("numpy")
+OBSTORE_INSTALLED = dependency_flag("obstore")
+OPENTELEMETRY_INSTALLED = dependency_flag("opentelemetry")
+ORJSON_INSTALLED = dependency_flag("orjson")
+PANDAS_INSTALLED = dependency_flag("pandas")
+PGVECTOR_INSTALLED = dependency_flag("pgvector")
+POLARS_INSTALLED = dependency_flag("polars")
+PROMETHEUS_INSTALLED = dependency_flag("prometheus_client")
+PYARROW_INSTALLED = dependency_flag("pyarrow")
+PYDANTIC_INSTALLED = dependency_flag("pydantic")
+ALLOYDB_CONNECTOR_INSTALLED = dependency_flag("google.cloud.alloydb.connector")
 
 __all__ = (
     "AIOSQL_INSTALLED",

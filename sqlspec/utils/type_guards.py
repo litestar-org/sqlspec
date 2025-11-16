@@ -527,7 +527,7 @@ def is_attrs_instance(obj: Any) -> "TypeGuard[AttrsInstanceStub]":
     Returns:
         bool
     """
-    return ATTRS_INSTALLED and attrs_has(obj.__class__)
+    return bool(ATTRS_INSTALLED) and attrs_has(obj.__class__)
 
 
 def is_attrs_schema(cls: Any) -> "TypeGuard[type[AttrsInstanceStub]]":
@@ -539,7 +539,7 @@ def is_attrs_schema(cls: Any) -> "TypeGuard[type[AttrsInstanceStub]]":
     Returns:
         bool
     """
-    return ATTRS_INSTALLED and attrs_has(cls)
+    return bool(ATTRS_INSTALLED) and attrs_has(cls)
 
 
 def is_attrs_instance_with_field(obj: Any, field_name: str) -> "TypeGuard[AttrsInstanceStub]":
@@ -697,7 +697,7 @@ def is_dto_data(v: Any) -> "TypeGuard[DTODataStub[Any]]":
     Returns:
         bool
     """
-    return LITESTAR_INSTALLED and isinstance(v, DTOData)
+    return bool(LITESTAR_INSTALLED) and isinstance(v, DTOData)
 
 
 def is_expression(obj: Any) -> "TypeGuard[exp.Expression]":

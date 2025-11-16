@@ -139,7 +139,6 @@ exclude = ["/.github", "/docs"]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-include = ["NOTICE"]
 packages = ["sqlspec"]
 
 
@@ -147,24 +146,27 @@ packages = ["sqlspec"]
 dependencies = ["hatch-mypyc", "hatch-cython"]
 enable-by-default = false
 exclude = [
-  "tests/**",                      # Test files
-  "sqlspec/__main__.py",           # Entry point (can't run directly when compiled)
-  "sqlspec/cli.py",                # CLI module (not performance critical)
-  "sqlspec/typing.py",             # Type aliases
-  "sqlspec/_typing.py",            # Type aliases
-  "sqlspec/config.py",             # Main config
-  "sqlspec/adapters/**/config.py", # Adapter configurations
-  "sqlspec/adapters/**/_types.py", # Type definitions (mypyc incompatible)
-  "sqlspec/extensions/**",         # All extensions
-  "sqlspec/**/__init__.py",        # Init files (usually just imports)
-  "sqlspec/protocols.py",          # Protocol definitions
-  "sqlspec/builder/**/*.py",       # Builder (not performance critical)
+  "tests/**",                       # Test files
+  "sqlspec/__main__.py",            # Entry point (can't run directly when compiled)
+  "sqlspec/cli.py",                 # CLI module (not performance critical)
+  "sqlspec/typing.py",              # Type aliases
+  "sqlspec/_typing.py",             # Type aliases
+  "sqlspec/config.py",              # Main config
+  "sqlspec/adapters/**/config.py",  # Adapter configurations
+  "sqlspec/adapters/**/_types.py",  # Type definitions (mypyc incompatible)
+  "sqlspec/extensions/**",          # All extensions
+  "sqlspec/**/__init__.py",         # Init files (usually just imports)
+  "sqlspec/protocols.py",           # Protocol definitions
+  "sqlspec/builder/**/*.py",        # Builder (not performance critical)
+  "sqlspec/migrations/commands.py", # Migration command CLI (dynamic imports)
 
 ]
 include = [
-  "sqlspec/core/**/*.py", # Core module
-  "sqlspec/loader.py",    # Loader module
-
+  "sqlspec/core/**/*.py",          # Core module
+  "sqlspec/loader.py",             # Loader module
+  "sqlspec/storage/**/*.py",       # Storage layer
+  "sqlspec/observability/**/*.py", # Observability utilities
+  "sqlspec/migrations/**/*.py",    # Migrations module
   # === ADAPTER TYPE CONVERTERS ===
   "sqlspec/adapters/adbc/type_converter.py",     # ADBC type converter
   "sqlspec/adapters/bigquery/type_converter.py", # BigQuery type converter
@@ -178,22 +180,13 @@ include = [
   "sqlspec/utils/type_guards.py",         # Type guard utilities
   "sqlspec/utils/fixtures.py",            # File fixture loading
   "sqlspec/utils/data_transformation.py", # Data transformation utilities
+  "sqlspec/utils/arrow_helpers.py",       # Arrow result helpers
+  "sqlspec/utils/serializers.py",         # Serialization helpers
+  "sqlspec/utils/type_converters.py",     # Adapter type converters
+  "sqlspec/utils/correlation.py",         # Correlation context helpers
+  "sqlspec/utils/portal.py",              # Thread portal utilities
+  "sqlspec/utils/singleton.py",           # Lightweight singleton helpers
 
-  # === OBSERVABILITY ===
-  "sqlspec/observability/_config.py",
-  "sqlspec/observability/_diagnostics.py",
-  "sqlspec/observability/_dispatcher.py",
-  "sqlspec/observability/_observer.py",
-  "sqlspec/observability/_runtime.py",
-  "sqlspec/observability/_spans.py",
-
-  # === STORAGE LAYER ===
-  # "sqlspec/storage/_utils.py",
-  # "sqlspec/storage/registry.py",
-  # "sqlspec/storage/backends/base.py",
-  # "sqlspec/storage/backends/obstore.py",
-  # "sqlspec/storage/backends/fsspec.py",
-  # "sqlspec/storage/backends/local.py",
 ]
 mypy-args = [
   "--ignore-missing-imports",

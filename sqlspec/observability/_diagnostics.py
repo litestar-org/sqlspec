@@ -1,6 +1,5 @@
 """Diagnostics aggregation utilities for observability exports."""
 
-from collections import defaultdict
 from collections.abc import Iterable
 from typing import Any
 
@@ -13,7 +12,7 @@ class TelemetryDiagnostics:
     __slots__ = ("_lifecycle_sections", "_metrics")
 
     def __init__(self) -> None:
-        self._lifecycle_sections: list[tuple[str, dict[str, int]]] = []
+        self._lifecycle_sections: list[tuple[str, dict[str, float]]] = []
         self._metrics: StorageDiagnostics = {}
 
     def add_lifecycle_snapshot(self, config_key: str, counters: dict[str, int]) -> None:
@@ -21,7 +20,8 @@ class TelemetryDiagnostics:
 
         if not counters:
             return
-        self._lifecycle_sections.append((config_key, counters))
+        float_counters = {metric: float(value) for metric, value in counters.items()}
+        self._lifecycle_sections.append((config_key, float_counters))
 
     def add_metric_snapshot(self, metrics: StorageDiagnostics) -> None:
         """Store custom metric snapshots."""
@@ -35,17 +35,18 @@ class TelemetryDiagnostics:
     def snapshot(self) -> "dict[str, Any]":
         """Return aggregated diagnostics payload."""
 
-        def _zero() -> float:
-            return 0.0
+        numeric_payload: dict[str, float] = {}
 
-        numeric_payload: defaultdict[str, float] = defaultdict(_zero)
+        def _increment(metric: str, amount: float) -> None:
+            numeric_payload[metric] = numeric_payload.get(metric, 0.0) + amount
+
         for key, value in get_storage_bridge_diagnostics().items():
-            numeric_payload[key] = float(value)
+            _increment(key, float(value))
         for _prefix, counters in self._lifecycle_sections:
             for metric, value in counters.items():
-                numeric_payload[metric] += float(value)
+                _increment(metric, value)
         for metric, value in self._metrics.items():
-            numeric_payload[metric] += float(value)
+            _increment(metric, float(value))
 
         payload: dict[str, Any] = dict(numeric_payload)
         recent_jobs = get_recent_storage_events()

@@ -633,6 +633,35 @@ def process() -> None:
 
 ## SQLSpec-Specific Guidelines
 
+### Avoid module-level optional dependency constants
+
+- **Problem**: Using ``MY_FEATURE_INSTALLED = module_available("pkg")`` at import time lets mypyc fold the value into the compiled extension. If the optional package is missing during compilation but added later, the compiled module still sees ``False`` forever and removes the guarded code paths entirely.
+- **Solution**: Use the runtime detector in ``sqlspec.utils.dependencies``. Wrap guards with ``dependency_flag("pkg")`` (boolean-like object) or call ``module_available("pkg")`` inside ``ensure_*`` helpers. These helpers evaluate availability at runtime, so compiled modules observe the actual environment when they execute.
+- **Example**:
+
+```python
+# BAD (constant folded during compilation)
+FSSPEC_INSTALLED = module_available("fsspec")
+if FSSPEC_INSTALLED:
+    ...
+
+# GOOD
+from sqlspec.utils.dependencies import dependency_flag
+
+FSSPEC_INSTALLED = dependency_flag("fsspec")
+if FSSPEC_INSTALLED:
+    ...  # evaluated when the code runs, not when it is compiled
+
+# GOOD (inside guards)
+from sqlspec.utils.dependencies import module_available
+
+def ensure_fsspec() -> None:
+    if not module_available("fsspec"):
+        raise MissingDependencyError(package="fsspec", install_package="fsspec")
+```
+
+- **Testing tip**: call ``reset_dependency_cache()`` in tests that manipulate ``sys.path`` to force the detector to re-check availability after installing or removing temporary packages.
+
 ### File Caching Optimization
 
 ```python
