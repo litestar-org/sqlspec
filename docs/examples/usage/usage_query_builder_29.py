@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_29", )
+
+
 def test_example_29(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -22,4 +25,3 @@ def test_example_29(tmp_path: Path) -> None:
         query = sql.select("*").from_("users").where("id = ?")
         print(query)  # Shows generated SQL
         # end-example
-

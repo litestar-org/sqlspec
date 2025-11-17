@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_24", )
+
+
 def test_example_24(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -16,7 +19,10 @@ def test_example_24(tmp_path: Path) -> None:
         }
     )
     with db.provide_session(config) as session:
-        session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text, status text)""")
+        session.execute(
+            """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text, status text)"""
+        )
+
         # start-example
         class UserQueries:
             @staticmethod
@@ -43,9 +49,8 @@ def test_example_24(tmp_path: Path) -> None:
                 return query, params
 
         # Usage
-        user = session.execute(UserQueries.by_id(), 1).one()
+        session.execute(UserQueries.by_id(), 1).one()
         query, params = UserQueries.search({"name": "Alice", "status": "active"})
         result = session.execute(query, *params)
-        users = result.all()
+        result.all()
         # end-example
-

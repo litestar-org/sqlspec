@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_12", )
+
+
 def test_example_12(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -16,17 +19,14 @@ def test_example_12(tmp_path: Path) -> None:
         }
     )
     with db.provide_session(config) as session:
-        session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text)""")
+        session.execute(
+            """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text)"""
+        )
         # start-example
         # Update with WHERE
-        query = (
-            sql.update("users")
-            .set("email", "?")
-            .where("id = ?")
-        )
+        query = sql.update("users").set("email", "?").where("id = ?")
         # SQL: UPDATE users SET email = ? WHERE id = ?
 
-        result = session.execute(query, 1, "newemail@example.com")
+        session.execute(query, 1, "newemail@example.com")
         # print(f"Updated {result.rows_affected} rows")
         # end-example
-

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+__all__ = ("test_example_10", )
+
 
 def test_example_10(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql

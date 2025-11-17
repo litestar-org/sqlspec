@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_3", )
+
+
 def test_example_3(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -21,28 +24,18 @@ def test_example_3(tmp_path: Path) -> None:
         # start-example
         # Simple WHERE
         query = sql.select("*").from_("users").where("status = ?")
-        result1 = session.execute(query, "active")
+        session.execute(query, "active")
 
         # Multiple conditions (AND)
-        query = (
-            sql.select("*")
-            .from_("users")
-            .where("status = ?")
-            .where("created_at > ?")
-        )
+        query = sql.select("*").from_("users").where("status = ?").where("created_at > ?")
         # SQL: SELECT * FROM users WHERE status = ? AND created_at > ?
-        result2 = session.execute(query, "active", "2024-01-01")
+        session.execute(query, "active", "2024-01-01")
 
         # OR conditions
-        query = (
-            sql.select("*")
-            .from_("users")
-            .where("status = ? OR role = ?")
-        )
-        result3 = session.execute(query, "active", "admin")
+        query = sql.select("*").from_("users").where("status = ? OR role = ?")
+        session.execute(query, "active", "admin")
 
         # IN clause
         query = sql.select("*").from_("users").where("id IN (?, ?, ?)")
-        result4 = session.execute(query, 1, 2, 3)
+        session.execute(query, 1, 2, 3)
         # end-example
-

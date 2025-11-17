@@ -1,5 +1,7 @@
 from pathlib import Path
 
+__all__ = ("test_example_9", )
+
 
 def test_example_9(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
@@ -25,5 +27,5 @@ def test_example_9(tmp_path: Path) -> None:
         query = sql.insert("users").columns("name", "email").values("?", "?")
         # SQL: INSERT INTO users (name, email) VALUES (?, ?)
 
-        result = session.execute(query, "alice@example.com", "Alice")
+        session.execute(query, "alice@example.com", "Alice")
         # end-example

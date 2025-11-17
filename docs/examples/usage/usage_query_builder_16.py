@@ -1,5 +1,8 @@
-from pathlib import Path
 import datetime
+from pathlib import Path
+
+__all__ = ("test_example_16", )
+
 
 def test_example_16(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
@@ -17,15 +20,12 @@ def test_example_16(tmp_path: Path) -> None:
         }
     )
     with db.provide_session(config) as session:
-        session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, status text, last_login date)""")
+        session.execute(
+            """CREATE TABLE if not exists users(id integer primary key autoincrement, status text, last_login date)"""
+        )
         # start-example
         # Delete with multiple conditions
-        query = (
-            sql.delete().from_("users")
-            .where("status = ?")
-            .where("last_login < ?")
-        )
+        query = sql.delete().from_("users").where("status = ?").where("last_login < ?")
 
         session.execute(query, "inactive", datetime.date(2024, 1, 1))
         # end-example
-

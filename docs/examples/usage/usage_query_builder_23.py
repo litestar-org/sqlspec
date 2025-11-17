@@ -1,5 +1,8 @@
-from pathlib import Path
 import datetime
+from pathlib import Path
+
+__all__ = ("test_example_23", )
+
 
 def test_example_23(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
@@ -17,7 +20,9 @@ def test_example_23(tmp_path: Path) -> None:
         }
     )
     with db.provide_session(config) as session:
-        session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text, status text, created_at date)""")
+        session.execute(
+            """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text, status text, created_at date)"""
+        )
         # start-example
         # Base query
         base_query = sql.select("id", "name", "email", "status").from_("users")
@@ -30,7 +35,6 @@ def test_example_23(tmp_path: Path) -> None:
             return base_query.where("created_at >= ?")
 
         # Use in different contexts
-        active = session.execute(active_users())
-        recent = session.execute(recent_users(), datetime.date.today() - datetime.timedelta(days=7))
+        session.execute(active_users())
+        session.execute(recent_users(), datetime.date.today() - datetime.timedelta(days=7))
         # end-example
-

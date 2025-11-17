@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_6", )
+
+
 def test_example_6(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -16,34 +19,26 @@ def test_example_6(tmp_path: Path) -> None:
         }
     )
     with db.provide_session(config) as session:
-        session.execute("""CREATE TABLE if not exists users(id int primary key, name text, created_at timestamp, status text)""")
+        session.execute(
+            """CREATE TABLE if not exists users(id int primary key, name text, created_at timestamp, status text)"""
+        )
         # start-example
         # ORDER BY
         query = sql.select("*").from_("users").order_by("created_at DESC")
-        result1 = session.execute(query)
+        session.execute(query)
 
         # Multiple order columns
-        query = (
-            sql.select("*")
-            .from_("users")
-            .order_by("status ASC", "created_at DESC")
-        )
-        result2 = session.execute(query)
+        query = sql.select("*").from_("users").order_by("status ASC", "created_at DESC")
+        session.execute(query)
 
         # LIMIT and OFFSET
         query = sql.select("*").from_("users").limit(10).offset(20)
-        result3 = session.execute(query)
+        session.execute(query)
 
         # Pagination helper
         def paginate(page=1, per_page=20):
             offset = (page - 1) * per_page
-            return (
-                sql.select("*")
-                .from_("users")
-                .order_by("id")
-                .limit(per_page)
-                .offset(offset)
-            )
-        result4 = session.execute(paginate(2, 10))
-        # end-example
+            return sql.select("*").from_("users").order_by("id").limit(per_page).offset(offset)
 
+        session.execute(paginate(2, 10))
+        # end-example

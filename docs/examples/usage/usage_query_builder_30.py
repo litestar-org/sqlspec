@@ -1,7 +1,10 @@
 from pathlib import Path
 
+__all__ = ("test_example_30", )
+
+
 def test_example_30(tmp_path: Path) -> None:
-    from sqlspec import SQLSpec, sql
+    from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
     db = SQLSpec()
@@ -16,10 +19,12 @@ def test_example_30(tmp_path: Path) -> None:
         }
     )
     with db.provide_session(config) as session:
-        session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, name text, region text, created_at timestamp)""")
+        session.execute(
+            """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, region text, created_at timestamp)"""
+        )
         # start-example
         # This is easier to read as raw SQL:
-        result = session.execute("""
+        session.execute("""
             WITH ranked_users AS (
                 SELECT id, name,
                        ROW_NUMBER() OVER (PARTITION BY region ORDER BY created_at DESC) as rn
@@ -28,4 +33,3 @@ def test_example_30(tmp_path: Path) -> None:
             SELECT * FROM ranked_users WHERE rn <= 5
         """)
         # end-example
-

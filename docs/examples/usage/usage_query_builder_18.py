@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_18", )
+
+
 def test_example_18(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -25,4 +28,3 @@ def test_example_18(tmp_path: Path) -> None:
 
         session.execute(query)
         # end-example
-

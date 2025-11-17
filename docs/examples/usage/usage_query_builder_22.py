@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_22", )
+
+
 def test_example_22(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -28,6 +31,5 @@ def test_example_22(tmp_path: Path) -> None:
             .from_("users u")
             .join("user_orders c", "u.id = c.user_id")
         )
-        result = session.execute(query)
+        session.execute(query)
         # end-example
-

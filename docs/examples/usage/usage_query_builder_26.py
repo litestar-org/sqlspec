@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_26", )
+
+
 def test_example_26(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -16,7 +19,10 @@ def test_example_26(tmp_path: Path) -> None:
         }
     )
     with db.provide_session(config) as session:
-        session.execute("""CREATE TABLE if not exists products(id integer primary key autoincrement, category_id int, price real, stock int)""")
+        session.execute(
+            """CREATE TABLE if not exists products(id integer primary key autoincrement, category_id int, price real, stock int)"""
+        )
+
         # start-example
         # Good use case: dynamic filtering
         def search_products(category=None, min_price=None, in_stock=None):
@@ -35,5 +41,5 @@ def test_example_26(tmp_path: Path) -> None:
                 query = query.where("stock > 0")
 
             return session.execute(query, *params)
-        # end-example
 
+        # end-example

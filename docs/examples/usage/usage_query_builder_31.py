@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_31", )
+
+
 def test_example_31(tmp_path: Path) -> None:
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -22,4 +25,3 @@ def test_example_31(tmp_path: Path) -> None:
         json_filter = '{"name": "Alice"}'
         session.execute("SELECT data->>'name' FROM events WHERE data @> ?", json_filter)
         # end-example
-

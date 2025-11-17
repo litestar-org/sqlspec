@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_19", )
+
+
 def test_example_19(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -19,20 +22,10 @@ def test_example_19(tmp_path: Path) -> None:
         session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, email text)""")
         # start-example
         # Create index
-        query = (
-            sql.create_index("idx_users_email")
-            .table("users")
-            .columns("email")
-        )
+        query = sql.create_index("idx_users_email").table("users").columns("email")
 
         # Unique index
-        query = (
-            sql.create_index("idx_users_email")
-            .table("users")
-            .columns("email")
-            .unique()
-        )
+        query = sql.create_index("idx_users_email").table("users").columns("email").unique()
 
         session.execute(query)
         # end-example
-

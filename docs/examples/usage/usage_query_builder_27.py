@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_27", )
+
+
 def test_example_27(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -21,6 +24,5 @@ def test_example_27(tmp_path: Path) -> None:
         # Always use placeholders for user input
         search_term = "Alice"  # Example user input
         query = sql.select("*").from_("users").where("name LIKE ?")
-        result = session.execute(query, f"%{search_term}%")
+        session.execute(query, f"%{search_term}%")
         # end-example
-

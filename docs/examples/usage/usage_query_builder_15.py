@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_15", )
+
+
 def test_example_15(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -16,13 +19,14 @@ def test_example_15(tmp_path: Path) -> None:
         }
     )
     with db.provide_session(config) as session:
-        session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text)""")
+        session.execute(
+            """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text)"""
+        )
         # start-example
         # Delete with WHERE
         query = sql.delete().from_("users").where("id = ?")
         # SQL: DELETE FROM users WHERE id = ?
 
-        result = session.execute(query, 1)
+        session.execute(query, 1)
         # print(f"Deleted {result.rows_affected} rows")
         # end-example
-

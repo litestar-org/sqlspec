@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_8", )
+
+
 def test_example_8(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -21,24 +24,11 @@ def test_example_8(tmp_path: Path) -> None:
         # start-example
         # Subquery in WHERE
         subquery = sql.select("id").from_("orders").where("total > ?")
-        query = (
-            sql.select("*")
-            .from_("users")
-            .where(f"id IN ({subquery})")
-        )
-        result1 = session.execute(query, 100)
+        query = sql.select("*").from_("users").where(f"id IN ({subquery})")
+        session.execute(query, 100)
 
         # Subquery in FROM
-        subquery = (
-            sql.select("user_id", "COUNT(*) as order_count")
-            .from_("orders")
-            .group_by("user_id")
-        )
-        query = (
-            sql.select("u.name", "o.order_count")
-            .from_("users u")
-            .join(f"({subquery}) o", "u.id = o.user_id")
-        )
-        result2 = session.execute(query)
+        subquery = sql.select("user_id", "COUNT(*) as order_count").from_("orders").group_by("user_id")
+        query = sql.select("u.name", "o.order_count").from_("users u").join(f"({subquery}) o", "u.id = o.user_id")
+        session.execute(query)
         # end-example
-

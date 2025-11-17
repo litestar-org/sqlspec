@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_25", )
+
+
 def test_example_25(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -19,10 +22,9 @@ def test_example_25(tmp_path: Path) -> None:
         session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, name text)""")
         # start-example
         # Prefer this for simple, static queries:
-        result = session.execute("SELECT * FROM users WHERE id = ?", 1)
+        session.execute("SELECT * FROM users WHERE id = ?", 1)
 
         # Over this:
         query = sql.select("*").from_("users").where("id = ?")
-        result = session.execute(query, 1)
+        session.execute(query, 1)
         # end-example
-

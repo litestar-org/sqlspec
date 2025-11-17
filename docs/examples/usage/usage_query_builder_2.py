@@ -1,5 +1,7 @@
 from pathlib import Path
 
+__all__ = ("test_example_2", )
+
 
 def test_example_2(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
@@ -23,15 +25,15 @@ def test_example_2(tmp_path: Path) -> None:
         # Simple select
         query = sql.select("*").from_("users")
         # SQL: SELECT * FROM users
-        result1 = session.execute(query)
+        session.execute(query)
 
         # Specific columns
         query = sql.select("id", "name", "email").from_("users")
         # SQL: SELECT id, name, email FROM users
-        result2 = session.execute(query)
+        session.execute(query)
 
         # With table alias
         query = sql.select("u.id", "u.name").from_("users u")
         # SQL: SELECT u.id, u.name FROM users u
-        result3 = session.execute(query)
+        session.execute(query)
         # end-example

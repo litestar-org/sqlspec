@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_5", )
+
+
 def test_example_5(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -23,12 +26,8 @@ def test_example_5(tmp_path: Path) -> None:
         session.execute("""CREATE TABLE if not exists products(id int primary key, name text)""")
         # start-example
         # INNER JOIN
-        query = (
-            sql.select("u.id", "u.name", "o.total")
-            .from_("users u")
-            .join("orders o", "u.id = o.user_id")
-        )
-        result1 = session.execute(query)
+        query = sql.select("u.id", "u.name", "o.total").from_("users u").join("orders o", "u.id = o.user_id")
+        session.execute(query)
         # SQL: SELECT u.id, u.name, o.total FROM users u
         #      INNER JOIN orders o ON u.id = o.user_id
 
@@ -39,7 +38,7 @@ def test_example_5(tmp_path: Path) -> None:
             .left_join("orders o", "u.id = o.user_id")
             .group_by("u.id", "u.name")
         )
-        result2 = session.execute(query)
+        session.execute(query)
 
         # Multiple JOINs
         query = (
@@ -49,6 +48,5 @@ def test_example_5(tmp_path: Path) -> None:
             .join("order_items oi", "o.id = oi.order_id")
             .join("products p", "oi.product_id = p.id")
         )
-        result3 = session.execute(query)
+        session.execute(query)
         # end-example
-

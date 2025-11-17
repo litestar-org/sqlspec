@@ -1,5 +1,8 @@
 from pathlib import Path
 
+__all__ = ("test_example_14", )
+
+
 def test_example_14(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -16,7 +19,10 @@ def test_example_14(tmp_path: Path) -> None:
         }
     )
     with db.provide_session(config) as session:
-        session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text, status text)""")
+        session.execute(
+            """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text, status text)"""
+        )
+
         # start-example
         # Dynamic update builder
         def update_user(user_id, **fields):
@@ -36,4 +42,3 @@ def test_example_14(tmp_path: Path) -> None:
         # Usage
         update_user(1, name="Alice", email="alice@example.com", status="active")
         # end-example
-

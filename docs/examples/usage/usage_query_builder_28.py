@@ -1,9 +1,13 @@
 from pathlib import Path
 
+__all__ = ("test_example_28", )
+
+
 def test_example_28(tmp_path: Path) -> None:
+    from pydantic import BaseModel
+
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite.config import SqliteConfig
-    from pydantic import BaseModel
 
     db = SQLSpec()
     database = tmp_path / "example28.db"
@@ -17,7 +21,10 @@ def test_example_28(tmp_path: Path) -> None:
         }
     )
     with db.provide_session(config) as session:
-        session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text)""")
+        session.execute(
+            """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text)"""
+        )
+
         # start-example
         class User(BaseModel):
             id: int
@@ -26,6 +33,5 @@ def test_example_28(tmp_path: Path) -> None:
 
         query = sql.select("id", "name", "email").from_("users")
         result = session.execute(query)
-        users: list[User] = result.all(schema_type=User)
+        result.all(schema_type=User)
         # end-example
-

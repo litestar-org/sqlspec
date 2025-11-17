@@ -1,5 +1,7 @@
 from pathlib import Path
 
+__all__ = ("test_example_1", )
+
 
 def test_example_1(tmp_path: Path) -> None:
     from sqlspec import SQLSpec, sql
@@ -25,5 +27,5 @@ def test_example_1(tmp_path: Path) -> None:
             sql.select("id", "name", "email").from_("users").where("status = ?").order_by("created_at DESC").limit(10)
         )
         # Execute with session
-        result = session.execute(query, "active")
+        session.execute(query, "active")
         # end-example
