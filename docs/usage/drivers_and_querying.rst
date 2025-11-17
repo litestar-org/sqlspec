@@ -395,10 +395,10 @@ Manual Transaction Control
 
 .. literalinclude:: /examples/usage/usage_drivers_and_querying_15.py
    :language: python
+   :caption: `manual transaction control`
    :start-after: # start-example
    :end-before: # end-example
-   :dedent: 2
-   :caption: `manual transaction control`
+   :dedent: 4
 
 
 Context Manager Transactions
@@ -412,6 +412,7 @@ prefer context manager semantics.
    :caption: ``async transaction helper``
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
 
 Parameter Binding
 -----------------
@@ -424,6 +425,7 @@ Positional Parameters
    :start-after: # start-example
    :end-before: # end-example
    :caption: ``positional parameters``
+   :dedent: 4
 
 Named Parameters
 ^^^^^^^^^^^^^^^^
@@ -433,6 +435,7 @@ Named Parameters
    :start-after: # start-example
    :end-before: # end-example
    :caption: ``named parameters``
+   :dedent: 4
 
 Type Coercion
 ^^^^^^^^^^^^^
@@ -444,6 +447,7 @@ SQLSpec automatically coerces types based on driver requirements:
    :start-after: # start-example
    :end-before: # end-example
    :caption: ``type coercion``
+   :dedent: 4
 
 Script Execution
 ----------------
@@ -455,6 +459,7 @@ Execute multiple SQL statements in one call:
    :start-after: # start-example
    :end-before: # end-example
    :caption: ``script execution``
+   :dedent: 4
 
 Performance Tips
 ----------------
@@ -466,6 +471,7 @@ Performance Tips
    :start-after: # start-example
    :end-before: # end-example
    :caption: ``asyncpg connection pooling``
+   :dedent: 4
 
 **2. Batch Operations**
 
@@ -476,6 +482,7 @@ Use ``execute_many()`` for bulk inserts:
    :start-after: # start-example
    :end-before: # end-example
    :caption: ``batch inserts``
+   :dedent: 4
 
 **3. Prepared Statements**
 
