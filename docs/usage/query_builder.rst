@@ -143,7 +143,7 @@ INSERT Queries
 Basic INSERT
 ^^^^^^^^^^^^
 
-.. literalinclude:: ../examples/usage/usage_query_builder_9.py
+.. literalinclude:: ../examples/usage/usage_queryfbuilder_9.py
 :caption: `Basic INSERT`
    :language: python
    :dedent:

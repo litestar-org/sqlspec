@@ -1,18 +1,36 @@
-def test_example_23():
-    # start-example
-    from sqlspec import sql
+from pathlib import Path
+import datetime
 
-    # Base query
-    base_query = sql.select("id", "name", "email", "status").from_("users")
+def test_example_23(tmp_path: Path) -> None:
+    from sqlspec import SQLSpec, sql
+    from sqlspec.adapters.sqlite.config import SqliteConfig
 
-    # Add filters based on context
-    def active_users():
-        return base_query.where("status = 'active'")
+    db = SQLSpec()
+    database = tmp_path / "example23.db"
+    config = SqliteConfig(
+        pool_config={
+            "database": database.name,
+            "timeout": 5.0,
+            "check_same_thread": False,
+            "cached_statements": 100,
+            "uri": False,
+        }
+    )
+    with db.provide_session(config) as session:
+        session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text, status text, created_at date)""")
+        # start-example
+        # Base query
+        base_query = sql.select("id", "name", "email", "status").from_("users")
 
-    def recent_users(days=7):
-        return base_query.where("created_at >= ?")
+        # Add filters based on context
+        def active_users():
+            return base_query.where("status = 'active'")
 
-    # Use in different contexts
-    active = session.execute(active_users())
-    recent = session.execute(recent_users(), datetime.date.today() - datetime.timedelta(days=7))
-    # end-example
+        def recent_users(days=7):
+            return base_query.where("created_at >= ?")
+
+        # Use in different contexts
+        active = session.execute(active_users())
+        recent = session.execute(recent_users(), datetime.date.today() - datetime.timedelta(days=7))
+        # end-example
+

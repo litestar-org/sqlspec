@@ -1,25 +1,43 @@
-def test_example_4():
-    # start-example
-    from sqlspec import sql
+from pathlib import Path
 
-    def search_users(name=None, email=None, status=None):
-        query = sql.select("id", "name", "email", "status").from_("users")
-        params = []
+def test_example_4(tmp_path: Path) -> None:
+    from sqlspec import SQLSpec, sql
+    from sqlspec.adapters.sqlite.config import SqliteConfig
 
-        if name:
-            query = query.where("name LIKE ?")
-            params.append(f"%{name}%")
+    db = SQLSpec()
+    database = tmp_path / "example4.db"
+    config = SqliteConfig(
+        pool_config={
+            "database": database.name,
+            "timeout": 5.0,
+            "check_same_thread": False,
+            "cached_statements": 100,
+            "uri": False,
+        }
+    )
+    with db.provide_session(config) as session:
+        create_table_query = """CREATE TABLE if not exists users(id int primary key,name text,email text, status text, created_at timestamp)"""
+        _ = session.execute(create_table_query)
+        # start-example
+        def search_users(name=None, email=None, status=None):
+            query = sql.select("id", "name", "email", "status").from_("users")
+            params = []
 
-        if email:
-            query = query.where("email = ?")
-            params.append(email)
+            if name:
+                query = query.where("name LIKE ?")
+                params.append(f"%{name}%")
 
-        if status:
-            query = query.where("status = ?")
-            params.append(status)
+            if email:
+                query = query.where("email = ?")
+                params.append(email)
 
-        return session.execute(query, *params)
+            if status:
+                query = query.where("status = ?")
+                params.append(status)
 
-    # Usage
-    users = search_users(name="Alice", status="active")
-    # end-example
+            return session.execute(query, *params)
+
+        # Usage
+        users = search_users(name="Alice", status="active")
+        # end-example
+

@@ -1,24 +1,48 @@
-def test_example_3():
-    # start-example
-    # Simple WHERE
-    query = sql.select("*").from_("users").where("status = ?")
+from pathlib import Path
 
-    # Multiple conditions (AND)
-    query = (
-        sql.select("*")
-        .from_("users")
-        .where("status = ?")
-        .where("created_at > ?")
+def test_example_3(tmp_path: Path) -> None:
+    from sqlspec import SQLSpec, sql
+    from sqlspec.adapters.sqlite.config import SqliteConfig
+
+    db = SQLSpec()
+    database = tmp_path / "example3.db"
+    config = SqliteConfig(
+        pool_config={
+            "database": database.name,
+            "timeout": 5.0,
+            "check_same_thread": False,
+            "cached_statements": 100,
+            "uri": False,
+        }
     )
-    # SQL: SELECT * FROM users WHERE status = ? AND created_at > ?
+    with db.provide_session(config) as session:
+        create_table_query = """CREATE TABLE if not exists users(id int primary key,name text,email text, status text, created_at timestamp, role text)"""
+        _ = session.execute(create_table_query)
+        # start-example
+        # Simple WHERE
+        query = sql.select("*").from_("users").where("status = ?")
+        result1 = session.execute(query, "active")
 
-    # OR conditions
-    query = (
-        sql.select("*")
-        .from_("users")
-        .where("status = ? OR role = ?")
-    )
+        # Multiple conditions (AND)
+        query = (
+            sql.select("*")
+            .from_("users")
+            .where("status = ?")
+            .where("created_at > ?")
+        )
+        # SQL: SELECT * FROM users WHERE status = ? AND created_at > ?
+        result2 = session.execute(query, "active", "2024-01-01")
 
-    # IN clause
-    query = sql.select("*").from_("users").where("id IN (?, ?, ?)")
-    # end-example
+        # OR conditions
+        query = (
+            sql.select("*")
+            .from_("users")
+            .where("status = ? OR role = ?")
+        )
+        result3 = session.execute(query, "active", "admin")
+
+        # IN clause
+        query = sql.select("*").from_("users").where("id IN (?, ?, ?)")
+        result4 = session.execute(query, 1, 2, 3)
+        # end-example
+

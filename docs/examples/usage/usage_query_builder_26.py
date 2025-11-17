@@ -1,22 +1,39 @@
-def test_example_26():
-    # start-example
-    from sqlspec import sql
+from pathlib import Path
 
-    # Good use case: dynamic filtering
-    def search_products(category=None, min_price=None, in_stock=None):
-        query = sql.select("*").from_("products")
-        params = []
+def test_example_26(tmp_path: Path) -> None:
+    from sqlspec import SQLSpec, sql
+    from sqlspec.adapters.sqlite.config import SqliteConfig
 
-        if category:
-            query = query.where("category_id = ?")
-            params.append(category)
+    db = SQLSpec()
+    database = tmp_path / "example26.db"
+    config = SqliteConfig(
+        pool_config={
+            "database": database.name,
+            "timeout": 5.0,
+            "check_same_thread": False,
+            "cached_statements": 100,
+            "uri": False,
+        }
+    )
+    with db.provide_session(config) as session:
+        session.execute("""CREATE TABLE if not exists products(id integer primary key autoincrement, category_id int, price real, stock int)""")
+        # start-example
+        # Good use case: dynamic filtering
+        def search_products(category=None, min_price=None, in_stock=None):
+            query = sql.select("*").from_("products")
+            params = []
 
-        if min_price:
-            query = query.where("price >= ?")
-            params.append(min_price)
+            if category:
+                query = query.where("category_id = ?")
+                params.append(category)
 
-        if in_stock:
-            query = query.where("stock > 0")
+            if min_price:
+                query = query.where("price >= ?")
+                params.append(min_price)
 
-        return session.execute(query, *params)
-    # end-example
+            if in_stock:
+                query = query.where("stock > 0")
+
+            return session.execute(query, *params)
+        # end-example
+
