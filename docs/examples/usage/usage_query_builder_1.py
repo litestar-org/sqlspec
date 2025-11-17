@@ -26,6 +26,4 @@ def test_example_1(tmp_path: Path) -> None:
         )
         # Execute with session
         result = session.execute(query, "active")
-    # end-example
-
-    # end-example
+        # end-example
