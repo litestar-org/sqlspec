@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Any
 
-__all__ = ("test_example_26", )
+__all__ = ("test_example_26",)
 
 
 def test_example_26(tmp_path: Path) -> None:
@@ -25,7 +26,9 @@ def test_example_26(tmp_path: Path) -> None:
 
         # start-example
         # Good use case: dynamic filtering
-        def search_products(category=None, min_price=None, in_stock=None):
+        def search_products(
+            category: Any | None = None, min_price: Any | None = None, in_stock: Any | None = None
+        ) -> Any:
             query = sql.select("*").from_("products")
             params = []
 

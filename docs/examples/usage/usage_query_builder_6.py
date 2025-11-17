@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Any
 
-__all__ = ("test_example_6", )
+__all__ = ("test_example_6",)
 
 
 def test_example_6(tmp_path: Path) -> None:
@@ -36,7 +37,7 @@ def test_example_6(tmp_path: Path) -> None:
         session.execute(query)
 
         # Pagination helper
-        def paginate(page=1, per_page=20):
+        def paginate(page: int = 1, per_page: int = 20) -> Any:
             offset = (page - 1) * per_page
             return sql.select("*").from_("users").order_by("id").limit(per_page).offset(offset)
 

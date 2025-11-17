@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Any
 
-__all__ = ("test_example_14", )
+__all__ = ("test_example_14",)
 
 
 def test_example_14(tmp_path: Path) -> None:
@@ -25,7 +26,7 @@ def test_example_14(tmp_path: Path) -> None:
 
         # start-example
         # Dynamic update builder
-        def update_user(user_id, **fields):
+        def update_user(user_id: Any, **fields: Any) -> Any:
             query = sql.update("users")
             params = []
 

@@ -1,7 +1,8 @@
 import datetime
 from pathlib import Path
+from typing import Any
 
-__all__ = ("test_example_23", )
+__all__ = ("test_example_23",)
 
 
 def test_example_23(tmp_path: Path) -> None:
@@ -28,10 +29,10 @@ def test_example_23(tmp_path: Path) -> None:
         base_query = sql.select("id", "name", "email", "status").from_("users")
 
         # Add filters based on context
-        def active_users():
+        def active_users() -> Any:
             return base_query.where("status = 'active'")
 
-        def recent_users(days=7):
+        def recent_users(days: int = 7) -> Any:
             return base_query.where("created_at >= ?")
 
         # Use in different contexts

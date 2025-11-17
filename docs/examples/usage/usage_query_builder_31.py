@@ -1,6 +1,6 @@
 from pathlib import Path
 
-__all__ = ("test_example_31", )
+__all__ = ("test_example_31",)
 
 
 def test_example_31(tmp_path: Path) -> None:

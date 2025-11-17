@@ -1,7 +1,7 @@
 import datetime
 from pathlib import Path
 
-__all__ = ("test_example_16", )
+__all__ = ("test_example_16",)
 
 
 def test_example_16(tmp_path: Path) -> None:

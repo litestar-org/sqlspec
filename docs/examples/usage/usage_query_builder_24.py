@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Any
 
-__all__ = ("test_example_24", )
+__all__ = ("test_example_24",)
 
 
 def test_example_24(tmp_path: Path) -> None:
@@ -26,15 +27,15 @@ def test_example_24(tmp_path: Path) -> None:
         # start-example
         class UserQueries:
             @staticmethod
-            def by_id():
+            def by_id() -> Any:
                 return sql.select("*").from_("users").where("id = ?")
 
             @staticmethod
-            def by_email():
+            def by_email() -> Any:
                 return sql.select("*").from_("users").where("email = ?")
 
             @staticmethod
-            def search(filters):
+            def search(filters: Any) -> Any:
                 query = sql.select("*").from_("users")
                 params = []
 

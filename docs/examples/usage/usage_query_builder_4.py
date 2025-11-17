@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Any
 
-__all__ = ("test_example_4", )
+__all__ = ("test_example_4",)
 
 
 def test_example_4(tmp_path: Path) -> None:
@@ -23,7 +24,7 @@ def test_example_4(tmp_path: Path) -> None:
         _ = session.execute(create_table_query)
 
         # start-example
-        def search_users(name=None, email=None, status=None):
+        def search_users(name: Any | None = None, email: Any | None = None, status: Any | None = None) -> Any:
             query = sql.select("id", "name", "email", "status").from_("users")
             params = []
 
