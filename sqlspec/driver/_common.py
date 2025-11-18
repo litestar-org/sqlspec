@@ -985,6 +985,13 @@ class CommonDriverAttributesMixin:
         expr = original_sql.expression
 
         if isinstance(expr, exp.Select):
+            if not expr.args.get("from"):
+                msg = (
+                    "Cannot create COUNT query: SELECT statement missing FROM clause. "
+                    "COUNT queries require a FROM clause to determine which table to count rows from."
+                )
+                raise ImproperConfigurationError(msg)
+
             if expr.args.get("group"):
                 subquery = expr.subquery(alias="grouped_data")
                 count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
