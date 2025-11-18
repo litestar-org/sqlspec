@@ -106,7 +106,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Test
-        run: uv run pytest -n 2 --dist=loadgroup 
+        run: uv run pytest -n 2 --dist=loadgroup
 
   # test-windows:
   #   runs-on: windows-latest
