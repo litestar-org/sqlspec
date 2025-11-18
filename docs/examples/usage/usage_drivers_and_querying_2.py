@@ -27,7 +27,7 @@ async def test_example_2_importable(postgres_service: PostgresService) -> None:
         await session.execute(create_table_query)
         # Insert with RETURNING
         result = await session.execute(
-            "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id", "Alice", "alice@example.com"
+            "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id", "Gretta", "gretta@example.com"
         )
         new_id = result.scalar()
         print(f"Inserted user with ID: {new_id}")
