@@ -40,86 +40,28 @@ Async Adapters
 
 For async adapters (AsyncPG, Asyncmy, Aiosqlite, Psqlpy), migration methods return awaitables:
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_migrations_1.py
+   :language: python
+   :caption: `Async Adapters`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
 
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-   config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://user:pass@localhost/mydb"},
-       migration_config={
-           "enabled": True,
-           "script_location": "migrations",
-       }
-   )
-
-   # Apply migrations
-   await config.migrate_up("head")
-   # Or use the alias
-   await config.upgrade("head")
-
-   # Rollback one revision
-   await config.migrate_down("-1")
-   # Or use the alias
-   await config.downgrade("-1")
-
-   # Check current version
-   current = await config.get_current_migration(verbose=True)
-   print(current)
-
-   # Create new migration
-   await config.create_migration("add users table", file_type="sql")
-
-   # Initialize migrations directory
-   await config.init_migrations()
-
-   # Stamp database to specific revision
-   await config.stamp_migration("0003")
-
-   # Convert timestamp to sequential migrations
-   await config.fix_migrations(dry_run=False, update_database=True, yes=True)
 
 Sync Adapters
 -------------
 
 For sync adapters (SQLite, DuckDB), migration methods execute immediately without await:
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_migrations_2.py
+   :language: python
+   :caption: `Sync Adapters`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
 
-   from sqlspec.adapters.sqlite import SqliteConfig
 
-   config = SqliteConfig(
-       pool_config={"database": "myapp.db"},
-       migration_config={
-           "enabled": True,
-           "script_location": "migrations",
-       }
-   )
-
-   # Apply migrations (no await needed)
-   config.migrate_up("head")
-   # Or use the alias
-   config.upgrade("head")
-
-   # Rollback one revision
-   config.migrate_down("-1")
-   # Or use the alias
-   config.downgrade("-1")
-
-   # Check current version
-   current = config.get_current_migration(verbose=True)
-   print(current)
-
-   # Create new migration
-   config.create_migration("add users table", file_type="sql")
-
-   # Initialize migrations directory
-   config.init_migrations()
-
-   # Stamp database to specific revision
-   config.stamp_migration("0003")
-
-   # Convert timestamp to sequential migrations
-   config.fix_migrations(dry_run=False, update_database=True, yes=True)
 
 Available Methods
 -----------------
@@ -171,7 +113,16 @@ def down(context: object | None = None) -> str | Iterable[str]:
        }
    }
 
+.. literalinclude:: ../examples/usage/usage_migrations_3.py
+   :language: python
+   :caption: `Template Profiles & Author Metadata`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
+
+
 Template fragments accept the following variables:
+
 
 - ``{title}`` – shared template title
 - ``{version}`` – generated revision identifier
@@ -241,13 +192,31 @@ For advanced use cases requiring custom logic, you can still use command classes
        migration_config={"script_location": "migrations"}
    )
 
+.. literalinclude:: ../examples/usage/usage_migrations_5.py
+   :language: python
+   :caption: `Configuration`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
+
+
+
    # Create commands instance
    commands = AsyncMigrationCommands(config)
 
    # Use commands directly
    await commands.upgrade("head")
 
+.. literalinclude:: ../examples/usage/usage_migrations_4.py
+   :language: python
+   :caption: `Command Classes (Advanced)`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
+
+
 This approach is useful when:
+
 
 - Building custom migration runners
 - Implementing migration lifecycle hooks
@@ -370,19 +339,26 @@ Python migrations provide more flexibility for complex operations:
        DROP TABLE user_roles;
        """
 
+.. literalinclude:: ../examples/usage/usage_migrations_6.py
+   :language: python
+   :caption: `Python Migrations`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
+
+
 **Advanced Usage:**
 
 Python migrations can also return a list of SQL statements:
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_migrations_7.py
+   :language: python
+   :caption: `Advanced Usage`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
 
-   def upgrade():
-       """Apply migration in multiple steps."""
-       return [
-           "CREATE TABLE products (id SERIAL PRIMARY KEY);",
-           "CREATE TABLE orders (id SERIAL PRIMARY KEY, product_id INTEGER);",
-           "CREATE INDEX idx_orders_product ON orders(product_id);",
-       ]
+
 
 .. _hybrid-versioning-guide:
 
@@ -665,6 +641,15 @@ If auto-sync is disabled, manually reconcile renamed migrations:
            old_version="20251018120000",
            new_version="0003"
        )
+
+.. literalinclude:: ../examples/usage/usage_migrations_8.py
+   :language: python
+   :caption: `Manual Version Reconciliation`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
+
+
 
 Troubleshooting
 ===============
