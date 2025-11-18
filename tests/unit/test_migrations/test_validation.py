@@ -182,7 +182,7 @@ def test_migration_gap_frozen() -> None:
     """Test MigrationGap is frozen (immutable)."""
     gap = MigrationGap(missing_version=parse_version("20251011130000"), applied_after=[parse_version("20251012120000")])
 
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         gap.missing_version = parse_version("20251011140000")  # type: ignore[misc]
 
 

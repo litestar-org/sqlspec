@@ -3,8 +3,10 @@
 from importlib import import_module
 from typing import Any
 
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.observability._config import TelemetryConfig
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import ensure_opentelemetry
 
 logger = get_logger("sqlspec.observability.spans")
 
@@ -117,10 +119,18 @@ class SpanManager:
 
     def _resolve_api(self) -> None:
         try:
+            ensure_opentelemetry()
+        except MissingDependencyError:
+            logger.debug("OpenTelemetry dependency missing - disabling spans")
+            self._enabled = False
+            self._tracer = None
+            return
+
+        try:
             trace = import_module("opentelemetry.trace")
             status_module = import_module("opentelemetry.trace.status")
         except ImportError:
-            logger.debug("OpenTelemetry dependency missing - disabling spans")
+            logger.debug("OpenTelemetry import failed - disabling spans")
             self._enabled = False
             self._tracer = None
             return

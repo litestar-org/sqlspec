@@ -11,24 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.typing import (
-    AIOSQL_INSTALLED,
-    ATTRS_INSTALLED,
-    CATTRS_INSTALLED,
-    FSSPEC_INSTALLED,
-    LITESTAR_INSTALLED,
-    MSGSPEC_INSTALLED,
-    NUMPY_INSTALLED,
-    OBSTORE_INSTALLED,
-    OPENTELEMETRY_INSTALLED,
-    ORJSON_INSTALLED,
-    PANDAS_INSTALLED,
-    PGVECTOR_INSTALLED,
-    POLARS_INSTALLED,
-    PROMETHEUS_INSTALLED,
-    PYARROW_INSTALLED,
-    PYDANTIC_INSTALLED,
-)
+from sqlspec.utils.dependencies import module_available
 
 __all__ = (
     "ensure_aiosql",
@@ -50,6 +33,19 @@ __all__ = (
     "import_string",
     "module_to_os_path",
 )
+
+
+def _require_dependency(
+    module_name: str, *, package_name: str | None = None, install_package: str | None = None
+) -> None:
+    """Raise MissingDependencyError when an optional dependency is absent."""
+
+    if module_available(module_name):
+        return
+
+    package = package_name or module_name
+    install = install_package or package
+    raise MissingDependencyError(package=package, install_package=install)
 
 
 def module_to_os_path(dotted_path: str = "app") -> "Path":
@@ -139,8 +135,7 @@ def ensure_aiosql() -> None:
     Raises:
         MissingDependencyError: If aiosql is not installed.
     """
-    if not AIOSQL_INSTALLED:
-        raise MissingDependencyError(package="aiosql", install_package="aiosql")
+    _require_dependency("aiosql")
 
 
 def ensure_attrs() -> None:
@@ -149,8 +144,7 @@ def ensure_attrs() -> None:
     Raises:
         MissingDependencyError: If attrs is not installed.
     """
-    if not ATTRS_INSTALLED:
-        raise MissingDependencyError(package="attrs", install_package="attrs")
+    _require_dependency("attrs")
 
 
 def ensure_cattrs() -> None:
@@ -159,8 +153,7 @@ def ensure_cattrs() -> None:
     Raises:
         MissingDependencyError: If cattrs is not installed.
     """
-    if not CATTRS_INSTALLED:
-        raise MissingDependencyError(package="cattrs", install_package="cattrs")
+    _require_dependency("cattrs")
 
 
 def ensure_fsspec() -> None:
@@ -169,8 +162,7 @@ def ensure_fsspec() -> None:
     Raises:
         MissingDependencyError: If fsspec is not installed.
     """
-    if not FSSPEC_INSTALLED:
-        raise MissingDependencyError(package="fsspec", install_package="fsspec")
+    _require_dependency("fsspec")
 
 
 def ensure_litestar() -> None:
@@ -179,8 +171,7 @@ def ensure_litestar() -> None:
     Raises:
         MissingDependencyError: If litestar is not installed.
     """
-    if not LITESTAR_INSTALLED:
-        raise MissingDependencyError(package="litestar", install_package="litestar")
+    _require_dependency("litestar")
 
 
 def ensure_msgspec() -> None:
@@ -189,8 +180,7 @@ def ensure_msgspec() -> None:
     Raises:
         MissingDependencyError: If msgspec is not installed.
     """
-    if not MSGSPEC_INSTALLED:
-        raise MissingDependencyError(package="msgspec", install_package="msgspec")
+    _require_dependency("msgspec")
 
 
 def ensure_numpy() -> None:
@@ -199,8 +189,7 @@ def ensure_numpy() -> None:
     Raises:
         MissingDependencyError: If numpy is not installed.
     """
-    if not NUMPY_INSTALLED:
-        raise MissingDependencyError(package="numpy", install_package="numpy")
+    _require_dependency("numpy")
 
 
 def ensure_obstore() -> None:
@@ -209,8 +198,7 @@ def ensure_obstore() -> None:
     Raises:
         MissingDependencyError: If obstore is not installed.
     """
-    if not OBSTORE_INSTALLED:
-        raise MissingDependencyError(package="obstore", install_package="obstore")
+    _require_dependency("obstore")
 
 
 def ensure_opentelemetry() -> None:
@@ -219,8 +207,7 @@ def ensure_opentelemetry() -> None:
     Raises:
         MissingDependencyError: If opentelemetry-api is not installed.
     """
-    if not OPENTELEMETRY_INSTALLED:
-        raise MissingDependencyError(package="opentelemetry-api", install_package="opentelemetry")
+    _require_dependency("opentelemetry", package_name="opentelemetry-api", install_package="opentelemetry")
 
 
 def ensure_orjson() -> None:
@@ -229,8 +216,7 @@ def ensure_orjson() -> None:
     Raises:
         MissingDependencyError: If orjson is not installed.
     """
-    if not ORJSON_INSTALLED:
-        raise MissingDependencyError(package="orjson", install_package="orjson")
+    _require_dependency("orjson")
 
 
 def ensure_pandas() -> None:
@@ -239,8 +225,7 @@ def ensure_pandas() -> None:
     Raises:
         MissingDependencyError: If pandas is not installed.
     """
-    if not PANDAS_INSTALLED:
-        raise MissingDependencyError(package="pandas", install_package="pandas")
+    _require_dependency("pandas")
 
 
 def ensure_pgvector() -> None:
@@ -249,8 +234,7 @@ def ensure_pgvector() -> None:
     Raises:
         MissingDependencyError: If pgvector is not installed.
     """
-    if not PGVECTOR_INSTALLED:
-        raise MissingDependencyError(package="pgvector", install_package="pgvector")
+    _require_dependency("pgvector")
 
 
 def ensure_polars() -> None:
@@ -259,8 +243,7 @@ def ensure_polars() -> None:
     Raises:
         MissingDependencyError: If polars is not installed.
     """
-    if not POLARS_INSTALLED:
-        raise MissingDependencyError(package="polars", install_package="polars")
+    _require_dependency("polars")
 
 
 def ensure_prometheus() -> None:
@@ -269,8 +252,7 @@ def ensure_prometheus() -> None:
     Raises:
         MissingDependencyError: If prometheus-client is not installed.
     """
-    if not PROMETHEUS_INSTALLED:
-        raise MissingDependencyError(package="prometheus-client", install_package="prometheus")
+    _require_dependency("prometheus_client", package_name="prometheus-client", install_package="prometheus")
 
 
 def ensure_pyarrow() -> None:
@@ -279,8 +261,7 @@ def ensure_pyarrow() -> None:
     Raises:
         MissingDependencyError: If pyarrow is not installed.
     """
-    if not PYARROW_INSTALLED:
-        raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
+    _require_dependency("pyarrow")
 
 
 def ensure_pydantic() -> None:
@@ -289,5 +270,4 @@ def ensure_pydantic() -> None:
     Raises:
         MissingDependencyError: If pydantic is not installed.
     """
-    if not PYDANTIC_INSTALLED:
-        raise MissingDependencyError(package="pydantic", install_package="pydantic")
+    _require_dependency("pydantic")
