@@ -1,13 +1,19 @@
 __all__ = ("test_async_methods",)
 
 
-async def test_async_methods() -> None:
+from pytest_databases.docker.postgres import PostgresService
+
+
+async def test_async_methods(postgres_service: PostgresService) -> None:
     # start-example
     from sqlspec.adapters.asyncpg import AsyncpgConfig
 
+    dsn = (
+        f"postgresql://{postgres_service.user}:{postgres_service.password}"
+        f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+    )
     config = AsyncpgConfig(
-        pool_config={"dsn": "postgresql://user:pass@localhost/mydb"},
-        migration_config={"enabled": True, "script_location": "migrations"},
+        pool_config={"dsn": dsn}, migration_config={"enabled": True, "script_location": "migrations"}
     )
 
     # Apply migrations
