@@ -1,4 +1,4 @@
-name: Tests And Linting
+
 
 on:
   pull_request:
@@ -89,8 +89,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        matrix:
+          python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     timeout-minutes: 30
     steps:
       - name: Check out repository
