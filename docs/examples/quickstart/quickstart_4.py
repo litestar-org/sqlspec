@@ -25,7 +25,7 @@ async def test_quickstart_4() -> None:
     async with db_manager.provide_session(db) as session:
         await session.execute(
             """
-            CREATE TABLE if not exists users (id INTEGER, name TEXT, email TEXT)
+            CREATE TABLE if not exists users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)
             """
         )
         await session.execute("INSERT INTO users VALUES (?, ?, ?)", 1, "Alice", "alice@example.com")
