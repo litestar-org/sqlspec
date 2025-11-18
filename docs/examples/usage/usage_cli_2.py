@@ -1,7 +1,7 @@
 from sqlspec.adapters.asyncmy import AsyncmyConfig
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-__all__ = ("test_multi_config", )
+__all__ = ("test_multi_config",)
 
 
 def test_multi_config() -> None:
