@@ -166,7 +166,7 @@ include = [
   "sqlspec/loader.py",             # Loader module
   "sqlspec/storage/**/*.py",       # Storage layer
   "sqlspec/observability/**/*.py", # Observability utilities
-  "sqlspec/migrations/**/*.py",    # Migrations module
+  # "sqlspec/migrations/**/*.py",    # Migrations module
   # === ADAPTER TYPE CONVERTERS ===
   "sqlspec/adapters/adbc/type_converter.py",     # ADBC type converter
   "sqlspec/adapters/bigquery/type_converter.py", # BigQuery type converter
