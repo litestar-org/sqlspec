@@ -37,9 +37,31 @@ GUARD_ATTRS = tuple(f"has_{name[3:]}" for name in EVENT_ATTRS)
 class LifecycleDispatcher:
     """Dispatches lifecycle hooks with guard flags and diagnostics counters."""
 
-    __slots__ = ("_hooks", "_counters", *GUARD_ATTRS)
+    __slots__ = (
+        "_counters",
+        "_hooks",
+        "has_connection_create",
+        "has_connection_destroy",
+        "has_error",
+        "has_pool_create",
+        "has_pool_destroy",
+        "has_query_complete",
+        "has_query_start",
+        "has_session_end",
+        "has_session_start",
+    )
 
     def __init__(self, hooks: "dict[str, Iterable[Any]] | None" = None) -> None:
+        self.has_pool_create = False
+        self.has_pool_destroy = False
+        self.has_connection_create = False
+        self.has_connection_destroy = False
+        self.has_session_start = False
+        self.has_session_end = False
+        self.has_query_start = False
+        self.has_query_complete = False
+        self.has_error = False
+
         normalized: dict[LifecycleEvent, tuple[Any, ...]] = {}
         for event_name, guard_attr in zip(EVENT_ATTRS, GUARD_ATTRS, strict=False):
             callables = hooks.get(event_name) if hooks else None
