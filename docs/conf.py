@@ -196,7 +196,7 @@ html_theme_options = {
     "github_url": "https://github.com/litestar-org/sqlspec",
     "discord_url": "https://discord.gg/dSDXd4mKhp",
     "navigation_with_keys": True,
-    "globaltoc_expand_depth": 2,
+    "globaltoc_expand_depth": 0,
     "light_logo": "_static/logo-default.png",
     "dark_logo": "_static/logo-default.png",
     "discussion_url": "https://discord.gg/dSDXd4mKhp",
