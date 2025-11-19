@@ -18,7 +18,7 @@ async def test_example_2_importable(postgres_service: PostgresService) -> None:
     db = spec.add_config(AsyncpgConfig(pool_config={"dsn": dsn, "min_size": 10, "max_size": 20}))
     async with spec.provide_session(db) as session:
         create_table_query = """
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE IF NOT EXISTS usage2_users (
             id SERIAL PRIMARY KEY,
             name VARCHAR(100),
             email VARCHAR(100) UNIQUE
@@ -27,12 +27,12 @@ async def test_example_2_importable(postgres_service: PostgresService) -> None:
         await session.execute(create_table_query)
         # Insert with RETURNING
         result = await session.execute(
-            "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id", "Gretta", "gretta@example.com"
+            "INSERT INTO usage2_users (name, email) VALUES ($1, $2) RETURNING id", "Gretta", "gretta@example.com"
         )
         new_id = result.scalar()
         print(f"Inserted user with ID: {new_id}")
         # Basic query
-        result = await session.execute("SELECT * FROM users WHERE id = $1", 1)
+        result = await session.execute("SELECT * FROM usage2_users WHERE id = $1", 1)
         user = result.one()
         print(f"User: {user}")
     # end-example

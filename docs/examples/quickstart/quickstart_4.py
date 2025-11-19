@@ -25,11 +25,11 @@ async def test_quickstart_4() -> None:
     async with db_manager.provide_session(db) as session:
         await session.execute(
             """
-            CREATE TABLE if not exists users (id INTEGER, name TEXT, email TEXT)
+            CREATE TABLE if not exists qs4_users (id INTEGER, name TEXT, email TEXT)
             """
         )
-        await session.execute("INSERT INTO users VALUES (?, ?, ?)", 100, "Alice", "alice@example.com")
-        user = await session.select_one("SELECT * FROM users WHERE id = ?", 100, schema_type=User)
+        await session.execute("INSERT INTO qs4_users VALUES (?, ?, ?)", 100, "Alice", "alice@example.com")
+        user = await session.select_one("SELECT * FROM qs4_users WHERE id = ?", 100, schema_type=User)
         print(f"User: {user.name}")
     # end-example
 
