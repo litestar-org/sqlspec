@@ -13,11 +13,11 @@ async def test_example_8_aiosqlite_config() -> None:
     spec = SQLSpec()
 
     async with spec.provide_session(config) as session:
-        create_table_query = """CREATE TABLE IF NOT EXISTS users (
+        create_table_query = """CREATE TABLE IF NOT EXISTS usage8_users (
            id INTEGER PRIMARY KEY AUTOINCREMENT,
            name TEXT NOT NULL
        );"""
         await session.execute(create_table_query)
-        await session.execute("INSERT INTO users (name) VALUES (?)", "Bob")
-        await session.execute("SELECT * FROM users")
+        await session.execute("INSERT INTO usage8_users (name) VALUES (?)", "Bob")
+        await session.execute("SELECT * FROM usage8_users")
     # end-example
