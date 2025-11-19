@@ -43,10 +43,9 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
 
 sql = SQLSpec()
-config = DuckDBConfig(database=":memory:")
-sql.add_config(config)
+duckdb = sql.add_config(DuckDBConfig(database=":memory:"))
 
-with sql.provide_session() as session:
+with sql.provide_session(duckdb) as session:
     # Native Arrow fetch - columnar format!
     result = session.select_to_arrow(
         "SELECT * FROM read_parquet('data.parquet') WHERE amount > ?",
