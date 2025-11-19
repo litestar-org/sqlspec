@@ -22,7 +22,7 @@ async def test_example_4_async(postgres_service: PostgresService) -> None:
 
     async with spec.provide_session(db) as session:
         create_table_query = """
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE IF NOT EXISTS usage4_users (
             id SERIAL PRIMARY KEY,
             name VARCHAR(100),
             email VARCHAR(100) UNIQUE
@@ -31,9 +31,9 @@ async def test_example_4_async(postgres_service: PostgresService) -> None:
         await session.execute(create_table_query)
         # Insert with RETURNING
         await session.execute(
-            "INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id", "Bill", "bill@example.com"
+            "INSERT INTO usage4_users (name, email) VALUES (%s, %s) RETURNING id", "Bill", "bill@example.com"
         )
-        await session.execute("SELECT * FROM users")
+        await session.execute("SELECT * FROM usage4_users")
     # end-example
 
     await spec.close_pool(db)

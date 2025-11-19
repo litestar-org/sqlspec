@@ -26,7 +26,7 @@ async def test_example_9_asyncmy_config(mysql_service: MySQLService) -> None:
     )
 
     async with spec.provide_session(config) as session:
-        create_table_query = """CREATE TABLE IF NOT EXISTS users (
+        create_table_query = """CREATE TABLE IF NOT EXISTS usage9_users (
            id INT PRIMARY KEY,
            name VARCHAR(100),
            email VARCHAR(100)
@@ -34,8 +34,8 @@ async def test_example_9_asyncmy_config(mysql_service: MySQLService) -> None:
         await session.execute(create_table_query)
         # insert a user
         await session.execute(
-            "INSERT INTO users (id, name, email) VALUES (%s, %s, %s)", (1, "John Doe", "john.doe@example.com")
+            "INSERT INTO usage9_users (id, name, email) VALUES (%s, %s, %s)", (1, "John Doe", "john.doe@example.com")
         )
         # query the user
-        await session.execute("SELECT * FROM users WHERE id = %s", 1)
+        await session.execute("SELECT * FROM usage9_users WHERE id = %s", 1)
     # end-example
