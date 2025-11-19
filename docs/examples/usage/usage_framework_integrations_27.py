@@ -1,6 +1,10 @@
 # start-example
 import pytest
+
 from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("test_create_user", "test_db" )
+
 
 @pytest.fixture
 async def test_db():
@@ -17,10 +21,10 @@ async def test_db():
         """)
         yield session
 
-async def test_create_user(test_db):
-    result = await test_db.execute(
-        "INSERT INTO users (name) VALUES ($1) RETURNING id",
-        "Test User"
-    )
+
+async def test_create_user(test_db) -> None:
+    result = await test_db.execute("INSERT INTO users (name) VALUES ($1) RETURNING id", "Test User")
     assert result.scalar() == 1
+
+
 # end-example

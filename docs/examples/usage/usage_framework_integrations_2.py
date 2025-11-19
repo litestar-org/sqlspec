@@ -12,6 +12,8 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
+__all__ = ("client", "get_user", "health_check", "stats", "test_stub" )
+
 
 # Inject database session
 @get("/users/{user_id:int}")
@@ -48,7 +50,7 @@ async def client(postgres_service: PostgresService):
             "database": postgres_service.database,
         }
     )
-    db = spec.add_config(config)
+    spec.add_config(config)
 
     sqlspec_plugin = SQLSpecPlugin(sqlspec=spec)
     app = Litestar(route_handlers=[health_check, stats, get_user], plugins=[sqlspec_plugin], debug=True)
@@ -56,6 +58,6 @@ async def client(postgres_service: PostgresService):
         yield client
 
 
-async def test_stub(client: AsyncTestClient):
+async def test_stub(client: AsyncTestClient) -> None:
     response = await client.get("/stats")
     assert response == {"status": "healthy"}

@@ -1,8 +1,11 @@
 # start-example
-import asyncio
 from contextvars import ContextVar
 
-db_session: ContextVar = ContextVar('db_session', default=None)
+__all__ = ("cleanup_session", "get_session", "test_stub" )
+
+
+db_session: ContextVar = ContextVar("db_session", default=None)
+
 
 async def get_session():
     session = db_session.get()
@@ -11,12 +14,16 @@ async def get_session():
         db_session.set(session)
     return session
 
-async def cleanup_session():
+
+async def cleanup_session() -> None:
     session = db_session.get()
     if session:
         await session.__aexit__(None, None, None)
         db_session.set(None)
+
+
 # end-example
 
-def test_stub():
+
+def test_stub() -> None:
     assert True
