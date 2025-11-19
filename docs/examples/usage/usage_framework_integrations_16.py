@@ -1,5 +1,10 @@
+__all__ = ("add_db_session", "cleanup_db_session", "list_users", "test_stub")
 # start-example
-__all__ = ("add_db_session", "cleanup_db_session", "list_users", "test_stub" )
+import json
+
+from fastapi import FastAPI, Request
+
+app = FastAPI()
 
 
 @app.middleware("request")

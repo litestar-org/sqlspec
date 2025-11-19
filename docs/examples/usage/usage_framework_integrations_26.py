@@ -3,9 +3,13 @@ __all__ = ("UserRepository", "get_user", "test_stub")
 
 
 # Good: Separate repository layer
-from fastapi import Depends
+from typing import Annotated
+
+from fastapi import Depends, FastAPI
 
 from sqlspec import AsyncDriverAdapterBase
+
+app = FastAPI()
 
 
 class UserRepository:
@@ -19,7 +23,7 @@ class UserRepository:
 
 # Use in handlers
 @app.get("/users/{user_id}")
-async def get_user(user_id: int, db: AsyncDriverAdapterBase = Depends(get_db)):
+async def get_user(user_id: int, db: Annotated[AsyncDriverAdapterBase, Depends(get_db)]):
     repo = UserRepository(db)
     return await repo.get_user(user_id)
 

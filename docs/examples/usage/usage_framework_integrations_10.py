@@ -1,4 +1,5 @@
 # start-example
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,7 +7,7 @@ from fastapi import FastAPI
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-__all__ = ("lifespan", "test_stub" )
+__all__ = ("lifespan", "test_stub")
 
 
 # Configure database
@@ -16,7 +17,7 @@ db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/m
 
 # Lifespan context manager
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Startup
     yield
     # Shutdown

@@ -3,6 +3,8 @@ __all__ = ("generate_report", "get_analytics_db", "get_main_db", "test_stub")
 
 
 # Main database
+from typing import Annotated
+
 from fastapi import Depends, FastAPI
 
 from sqlspec import AsyncDriverAdapterBase, SQLSpec
@@ -32,8 +34,8 @@ app = FastAPI()
 # Use in handlers
 @app.get("/report")
 async def generate_report(
-    main_db: AsyncDriverAdapterBase = Depends(get_main_db),
-    analytics_db: AsyncDriverAdapterBase = Depends(get_analytics_db),
+    main_db: Annotated[AsyncDriverAdapterBase, Depends(get_main_db)],
+    analytics_db: Annotated[AsyncDriverAdapterBase, Depends(get_analytics_db)],
 ) -> dict:
     users = await main_db.execute("SELECT COUNT(*) FROM users")
     events = await analytics_db.execute("SELECT COUNT(*) FROM events")

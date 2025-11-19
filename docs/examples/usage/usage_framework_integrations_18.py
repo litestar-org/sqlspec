@@ -1,5 +1,5 @@
 # start-example
-__all__ = ("close_db", "get_db", "get_user", "test_stub" )
+__all__ = ("close_db", "get_db", "get_user", "test_stub")
 
 
 def get_db():

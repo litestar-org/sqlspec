@@ -1,13 +1,13 @@
-# start-example
 from litestar import post
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 
-__all__ = ("create_user", "test_stub" )
+__all__ = ("create_user", "test_stub")
 
 
+# start-example
 spec = SQLSpec()
 db = spec.add_config(
     AsyncpgConfig(
