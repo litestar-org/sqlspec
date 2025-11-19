@@ -5,6 +5,9 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
+__all__ = ("index", "test_app_exists" )
+
+
 # Configure database and create plugin
 spec = SQLSpec()
 db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/mydb", "min_size": 10, "max_size": 20}))
