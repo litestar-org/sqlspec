@@ -1,5 +1,12 @@
 # start-example
-__all__ = ("get_user", "test_stub" )
+__all__ = ("get_user", "test_stub")
+
+
+import json
+
+from fastapi import FastAPI, Request
+
+app = FastAPI()
 
 
 @app.get("/users/<user_id:int>")

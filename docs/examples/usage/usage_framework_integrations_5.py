@@ -1,6 +1,9 @@
 # start-example
-__all__ = ("test_stub", )
+__all__ = ("test_stub",)
 
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 spec = SQLSpec()
 db = spec.add_config(

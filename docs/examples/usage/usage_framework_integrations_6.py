@@ -1,9 +1,11 @@
 # start-example
+from litestar import get
+
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 
-__all__ = ("list_users", "test_stub" )
+__all__ = ("list_users", "test_stub")
 
 
 spec = SQLSpec()

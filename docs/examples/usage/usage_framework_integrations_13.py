@@ -1,8 +1,14 @@
 # start-example
-__all__ = ("generate_report", "get_analytics_db", "get_main_db", "test_stub" )
+__all__ = ("generate_report", "get_analytics_db", "get_main_db", "test_stub")
 
 
 # Main database
+from fastapi import Depends, FastAPI
+
+from sqlspec import AsyncDriverAdapterBase, SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+spec = SQLSpec()
 main_db = spec.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/main"}))
 
 # Analytics database
@@ -18,6 +24,9 @@ async def get_main_db():
 async def get_analytics_db():
     async with spec.provide_session(analytics_db) as session:
         yield session
+
+
+app = FastAPI()
 
 
 # Use in handlers

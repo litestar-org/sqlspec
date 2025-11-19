@@ -1,6 +1,11 @@
 # start-example
-__all__ = ("create_user", "test_stub" )
+__all__ = ("create_user", "test_stub")
 
+
+from litestar import post
+
+from sqlspec import AsyncDriverAdapterBase, SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 spec = SQLSpec()
 db = spec.add_config(

@@ -1,8 +1,13 @@
 # start-example
-__all__ = ("UserRepository", "get_user", "test_stub" )
+__all__ = ("UserRepository", "get_user", "test_stub")
 
 
 # Good: Separate repository layer
+from fastapi import Depends
+
+from sqlspec import AsyncDriverAdapterBase
+
+
 class UserRepository:
     def __init__(self, db: AsyncDriverAdapterBase) -> None:
         self.db = db

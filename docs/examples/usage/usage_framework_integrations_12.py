@@ -1,9 +1,17 @@
 # start-example
-__all__ = ("create_user", "test_stub" )
+__all__ = ("create_user", "test_stub")
+
+from typing import Annotated
+
+from fastapi import Depends, FastAPI
+
+from sqlspec import AsyncDriverAdapterBase
+
+app = FastAPI()
 
 
 @app.post("/users")
-async def create_user(user_data: dict, db: AsyncDriverAdapterBase = Depends(get_db_session)) -> dict:
+async def create_user(user_data: dict, db: Annotated[AsyncDriverAdapterBase, Depends(get_db_session)]) -> dict:
     async with db.begin_transaction():
         result = await db.execute(
             "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id", user_data["name"], user_data["email"]

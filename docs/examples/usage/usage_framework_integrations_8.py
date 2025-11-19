@@ -7,21 +7,20 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.asyncpg.litestar import AsyncpgStore
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
-__all__ = ("test_stub", )
+__all__ = ("test_stub",)
 
 
 # Configure database with session support
 spec = SQLSpec()
-db = spec.add_config(
-    AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/db"},
-        extension_config={"litestar": {"session_table": "litestar_sessions"}},
-        migration_config={"script_location": "migrations", "include_extensions": ["litestar"]},
-    )
+config = AsyncpgConfig(
+    pool_config={"dsn": "postgresql://localhost/db"},
+    extension_config={"litestar": {"session_table": "litestar_sessions"}},
+    migration_config={"script_location": "migrations", "include_extensions": ["litestar"]},
 )
+db = spec.add_config(config)
 
 # Create session store using adapter-specific class
-store = AsyncpgStore(db)
+store = AsyncpgStore(config)
 
 # Configure Litestar with plugin and session middleware
 app = Litestar(plugins=[SQLSpecPlugin(sqlspec=spec)], middleware=[ServerSideSessionConfig(store=store).middleware])

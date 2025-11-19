@@ -4,7 +4,7 @@ from sanic import Sanic
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-__all__ = ("close_db", "test_stub" )
+__all__ = ("close_db", "test_stub")
 
 
 app = Sanic("MyApp")

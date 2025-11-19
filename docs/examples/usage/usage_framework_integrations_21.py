@@ -1,5 +1,9 @@
 # start-example
-__all__ = ("Database", "example_usage", "test_stub" )
+__all__ = ("Database", "example_usage", "test_stub")
+
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 
 class Database:

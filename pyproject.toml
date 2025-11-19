@@ -50,6 +50,7 @@ psycopg = ["psycopg[binary,pool]"]
 pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
+sanic = ["sanic"]
 spanner = ["google-cloud-spanner"]
 uuid = ["uuid-utils"]
 

@@ -1,10 +1,12 @@
 # start-example
+from litestar import Litestar, get
+
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
-__all__ = ("generate_report", "test_stub" )
+__all__ = ("generate_report", "test_stub")
 
 
 spec = SQLSpec()

@@ -1,8 +1,13 @@
 # start-example
-__all__ = ("close_pools", "lifespan", "test_stub" )
+__all__ = ("close_pools", "lifespan", "test_stub")
 
 
 # FastAPI
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield

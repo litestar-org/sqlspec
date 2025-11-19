@@ -1,5 +1,8 @@
 # start-example
-__all__ = ("DatabaseSession", "example_usage", "test_stub" )
+__all__ = ("DatabaseSession", "example_usage", "test_stub")
+
+
+from sqlspec import SQLSpec
 
 
 class DatabaseSession:
