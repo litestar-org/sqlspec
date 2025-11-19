@@ -17,16 +17,16 @@ def test_example_6_sqlite_config() -> None:
     with spec.provide_session(config) as session:
         # Create table
         session.execute("""
-           CREATE TABLE IF NOT EXISTS users (
+           CREATE TABLE IF NOT EXISTS usage6_users (
                id INTEGER PRIMARY KEY,
                name TEXT NOT NULL
            )
        """)
 
         # Insert with parameters
-        session.execute("INSERT INTO users (name) VALUES (?)", "Alice")
+        session.execute("INSERT INTO usage6_users (name) VALUES (?)", "Alice")
 
         # Query
-        result = session.execute("SELECT * FROM users")
+        result = session.execute("SELECT * FROM usage6_users")
         result.all()
     # end-example
