@@ -1,5 +1,8 @@
-# start-example
 __all__ = ("close_db", "get_db", "get_user", "test_stub")
+# start-example
+from flask import Flask
+
+app = Flask(__name__)
 
 
 def get_db():
