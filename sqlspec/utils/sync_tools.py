@@ -271,16 +271,7 @@ async def get_next(iterable: Any, default: Any = NO_VALUE, *args: Any) -> Any:  
 
     Returns:
         The next value of the iterable.
-
-    Raises:
-        StopAsyncIteration: The iterable given is not async.
     """
-    has_default = bool(not isinstance(default, NoValue))
-    try:
-        return await iterable.__anext__()
-
-    except StopAsyncIteration as exc:
-        if has_default:
-            return default
-
-        raise StopAsyncIteration from exc
+    if isinstance(default, NoValue):
+        return await anext(iterable)
+    return await anext(iterable, default)
