@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10, <4.0"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -1350,18 +1350,6 @@ wheels = [
 ]
 
 [[package]]
-name = "faker"
-version = "38.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "tzdata" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/04/05/206c151fe8ca9c8e46963d6c8b6e2e281f272009dad30fe3792005393a5e/faker-38.0.0.tar.gz", hash = "sha256:797aa03fa86982dfb6206918acc10ebf3655bdaa89ddfd3e668d7cc69537331a", size = 1935705, upload-time = "2025-11-12T01:47:39.586Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4d/1e/e6d1940d2c2617d7e6a0a3fdd90e506ff141715cdc4c3ecd7217d937e656/faker-38.0.0-py3-none-any.whl", hash = "sha256:ad4ea6fbfaac2a75d92943e6a79c81f38ecff92378f6541dea9a677ec789a5b2", size = 1975561, upload-time = "2025-11-12T01:47:36.672Z" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.121.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2516,35 +2504,19 @@ wheels = [
 
 [[package]]
 name = "litestar"
-version = "2.18.0"
-source = { registry = "https://pypi.org/simple" }
+version = "3.0.0b0"
+source = { git = "https://github.com/euri10/litestar.git#9bcae1e42dabce7a7d4308cebec0615d4c1c93c4" }
 dependencies = [
     { name = "anyio" },
     { name = "click" },
     { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
     { name = "httpx" },
-    { name = "litestar-htmx" },
     { name = "msgspec" },
     { name = "multidict" },
     { name = "multipart" },
-    { name = "polyfactory" },
-    { name = "pyyaml" },
     { name = "rich" },
     { name = "rich-click" },
     { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/75/e0c286719860bc63459dd3364616bb436aecfbd8ab26f212a3a7957a551f/litestar-2.18.0.tar.gz", hash = "sha256:be8f91813854722b7a2f37cbb57d76977050a96b2427d3c4455d406f0f4fcd50", size = 372890, upload-time = "2025-10-05T16:24:00.094Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/ec/76d3e07db8bac2f3248acb8879c7a8ba6b6c96e846c40d8474d1a0f79160/litestar-2.18.0-py3-none-any.whl", hash = "sha256:459ec993bafe47245c981d802a0a0c73f47c98313b3c4e47923eebe978f0e511", size = 564603, upload-time = "2025-10-05T16:23:58.439Z" },
-]
-
-[[package]]
-name = "litestar-htmx"
-version = "0.5.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3f/b9/7e296aa1adada25cce8e5f89a996b0e38d852d93b1b656a2058226c542a2/litestar_htmx-0.5.0.tar.gz", hash = "sha256:e02d1a3a92172c874835fa3e6749d65ae9fc626d0df46719490a16293e2146fb", size = 119755, upload-time = "2025-06-11T21:19:45.573Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/24/8d99982f0aa9c1cd82073c6232b54a0dbe6797c7d63c0583a6c68ee3ddf2/litestar_htmx-0.5.0-py3-none-any.whl", hash = "sha256:92833aa47e0d0e868d2a7dbfab75261f124f4b83d4f9ad12b57b9a68f86c50e6", size = 9970, upload-time = "2025-06-11T21:19:44.465Z" },
 ]
 
 [[package]]
@@ -3772,19 +3744,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/67/89/e09d9897a70b607e22a36c9eae85a5b829581108fd1e3d4292e5c0f52939/polars_runtime_32-1.35.2-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:3b9006902fc51b768ff747c0f74bd4ce04005ee8aeb290ce9c07ce1cbe1b58a9", size = 37850590, upload-time = "2025-11-09T13:19:08.154Z" },
     { url = "https://files.pythonhosted.org/packages/dc/40/96a808ca5cc8707894e196315227f04a0c82136b7fb25570bc51ea33b88d/polars_runtime_32-1.35.2-cp39-abi3-win_amd64.whl", hash = "sha256:ddc015fac39735592e2e7c834c02193ba4d257bb4c8c7478b9ebe440b0756b84", size = 41290019, upload-time = "2025-11-09T13:19:12.214Z" },
     { url = "https://files.pythonhosted.org/packages/f4/d1/8d1b28d007da43c750367c8bf5cb0f22758c16b1104b2b73b9acadb2d17a/polars_runtime_32-1.35.2-cp39-abi3-win_arm64.whl", hash = "sha256:6861145aa321a44eda7cc6694fb7751cb7aa0f21026df51b5faa52e64f9dc39b", size = 36955684, upload-time = "2025-11-09T13:19:15.666Z" },
-]
-
-[[package]]
-name = "polyfactory"
-version = "3.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "faker" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/45/c6/2f795ede27e82bf6ed10a6b689f975017e36bf497915bfeafc3932b1a613/polyfactory-3.0.0.tar.gz", hash = "sha256:c1be54fc10fe738415eef2248bcfc687e3d74634f5e73b70e4ba58952df31363", size = 304234, upload-time = "2025-11-15T11:23:02.003Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/54/86/742c4eb237cdb5e7e6dfb1474f5f0dac967896185f832c012dff4d7bdce2/polyfactory-3.0.0-py3-none-any.whl", hash = "sha256:ad9ba3b3f04c292d30673587946e1c5d18e249074368b09abb7c9455288cfc37", size = 61237, upload-time = "2025-11-15T11:23:00.524Z" },
 ]
 
 [[package]]
@@ -6181,7 +6140,7 @@ requires-dist = [
     { name = "google-cloud-bigquery", marker = "extra == 'bigquery'" },
     { name = "google-cloud-spanner", marker = "extra == 'spanner'" },
     { name = "google-cloud-storage", marker = "extra == 'bigquery'" },
-    { name = "litestar", marker = "extra == 'litestar'" },
+    { name = "litestar", marker = "extra == 'litestar'", git = "https://github.com/euri10/litestar.git" },
     { name = "msgspec", marker = "extra == 'msgspec'" },
     { name = "msgspec", marker = "extra == 'performance'" },
     { name = "mypy-extensions" },

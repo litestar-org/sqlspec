@@ -31,7 +31,9 @@ duckdb = ["duckdb"]
 fastapi = ["fastapi"]
 flask = ["flask"]
 fsspec = ["fsspec"]
-litestar = ["litestar"]
+litestar = [
+    "litestar",
+]
 msgspec = ["msgspec"]
 mypyc = []
 nanoid = ["fastnanoid>=0.4.1"]
@@ -296,6 +298,7 @@ filterwarnings = [
   "ignore:`use_rich_markup=` will be deprecated:PendingDeprecationWarning",
   "ignore:`show_metavars_column=` will be deprecated:PendingDeprecationWarning",
   "ignore:`append_metavars_help=` will be deprecated:PendingDeprecationWarning",
+  "ignore:Call to deprecated function 'resolve_before_request'. Deprecated in litestar 3.0. This function will be removed in 4.0. Use '.before_request attribute' instead:DeprecationWarning:litestar",
 ]
 markers = [
   "integration: marks tests that require an external database",
@@ -536,3 +539,6 @@ split-on-trailing-comma = false
 [tool.ruff.lint.flake8-tidy-imports]
 # Disallow all relative imports.
 ban-relative-imports = "all"
+
+[tool.uv.sources]
+litestar = { git = "https://github.com/euri10/litestar.git" }

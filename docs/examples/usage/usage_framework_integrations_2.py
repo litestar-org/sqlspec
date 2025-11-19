@@ -1,4 +1,3 @@
-# start-example
 from typing import Any
 
 import pytest
@@ -12,9 +11,10 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
-__all__ = ("client", "get_user", "health_check", "stats", "test_stub" )
+__all__ = ("client", "get_user", "health_check", "stats", "test_stub")
 
 
+# start-example
 # Inject database session
 @get("/users/{user_id:int}")
 async def get_user(user_id: int, db_session: AsyncDriverAdapterBase) -> dict:
@@ -53,11 +53,13 @@ async def client(postgres_service: PostgresService):
     spec.add_config(config)
 
     sqlspec_plugin = SQLSpecPlugin(sqlspec=spec)
+    async with spec.provide_session(config) as session:
+        await session.execute("""create table if not exists users(id int primary key, name text, email text)""")
     app = Litestar(route_handlers=[health_check, stats, get_user], plugins=[sqlspec_plugin], debug=True)
     async with AsyncTestClient(app) as client:
         yield client
 
 
 async def test_stub(client: AsyncTestClient) -> None:
-    response = await client.get("/stats")
-    assert response == {"status": "healthy"}
+    response = await client.get("/health")
+    assert response.json() == {"status": "healthy"}
