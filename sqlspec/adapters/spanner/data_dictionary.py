@@ -1,30 +1,46 @@
-from typing import Any
+"""Spanner metadata queries using INFORMATION_SCHEMA."""
 
-from sqlspec.driver import SyncDataDictionaryBase
+from typing import TYPE_CHECKING, Any, cast
+
+from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
+
+if TYPE_CHECKING:
+    from sqlspec.driver import VersionInfo
+
+
+__all__ = ("SpannerDataDictionary",)
 
 
 class SpannerDataDictionary(SyncDataDictionaryBase):
-    """Query Spanner INFORMATION_SCHEMA for metadata."""
+    """Fetch table, column, and index metadata from Spanner."""
 
-    def get_tables(self, schema: str | None = None) -> list[str]:
-        """Query INFORMATION_SCHEMA.TABLES."""
+    def get_version(self, driver: "SyncDriverAdapterBase") -> "VersionInfo | None":
+        _ = driver
+        return None
+
+    def get_feature_flag(self, driver: "SyncDriverAdapterBase", feature: str) -> bool:
+        _ = driver, feature
+        return False
+
+    def get_optimal_type(self, driver: "SyncDriverAdapterBase", type_category: str) -> str:
+        _ = driver, type_category
+        return ""
+
+    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
         sql = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = @schema"
-        schema_val = schema or ""  # Spanner usually uses empty string or specific schema
-        # If schema is None, maybe we want all user tables?
-        # Spanner uses 'public' or empty string mostly.
-        # Let's assume empty string is default schema if not provided.
-
+        params: dict[str, Any]
         if schema is None:
             sql = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ''"
             params = {}
         else:
             params = {"schema": schema}
 
-        results = self.driver.select(sql, params)
-        return [row["TABLE_NAME"] for row in results]  # type: ignore
+        results = driver.select(sql, params)
+        return [cast("str", row["TABLE_NAME"]) for row in results]
 
-    def get_columns(self, table: str, schema: str | None = None) -> list[dict[str, Any]]:
-        """Query INFORMATION_SCHEMA.COLUMNS."""
+    def get_columns(
+        self, driver: "SyncDriverAdapterBase", table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
         sql = """
             SELECT COLUMN_NAME, SPANNER_TYPE, IS_NULLABLE
             FROM INFORMATION_SCHEMA.COLUMNS
@@ -32,19 +48,24 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         """
         params: dict[str, Any] = {"table": table}
         if schema is not None:
-            sql += " AND TABLE_SCHEMA = @schema"
+            sql = f"{sql} AND TABLE_SCHEMA = @schema"
             params["schema"] = schema
         else:
-            sql += " AND TABLE_SCHEMA = ''"
+            sql = f"{sql} AND TABLE_SCHEMA = ''"
 
-        results = self.driver.select(sql, params)
+        results = driver.select(sql, params)
         return [
-            {"name": row["COLUMN_NAME"], "type": row["SPANNER_TYPE"], "nullable": row["IS_NULLABLE"] == "YES"}
-            for row in results  # type: ignore
+            {
+                "name": row["COLUMN_NAME"],
+                "type": row["SPANNER_TYPE"],
+                "nullable": row["IS_NULLABLE"] == "YES",
+            }
+            for row in results
         ]
 
-    def get_indexes(self, table: str, schema: str | None = None) -> list[dict[str, Any]]:
-        """Query INFORMATION_SCHEMA.INDEXES."""
+    def get_indexes(
+        self, driver: "SyncDriverAdapterBase", table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
         sql = """
             SELECT INDEX_NAME, INDEX_TYPE, IS_UNIQUE
             FROM INFORMATION_SCHEMA.INDEXES
@@ -52,13 +73,14 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         """
         params: dict[str, Any] = {"table": table}
         if schema is not None:
-            sql += " AND TABLE_SCHEMA = @schema"
+            sql = f"{sql} AND TABLE_SCHEMA = @schema"
             params["schema"] = schema
         else:
-            sql += " AND TABLE_SCHEMA = ''"
+            sql = f"{sql} AND TABLE_SCHEMA = ''"
 
-        results = self.driver.select(sql, params)
+        results = driver.select(sql, params)
         return [
             {"name": row["INDEX_NAME"], "type": row["INDEX_TYPE"], "unique": row["IS_UNIQUE"]}
-            for row in results  # type: ignore
+            for row in results
         ]
+

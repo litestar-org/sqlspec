@@ -1,52 +1,57 @@
 """Google Cloud Spanner SQL dialect (GoogleSQL variant).
 
-This dialect inherits from BigQuery because both use the GoogleSQL standard.
-It adds support for Spanner-specific features like INTERLEAVE IN PARENT and TTL.
+Extends the BigQuery dialect with Spanner-only DDL features:
+`INTERLEAVE IN PARENT` for interleaved tables and `TTL INTERVAL ... ON ...`
+for row-level time-to-live policies.
 """
 
-import logging
-from sqlglot import exp
-from sqlglot.dialects import BigQuery
+from typing import Any, cast
 
-logger = logging.getLogger(__name__)
+from sqlglot import exp
+from sqlglot.dialects.bigquery import BigQuery
+from sqlglot.tokens import TokenType
+
+__all__ = ("Spanner",)
+
+
+_SPANNER_KEYWORDS: dict[str, TokenType] = {}
+interleave_token = getattr(TokenType, "INTERLEAVE", None)
+if interleave_token is not None:
+    _SPANNER_KEYWORDS["INTERLEAVE"] = interleave_token
+ttl_token = getattr(TokenType, "TTL", None)
+if ttl_token is not None:
+    _SPANNER_KEYWORDS["TTL"] = ttl_token
+
+_TTL_MIN_COMPONENTS = 2
+
 
 class Spanner(BigQuery):
     """Google Cloud Spanner SQL dialect."""
 
     class Tokenizer(BigQuery.Tokenizer):
-        """Extend BigQuery tokenizer with Spanner keywords."""
-        # We don't add INTERLEAVE/TTL to KEYWORDS because sqlglot TokenType doesn't have them.
-        # They will be parsed as identifiers and matched by text in the parser.
+        """Tokenizer adds Spanner-only keywords when supported by sqlglot."""
+
+        KEYWORDS = {**BigQuery.Tokenizer.KEYWORDS, **_SPANNER_KEYWORDS}
 
     class Parser(BigQuery.Parser):
-        """Override parser to handle INTERLEAVE and TTL clauses."""
+        """Parse Spanner extensions such as INTERLEAVE and TTL clauses."""
 
-        def _parse_table_parts(self, schema: bool = False, is_db_reference: bool = False) -> exp.Expression:
-            """Override to parse INTERLEAVE IN PARENT clause.
+        def _parse_table_parts(
+            self, schema: "bool" = False, is_db_reference: "bool" = False, wildcard: "bool" = False
+        ) -> exp.Table:
+            """Parse Spanner table options including interleaving metadata."""
+            table = super()._parse_table_parts(schema=schema, is_db_reference=is_db_reference, wildcard=wildcard)
 
-            Syntax:
-                INTERLEAVE IN PARENT parent_table [ON DELETE {CASCADE|NO ACTION}]
-            """
-            # Parse standard table definition first
-            table = super()._parse_table_parts(schema=schema, is_db_reference=is_db_reference)
+            if self._match_text_seq("INTERLEAVE", "IN", "PARENT"):  # type: ignore[no-untyped-call]
+                parent = cast("exp.Expression", self._parse_table(schema=True, is_db_reference=True))
+                on_delete: str | None = None
 
-            # Check for INTERLEAVE clause
-            # Debug: print current token
-            # print(f"DEBUG: current token: {self._curr.text}, type: {self._curr.token_type}")
-            
-            if self._match_text_seq("INTERLEAVE", "IN", "PARENT"):
-                # Parse parent table name
-                parent = self._parse_table_name()
-                on_delete = None
-
-                # Parse ON DELETE action
-                if self._match_text_seq("ON", "DELETE"):
-                    if self._match_text_seq("CASCADE"):
+                if self._match_text_seq("ON", "DELETE"):  # type: ignore[no-untyped-call]
+                    if self._match_text_seq("CASCADE"):  # type: ignore[no-untyped-call]
                         on_delete = "CASCADE"
-                    elif self._match_text_seq("NO", "ACTION"):
+                    elif self._match_text_seq("NO", "ACTION"):  # type: ignore[no-untyped-call]
                         on_delete = "NO ACTION"
 
-                # Attach to table expression using custom properties
                 table.set("interleave_parent", parent)
                 if on_delete:
                     table.set("interleave_on_delete", on_delete)
@@ -54,49 +59,40 @@ class Spanner(BigQuery):
             return table
 
         def _parse_property(self) -> exp.Expression:
-            """Override to parse TTL property.
+            """Parse Spanner TTL property as a Property expression."""
+            if self._match_text_seq("TTL"):  # type: ignore[no-untyped-call]
+                self._match_text_seq("INTERVAL")  # type: ignore[no-untyped-call]
+                interval = cast("exp.Expression", self._parse_string())
+                self._match_text_seq("ON")  # type: ignore[no-untyped-call]
+                column = cast("exp.Expression", self._parse_id_var())
 
-            Syntax:
-                TTL INTERVAL 'duration' ON column_name
-            """
-            if self._match_text_seq("TTL"):
-                # Parse TTL INTERVAL '30 days' ON column_name
-                self._match_text_seq("INTERVAL")
-                interval = self._parse_string()
-                self._match_text_seq("ON")
-                column = self._parse_id_var()
+                return exp.Property(this=exp.Literal.string("TTL"), value=exp.Tuple(expressions=[interval, column]))
 
-                # Create a Property expression
-                return exp.Property(
-                    this=exp.Literal.string("TTL"),
-                    value=exp.Tuple(expressions=[interval, column]),
-                )
-            return super()._parse_property()
+            return cast("exp.Expression", super()._parse_property())
 
     class Generator(BigQuery.Generator):
-        """Override generator to output INTERLEAVE and TTL syntax."""
+        """Generate Spanner-specific DDL syntax."""
 
-        def table_sql(self, expression: exp.Expression) -> str:
-            """Override to generate INTERLEAVE clause."""
-            sql = super().table_sql(expression)
+        def table_sql(self, expression: exp.Table, sep: str = " ") -> str:
+            """Render INTERLEAVE clause when present on a table expression."""
+            sql = super().table_sql(expression, sep=sep)
 
-            # Add INTERLEAVE clause if present
             parent = expression.args.get("interleave_parent")
             if parent:
-                sql += f"\nINTERLEAVE IN PARENT {self.sql(parent)}"
+                sql = f"{sql}\nINTERLEAVE IN PARENT {self.sql(parent)}"
                 on_delete = expression.args.get("interleave_on_delete")
                 if on_delete:
-                    sql += f" ON DELETE {on_delete}"
+                    sql = f"{sql} ON DELETE {on_delete}"
 
             return sql
 
-        def property_sql(self, expression: exp.Expression) -> str:
-            """Override to generate TTL property."""
-            if expression.this.name == "TTL":
-                # Extract values from Tuple
-                values = expression.args.get("value").expressions
-                interval = self.sql(values[0])
-                column = self.sql(values[1])
-                return f"TTL INTERVAL {interval} ON {column}"
+        def property_sql(self, expression: exp.Property) -> str:
+            """Render TTL property in Spanner syntax."""
+            if getattr(expression.this, "name", "").upper() == "TTL":
+                values = cast("Any", expression.args.get("value"))
+                if values and getattr(values, "expressions", None) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
+                    interval = self.sql(values.expressions[0])
+                    column = self.sql(values.expressions[1])
+                    return f"TTL INTERVAL {interval} ON {column}"
 
             return super().property_sql(expression)
