@@ -1,4 +1,3 @@
-import pytest
 from sqlglot import parse_one
 
 from sqlspec.adapters.spanner.dialect import Spanner
@@ -32,7 +31,9 @@ def test_parse_ttl_clause() -> None:
     # Verify TTL property parsed correctly
     assert ast.sql(dialect=Spanner)
     properties = ast.args.get("properties")
-    ttl_prop = next((p for p in properties.expressions if p.this.name == "TTL"), None)
+    ttl_prop = None
+    if properties is not None and getattr(properties, "expressions", None):
+        ttl_prop = next((p for p in properties.expressions if getattr(p.this, "name", "") == "TTL"), None)
     assert ttl_prop is not None
 
 
@@ -44,7 +45,7 @@ def test_generate_interleave_syntax() -> None:
   PRIMARY KEY (parent_id, child_id)
 )
 INTERLEAVE IN PARENT parent ON DELETE CASCADE"""
-    
+
     ast = parse_one(sql, read=Spanner)
     generated = ast.sql(dialect=Spanner)
     assert "INTERLEAVE IN PARENT parent ON DELETE CASCADE" in generated
@@ -58,7 +59,7 @@ def test_generate_ttl_syntax() -> None:
   PRIMARY KEY (order_id)
 )
 TTL INTERVAL '30 days' ON created_at"""
-    
+
     ast = parse_one(sql, read=Spanner)
     generated = ast.sql(dialect=Spanner)
     assert "TTL INTERVAL '30 days' ON created_at" in generated
