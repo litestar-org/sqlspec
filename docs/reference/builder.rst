@@ -514,6 +514,238 @@ Base Classes
    :undoc-members:
    :show-inheritance:
 
+Vector Distance Functions
+=========================
+
+The query builder provides portable vector similarity search functions that generate dialect-specific SQL across PostgreSQL (pgvector), MySQL 9+, Oracle 23ai+, BigQuery, DuckDB, and other databases.
+
+.. note::
+   Vector functions are designed for AI/ML similarity search with embedding vectors. The SQL is generated at ``build(dialect=X)`` time, enabling portable query definitions that execute against multiple database types.
+
+Column Methods
+--------------
+
+.. py:method:: Column.vector_distance(other_vector, metric="euclidean")
+
+   Calculate vector distance using the specified metric.
+
+   Generates dialect-specific SQL for vector distance operations.
+
+   :param other_vector: Vector to compare against (list, Column reference, or SQLGlot expression)
+   :type other_vector: list[float] | Column | exp.Expression
+   :param metric: Distance metric to use (default: "euclidean")
+   :type metric: str
+   :return: FunctionColumn expression for use in SELECT, WHERE, ORDER BY
+   :rtype: FunctionColumn
+
+   **Supported Metrics:**
+
+   - ``euclidean`` - L2 distance (default)
+   - ``cosine`` - Cosine distance
+   - ``inner_product`` - Negative inner product (for similarity ranking)
+   - ``euclidean_squared`` - L2² distance (Oracle only)
+
+   **Examples:**
+
+   .. code-block:: python
+
+      from sqlspec import sql
+      from sqlspec.builder import Column
+
+      query_vector = [0.1, 0.2, 0.3]
+
+      # Basic distance query
+      query = (
+          sql.select("id", "title", Column("embedding").vector_distance(query_vector).alias("distance"))
+          .from_("documents")
+          .where(Column("embedding").vector_distance(query_vector) < 0.5)
+          .order_by("distance")
+          .limit(10)
+      )
+
+      # Using dynamic attribute access
+      query = (
+          sql.select("*")
+          .from_("docs")
+          .order_by(sql.embedding.vector_distance(query_vector, metric="cosine"))
+          .limit(10)
+      )
+
+      # Compare two vector columns
+      query = (
+          sql.select("*")
+          .from_("pairs")
+          .where(Column("vec1").vector_distance(Column("vec2"), metric="euclidean") < 0.3)
+      )
+
+.. py:method:: Column.cosine_similarity(other_vector)
+
+   Calculate cosine similarity (1 - cosine_distance).
+
+   Convenience method that computes similarity instead of distance.
+   Returns values in range [-1, 1] where 1 = identical vectors.
+
+   :param other_vector: Vector to compare against
+   :type other_vector: list[float] | Column | exp.Expression
+   :return: FunctionColumn expression computing ``1 - cosine_distance(self, other_vector)``
+   :rtype: FunctionColumn
+
+   **Example:**
+
+   .. code-block:: python
+
+      from sqlspec import sql
+
+      query_vector = [0.5, 0.5, 0.5]
+
+      # Find most similar documents
+      query = (
+          sql.select("id", "title", sql.embedding.cosine_similarity(query_vector).alias("similarity"))
+          .from_("documents")
+          .order_by(sql.column("similarity").desc())
+          .limit(10)
+      )
+
+Database Compatibility
+----------------------
+
+Vector functions generate dialect-specific SQL:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 25 25 35
+
+   * - Database
+     - Euclidean
+     - Cosine
+     - Inner Product
+   * - PostgreSQL (pgvector)
+     - ``<->`` operator
+     - ``<=>`` operator
+     - ``<#>`` operator
+   * - MySQL 9+
+     - ``DISTANCE(..., 'EUCLIDEAN')``
+     - ``DISTANCE(..., 'COSINE')``
+     - ``DISTANCE(..., 'DOT')``
+   * - Oracle 23ai+
+     - ``VECTOR_DISTANCE(..., EUCLIDEAN)``
+     - ``VECTOR_DISTANCE(..., COSINE)``
+     - ``VECTOR_DISTANCE(..., DOT)``
+   * - BigQuery
+     - ``EUCLIDEAN_DISTANCE(...)``
+     - ``COSINE_DISTANCE(...)``
+     - ``DOT_PRODUCT(...)``
+   * - DuckDB
+     - ``SQRT(LIST_SUM(...))``
+     - ``1 - (LIST_DOT_PRODUCT(...) / ...)``
+     - ``-LIST_DOT_PRODUCT(...)``
+   * - Generic
+     - ``VECTOR_DISTANCE(..., 'EUCLIDEAN')``
+     - ``VECTOR_DISTANCE(..., 'COSINE')``
+     - ``VECTOR_DISTANCE(..., 'INNER_PRODUCT')``
+
+Usage Examples
+--------------
+
+**Basic Similarity Search**
+
+.. code-block:: python
+
+   from sqlspec import sql
+
+   # Find documents similar to query vector
+   query_vector = [0.1, 0.2, 0.3]
+
+   query = (
+       sql.select("id", "title", sql.embedding.vector_distance(query_vector).alias("distance"))
+       .from_("documents")
+       .order_by("distance")
+       .limit(10)
+   )
+
+   # PostgreSQL generates: SELECT id, title, embedding <-> '[0.1,0.2,0.3]' AS distance ...
+   # MySQL generates: SELECT id, title, DISTANCE(embedding, STRING_TO_VECTOR('[0.1,0.2,0.3]'), 'EUCLIDEAN') AS distance ...
+   # Oracle generates: SELECT id, title, VECTOR_DISTANCE(embedding, TO_VECTOR('[0.1,0.2,0.3]'), EUCLIDEAN) AS distance ...
+
+**Threshold Filtering**
+
+.. code-block:: python
+
+   # Find documents within distance threshold
+   query = (
+       sql.select("*")
+       .from_("documents")
+       .where(sql.embedding.vector_distance(query_vector, metric="euclidean") < 0.5)
+       .order_by(sql.embedding.vector_distance(query_vector))
+   )
+
+**Similarity Ranking**
+
+.. code-block:: python
+
+   # Rank by cosine similarity (higher = more similar)
+   query = (
+       sql.select("id", "content", sql.embedding.cosine_similarity(query_vector).alias("score"))
+       .from_("articles")
+       .order_by(sql.column("score").desc())
+       .limit(5)
+   )
+
+**Multiple Metrics**
+
+.. code-block:: python
+
+   # Compare different distance metrics in single query
+   query = (
+       sql.select(
+           "id",
+           sql.embedding.vector_distance(query_vector, metric="euclidean").alias("l2_dist"),
+           sql.embedding.vector_distance(query_vector, metric="cosine").alias("cos_dist"),
+           sql.embedding.cosine_similarity(query_vector).alias("similarity")
+       )
+       .from_("documents")
+       .limit(10)
+   )
+
+**Combined Filters**
+
+.. code-block:: python
+
+   # Vector search with additional filters
+   query = (
+       sql.select("*")
+       .from_("products")
+       .where("category = ?")
+       .where("in_stock = TRUE")
+       .where(sql.embedding.vector_distance(query_vector) < 0.3)
+       .order_by(sql.embedding.vector_distance(query_vector))
+       .limit(20)
+   )
+
+Dialect-Agnostic Construction
+------------------------------
+
+Queries are constructed once and executed against multiple databases:
+
+.. code-block:: python
+
+   from sqlspec import sql
+
+   # Define query once
+   query = (
+       sql.select("id", "title", sql.embedding.vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+       .from_("documents")
+       .order_by("distance")
+       .limit(10)
+   )
+
+   # Execute with different adapters
+   pg_result = await pg_session.execute(query)      # → PostgreSQL SQL with <-> operator
+   mysql_result = await mysql_session.execute(query)  # → MySQL SQL with DISTANCE()
+   oracle_result = await oracle_session.execute(query)  # → Oracle SQL with VECTOR_DISTANCE()
+
+The dialect is selected at ``build(dialect=X)`` time based on the driver, not at query construction time.
+
 Filter Integration
 ==================
 
