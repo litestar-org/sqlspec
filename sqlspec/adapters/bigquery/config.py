@@ -2,7 +2,7 @@
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
@@ -103,7 +103,7 @@ class BigQueryDriverFeatures(TypedDict):
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["table_queue"]]
 
 
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")

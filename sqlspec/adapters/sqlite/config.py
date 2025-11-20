@@ -3,7 +3,7 @@
 import logging
 import uuid
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -62,7 +62,7 @@ class SqliteDriverFeatures(TypedDict):
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["table_queue"]]
 
 
 __all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")

@@ -3,7 +3,7 @@
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -97,7 +97,7 @@ class PsycopgDriverFeatures(TypedDict):
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["listen_notify", "table_queue", "listen_notify_durable"]]
 
 
 __all__ = (

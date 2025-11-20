@@ -1,7 +1,5 @@
 """Oracle Advanced Queuing backend for EventChannel."""
 
-from __future__ import annotations
-
 import contextlib
 import uuid
 from datetime import datetime, timezone
