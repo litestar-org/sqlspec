@@ -3412,6 +3412,152 @@ When implementing framework extensions:
 6. **TypedDict for type safety**: Define config schemas in `sqlspec/config.py`
 7. **Inheritance for related frameworks**: Child framework extends parent, adds specific helpers
 
+## Custom SQLGlot Expression Pattern
+
+### Overview
+
+When implementing database-specific operations that require dialect-specific SQL generation (e.g., vector distance functions, JSON operations, array functions), use custom SQLGlot expressions with dual registration.
+
+### When to Use This Pattern
+
+Use custom SQLGlot expressions when:
+
+- Operation must generate different SQL syntax per database dialect
+- Feature needs to work portably across multiple databases
+- Native database functions/operators vary significantly (pgvector `<->` vs MySQL `DISTANCE()` vs Oracle `VECTOR_DISTANCE()`)
+- Expression may be nested inside other SQLGlot expressions
+
+### Implementation Pattern
+
+**Step 1: Create Custom Expression Class**
+
+Define expression class with dialect-aware `sql()` method:
+
+```python
+from sqlglot import exp
+from typing import Any
+
+class VectorDistance(exp.Expression):
+    """Vector distance expression with dialect-specific generation."""
+
+    arg_types = {"this": True, "expression": True, "metric": True}
+
+    def sql(self, dialect: Any = None, **opts: Any) -> str:
+        """Generate dialect-specific SQL at build time."""
+        dialect_name = str(dialect).lower() if dialect else "generic"
+
+        left_sql = self.left.sql(dialect=dialect, **opts)
+        right_sql = self.right.sql(dialect=dialect, **opts)
+        metric = self.metric
+
+        # PostgreSQL: Use operators
+        if dialect_name in {"postgres", "postgresql"}:
+            return self._sql_postgres(left_sql, right_sql, metric)
+
+        # MySQL: Use DISTANCE function
+        if dialect_name == "mysql":
+            return self._sql_mysql(left_sql, right_sql, metric)
+
+        # Generic fallback
+        return self._sql_generic(left_sql, right_sql, metric)
+```
+
+**Step 2: Register with SQLGlot Generator System**
+
+Register generators for nested expression support:
+
+```python
+def _register_with_sqlglot() -> None:
+    """Register VectorDistance with SQLGlot's generator dispatch system."""
+    from sqlglot.dialects.postgres import Postgres
+    from sqlglot.generator import Generator
+
+    def vector_distance_sql_postgres(generator: Generator, expression: VectorDistance) -> str:
+        return expression._sql_postgres(
+            generator.sql(expression.left),
+            generator.sql(expression.right),
+            expression.metric
+        )
+
+    # Register with base generator for generic fallback
+    Generator.TRANSFORMS[VectorDistance] = lambda g, e: e._sql_generic(...)
+
+    # Register dialect-specific generators
+    Postgres.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_postgres
+
+# Register on module import
+_register_with_sqlglot()
+```
+
+### Why Both are Needed
+
+**Direct `sql()` override**: Works when expression is top-level
+
+**Generator registration**: Required when expression is nested (e.g., inside `Binary`, `Paren`)
+
+Example:
+
+```python
+# Nested in comparison - requires generator registration
+query = sql.select("*").where(Column("embedding").vector_distance([0.1]) < 0.5)
+# The comparison wraps VectorDistance in Binary expression
+# SQLGlot's generator dispatches to registered transform
+```
+
+### Dialect-Agnostic Construction Pattern
+
+Define queries once, execute against multiple databases:
+
+```python
+# Define once
+query = sql.select("*").where(sql.embedding.vector_distance([0.1, 0.2]) < 0.5)
+
+# Execute with different adapters
+pg_result = await pg_session.execute(query)      # → embedding <-> '[0.1,0.2]'
+mysql_result = await mysql_session.execute(query)  # → DISTANCE(embedding, ...)
+```
+
+Dialect selected at `build(dialect=X)` time, not at construction time.
+
+### Key Principles
+
+1. **Build-Time Dialect Detection**: Check dialect in `sql(dialect=X)`, not at construction
+2. **Dual Registration**: Override `sql()` AND register with `Generator.TRANSFORMS`
+3. **Delegation Pattern**: Dialect methods (`_sql_postgres`, `_sql_mysql`) for clarity
+4. **Generic Fallback**: Always provide fallback for unsupported dialects
+5. **Composability**: Works nested in other SQLGlot expressions
+
+### Testing Requirements
+
+**Unit Tests** - Test SQL generation:
+
+```python
+def test_vector_distance_postgres():
+    expr = VectorDistance(...)
+    assert "<->" in expr.sql(dialect="postgres")
+
+def test_vector_distance_mysql():
+    expr = VectorDistance(...)
+    assert "DISTANCE(" in expr.sql(dialect="mysql")
+```
+
+**Integration Tests** - Test with real databases:
+
+```python
+@pytest.mark.postgres
+async def test_vector_distance_execution(pg_session):
+    query = sql.select("*").where(sql.embedding.vector_distance([0.1]) < 0.5)
+    result = await pg_session.execute(query)
+```
+
+### Examples
+
+**Vector Distance Functions** (`sqlspec/builder/_vector_expressions.py`):
+
+- 6 dialect-specific generators (PostgreSQL, MySQL, Oracle, BigQuery, DuckDB, Generic)
+- Demonstrates operator vs function generation per dialect
+- Full nested expression support via generator registration
+
 ## Agent Workflow Coordination
 
 ### Automated Multi-Agent Workflow

@@ -254,6 +254,122 @@ class Column:
         """SQL COUNT(*) function."""
         return FunctionColumn(exp.Count(this=exp.Star()))
 
+    @staticmethod
+    def _normalize_metric(metric: str) -> str:
+        """Normalize and validate vector distance metric."""
+        normalized_metric = metric.lower()
+        valid_metrics = {"euclidean", "cosine", "inner_product", "euclidean_squared"}
+        if normalized_metric not in valid_metrics:
+            msg = f"Invalid metric: {metric}. Must be one of {valid_metrics}"
+            raise ValueError(msg)
+        return normalized_metric
+
+    def _convert_vector_value(self, value: "list[float] | Column | exp.Expression") -> "exp.Expression":
+        """Convert a vector input into a SQLGlot expression."""
+        if isinstance(value, list):
+            return exp.Array(expressions=[exp.Literal.number(v) for v in value])
+        if isinstance(value, Column):
+            return value._expression
+        if isinstance(value, exp.Expression):
+            return value
+        msg = f"Unsupported vector type: {type(value)}"
+        raise TypeError(msg)
+
+    def vector_distance(
+        self, other_vector: "list[float] | Column | exp.Expression", metric: str = "euclidean"
+    ) -> "FunctionColumn":
+        """Calculate vector distance using specified metric.
+
+        Generates dialect-specific SQL for vector distance calculation:
+        - PostgreSQL (pgvector): Operators <->, <=>, <#>
+        - MySQL 9+: DISTANCE(col, vec, 'METRIC') function
+        - Oracle 23ai+: VECTOR_DISTANCE(col, vec, METRIC) function
+
+        Args:
+            other_vector: Vector to compare against (list, Column, or SQLGlot expression).
+            metric: Distance metric to use. Options:
+                   - "euclidean": L2 distance (default)
+                   - "cosine": Cosine distance
+                   - "inner_product": Negative inner product
+                   - "euclidean_squared": L2² distance (Oracle only)
+
+        Returns:
+            FunctionColumn expression for use in SELECT, WHERE, ORDER BY.
+
+        Examples:
+            Basic distance query with threshold:
+                >>> query = (
+                ...     sql.select("*")
+                ...     .from_("docs")
+                ...     .where(
+                ...         Column("embedding").vector_distance(
+                ...             [0.1, 0.2], metric="euclidean"
+                ...         )
+                ...         < 0.5
+                ...     )
+                ... )
+
+            Distance in SELECT clause with alias:
+                >>> query = (
+                ...     sql.select(
+                ...         "id",
+                ...         Column("embedding")
+                ...         .vector_distance([0.1, 0.2])
+                ...         .as_("dist"),
+                ...     )
+                ...     .from_("docs")
+                ...     .order_by("dist")
+                ... )
+
+            Compare two vector columns:
+                >>> query = (
+                ...     sql.select("*")
+                ...     .from_("pairs")
+                ...     .where(
+                ...         Column("vec1").vector_distance(
+                ...             Column("vec2"), metric="cosine"
+                ...         )
+                ...         < 0.3
+                ...     )
+                ... )
+        """
+        from sqlspec.builder._vector_expressions import VectorDistance
+
+        normalized_metric = self._normalize_metric(metric)
+        vec_expr = self._convert_vector_value(other_vector)
+        distance_expr = VectorDistance(this=self._expression, expression=vec_expr, metric=normalized_metric)
+        return FunctionColumn(distance_expr)
+
+    def cosine_similarity(self, other_vector: "list[float] | Column | exp.Expression") -> "FunctionColumn":
+        """Calculate cosine similarity (1 - cosine_distance).
+
+        Convenience method that computes similarity instead of distance.
+        Returns values in range [-1, 1] where 1 = identical vectors.
+
+        Args:
+            other_vector: Vector to compare against (list, Column, or expression).
+
+        Returns:
+            FunctionColumn expression: 1 - cosine_distance(self, other_vector).
+
+        Examples:
+            Find most similar documents:
+                >>> query = (
+                ...     sql.select(
+                ...         "id",
+                ...         Column("embedding")
+                ...         .cosine_similarity([0.1, 0.2])
+                ...         .as_("score"),
+                ...     )
+                ...     .from_("docs")
+                ...     .order_by(sql.column("score").desc())
+                ...     .limit(10)
+                ... )
+        """
+        cosine_dist = self.vector_distance(other_vector, metric="cosine")
+        similarity_expr = exp.Sub(this=exp.Literal.number(1), expression=exp.Paren(this=cosine_dist._expression))
+        return FunctionColumn(similarity_expr)
+
     def alias(self, alias_name: str) -> exp.Expression:
         """Create an aliased column expression."""
         return exp.Alias(this=self._expression, alias=alias_name)
@@ -294,18 +410,39 @@ class FunctionColumn:
 
     __slots__ = ("_expression",)
 
-    def __init__(self, expression: exp.Expression) -> None:
+    def __init__(self, expression: "exp.Expression") -> None:
         self._expression = expression
 
     def _convert_value(self, value: Any) -> exp.Expression:
         """Convert a Python value to a SQLGlot expression."""
         return _convert_value(value)
 
+    @property
+    def sqlglot_expression(self) -> "exp.Expression":
+        """Return underlying SQLGlot expression."""
+        return self._expression
+
     def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
         return ColumnExpression(exp.EQ(this=self._expression, expression=self._convert_value(other)))
 
     def __ne__(self, other: object) -> ColumnExpression:  # type: ignore[override]
         return ColumnExpression(exp.NEQ(this=self._expression, expression=self._convert_value(other)))
+
+    def __gt__(self, other: Any) -> ColumnExpression:
+        """Greater than (>)."""
+        return ColumnExpression(exp.GT(this=self._expression, expression=self._convert_value(other)))
+
+    def __ge__(self, other: Any) -> ColumnExpression:
+        """Greater than or equal (>=)."""
+        return ColumnExpression(exp.GTE(this=self._expression, expression=self._convert_value(other)))
+
+    def __lt__(self, other: Any) -> ColumnExpression:
+        """Less than (<)."""
+        return ColumnExpression(exp.LT(this=self._expression, expression=self._convert_value(other)))
+
+    def __le__(self, other: Any) -> ColumnExpression:
+        """Less than or equal (<=)."""
+        return ColumnExpression(exp.LTE(this=self._expression, expression=self._convert_value(other)))
 
     def like(self, pattern: str) -> ColumnExpression:
         return ColumnExpression(exp.Like(this=self._expression, expression=self._convert_value(pattern)))
@@ -355,9 +492,21 @@ class FunctionColumn:
         converted_values = [self._convert_value(v) for v in values]
         return ColumnExpression(exp.NEQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
 
-    def alias(self, alias_name: str) -> exp.Expression:
+    def alias(self, alias_name: str) -> "exp.Expression":
         """Create an aliased function expression."""
         return exp.Alias(this=self._expression, alias=alias_name)
+
+    def as_(self, alias: str) -> "exp.Alias":
+        """Create an aliased expression using sqlglot helper."""
+        return cast("exp.Alias", exp.alias_(self._expression, alias))
+
+    def asc(self) -> "exp.Ordered":
+        """Create an ASC ordering expression."""
+        return exp.Ordered(this=self._expression, desc=False)
+
+    def desc(self) -> "exp.Ordered":
+        """Create a DESC ordering expression."""
+        return exp.Ordered(this=self._expression, desc=True)
 
     def __hash__(self) -> int:
         """Hash based on the SQL expression."""
