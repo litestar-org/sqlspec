@@ -1,7 +1,7 @@
 """Aiosqlite database configuration."""
 
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -83,7 +83,7 @@ class AiosqliteDriverFeatures(TypedDict):
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["table_queue"]]
 
 
 class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnectionPool, AiosqliteDriver]):

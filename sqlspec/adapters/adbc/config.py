@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -142,7 +142,7 @@ class AdbcDriverFeatures(TypedDict):
     strict_type_coercion: NotRequired[bool]
     arrow_extension_types: NotRequired[bool]
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["table_queue"]]
 
 
 __all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")

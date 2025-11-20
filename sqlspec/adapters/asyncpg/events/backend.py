@@ -1,6 +1,4 @@
-"""Native PostgreSQL LISTEN/NOTIFY backend for EventChannel."""
-
-from __future__ import annotations
+"""Native and hybrid PostgreSQL backends for EventChannel."""
 
 import asyncio
 import contextlib
@@ -11,17 +9,127 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.core import SQL
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events import EventMessage
+from sqlspec.extensions.events._queue import QueueEventBackend, TableEventQueue
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+    from sqlspec.extensions.events._queue import QueueEventBackend
 
 logger = get_logger("events.postgres")
 
-__all__ = ("AsyncpgEventsBackend", "create_event_backend")
+__all__ = ("AsyncpgEventsBackend", "AsyncpgHybridEventsBackend", "create_event_backend")
 
 MAX_NOTIFY_BYTES = 8000
+
+
+class AsyncpgHybridEventsBackend:
+    """Hybrid backend combining durable queue with LISTEN/NOTIFY wakeups."""
+
+    supports_sync = False
+    supports_async = True
+    backend_name = "listen_notify_durable"
+
+    def __init__(self, config: "AsyncpgConfig", queue: "QueueEventBackend") -> None:
+        if not config.is_async:
+            msg = "Asyncpg hybrid backend requires an async adapter"
+            raise ImproperConfigurationError(msg)
+        self._config = config
+        self._runtime = config.get_observability_runtime()
+        self._queue = queue
+
+    async def publish_async(
+        self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None
+    ) -> str:
+        event_id = uuid.uuid4().hex
+        envelope = {
+            "event_id": event_id,
+            "payload": payload,
+            "metadata": metadata,
+            "published_at": datetime.now(timezone.utc).isoformat(),
+        }
+        encoded_payload = to_json(envelope)
+        await self._publish_durable(channel, event_id, payload, metadata)
+        await self._notify(channel, encoded_payload)
+        self._runtime.increment_metric("events.publish.native")
+        return event_id
+
+    async def dequeue_async(self, channel: str, poll_interval: float) -> EventMessage | None:
+        connection_cm = self._config.provide_connection()
+        connection = await connection_cm.__aenter__()
+        try:
+            if hasattr(connection, "notifies"):
+                message = await self._dequeue_with_notifies(connection, channel, poll_interval)
+            else:
+                message = await self._queue.dequeue_async(channel)
+        finally:
+            with contextlib.suppress(Exception):
+                await connection_cm.__aexit__(None, None, None)
+        return message
+
+    async def ack_async(self, event_id: str) -> None:
+        await self._queue.ack_async(event_id)
+        self._runtime.increment_metric("events.ack")
+
+    def publish(self, *_: Any, **__: Any) -> str:
+        msg = "publish is not supported for async-only Postgres backend"
+        raise ImproperConfigurationError(msg)
+
+    def dequeue(self, *_: Any, **__: Any) -> EventMessage | None:
+        msg = "dequeue is not supported for async-only Postgres backend"
+        raise ImproperConfigurationError(msg)
+
+    def ack(self, _event_id: str) -> None:
+        msg = "ack is not supported for async-only backend"
+        raise ImproperConfigurationError(msg)
+
+    async def _publish_durable(
+        self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        async with self._config.provide_session() as driver:
+            queue_backend = getattr(self._queue, "_queue", None)
+            if queue_backend is None:
+                msg = "Hybrid queue backend missing queue reference"
+                raise EventChannelError(msg)
+            statement_config = queue_backend.statement_config
+            await driver.execute(
+                SQL(
+                    queue_backend._upsert_sql,  # type: ignore[attr-defined]
+                    {
+                        "event_id": event_id,
+                        "channel": channel,
+                        "payload_json": queue_backend._encode_json(payload),  # type: ignore[attr-defined]
+                        "metadata_json": queue_backend._encode_json(metadata),  # type: ignore[attr-defined]
+                        "status": "pending",
+                        "available_at": now,
+                        "lease_expires_at": None,
+                        "attempts": 0,
+                        "created_at": now,
+                    },
+                    statement_config=statement_config,
+                )
+            )
+            await driver.execute(SQL("SELECT pg_notify($1, $2)", channel, to_json({"event_id": event_id})))
+            await driver.commit()
+
+    async def _dequeue_with_notifies(self, connection: Any, channel: str, poll_interval: float) -> EventMessage | None:
+        listen_sql = f"LISTEN {channel}"
+        unlisten_sql = f"UNLISTEN {channel}"
+        await connection.execute(listen_sql)
+        try:
+            try:
+                notify = await asyncio.wait_for(connection.notifies.get(), timeout=poll_interval)
+            except asyncio.TimeoutError:
+                return None
+            payload = getattr(notify, "payload", None)
+            if payload:
+                return await self._queue.dequeue_async(channel)
+            return None
+        finally:
+            with contextlib.suppress(Exception):
+                await connection.execute(unlisten_sql)
 
 
 class AsyncpgEventsBackend:
@@ -31,7 +139,7 @@ class AsyncpgEventsBackend:
     supports_async = True
     backend_name = "listen_notify"
 
-    def __init__(self, config: AsyncpgConfig) -> None:
+    def __init__(self, config: "AsyncpgConfig") -> None:
         if not config.is_async:
             msg = "AsyncpgEventsBackend requires an async adapter"
             raise ImproperConfigurationError(msg)
@@ -164,13 +272,28 @@ class AsyncpgEventsBackend:
 
 
 def create_event_backend(
-    config: AsyncpgConfig, backend_name: str, _extension_settings: dict[str, Any]
-) -> AsyncpgEventsBackend | None:
+    config: "AsyncpgConfig", backend_name: str, extension_settings: "dict[str, Any]"
+) -> AsyncpgEventsBackend | AsyncpgHybridEventsBackend | None:
     """Factory used by EventChannel to create the native backend."""
 
-    if backend_name != "listen_notify":
-        return None
-    try:
-        return AsyncpgEventsBackend(config)
-    except ImproperConfigurationError:
-        return None
+    if backend_name == "listen_notify":
+        try:
+            return AsyncpgEventsBackend(config)
+        except ImproperConfigurationError:
+            return None
+    if backend_name == "listen_notify_durable":
+        queue = TableEventQueue(
+            config,
+            queue_table=extension_settings.get("queue_table"),
+            lease_seconds=extension_settings.get("lease_seconds"),
+            retention_seconds=extension_settings.get("retention_seconds"),
+            select_for_update=extension_settings.get("select_for_update"),
+            skip_locked=extension_settings.get("skip_locked"),
+            json_passthrough=extension_settings.get("json_passthrough"),
+        )
+        queue_backend = QueueEventBackend(queue)
+        try:
+            return AsyncpgHybridEventsBackend(config, queue_backend)
+        except ImproperConfigurationError:
+            return None
+    return None

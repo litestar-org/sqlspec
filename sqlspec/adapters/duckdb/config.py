@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -160,7 +160,7 @@ class DuckDBDriverFeatures(TypedDict):
     enable_uuid_conversion: NotRequired[bool]
     extension_flags: NotRequired[dict[str, Any]]
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["table_queue"]]
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):

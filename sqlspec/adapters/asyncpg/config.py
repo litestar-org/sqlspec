@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from asyncpg import Connection, Record
 from asyncpg import create_pool as asyncpg_create_pool
@@ -143,7 +143,7 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_enable_iam_auth: NotRequired[bool]
     alloydb_ip_type: NotRequired[str]
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["listen_notify", "table_queue", "listen_notify_durable"]]
 
 
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):

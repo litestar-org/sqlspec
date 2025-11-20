@@ -2,7 +2,7 @@
 
 import contextlib
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 import oracledb
 from typing_extensions import NotRequired
@@ -118,7 +118,7 @@ class OracleDriverFeatures(TypedDict):
     enable_lowercase_column_names: NotRequired[bool]
     enable_uuid_binary: NotRequired[bool]
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["advanced_queue", "table_queue"]]
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
