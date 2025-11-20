@@ -14,8 +14,9 @@ def test_parse_interleave_in_parent() -> None:
     ) INTERLEAVE IN PARENT parent ON DELETE CASCADE
     """
     ast = parse_one(sql, read=Spanner)
-    assert ast.args.get("interleave_parent").this.name == "parent"
-    assert ast.args.get("interleave_on_delete") == "CASCADE"
+    # Properties attached to Schema (ast.this)
+    assert ast.this.args.get("interleave_parent").this.name == "parent"
+    assert ast.this.args.get("interleave_on_delete") == "CASCADE"
 
 
 def test_parse_ttl_clause() -> None:

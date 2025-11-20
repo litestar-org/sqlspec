@@ -11,7 +11,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner._types import SpannerConnection
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver, spanner_statement_config
-from sqlspec.base import SyncDatabaseConfig
+from sqlspec.config import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.serializers import from_json, to_json
 
