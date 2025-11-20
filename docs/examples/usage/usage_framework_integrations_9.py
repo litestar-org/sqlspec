@@ -2,9 +2,7 @@
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-__all__ = ("test_stub", )
-
-
+_all__ = ("test_stub",)
 spec = SQLSpec()
 db = spec.add_config(
     AsyncpgConfig(

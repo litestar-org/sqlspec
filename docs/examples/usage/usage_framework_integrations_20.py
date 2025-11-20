@@ -1,7 +1,7 @@
 # start-example
 from contextvars import ContextVar
 
-__all__ = ("cleanup_session", "get_session", "test_stub" )
+__all__ = ("cleanup_session", "get_session", "test_stub")
 
 
 db_session: ContextVar = ContextVar("db_session", default=None)

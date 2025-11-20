@@ -1,12 +1,10 @@
+__all__ = ("index", "test_app_exists")
 # start-example
 from litestar import Litestar, get
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.extensions.litestar import SQLSpecPlugin
-
-__all__ = ("index", "test_app_exists" )
-
 
 # Configure database and create plugin
 spec = SQLSpec()

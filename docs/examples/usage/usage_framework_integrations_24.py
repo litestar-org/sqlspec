@@ -1,5 +1,5 @@
 # start-example
-__all__ = ("get_db", "test_stub" )
+__all__ = ("get_db", "test_stub")
 
 
 # Inject sessions, not global instances
