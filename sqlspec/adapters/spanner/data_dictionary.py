@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlspec.base import SyncDataDictionaryBase
+from sqlspec.driver import SyncDataDictionaryBase
 
 
 class SpannerDataDictionary(SyncDataDictionaryBase):
