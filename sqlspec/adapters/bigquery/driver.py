@@ -686,9 +686,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """
         sql, parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.job = self._run_query_job(sql, parameters, connection=cursor)
+        job_result = cursor.job.result(job_retry=self._job_retry)
+        statement_type = str(cursor.job.statement_type or "").upper()
+        is_select_like = (
+            statement.returns_rows() or statement_type == "SELECT" or self._should_force_select(statement, cursor)
+        )
 
-        if statement.returns_rows():
-            job_result = cursor.job.result(job_retry=self._job_retry)
+        if is_select_like:
             rows_list = self._rows_to_results(iter(job_result))
             column_names = [field.name for field in cursor.job.schema] if cursor.job.schema else []
 
@@ -700,7 +704,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        cursor.job.result(job_retry=self._job_retry)
         affected_rows = cursor.job.num_dml_affected_rows or 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
