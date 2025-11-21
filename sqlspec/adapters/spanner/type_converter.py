@@ -20,6 +20,13 @@ class SpannerTypeConverter:
 
     def convert_if_detected(self, value: Any) -> Any:
         """Auto-detect and convert UUID and JSON strings."""
+        uuid_byte_length = 16
+        if self.enable_uuid_conversion and isinstance(value, bytes) and len(value) == uuid_byte_length:
+            try:
+                return UUID(bytes=value)
+            except ValueError:
+                return value
+
         if isinstance(value, str):
             if self.enable_uuid_conversion:
                 try:
