@@ -19,30 +19,47 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         return None
 
     def get_feature_flag(self, driver: "SyncDriverAdapterBase", feature: str) -> bool:
-        _ = driver, feature
-        return False
+        _ = driver
+        feature_checks = {
+            "supports_json": True,
+            "supports_generators": False,
+            "supports_index_clustering": True,
+            "supports_interleaved_tables": True,
+        }
+        return feature_checks.get(feature, False)
 
     def get_optimal_type(self, driver: "SyncDriverAdapterBase", type_category: str) -> str:
-        _ = driver, type_category
-        return ""
+        _ = driver
+        type_map = {
+            "json": "JSON",
+            "uuid": "BYTES(16)",
+            "boolean": "BOOL",
+            "timestamp": "TIMESTAMP",
+            "text": "STRING(MAX)",
+            "blob": "BYTES(MAX)",
+            "numeric": "NUMERIC",
+            "bignumeric": "NUMERIC",
+            "array": "ARRAY",
+        }
+        return type_map.get(type_category, "STRING(MAX)")
 
     def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
-        sql = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = @schema"
+        sql = 'SELECT TABLE_NAME AS "table_name" FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = @schema'
         params: dict[str, Any]
         if schema is None:
-            sql = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ''"
+            sql = "SELECT TABLE_NAME AS \"table_name\" FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ''"
             params = {}
         else:
             params = {"schema": schema}
 
         results = driver.select(sql, params)
-        return [cast("str", row["TABLE_NAME"]) for row in results]
+        return [cast("str", row["table_name"]) for row in results]
 
     def get_columns(
         self, driver: "SyncDriverAdapterBase", table: str, schema: "str | None" = None
     ) -> "list[dict[str, Any]]":
         sql = """
-            SELECT COLUMN_NAME, SPANNER_TYPE, IS_NULLABLE
+            SELECT COLUMN_NAME AS "column_name", SPANNER_TYPE AS "spanner_type", IS_NULLABLE AS "is_nullable"
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_NAME = @table
         """
@@ -55,11 +72,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
 
         results = driver.select(sql, params)
         return [
-            {
-                "name": row["COLUMN_NAME"],
-                "type": row["SPANNER_TYPE"],
-                "nullable": row["IS_NULLABLE"] == "YES",
-            }
+            {"name": row["column_name"], "type": row["spanner_type"], "nullable": row["is_nullable"] == "YES"}
             for row in results
         ]
 
@@ -67,7 +80,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         self, driver: "SyncDriverAdapterBase", table: str, schema: "str | None" = None
     ) -> "list[dict[str, Any]]":
         sql = """
-            SELECT INDEX_NAME, INDEX_TYPE, IS_UNIQUE
+            SELECT INDEX_NAME AS "index_name", INDEX_TYPE AS "index_type", IS_UNIQUE AS "is_unique"
             FROM INFORMATION_SCHEMA.INDEXES
             WHERE TABLE_NAME = @table
         """
@@ -79,8 +92,4 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
             sql = f"{sql} AND TABLE_SCHEMA = ''"
 
         results = driver.select(sql, params)
-        return [
-            {"name": row["INDEX_NAME"], "type": row["INDEX_TYPE"], "unique": row["IS_UNIQUE"]}
-            for row in results
-        ]
-
+        return [{"name": row["index_name"], "type": row["index_type"], "unique": row["is_unique"]} for row in results]

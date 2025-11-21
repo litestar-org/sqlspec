@@ -110,6 +110,21 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             )
         return self._client
 
+    def get_database(self) -> "Database":
+        instance_id = self.pool_config.get("instance_id")
+        database_id = self.pool_config.get("database_id")
+        if not instance_id or not database_id:
+            msg = "instance_id and database_id are required."
+            raise ImproperConfigurationError(msg)
+
+        if self.pool_instance is None:
+            self.pool_instance = self.provide_pool()
+
+        if self._database is None:
+            client = self._get_client()
+            self._database = client.instance(instance_id).database(database_id, pool=self.pool_instance)  # type: ignore[no-untyped-call]
+        return self._database
+
     def create_connection(self) -> SpannerConnection:
         instance_id = self.pool_config.get("instance_id")
         database_id = self.pool_config.get("database_id")
@@ -152,15 +167,9 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> Generator[SpannerConnection, None, None]:
         """Yield a Snapshot or Transaction from the configured pool."""
-        if self._database is None:
-            self.pool_instance = self.provide_pool()
-            client = cast("Any", self._get_client())
-            instance = client.instance(self.pool_config.get("instance_id"))
-            self._database = instance.database(self.pool_config.get("database_id"), pool=self.pool_instance)
-
-        assert self._database is not None
-        with self._database.snapshot() as snapshot:
-            yield snapshot
+        database = self.get_database()
+        with cast("Any", database).snapshot() as snapshot:
+            yield cast("SpannerConnection", snapshot)
 
     @contextmanager
     def provide_session(

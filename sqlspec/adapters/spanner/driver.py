@@ -1,6 +1,7 @@
 """Spanner driver implementation."""
 
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1 import param_types
@@ -137,11 +138,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def _execute_statement(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._get_compiled_sql(statement, self.statement_config)
-        param_types_map = self._infer_param_types(params)
+        coerced_params = self._coerce_params(params)
+        param_types_map = self._infer_param_types(coerced_params)
         conn = cast("Any", cursor)
 
         if statement.returns_rows():
-            result_set = conn.execute_sql(sql, params=params, param_types=param_types_map)
+            result_set = conn.execute_sql(sql, params=coerced_params, param_types=param_types_map)
             rows = list(result_set)
             metadata = getattr(result_set, "metadata", None)
             row_type = getattr(metadata, "row_type", None)
@@ -163,7 +165,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             )
 
         if hasattr(conn, "execute_update"):
-            row_count = conn.execute_update(sql, params=params, param_types=param_types_map)
+            row_count = conn.execute_update(sql, params=coerced_params, param_types=param_types_map)
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
         msg = "Cannot execute DML in a read-only Snapshot context."
@@ -177,9 +179,13 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         count = 0
         for stmt in statements:
             if hasattr(conn, "execute_update") and not stmt.upper().strip().startswith("SELECT"):
-                conn.execute_update(stmt, params=params)
+                coerced_params = self._coerce_params(params)
+                conn.execute_update(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
             else:
-                _ = list(conn.execute_sql(stmt, params=params))
+                coerced_params = self._coerce_params(params)
+                _ = list(
+                    conn.execute_sql(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
+                )
             count += 1
 
         return self.create_execution_result(
@@ -209,7 +215,10 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 statement.raw_sql, *[params], statement_config=statement.statement_config
             )
             _, processed_params = self._get_compiled_sql(per_statement, self.statement_config)
-            batch_inputs.append(processed_params)
+            coerced_params = self._coerce_params(processed_params)
+            if coerced_params is None:
+                coerced_params = {}
+            batch_inputs.append(coerced_params)
 
         batch_args = [(compiled_sql, p, self._infer_param_types(p)) for p in batch_inputs]
 
@@ -252,6 +261,18 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             if key not in types and hasattr(param_types, "JSON") and isinstance(value, (dict, list)):
                 types[key] = param_types.JSON
         return types
+
+    def _coerce_params(self, params: "dict[str, Any] | None") -> "dict[str, Any] | None":
+        """Coerce UUIDs to bytes for BYTES(16) storage."""
+        if params is None:
+            return None
+        coerced: dict[str, Any] = {}
+        for key, value in params.items():
+            if isinstance(value, UUID):
+                coerced[key] = value.bytes
+            else:
+                coerced[key] = value
+        return coerced
 
     def begin(self) -> None:
         return None
