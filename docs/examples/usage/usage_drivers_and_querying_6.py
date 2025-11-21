@@ -19,10 +19,12 @@ def test_example_6_sqlite_config(tmp_path: Path) -> None:
 
         spec = SQLSpec()
 
-        config = SqliteConfig(pool_config={"database": db_path, "timeout": 5.0, "check_same_thread": False})
+        db = spec.add_config(
+            SqliteConfig(pool_config={"database": db_path, "timeout": 5.0, "check_same_thread": False})
+        )
 
         try:
-            with spec.provide_session(config) as session:
+            with spec.provide_session(db) as session:
                 # Create table
                 session.execute("""
                 CREATE TABLE IF NOT EXISTS usage6_users (
@@ -39,6 +41,6 @@ def test_example_6_sqlite_config(tmp_path: Path) -> None:
                 result.all()
         finally:
             # Clean up the temporary database file
-            config.close_pool()
+            spec.get_config(db).close_pool()
             Path(db_path).unlink()
         # end-example
