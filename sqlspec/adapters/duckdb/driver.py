@@ -349,7 +349,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters or ())
 
-        if statement.returns_rows():
+        is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
+
+        if is_select_like:
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
 

@@ -548,6 +548,32 @@ class CommonDriverAttributesMixin:
             metadata=execution_result.special_data or {"status_message": "OK"},
         )
 
+    def _should_force_select(self, statement: "SQL", cursor: Any) -> bool:
+        """Determine if a statement with unknown type should be treated as SELECT.
+
+        Uses driver metadata (statement_type, description/schema) as a safety net when
+        the compiler cannot classify the operation. This remains conservative by only
+        triggering when the operation type is "UNKNOWN".
+
+        Args:
+            statement: SQL statement being executed.
+            cursor: Database cursor/job object that may expose metadata.
+
+        Returns:
+            True when cursor metadata indicates a row-returning operation despite an
+            unknown operation type; otherwise False.
+        """
+
+        if statement.operation_type != "UNKNOWN":
+            return False
+
+        statement_type = getattr(cursor, "statement_type", None)
+        if isinstance(statement_type, str) and statement_type.upper() == "SELECT":
+            return True
+
+        description = getattr(cursor, "description", None)
+        return bool(description)
+
     def prepare_statement(
         self,
         statement: "Statement | QueryBuilder",
