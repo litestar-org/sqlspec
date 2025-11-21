@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.driver._common import ForeignKeyMetadata
     from sqlspec.typing import ArrowReturnFormat, SchemaT, StatementParameters
 
 _LOGGER_NAME: Final[str] = "sqlspec"
@@ -746,6 +747,41 @@ class SyncDataDictionaryBase(DataDictionaryMixin):
         """
         _ = driver, table, schema
         return []
+
+    def get_foreign_keys(
+        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata.
+
+        Args:
+            driver: Sync database driver instance
+            table: Optional table name filter
+            schema: Optional schema name filter
+
+        Returns:
+            List of foreign key metadata
+        """
+        _ = driver, table, schema
+        return []
+
+    def get_tables_in_topological_order(
+        self, driver: "SyncDriverAdapterBase", schema: "str | None" = None
+    ) -> "list[str]":
+        """Get tables sorted by topological dependency order.
+
+        Default implementation fetches all tables and foreign keys,
+        then uses Python's topological sort.
+
+        Args:
+            driver: Sync database driver instance
+            schema: Optional schema name
+
+        Returns:
+            List of table names sorted by dependency
+        """
+        tables = self.get_tables(driver, schema)
+        foreign_keys = self.get_foreign_keys(driver, schema=schema)
+        return self.sort_tables_topologically(tables, foreign_keys)
 
     def list_available_features(self) -> "list[str]":
         """List all features that can be checked via get_feature_flag.

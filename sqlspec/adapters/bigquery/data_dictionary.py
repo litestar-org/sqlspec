@@ -7,6 +7,7 @@ from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
+    from sqlspec.driver import ForeignKeyMetadata
 
 logger = get_logger("adapters.bigquery.data_dictionary")
 
@@ -124,6 +125,76 @@ class BigQuerySyncDataDictionary(SyncDataDictionaryBase):
 
         result = bigquery_driver.execute(sql)
         return result.data or []
+
+    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
+        """Get list of tables in schema."""
+        bigquery_driver = cast("BigQueryDriver", driver)
+        if schema:
+            sql = f"SELECT table_name FROM `{schema}.INFORMATION_SCHEMA.TABLES` WHERE table_type = 'BASE TABLE'"
+        else:
+            sql = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_type = 'BASE TABLE'"
+
+        result = bigquery_driver.execute(sql)
+        return [row["table_name"] for row in result.data]
+
+    def get_foreign_keys(
+        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        from sqlspec.driver import ForeignKeyMetadata
+
+        bigquery_driver = cast("BigQueryDriver", driver)
+
+        dataset = schema
+        if dataset:
+            kcu_table = f"`{dataset}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
+            rc_table = f"`{dataset}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
+        else:
+            kcu_table = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
+            rc_table = "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
+
+        where_clauses = []
+        if table:
+            where_clauses.append(f"kcu.table_name = '{table}'")
+
+        where_str = " AND ".join(where_clauses)
+        if where_str:
+            where_str = "WHERE " + where_str
+
+        sql = f"""
+            SELECT
+                kcu.table_name,
+                kcu.column_name,
+                pk_kcu.table_name AS referenced_table_name,
+                pk_kcu.column_name AS referenced_column_name,
+                kcu.constraint_name,
+                kcu.table_schema,
+                pk_kcu.table_schema AS referenced_table_schema
+            FROM {kcu_table} kcu
+            JOIN {rc_table} rc ON kcu.constraint_name = rc.constraint_name
+            JOIN {kcu_table} pk_kcu
+              ON rc.unique_constraint_name = pk_kcu.constraint_name
+              AND kcu.ordinal_position = pk_kcu.ordinal_position
+            {where_str}
+        """
+
+        try:
+            result = bigquery_driver.execute(sql)
+            return [
+                ForeignKeyMetadata(
+                    table_name=row["table_name"],
+                    column_name=row["column_name"],
+                    referenced_table=row["referenced_table_name"],
+                    referenced_column=row["referenced_column_name"],
+                    constraint_name=row["constraint_name"],
+                    schema=row["table_schema"],
+                    referenced_schema=row["referenced_table_schema"],
+                )
+                for row in result.data
+            ]
+        except Exception:
+            logger.warning("Failed to fetch foreign keys from BigQuery")
+            return []
 
     def list_available_features(self) -> "list[str]":
         """List available BigQuery feature flags.
