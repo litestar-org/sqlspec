@@ -17,7 +17,7 @@ def test_example_10_duckdb_config(tmp_path: Path) -> None:
 
     # Persistent
     database_file = tmp_path / "analytics.duckdb"
-    config = DuckDBConfig(pool_config={"database": database_file.name})
+    config = DuckDBConfig(pool_config={"database": database_file.name, "read_only": False})
 
     with spec.provide_session(config) as session:
         # Create table from Parquet
