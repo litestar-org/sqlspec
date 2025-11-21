@@ -234,6 +234,24 @@ class ParameterConverter:
         if not parameters or not param_info:
             return parameters
 
+        if (
+            isinstance(parameters, Sequence)
+            and not isinstance(parameters, (str, bytes, bytearray))
+            and parameters
+            and isinstance(parameters[0], Mapping)
+        ):
+            normalized_sets = [
+                self._convert_parameter_format(
+                    param_set, param_info, target_style, param_set, preserve_parameter_format
+                )
+                if isinstance(param_set, Mapping)
+                else param_set
+                for param_set in parameters
+            ]
+            if preserve_parameter_format and isinstance(parameters, tuple):
+                return tuple(normalized_sets)
+            return normalized_sets
+
         is_named_style = target_style in {
             ParameterStyle.NAMED_COLON,
             ParameterStyle.NAMED_AT,
@@ -261,7 +279,7 @@ class ParameterConverter:
             if has_mixed_styles:
                 param_keys = list(parameters.keys())
                 for param in param_info:
-                    param_key = param.placeholder_text
+                    param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
                     if param_key not in unique_params:
                         value, found = self._extract_param_value_mixed_styles(param, parameters, param_keys)
                         if found:
@@ -269,7 +287,7 @@ class ParameterConverter:
                             param_order.append(param_key)
             else:
                 for param in param_info:
-                    param_key = param.placeholder_text
+                    param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
                     if param_key not in unique_params:
                         value, found = self._extract_param_value_single_style(param, parameters)
                         if found:

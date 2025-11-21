@@ -169,6 +169,31 @@ class ParameterProcessor:
 
         needs_static_embedding = config.needs_static_script_compilation and param_info and parameters and not is_many
 
+        def _requires_mapping_normalization(payload: Any) -> bool:
+            if not payload or not param_info:
+                return False
+
+            has_named_placeholders = any(
+                param.style
+                in {
+                    ParameterStyle.NAMED_COLON,
+                    ParameterStyle.NAMED_AT,
+                    ParameterStyle.NAMED_DOLLAR,
+                    ParameterStyle.NAMED_PYFORMAT,
+                }
+                for param in param_info
+            )
+            if has_named_placeholders:
+                return False
+
+            if isinstance(payload, Mapping):
+                return True
+
+            if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+                return any(isinstance(item, Mapping) for item in payload)
+
+            return False
+
         if needs_static_embedding:
             return self._handle_static_embedding(sql, parameters, config, is_many, cache_key)
 
@@ -177,6 +202,7 @@ class ParameterProcessor:
             and not needs_execution_conversion
             and not config.type_coercion_map
             and not config.output_transformer
+            and not _requires_mapping_normalization(parameters)
         ):
             result = ParameterProcessingResult(sql, parameters, ParameterProfile(param_info))
             if self._cache_size < self.DEFAULT_CACHE_SIZE:
@@ -185,6 +211,12 @@ class ParameterProcessor:
             return result
 
         processed_sql, processed_parameters = sql, parameters
+
+        if _requires_mapping_normalization(processed_parameters):
+            target_style = self._determine_target_execution_style(original_styles, config)
+            processed_sql, processed_parameters = self._converter.convert_placeholder_style(
+                processed_sql, processed_parameters, target_style, is_many
+            )
 
         if processed_parameters:
             processed_parameters = self._apply_type_wrapping(processed_parameters)
