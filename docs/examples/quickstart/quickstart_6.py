@@ -3,6 +3,10 @@ __all__ = ("test_quickstart_6",)
 
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.xdist_group("duckdb")
+
 
 def test_quickstart_6(tmp_path: Path) -> None:
     # start-example

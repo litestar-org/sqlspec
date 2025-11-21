@@ -3,7 +3,11 @@
 
 from pathlib import Path
 
+import pytest
+
 __all__ = ("test_example_10_duckdb_config",)
+
+pytestmark = pytest.mark.xdist_group("duckdb")
 
 
 def test_example_10_duckdb_config(tmp_path: Path) -> None:
