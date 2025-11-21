@@ -3,10 +3,14 @@
 
 from pathlib import Path
 
+import pytest
+
 __all__ = ("test_example_10_duckdb_config",)
 
+pytestmark = pytest.mark.xdist_group("duckdb")
 
-def test_example_10_duckdb_config() -> None:
+
+def test_example_10_duckdb_config(tmp_path: Path) -> None:
     # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.duckdb import DuckDBConfig
@@ -16,7 +20,8 @@ def test_example_10_duckdb_config() -> None:
     config = DuckDBConfig()
 
     # Persistent
-    config = DuckDBConfig(pool_config={"database": "analytics.duckdb"})
+    database_file = tmp_path / "analytics.duckdb"
+    config = DuckDBConfig(pool_config={"database": database_file.name, "read_only": False})
 
     with spec.provide_session(config) as session:
         # Create table from Parquet

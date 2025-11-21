@@ -4,12 +4,16 @@
 __all__ = ("test_example_8_aiosqlite_config",)
 
 
-async def test_example_8_aiosqlite_config() -> None:
+from pathlib import Path
+
+
+async def test_example_8_aiosqlite_config(tmp_path: Path) -> None:
     # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
-    config = AiosqliteConfig(pool_config={"database": "myapp.db"})
+    database_file = tmp_path / "myapp.db"
+    config = AiosqliteConfig(pool_config={"database": database_file})
     spec = SQLSpec()
 
     async with spec.provide_session(config) as session:
