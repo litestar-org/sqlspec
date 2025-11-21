@@ -64,3 +64,27 @@ class LitestarConfig(TypedDict):
         - Tables created with INMEMORY PRIORITY HIGH clause
         - Ignored by unsupported adapters
     """
+
+    shard_count: NotRequired[int]
+    """Optional hash shard count for session table primary key.
+
+    When set (>1), adapters that support computed shard columns (e.g., Spanner)
+    will create a generated shard_id using MOD(FARM_FINGERPRINT(session_id), shard_count)
+    and include it in the primary key to reduce hotspotting. Ignored by adapters
+    that do not support computed shards.
+    """
+
+    table_options: NotRequired[str]
+    """Optional raw OPTIONS/engine-specific table options string.
+
+    Passed verbatim when the adapter supports table-level OPTIONS/clauses
+    (e.g., Spanner columnar/tiered storage). Ignored by adapters that do not
+    support table options.
+    """
+
+    index_options: NotRequired[str]
+    """Optional raw OPTIONS/engine-specific options for the expires_at index.
+
+    Passed verbatim to the index definition for adapters that support index
+    OPTIONS/clauses. Ignored by adapters that do not support index options.
+    """
