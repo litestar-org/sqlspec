@@ -1,18 +1,21 @@
 # Test module converted from docs example - code-block 6
 """Minimal smoke test for drivers_and_querying example 6."""
 
+from pathlib import Path
+
 from sqlspec import SQLSpec
 
 __all__ = ("test_example_6_sqlite_config",)
 
 
-def test_example_6_sqlite_config() -> None:
+def test_example_6_sqlite_config(tmp_path: Path) -> None:
     # start-example
     from sqlspec.adapters.sqlite import SqliteConfig
 
     spec = SQLSpec()
 
-    config = SqliteConfig(pool_config={"database": "myapp.db", "timeout": 5.0, "check_same_thread": False})
+    database_file = tmp_path / "myapp.db"
+    config = SqliteConfig(pool_config={"database": database_file.name, "timeout": 5.0, "check_same_thread": False})
 
     with spec.provide_session(config) as session:
         # Create table
