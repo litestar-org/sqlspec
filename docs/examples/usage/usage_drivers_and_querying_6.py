@@ -1,7 +1,6 @@
 # Test module converted from docs example - code-block 6
 """Minimal smoke test for drivers_and_querying example 6."""
 
-import tempfile
 from pathlib import Path
 
 from sqlspec import SQLSpec
