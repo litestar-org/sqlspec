@@ -1,8 +1,10 @@
 """Tests for the _should_force_select safety net."""
 
+from typing import Any, cast
+
+from sqlspec import SQL, ProcessedState
 from sqlspec.adapters.bigquery import bigquery_statement_config
-from sqlspec.core import SQL, ProcessedState
-from sqlspec.driver._common import CommonDriverAttributesMixin
+from sqlspec.driver import CommonDriverAttributesMixin
 
 
 class _DummyDriver(CommonDriverAttributesMixin):
@@ -32,7 +34,7 @@ class _CursorWithDescription:
 
 def _make_unknown_statement(sql_text: str = "select 1") -> "SQL":
     stmt = SQL(sql_text)
-    stmt._processed_state = ProcessedState(  # pylint: disable=protected-access
+    cast("Any", stmt)._processed_state = ProcessedState(
         compiled_sql=sql_text, execution_parameters={}, operation_type="UNKNOWN"
     )
     return stmt
@@ -40,7 +42,7 @@ def _make_unknown_statement(sql_text: str = "select 1") -> "SQL":
 
 def _make_select_statement(sql_text: str = "select 1") -> "SQL":
     stmt = SQL(sql_text)
-    stmt._processed_state = ProcessedState(  # pylint: disable=protected-access
+    cast("Any", stmt)._processed_state = ProcessedState(
         compiled_sql=sql_text, execution_parameters={}, operation_type="SELECT"
     )
     return stmt
@@ -51,7 +53,7 @@ def test_force_select_uses_statement_type_select() -> None:
     stmt = _make_unknown_statement()
     cursor = _CursorWithStatementType("SELECT")
 
-    assert driver._should_force_select(stmt, cursor) is True  # pylint: disable=protected-access
+    assert cast("Any", driver)._should_force_select(stmt, cursor) is True
 
 
 def test_force_select_uses_description_when_unknown() -> None:
@@ -59,7 +61,7 @@ def test_force_select_uses_description_when_unknown() -> None:
     stmt = _make_unknown_statement()
     cursor = _CursorWithDescription(True)
 
-    assert driver._should_force_select(stmt, cursor) is True  # pylint: disable=protected-access
+    assert cast("Any", driver)._should_force_select(stmt, cursor) is True
 
 
 def test_force_select_false_when_no_metadata() -> None:
@@ -67,7 +69,7 @@ def test_force_select_false_when_no_metadata() -> None:
     stmt = _make_unknown_statement()
     cursor = _CursorWithDescription(False)
 
-    assert driver._should_force_select(stmt, cursor) is False  # pylint: disable=protected-access
+    assert cast("Any", driver)._should_force_select(stmt, cursor) is False
 
 
 def test_force_select_ignored_when_operation_known() -> None:
@@ -75,4 +77,4 @@ def test_force_select_ignored_when_operation_known() -> None:
     stmt = _make_select_statement()
     cursor = _CursorWithDescription(True)
 
-    assert driver._should_force_select(stmt, cursor) is False  # pylint: disable=protected-access
+    assert cast("Any", driver)._should_force_select(stmt, cursor) is False
