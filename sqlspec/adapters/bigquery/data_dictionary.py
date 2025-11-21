@@ -2,12 +2,11 @@
 
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
+from sqlspec.driver import ForeignKeyMetadata, SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
-    from sqlspec.driver import ForeignKeyMetadata
 
 logger = get_logger("adapters.bigquery.data_dictionary")
 
@@ -141,7 +140,6 @@ class BigQuerySyncDataDictionary(SyncDataDictionaryBase):
         self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-        from sqlspec.driver import ForeignKeyMetadata
 
         bigquery_driver = cast("BigQueryDriver", driver)
 

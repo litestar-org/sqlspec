@@ -3,14 +3,13 @@
 import re
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, VersionInfo
+from sqlspec.driver import AsyncDataDictionaryBase, AsyncDriverAdapterBase, ForeignKeyMetadata, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
-    from sqlspec.driver import ForeignKeyMetadata
 
 logger = get_logger("adapters.asyncpg.data_dictionary")
 
@@ -217,7 +216,6 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
         self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-        from sqlspec.driver import ForeignKeyMetadata
 
         asyncpg_driver = cast("AsyncpgDriver", driver)
         schema_name = schema or "public"

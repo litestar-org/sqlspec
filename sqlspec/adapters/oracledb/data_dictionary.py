@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
+    ForeignKeyMetadata,
     SyncDataDictionaryBase,
     SyncDriverAdapterBase,
     VersionInfo,
@@ -17,7 +18,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
-    from sqlspec.driver import ForeignKeyMetadata
 
 logger = get_logger("adapters.oracledb.data_dictionary")
 
@@ -453,7 +453,6 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-        from sqlspec.driver import ForeignKeyMetadata
 
         oracle_driver = cast("OracleSyncDriver", driver)
         result = oracle_driver.execute(self._get_foreign_keys_sql(table))
@@ -675,7 +674,6 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-        from sqlspec.driver import ForeignKeyMetadata
 
         oracle_driver = cast("OracleAsyncDriver", driver)
         result = await oracle_driver.execute(self._get_foreign_keys_sql(table))

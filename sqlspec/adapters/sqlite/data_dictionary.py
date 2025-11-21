@@ -3,14 +3,13 @@
 import re
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
+from sqlspec.driver import ForeignKeyMetadata, SyncDataDictionaryBase, SyncDriverAdapterBase, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.adapters.sqlite.driver import SqliteDriver
-    from sqlspec.driver import ForeignKeyMetadata
 
 logger = get_logger("adapters.sqlite.data_dictionary")
 
@@ -176,7 +175,6 @@ class SqliteSyncDataDictionary(SyncDataDictionaryBase):
         self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-        from sqlspec.driver import ForeignKeyMetadata
 
         sqlite_driver = cast("SqliteDriver", driver)
 

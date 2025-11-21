@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
+    ForeignKeyMetadata,
     SyncDataDictionaryBase,
     SyncDriverAdapterBase,
     VersionInfo,
@@ -16,7 +17,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
-    from sqlspec.driver import ForeignKeyMetadata
 
 logger = get_logger("adapters.psycopg.data_dictionary")
 
@@ -222,7 +222,6 @@ class PostgresSyncDataDictionary(SyncDataDictionaryBase):
         self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-        from sqlspec.driver import ForeignKeyMetadata
 
         psycopg_driver = cast("PsycopgSyncDriver", driver)
         schema_name = schema or "public"
@@ -528,7 +527,6 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
         self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-        from sqlspec.driver import ForeignKeyMetadata
 
         psycopg_driver = cast("PsycopgAsyncDriver", driver)
         schema_name = schema or "public"

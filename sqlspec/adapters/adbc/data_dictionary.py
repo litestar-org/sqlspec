@@ -110,8 +110,6 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         kcu = "information_schema.key_column_usage"
 
         if dialect == "postgres":
-            # Postgres joins with constraint_column_usage or referential_constraints
-            # Let's use the query we verified for asyncpg
             sql = """
                 SELECT
                     kcu.table_name,
