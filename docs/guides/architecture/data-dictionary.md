@@ -43,7 +43,7 @@ This is essential for:
 async with config.provide_session() as session:
     # Get tables sorted parent -> child
     sorted_tables = await session.data_dictionary.get_tables_in_topological_order(session)
-    
+
     print("Insertion Order:", sorted_tables)
     print("Deletion Order:", list(reversed(sorted_tables)))
 ```
@@ -56,14 +56,14 @@ async with config.provide_session() as session:
 
 ### Metadata Types
 
-SQLSpec uses typed dataclasses for metadata results where possible.
+SQLSpec uses regular classes with __slots__ for metadata results to ensure mypyc compatibility and memory efficiency.
 
 ```python
 from sqlspec.driver import ForeignKeyMetadata
 
 async with config.provide_session() as session:
     fks: list[ForeignKeyMetadata] = await session.data_dictionary.get_foreign_keys(session, "orders")
-    
+
     for fk in fks:
         print(f"FK: {fk.column_name} -> {fk.referenced_table}.{fk.referenced_column}")
 ```
@@ -80,19 +80,4 @@ async with config.provide_session() as session:
 
 ## API Reference
 
-### Data Dictionary Protocol
-
-The base interface shared by all adapters.
-
-```python
-class DataDictionaryBase:
-    async def get_tables(self, driver, schema=None) -> list[str]: ...
-    
-    async def get_columns(self, driver, table, schema=None) -> list[dict]: ...
-    
-    async def get_indexes(self, driver, table, schema=None) -> list[dict]: ...
-    
-    async def get_foreign_keys(self, driver, table=None, schema=None) -> list[ForeignKeyMetadata]: ...
-    
-    async def get_tables_in_topological_order(self, driver, schema=None) -> list[str]: ...
-```
+For a complete API reference of the Data Dictionary components, including `DataDictionaryMixin`, `AsyncDataDictionaryBase`, `SyncDataDictionaryBase`, and the metadata classes (`ForeignKeyMetadata`, `ColumnMetadata`, `IndexMetadata`), please refer to the :doc:`/reference/driver`.

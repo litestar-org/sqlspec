@@ -61,7 +61,6 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         # They all support information_schema.key_column_usage roughly the same way
 
         # Postgres/DuckDB/MySQL query
-        where_clauses = []
         params = []
 
         if dialect == "bigquery":
@@ -83,8 +82,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                     pk_kcu.table_schema AS referenced_table_schema
                 FROM {kcu} kcu
                 JOIN {rc} rc ON kcu.constraint_name = rc.constraint_name
-                JOIN {kcu} pk_kcu 
-                  ON rc.unique_constraint_name = pk_kcu.constraint_name 
+                JOIN {kcu} pk_kcu
+                  ON rc.unique_constraint_name = pk_kcu.constraint_name
                   AND kcu.ordinal_position = pk_kcu.ordinal_position
             """
             if table:
