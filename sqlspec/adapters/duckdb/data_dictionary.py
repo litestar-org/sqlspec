@@ -141,10 +141,8 @@ class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
         result = duckdb_driver.execute(sql)
         return result.data or []
 
-    def get_tables_in_topological_order(
-        self, driver: "SyncDriverAdapterBase", schema: "str | None" = None
-    ) -> "list[str]":
-        """Get tables sorted by topological dependency order."""
+    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
+        """Get tables sorted by topological dependency order using DuckDB catalog."""
         duckdb_driver = cast("DuckDBDriver", driver)
         schema_clause = f"'{schema}'" if schema else "current_schema()"
 
@@ -184,19 +182,13 @@ class DuckDBSyncDataDictionary(SyncDataDictionaryBase):
         FROM dependency_tree
         ORDER BY level, table_name
         """
-        try:
-            result = duckdb_driver.execute(sql)
-            return [row["table_name"] for row in result.get_data()]
-        except Exception:
-            return self.sort_tables_topologically(
-                self.get_tables(driver, schema), self.get_foreign_keys(driver, schema=schema)
-            )
+        result = duckdb_driver.execute(sql)
+        return [row["table_name"] for row in result.get_data()]
 
     def get_foreign_keys(
         self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-
         duckdb_driver = cast("DuckDBDriver", driver)
 
         where_clauses = []

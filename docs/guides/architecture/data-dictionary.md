@@ -32,7 +32,7 @@ async with config.provide_session() as session:
 
 ### Topological Sort (Dependency Ordering)
 
-One of the most powerful features is `get_tables_in_topological_order`. This returns table names sorted such that parent tables appear before child tables (tables with foreign keys to parents).
+`get_tables` now returns table names sorted such that parent tables appear before child tables (tables with foreign keys to parents).
 
 This is essential for:
 
@@ -42,7 +42,7 @@ This is essential for:
 ```python
 async with config.provide_session() as session:
     # Get tables sorted parent -> child
-    sorted_tables = await session.data_dictionary.get_tables_in_topological_order(session)
+    sorted_tables = await session.data_dictionary.get_tables(session)
 
     print("Insertion Order:", sorted_tables)
     print("Deletion Order:", list(reversed(sorted_tables)))

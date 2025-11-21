@@ -40,7 +40,7 @@ async def test_aiosqlite_data_dictionary_topology_and_fks(aiosqlite_session: "Ai
 
     try:
         # Test 1: Topological Sort
-        sorted_tables = await aiosqlite_driver.data_dictionary.get_tables_in_topological_order(aiosqlite_driver)
+        sorted_tables = await aiosqlite_driver.data_dictionary.get_tables(aiosqlite_driver)
 
         test_tables = [t for t in sorted_tables if t in (users_table, orders_table, items_table)]
         assert len(test_tables) == 3

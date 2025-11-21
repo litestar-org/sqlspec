@@ -114,53 +114,7 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
         }
         return type_map.get(type_category, "TEXT")
 
-    async def get_columns(
-        self, driver: AsyncDriverAdapterBase, table: str, schema: "str | None" = None
-    ) -> "list[dict[str, Any]]":
-        """Get column information for a table using pg_catalog.
-
-        Args:
-            driver: AsyncPG driver instance
-            table: Table name to query columns for
-            schema: Schema name (None for default 'public')
-
-        Returns:
-            List of column metadata dictionaries with keys:
-                - column_name: Name of the column
-                - data_type: PostgreSQL data type
-                - is_nullable: Whether column allows NULL (YES/NO)
-                - column_default: Default value if any
-
-        Notes:
-            Uses pg_catalog instead of information_schema to avoid potential
-            issues with PostgreSQL 'name' type in some drivers.
-        """
-        asyncpg_driver = cast("AsyncpgDriver", driver)
-
-        schema_name = schema or "public"
-        sql = """
-            SELECT
-                a.attname::text AS column_name,
-                pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
-                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
-                pg_catalog.pg_get_expr(d.adbin, d.adrelid)::text AS column_default
-            FROM pg_catalog.pg_attribute a
-            JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
-            JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
-            LEFT JOIN pg_catalog.pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
-            WHERE c.relname = $1
-                AND n.nspname = $2
-                AND a.attnum > 0
-                AND NOT a.attisdropped
-            ORDER BY a.attnum
-        """
-
-        result = await asyncpg_driver.execute(sql, (table, schema_name))
-        return result.data or []
-
-    async def get_tables_in_topological_order(
-        self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None
-    ) -> "list[str]":
+    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
         """Get tables sorted by topological dependency order using Recursive CTE."""
         asyncpg_driver = cast("AsyncpgDriver", driver)
         schema_name = schema or "public"
@@ -210,13 +164,56 @@ class PostgresAsyncDataDictionary(AsyncDataDictionaryBase):
         ORDER BY level, table_name;
         """
         result = await asyncpg_driver.execute(sql, (schema_name,))
-        return [row["table_name"] for row in result.data]
+        return [row["table_name"] for row in result.get_data()]
+
+    async def get_columns(
+        self, driver: AsyncDriverAdapterBase, table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get column information for a table using pg_catalog.
+
+        Args:
+            driver: AsyncPG driver instance
+            table: Table name to query columns for
+            schema: Schema name (None for default 'public')
+
+        Returns:
+            List of column metadata dictionaries with keys:
+                - column_name: Name of the column
+                - data_type: PostgreSQL data type
+                - is_nullable: Whether column allows NULL (YES/NO)
+                - column_default: Default value if any
+
+        Notes:
+            Uses pg_catalog instead of information_schema to avoid potential
+            issues with PostgreSQL 'name' type in some drivers.
+        """
+        asyncpg_driver = cast("AsyncpgDriver", driver)
+
+        schema_name = schema or "public"
+        sql = """
+            SELECT
+                a.attname::text AS column_name,
+                pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+                pg_catalog.pg_get_expr(d.adbin, d.adrelid)::text AS column_default
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
+            JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+            LEFT JOIN pg_catalog.pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+            WHERE c.relname = $1
+                AND n.nspname = $2
+                AND a.attnum > 0
+                AND NOT a.attisdropped
+            ORDER BY a.attnum
+        """
+
+        result = await asyncpg_driver.execute(sql, (table, schema_name))
+        return result.data or []
 
     async def get_foreign_keys(
         self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-
         asyncpg_driver = cast("AsyncpgDriver", driver)
         schema_name = schema or "public"
 

@@ -129,10 +129,8 @@ class SqliteSyncDataDictionary(SyncDataDictionaryBase):
             for row in result.data or []
         ]
 
-    def get_tables_in_topological_order(
-        self, driver: "SyncDriverAdapterBase", schema: "str | None" = None
-    ) -> "list[str]":
-        """Get tables sorted by topological dependency order."""
+    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
+        """Get tables sorted by topological dependency order using SQLite catalog."""
         sqlite_driver = cast("SqliteDriver", driver)
 
         sql = """
@@ -161,21 +159,15 @@ class SqliteSyncDataDictionary(SyncDataDictionaryBase):
               AND m.name NOT LIKE 'sqlite_%'
               AND instr(dt.path, '/' || m.name || '/') = 0
         )
-        SELECT DISTINCT table_name, level FROM dependency_tree ORDER BY level, table_name;
+        SELECT DISTINCT table_name FROM dependency_tree ORDER BY level, table_name;
         """
-        try:
-            result = sqlite_driver.execute(sql)
-            return [row["table_name"] if isinstance(row, dict) else row[0] for row in result.data]
-        except Exception:
-            return self.sort_tables_topologically(
-                self.get_tables(driver, schema), self.get_foreign_keys(driver, schema=schema)
-            )
+        result = sqlite_driver.execute(sql)
+        return [row["table_name"] for row in result.get_data()]
 
     def get_foreign_keys(
         self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-
         sqlite_driver = cast("SqliteDriver", driver)
 
         if table:

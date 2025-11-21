@@ -764,25 +764,6 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
         _ = driver, table, schema
         return []
 
-    async def get_tables_in_topological_order(
-        self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None
-    ) -> "list[str]":
-        """Get tables sorted by topological dependency order.
-
-        Default implementation fetches all tables and foreign keys,
-        then uses Python's topological sort.
-
-        Args:
-            driver: Async database driver instance
-            schema: Optional schema name
-
-        Returns:
-            List of table names sorted by dependency
-        """
-        tables = await self.get_tables(driver, schema)
-        foreign_keys = await self.get_foreign_keys(driver, schema=schema)
-        return self.sort_tables_topologically(tables, foreign_keys)
-
     def list_available_features(self) -> "list[str]":
         """List all features that can be checked via get_feature_flag.
 

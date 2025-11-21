@@ -136,7 +136,7 @@ async def test_asyncpg_data_dictionary_topology_and_fks(asyncpg_async_driver: "A
 
     try:
         # Test 1: Topological Sort
-        sorted_tables = await asyncpg_async_driver.data_dictionary.get_tables_in_topological_order(asyncpg_async_driver)
+        sorted_tables = await asyncpg_async_driver.data_dictionary.get_tables(asyncpg_async_driver)
 
         test_tables = [t for t in sorted_tables if t in (users_table, orders_table, items_table)]
         assert len(test_tables) == 3

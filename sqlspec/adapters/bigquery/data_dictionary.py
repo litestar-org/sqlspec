@@ -126,21 +126,59 @@ class BigQuerySyncDataDictionary(SyncDataDictionaryBase):
         return result.data or []
 
     def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
-        """Get list of tables in schema."""
+        """Get tables sorted by topological dependency order using BigQuery catalog."""
         bigquery_driver = cast("BigQueryDriver", driver)
+
         if schema:
-            sql = f"SELECT table_name FROM `{schema}.INFORMATION_SCHEMA.TABLES` WHERE table_type = 'BASE TABLE'"
+            tables_table = f"`{schema}.INFORMATION_SCHEMA.TABLES`"
+            kcu_table = f"`{schema}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
+            rc_table = f"`{schema}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
         else:
-            sql = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_type = 'BASE TABLE'"
+            tables_table = "INFORMATION_SCHEMA.TABLES"
+            kcu_table = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
+            rc_table = "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
+
+        sql = f"""
+        WITH RECURSIVE dependency_tree AS (
+            SELECT
+                t.table_name,
+                0 AS level,
+                [t.table_name] AS path
+            FROM {tables_table} t
+            WHERE t.table_type = 'BASE TABLE'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM {kcu_table} kcu
+                  JOIN {rc_table} rc ON kcu.constraint_name = rc.constraint_name
+                  WHERE kcu.table_name = t.table_name
+              )
+
+            UNION ALL
+
+            SELECT
+                kcu.table_name,
+                dt.level + 1,
+                ARRAY_CONCAT(dt.path, [kcu.table_name])
+            FROM {kcu_table} kcu
+            JOIN {rc_table} rc ON kcu.constraint_name = rc.constraint_name
+            JOIN {kcu_table} pk_kcu
+              ON rc.unique_constraint_name = pk_kcu.constraint_name
+              AND kcu.ordinal_position = pk_kcu.ordinal_position
+            JOIN dependency_tree dt ON pk_kcu.table_name = dt.table_name
+            WHERE kcu.table_name NOT IN UNNEST(dt.path)
+        )
+        SELECT DISTINCT table_name
+        FROM dependency_tree
+        ORDER BY level, table_name
+        """
 
         result = bigquery_driver.execute(sql)
-        return [row["table_name"] for row in result.data]
+        return [row["table_name"] for row in result.get_data()]
 
     def get_foreign_keys(
         self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-
         bigquery_driver = cast("BigQueryDriver", driver)
 
         dataset = schema

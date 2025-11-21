@@ -129,13 +129,10 @@ class AiosqliteAsyncDataDictionary(AsyncDataDictionaryBase):
             for row in result.data or []
         ]
 
-    async def get_tables_in_topological_order(
-        self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None
-    ) -> "list[str]":
-        """Get tables sorted by topological dependency order."""
+    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
+        """Get tables sorted by topological dependency order using SQLite catalog."""
         aiosqlite_driver = cast("AiosqliteDriver", driver)
 
-        # Assuming modern SQLite with pragma table-valued functions
         sql = """
         WITH RECURSIVE dependency_tree AS (
             SELECT
@@ -162,20 +159,15 @@ class AiosqliteAsyncDataDictionary(AsyncDataDictionaryBase):
               AND m.name NOT LIKE 'sqlite_%'
               AND instr(dt.path, '/' || m.name || '/') = 0
         )
-        SELECT DISTINCT table_name, level FROM dependency_tree ORDER BY level, table_name;
+        SELECT DISTINCT table_name FROM dependency_tree ORDER BY level, table_name;
         """
-        try:
-            result = await aiosqlite_driver.execute(sql)
-            return [row["table_name"] if isinstance(row, dict) else row[0] for row in result.data]
-        except Exception:
-            # Fallback to Python sort if TVF not supported or other error
-            return await super().get_tables_in_topological_order(driver, schema)
+        result = await aiosqlite_driver.execute(sql)
+        return [row["table_name"] for row in result.get_data()]
 
     async def get_foreign_keys(
         self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-
         aiosqlite_driver = cast("AiosqliteDriver", driver)
 
         if table:

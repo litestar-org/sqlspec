@@ -174,7 +174,7 @@ class OracleDataDictionaryMixin:
             GROUP BY i.index_name, i.table_name, i.uniqueness
         """
 
-    def _get_topological_sort_sql(self) -> str:
+    def _get_tables_sql(self) -> str:
         return """
             SELECT table_name, MAX(LEVEL) as lvl
             FROM user_constraints
@@ -429,20 +429,16 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         result = oracle_driver.execute(self._get_columns_sql(table, schema))
         return result.get_data()
 
-    def get_tables_in_topological_order(
-        self, driver: "SyncDriverAdapterBase", schema: "str | None" = None
-    ) -> "list[str]":
-        """Get tables sorted by topological dependency order."""
+    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
+        """Get tables sorted by topological dependency order using Oracle CONNECT BY."""
         oracle_driver = cast("OracleSyncDriver", driver)
-        # Fetch dependency sorted tables
-        result = oracle_driver.execute(self._get_topological_sort_sql())
-        sorted_tables = [row["table_name"] for row in result.get_data()]
 
-        # Fetch all tables
+        result = oracle_driver.execute(self._get_tables_sql())
+        sorted_tables = [row["table_name"] for row in result]
+
         all_result = oracle_driver.execute("SELECT table_name FROM user_tables")
         all_tables = {row["table_name"] for row in all_result.get_data()}
 
-        # Add disconnected tables (level 0 implied) at the beginning
         sorted_set = set(sorted_tables)
         disconnected = list(all_tables - sorted_set)
         disconnected.sort()
@@ -453,7 +449,6 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-
         oracle_driver = cast("OracleSyncDriver", driver)
         result = oracle_driver.execute(self._get_foreign_keys_sql(table))
 
@@ -650,20 +645,16 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         result = await oracle_driver.execute(self._get_columns_sql(table, schema))
         return result.get_data()
 
-    async def get_tables_in_topological_order(
-        self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None
-    ) -> "list[str]":
-        """Get tables sorted by topological dependency order."""
+    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
+        """Get tables sorted by topological dependency order using Oracle CONNECT BY."""
         oracle_driver = cast("OracleAsyncDriver", driver)
-        # Fetch dependency sorted tables
-        result = await oracle_driver.execute(self._get_topological_sort_sql())
+
+        result = await oracle_driver.execute(self._get_tables_sql())
         sorted_tables = [row["table_name"] for row in result.get_data()]
 
-        # Fetch all tables
         all_result = await oracle_driver.execute("SELECT table_name FROM user_tables")
         all_tables = {row["table_name"] for row in all_result.get_data()}
 
-        # Add disconnected tables (level 0 implied) at the beginning
         sorted_set = set(sorted_tables)
         disconnected = list(all_tables - sorted_set)
         disconnected.sort()
@@ -674,7 +665,6 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-
         oracle_driver = cast("OracleAsyncDriver", driver)
         result = await oracle_driver.execute(self._get_foreign_keys_sql(table))
 

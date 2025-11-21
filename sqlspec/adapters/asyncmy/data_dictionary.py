@@ -104,62 +104,60 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         }
         return type_map.get(type_category, "VARCHAR(255)")
 
-    async def get_tables_in_topological_order(
-        self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None
-    ) -> "list[str]":
-        """Get tables sorted by topological dependency order."""
+    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
+        """Get tables sorted by topological dependency order using MySQL catalog.
+
+        Requires MySQL 8.0.1+ for recursive CTE support.
+        """
         version = await self.get_version(driver)
-        if version and version >= VersionInfo(8, 0, 1):
-            # Use Recursive CTE
-            asyncmy_driver = cast("AsyncmyDriver", driver)
-            schema_clause = f"'{schema}'" if schema else "DATABASE()"
+        asyncmy_driver = cast("AsyncmyDriver", driver)
 
-            sql = f"""
-            WITH RECURSIVE dependency_tree AS (
-                SELECT
-                    table_name,
-                    0 AS level,
-                    CAST(table_name AS CHAR(4000)) AS path
-                FROM information_schema.tables t
-                WHERE t.table_type = 'BASE TABLE'
-                  AND t.table_schema = {schema_clause}
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM information_schema.key_column_usage kcu
-                      WHERE kcu.table_name = t.table_name
-                        AND kcu.table_schema = t.table_schema
-                        AND kcu.referenced_table_name IS NOT NULL
-                  )
+        if not version or version < VersionInfo(8, 0, 1):
+            msg = "get_tables requires MySQL 8.0.1+ for dependency ordering"
+            raise RuntimeError(msg)
 
-                UNION ALL
+        schema_clause = f"'{schema}'" if schema else "DATABASE()"
 
-                SELECT
-                    kcu.table_name,
-                    dt.level + 1,
-                    CONCAT(dt.path, ',', kcu.table_name)
-                FROM information_schema.key_column_usage kcu
-                JOIN dependency_tree dt ON kcu.referenced_table_name = dt.table_name
-                WHERE kcu.table_schema = {schema_clause}
-                  AND kcu.referenced_table_name IS NOT NULL
-                  AND NOT FIND_IN_SET(kcu.table_name, dt.path)
-            )
-            SELECT DISTINCT table_name, level
-            FROM dependency_tree
-            ORDER BY level, table_name
-            """
-            try:
-                result = await asyncmy_driver.execute(sql)
-                return [row["table_name"] for row in result.data]
-            except Exception as exc:
-                logger.warning("Failed to get tables in topological order via SQL: %s", exc)
+        sql = f"""
+        WITH RECURSIVE dependency_tree AS (
+            SELECT
+                table_name,
+                0 AS level,
+                CAST(table_name AS CHAR(4000)) AS path
+            FROM information_schema.tables t
+            WHERE t.table_type = 'BASE TABLE'
+              AND t.table_schema = {schema_clause}
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM information_schema.key_column_usage kcu
+                  WHERE kcu.table_name = t.table_name
+                    AND kcu.table_schema = t.table_schema
+                    AND kcu.referenced_table_name IS NOT NULL
+              )
 
-        return await super().get_tables_in_topological_order(driver, schema)
+            UNION ALL
+
+            SELECT
+                kcu.table_name,
+                dt.level + 1,
+                CONCAT(dt.path, ',', kcu.table_name)
+            FROM information_schema.key_column_usage kcu
+            JOIN dependency_tree dt ON kcu.referenced_table_name = dt.table_name
+            WHERE kcu.table_schema = {schema_clause}
+              AND kcu.referenced_table_name IS NOT NULL
+              AND NOT FIND_IN_SET(kcu.table_name, dt.path)
+        )
+        SELECT DISTINCT table_name
+        FROM dependency_tree
+        ORDER BY level, table_name
+        """
+        result = await asyncmy_driver.execute(sql)
+        return [row["table_name"] for row in result.get_data()]
 
     async def get_foreign_keys(
         self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-
         asyncmy_driver = cast("AsyncmyDriver", driver)
 
         where_clauses = ["referenced_table_name IS NOT NULL"]
