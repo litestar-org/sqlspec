@@ -55,6 +55,10 @@ OperationType = Literal[
 
 OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
     exp.Select: "SELECT",
+    exp.Union: "SELECT",
+    exp.Except: "SELECT",
+    exp.Intersect: "SELECT",
+    exp.With: "SELECT",
     exp.Insert: "INSERT",
     exp.Update: "UPDATE",
     exp.Delete: "DELETE",
@@ -554,7 +558,9 @@ class SQLProcessor:
         modifies_rows = False
 
         expr = expression
-        if isinstance(expr, (exp.Select, exp.Values, exp.Table, exp.TableSample, exp.With)):
+        if isinstance(
+            expr, (exp.Select, exp.Union, exp.Except, exp.Intersect, exp.Values, exp.Table, exp.TableSample, exp.With)
+        ):
             returns_rows = True
         elif isinstance(expr, (exp.Insert, exp.Update, exp.Delete, exp.Merge)):
             modifies_rows = True

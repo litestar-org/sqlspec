@@ -534,6 +534,27 @@ def test_sql_returns_rows_detection() -> None:
     assert show_stmt.returns_rows() is True
 
 
+@pytest.mark.parametrize(
+    "sql_text",
+    [
+        "SELECT 1 UNION ALL SELECT 2",
+        "SELECT 1 EXCEPT SELECT 2",
+        "SELECT 1 INTERSECT SELECT 1",
+        "WITH cte AS (SELECT 1 AS id) SELECT * FROM cte",
+    ],
+    ids=["union", "except", "intersect", "cte_select"],
+)
+def test_sql_set_and_cte_operations_detect_as_select(sql_text: str) -> None:
+    """Ensure set operations and CTE queries are detected as SELECT and return rows."""
+
+    stmt = SQL(sql_text)
+    stmt.compile()
+
+    assert stmt.operation_type == "SELECT"
+    assert stmt.returns_rows() is True
+    assert stmt.is_modifying_operation() is False
+
+
 def test_sql_slots_prevent_new_attributes() -> None:
     """Test SQL __slots__ prevent adding new attributes."""
     stmt = SQL("SELECT * FROM users")

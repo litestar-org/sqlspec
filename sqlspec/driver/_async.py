@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig, StatementFilter
+    from sqlspec.driver._common import ForeignKeyMetadata
     from sqlspec.typing import ArrowReturnFormat, SchemaT, StatementParameters
 
 
@@ -743,6 +744,22 @@ class AsyncDataDictionaryBase(DataDictionaryMixin):
 
         Returns:
             List of index metadata dictionaries
+        """
+        _ = driver, table, schema
+        return []
+
+    async def get_foreign_keys(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata.
+
+        Args:
+            driver: Async database driver instance
+            table: Optional table name filter
+            schema: Optional schema name filter
+
+        Returns:
+            List of foreign key metadata
         """
         _ = driver, table, schema
         return []
