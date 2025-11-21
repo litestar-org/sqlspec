@@ -1,7 +1,6 @@
 # Test module converted from docs example - code-block 10
 """Minimal smoke test for drivers_and_querying example 10."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -13,6 +12,8 @@ pytestmark = pytest.mark.xdist_group("duckdb")
 
 def test_example_10_duckdb_config(tmp_path: Path) -> None:
     # start-example
+    import tempfile
+
     from sqlspec import SQLSpec
     from sqlspec.adapters.duckdb import DuckDBConfig
 
@@ -22,14 +23,12 @@ def test_example_10_duckdb_config(tmp_path: Path) -> None:
 
         spec = SQLSpec()
         # In-memory
-        in_memory_config = DuckDBConfig()
-
-        # Persistent (using the temporary file in the temporary directory)
-        persistent_config = DuckDBConfig(pool_config={"database": str(db_path)})
+        in_memory_db = spec.add_config(DuckDBConfig())
+        persistent_db = spec.add_config(DuckDBConfig(pool_config={"database": str(db_path)}))
 
         try:
             # Test with in-memory config
-            with spec.provide_session(in_memory_config) as session:
+            with spec.provide_session(in_memory_db) as session:
                 # Create table from Parquet
                 session.execute(f"""
                    CREATE TABLE if not exists users AS
@@ -46,7 +45,7 @@ def test_example_10_duckdb_config(tmp_path: Path) -> None:
                """)
 
             # Test with persistent config
-            with spec.provide_session(persistent_config) as session:
+            with spec.provide_session(persistent_db) as session:
                 # Create table from Parquet
                 session.execute(f"""
                    CREATE TABLE if not exists users AS
@@ -63,6 +62,7 @@ def test_example_10_duckdb_config(tmp_path: Path) -> None:
                """)
         finally:
             # Close the pool for the persistent config
-            persistent_config.close_pool()
+            spec.get_config(in_memory_db).close_pool()
+            spec.get_config(persistent_db).close_pool()
             # The TemporaryDirectory context manager handles directory cleanup automatically
     # end-example
