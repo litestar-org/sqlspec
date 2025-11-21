@@ -1,5 +1,6 @@
 """Common driver attributes and utilities."""
 
+import graphlib
 import hashlib
 import logging
 import re
@@ -42,9 +43,12 @@ __all__ = (
     "EXEC_CURSOR_RESULT",
     "EXEC_ROWCOUNT_OVERRIDE",
     "EXEC_SPECIAL_DATA",
+    "ColumnMetadata",
     "CommonDriverAttributesMixin",
     "DataDictionaryMixin",
     "ExecutionResult",
+    "ForeignKeyMetadata",
+    "IndexMetadata",
     "ScriptExecutionResult",
     "StackExecutionObserver",
     "VersionInfo",
@@ -60,6 +64,163 @@ logger = get_logger("driver")
 DriverT = TypeVar("DriverT")
 VERSION_GROUPS_MIN_FOR_MINOR = 1
 VERSION_GROUPS_MIN_FOR_PATCH = 2
+
+
+class ForeignKeyMetadata:
+    """Metadata for a foreign key constraint."""
+
+    __slots__ = (
+        "column_name",
+        "constraint_name",
+        "referenced_column",
+        "referenced_schema",
+        "referenced_table",
+        "schema",
+        "table_name",
+    )
+
+    def __init__(
+        self,
+        table_name: str,
+        column_name: str,
+        referenced_table: str,
+        referenced_column: str,
+        constraint_name: str | None = None,
+        schema: str | None = None,
+        referenced_schema: str | None = None,
+    ) -> None:
+        self.table_name = table_name
+        self.column_name = column_name
+        self.referenced_table = referenced_table
+        self.referenced_column = referenced_column
+        self.constraint_name = constraint_name
+        self.schema = schema
+        self.referenced_schema = referenced_schema
+
+    def __repr__(self) -> str:
+        return (
+            f"ForeignKeyMetadata(table_name={self.table_name!r}, column_name={self.column_name!r}, "
+            f"referenced_table={self.referenced_table!r}, referenced_column={self.referenced_column!r}, "
+            f"constraint_name={self.constraint_name!r}, schema={self.schema!r}, referenced_schema={self.referenced_schema!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ForeignKeyMetadata):
+            return NotImplemented
+        return (
+            self.table_name == other.table_name
+            and self.column_name == other.column_name
+            and self.referenced_table == other.referenced_table
+            and self.referenced_column == other.referenced_column
+            and self.constraint_name == other.constraint_name
+            and self.schema == other.schema
+            and self.referenced_schema == other.referenced_schema
+        )
+
+    def __hash__(self) -> int:
+        return hash((
+            self.table_name,
+            self.column_name,
+            self.referenced_table,
+            self.referenced_column,
+            self.constraint_name,
+            self.schema,
+            self.referenced_schema,
+        ))
+
+
+class ColumnMetadata:
+    """Metadata for a database column."""
+
+    __slots__ = ("data_type", "default_value", "max_length", "name", "nullable", "precision", "primary_key", "scale")
+
+    def __init__(
+        self,
+        name: str,
+        data_type: str,
+        nullable: bool,
+        default_value: str | None = None,
+        primary_key: bool = False,
+        max_length: int | None = None,
+        precision: int | None = None,
+        scale: int | None = None,
+    ) -> None:
+        self.name = name
+        self.data_type = data_type
+        self.nullable = nullable
+        self.default_value = default_value
+        self.primary_key = primary_key
+        self.max_length = max_length
+        self.precision = precision
+        self.scale = scale
+
+    def __repr__(self) -> str:
+        return (
+            f"ColumnMetadata(name={self.name!r}, data_type={self.data_type!r}, nullable={self.nullable!r}, "
+            f"default_value={self.default_value!r}, primary_key={self.primary_key!r}, max_length={self.max_length!r}, "
+            f"precision={self.precision!r}, scale={self.scale!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ColumnMetadata):
+            return NotImplemented
+        return (
+            self.name == other.name
+            and self.data_type == other.data_type
+            and self.nullable == other.nullable
+            and self.default_value == other.default_value
+            and self.primary_key == other.primary_key
+            and self.max_length == other.max_length
+            and self.precision == other.precision
+            and self.scale == other.scale
+        )
+
+    def __hash__(self) -> int:
+        return hash((
+            self.name,
+            self.data_type,
+            self.nullable,
+            self.default_value,
+            self.primary_key,
+            self.max_length,
+            self.precision,
+            self.scale,
+        ))
+
+
+class IndexMetadata:
+    """Metadata for a database index."""
+
+    __slots__ = ("columns", "name", "primary", "table_name", "unique")
+
+    def __init__(
+        self, name: str, table_name: str, columns: list[str], unique: bool = False, primary: bool = False
+    ) -> None:
+        self.name = name
+        self.table_name = table_name
+        self.columns = columns
+        self.unique = unique
+        self.primary = primary
+
+    def __repr__(self) -> str:
+        return (
+            f"IndexMetadata(name={self.name!r}, table_name={self.table_name!r}, columns={self.columns!r}, "
+            f"unique={self.unique!r}, primary={self.primary!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, IndexMetadata):
+            return NotImplemented
+        return (
+            self.name == other.name
+            and self.table_name == other.table_name
+            and self.columns == other.columns
+            and self.unique == other.unique
+            and self.primary == other.primary
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.name, self.table_name, tuple(self.columns), self.unique, self.primary))
 
 
 def make_cache_key_hashable(obj: Any) -> Any:
@@ -374,6 +535,32 @@ class DataDictionaryMixin:
         """
         return ["supports_transactions", "supports_prepared_statements"]
 
+    def sort_tables_topologically(self, tables: "list[str]", foreign_keys: "list[ForeignKeyMetadata]") -> "list[str]":
+        """Sort tables topologically based on foreign key dependencies using Python.
+
+        Args:
+            tables: List of table names.
+            foreign_keys: List of foreign key metadata.
+
+        Returns:
+            List of table names in topological order (dependencies first).
+
+        Raises:
+            CycleError: If a dependency cycle is detected.
+        """
+        sorter: graphlib.TopologicalSorter[str] = graphlib.TopologicalSorter()
+        for table in tables:
+            sorter.add(table)
+
+        for fk in foreign_keys:
+            # If self-referencing, ignore for sorting purposes to avoid simple cycles
+            if fk.table_name == fk.referenced_table:
+                continue
+            # table_name depends on referenced_table
+            sorter.add(fk.table_name, fk.referenced_table)
+
+        return list(sorter.static_order())
+
 
 class ScriptExecutionResult(NamedTuple):
     """Result from script execution with statement count information."""
@@ -547,6 +734,32 @@ class CommonDriverAttributesMixin:
             last_inserted_id=execution_result.last_inserted_id,
             metadata=execution_result.special_data or {"status_message": "OK"},
         )
+
+    def _should_force_select(self, statement: "SQL", cursor: Any) -> bool:
+        """Determine if a statement with unknown type should be treated as SELECT.
+
+        Uses driver metadata (statement_type, description/schema) as a safety net when
+        the compiler cannot classify the operation. This remains conservative by only
+        triggering when the operation type is "UNKNOWN".
+
+        Args:
+            statement: SQL statement being executed.
+            cursor: Database cursor/job object that may expose metadata.
+
+        Returns:
+            True when cursor metadata indicates a row-returning operation despite an
+            unknown operation type; otherwise False.
+        """
+
+        if statement.operation_type != "UNKNOWN":
+            return False
+
+        statement_type = getattr(cursor, "statement_type", None)
+        if isinstance(statement_type, str) and statement_type.upper() == "SELECT":
+            return True
+
+        description = getattr(cursor, "description", None)
+        return bool(description)
 
     def prepare_statement(
         self,

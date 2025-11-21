@@ -1026,6 +1026,41 @@ def test_process_full_pipeline(processor: ParameterProcessor) -> None:
         assert len(final_params) > 0
 
 
+def test_process_execute_many_mapping_payload(
+    processor: "ParameterProcessor", basic_config: "ParameterStyleConfig"
+) -> None:
+    """Ensure execute_many normalizes mapping payloads for positional placeholders."""
+
+    sql = "INSERT INTO metrics (a, b) VALUES (?, ?)"
+    parameters = [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}]
+
+    final_sql, final_params = processor.process(sql, parameters, basic_config, is_many=True)
+
+    assert final_sql == sql
+    assert isinstance(final_params, list)
+    assert all(isinstance(param_set, (list, tuple)) for param_set in final_params)
+    assert [tuple(param_set) for param_set in final_params] == [(1, "x"), (2, "y")]
+
+
+def test_process_execute_many_named_to_positional(processor: "ParameterProcessor") -> None:
+    """Execute_many with named placeholders should convert mapping batches to positional values."""
+
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_DOLLAR,
+        supported_parameter_styles={ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
+        default_execution_parameter_style=ParameterStyle.QMARK,
+    )
+
+    sql = "INSERT INTO metrics (a, b) VALUES ($a, $b)"
+    parameters = [{"a": 10, "b": 20}, {"b": 40, "a": 30}]
+
+    final_sql, final_params = processor.process(sql, parameters, config, "duckdb", is_many=True)
+
+    assert final_sql.count("?") == 2
+    assert isinstance(final_params, list)
+    assert [tuple(param_set) for param_set in final_params] == [(10, 20), (30, 40)]
+
+
 def test_list_parameter_preservation(converter: ParameterConverter) -> None:
     """Test that list parameters are properly handled."""
     sql = "INSERT INTO users (id, name, active) VALUES (?, ?, ?)"

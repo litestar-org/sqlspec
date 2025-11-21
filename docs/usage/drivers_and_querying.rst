@@ -471,7 +471,7 @@ Performance Tips
    :start-after: # start-example
    :end-before: # end-example
    :caption: ``asyncpg connection pooling``
-   :dedent: 4
+   :dedent: 2
 
 **2. Batch Operations**
 

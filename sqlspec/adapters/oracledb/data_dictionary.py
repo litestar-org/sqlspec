@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlspec.driver import (
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
+    ForeignKeyMetadata,
     SyncDataDictionaryBase,
     SyncDriverAdapterBase,
     VersionInfo,
@@ -137,6 +138,52 @@ class OracleDataDictionaryMixin:
             FROM user_tab_columns
             WHERE table_name = '{table.upper()}'
             ORDER BY column_id
+        """
+
+    def _get_foreign_keys_sql(self, table: "str | None" = None) -> str:
+        where_clause = f"AND c.table_name = '{table.upper()}'" if table else ""
+        return f"""
+            SELECT
+                c.table_name,
+                cc.column_name,
+                r.table_name AS referenced_table_name,
+                rcc.column_name AS referenced_column_name,
+                c.constraint_name,
+                c.owner AS schema,
+                r.owner AS referenced_schema
+            FROM user_constraints c
+            JOIN user_cons_columns cc ON c.constraint_name = cc.constraint_name
+            JOIN user_constraints r ON c.r_constraint_name = r.constraint_name
+            JOIN user_cons_columns rcc ON r.constraint_name = rcc.constraint_name
+            WHERE c.constraint_type = 'R'
+              AND cc.position = rcc.position
+              {where_clause}
+        """
+
+    def _get_indexes_sql(self, table: "str | None" = None) -> str:
+        where_clause = f"AND i.table_name = '{table.upper()}'" if table else ""
+        return f"""
+            SELECT
+                i.index_name AS name,
+                i.table_name,
+                i.uniqueness,
+                LISTAGG(ic.column_name, ',') WITHIN GROUP (ORDER BY ic.column_position) AS columns
+            FROM user_indexes i
+            JOIN user_ind_columns ic ON i.index_name = ic.index_name
+            WHERE 1=1 {where_clause}
+            GROUP BY i.index_name, i.table_name, i.uniqueness
+        """
+
+    def _get_tables_sql(self) -> str:
+        return """
+            SELECT table_name, MAX(LEVEL) as lvl
+            FROM user_constraints
+            START WITH table_name NOT IN (
+                SELECT table_name FROM user_constraints WHERE constraint_type = 'R'
+            )
+            CONNECT BY NOCYCLE PRIOR constraint_name = r_constraint_name
+            GROUP BY table_name
+            ORDER BY lvl, table_name
         """
 
     def _select_component_version_row(self, driver: "OracleSyncDriver") -> "dict[str, Any] | None":
@@ -382,6 +429,60 @@ class OracleSyncDataDictionary(OracleDataDictionaryMixin, SyncDataDictionaryBase
         result = oracle_driver.execute(self._get_columns_sql(table, schema))
         return result.get_data()
 
+    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
+        """Get tables sorted by topological dependency order using Oracle CONNECT BY."""
+        oracle_driver = cast("OracleSyncDriver", driver)
+
+        result = oracle_driver.execute(self._get_tables_sql())
+        sorted_tables = [row["table_name"] for row in result]
+
+        all_result = oracle_driver.execute("SELECT table_name FROM user_tables")
+        all_tables = {row["table_name"] for row in all_result.get_data()}
+
+        sorted_set = set(sorted_tables)
+        disconnected = list(all_tables - sorted_set)
+        disconnected.sort()
+
+        return disconnected + sorted_tables
+
+    def get_foreign_keys(
+        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        oracle_driver = cast("OracleSyncDriver", driver)
+        result = oracle_driver.execute(self._get_foreign_keys_sql(table))
+
+        return [
+            ForeignKeyMetadata(
+                table_name=row["table_name"],
+                column_name=row["column_name"],
+                referenced_table=row["referenced_table_name"],
+                referenced_column=row["referenced_column_name"],
+                constraint_name=row["constraint_name"],
+                schema=row["schema"],
+                referenced_schema=row["referenced_schema"],
+            )
+            for row in result.get_data()
+        ]
+
+    def get_indexes(
+        self, driver: "SyncDriverAdapterBase", table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get index information for a table."""
+        oracle_driver = cast("OracleSyncDriver", driver)
+        result = oracle_driver.execute(self._get_indexes_sql(table))
+
+        return [
+            {
+                "name": row["name"],
+                "columns": row["columns"].split(",") if row["columns"] else [],
+                "unique": row["uniqueness"] == "UNIQUE",
+                "primary": False,
+                "table_name": row["table_name"],
+            }
+            for row in result.get_data()
+        ]
+
     def list_available_features(self) -> "list[str]":
         """List available Oracle feature flags.
 
@@ -543,6 +644,60 @@ class OracleAsyncDataDictionary(OracleDataDictionaryMixin, AsyncDataDictionaryBa
         oracle_driver = cast("OracleAsyncDriver", driver)
         result = await oracle_driver.execute(self._get_columns_sql(table, schema))
         return result.get_data()
+
+    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[str]":
+        """Get tables sorted by topological dependency order using Oracle CONNECT BY."""
+        oracle_driver = cast("OracleAsyncDriver", driver)
+
+        result = await oracle_driver.execute(self._get_tables_sql())
+        sorted_tables = [row["table_name"] for row in result.get_data()]
+
+        all_result = await oracle_driver.execute("SELECT table_name FROM user_tables")
+        all_tables = {row["table_name"] for row in all_result.get_data()}
+
+        sorted_set = set(sorted_tables)
+        disconnected = list(all_tables - sorted_set)
+        disconnected.sort()
+
+        return disconnected + sorted_tables
+
+    async def get_foreign_keys(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        oracle_driver = cast("OracleAsyncDriver", driver)
+        result = await oracle_driver.execute(self._get_foreign_keys_sql(table))
+
+        return [
+            ForeignKeyMetadata(
+                table_name=row["table_name"],
+                column_name=row["column_name"],
+                referenced_table=row["referenced_table_name"],
+                referenced_column=row["referenced_column_name"],
+                constraint_name=row["constraint_name"],
+                schema=row["schema"],
+                referenced_schema=row["referenced_schema"],
+            )
+            for row in result.get_data()
+        ]
+
+    async def get_indexes(
+        self, driver: "AsyncDriverAdapterBase", table: str, schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Get index information for a table."""
+        oracle_driver = cast("OracleAsyncDriver", driver)
+        result = await oracle_driver.execute(self._get_indexes_sql(table))
+
+        return [
+            {
+                "name": row["name"],
+                "columns": row["columns"].split(",") if row["columns"] else [],
+                "unique": row["uniqueness"] == "UNIQUE",
+                "primary": False,
+                "table_name": row["table_name"],
+            }
+            for row in result.get_data()
+        ]
 
     def list_available_features(self) -> "list[str]":
         """List available Oracle feature flags.

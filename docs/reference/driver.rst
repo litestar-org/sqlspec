@@ -103,6 +103,43 @@ Connection Pooling
    :undoc-members:
    :show-inheritance:
 
+Data Dictionary
+===============
+
+The Data Dictionary API provides standardized introspection capabilities across all supported databases.
+
+.. currentmodule:: sqlspec.driver
+
+.. autoclass:: DataDictionaryMixin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: AsyncDataDictionaryBase
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: SyncDataDictionaryBase
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: ForeignKeyMetadata
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: ColumnMetadata
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: IndexMetadata
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Driver Protocols
 ================
 
