@@ -79,13 +79,13 @@ class ParameterConverter:
         current_styles = {p.style for p in param_info}
         if len(current_styles) == 1 and target_style in current_styles:
             converted_parameters = self._convert_parameter_format(
-                parameters, param_info, target_style, parameters, preserve_parameter_format=True
+                parameters, param_info, target_style, parameters, preserve_parameter_format=True, is_many=is_many
             )
             return sql, converted_parameters
 
         converted_sql = self._convert_placeholders_to_style(sql, param_info, target_style)
         converted_parameters = self._convert_parameter_format(
-            parameters, param_info, target_style, parameters, preserve_parameter_format=True
+            parameters, param_info, target_style, parameters, preserve_parameter_format=True, is_many=is_many
         )
         return converted_sql, converted_parameters
 
@@ -230,19 +230,21 @@ class ParameterConverter:
         target_style: "ParameterStyle",
         original_parameters: Any = None,
         preserve_parameter_format: bool = False,
+        is_many: bool = False,
     ) -> Any:
         if not parameters or not param_info:
             return parameters
 
         if (
-            isinstance(parameters, Sequence)
+            is_many
+            and isinstance(parameters, Sequence)
             and not isinstance(parameters, (str, bytes, bytearray))
             and parameters
             and isinstance(parameters[0], Mapping)
         ):
             normalized_sets = [
                 self._convert_parameter_format(
-                    param_set, param_info, target_style, param_set, preserve_parameter_format
+                    param_set, param_info, target_style, param_set, preserve_parameter_format, is_many=False
                 )
                 if isinstance(param_set, Mapping)
                 else param_set

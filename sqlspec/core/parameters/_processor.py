@@ -6,6 +6,7 @@ from typing import Any
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.core.parameters._alignment import looks_like_execute_many
 from sqlspec.core.parameters._converter import ParameterConverter
 from sqlspec.core.parameters._types import (
     ParameterInfo,
@@ -184,6 +185,10 @@ class ParameterProcessor:
                 for param in param_info
             )
             if has_named_placeholders:
+                return False
+
+            looks_many = is_many or looks_like_execute_many(payload)
+            if not looks_many:
                 return False
 
             if isinstance(payload, Mapping):
