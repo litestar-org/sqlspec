@@ -218,32 +218,12 @@ The ``--config`` option accepts a dotted path to either:
 
 Example configuration file (``myapp/config.py``):
 
-.. code-block:: python
-
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   # Single config
-   db_config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://user:pass@localhost/mydb"},
-       migration_config={
-           "script_location": "migrations",
-           "enabled": True
-       }
-   )
-
-   # Multiple configs
-   configs = [
-       AsyncpgConfig(
-           bind_key="postgres",
-           pool_config={"dsn": "postgresql://..."},
-           migration_config={"script_location": "migrations/postgres"}
-       ),
-       # ... more configs
-   ]
-
-   # Callable function
-   def get_configs():
-       return [db_config]
+.. literalinclude:: /examples/usage/usage_cli_1.py
+   :language: python
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: `configuration loading`
 
 Global Options
 --------------
@@ -769,29 +749,12 @@ them collectively or selectively.
 Scenario: Multiple Databases
 -----------------------------
 
-.. code-block:: python
-
-   # config.py
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-   from sqlspec.adapters.asyncmy import AsyncmyConfig
-
-   configs = [
-       AsyncpgConfig(
-           bind_key="postgres",
-           pool_config={"dsn": "postgresql://..."},
-           migration_config={"script_location": "migrations/postgres", "enabled": True}
-       ),
-       AsyncmyConfig(
-           bind_key="mysql",
-           pool_config={"host": "localhost", "database": "mydb"},
-           migration_config={"script_location": "migrations/mysql", "enabled": True}
-       ),
-       AsyncpgConfig(
-           bind_key="analytics",
-           pool_config={"dsn": "postgresql://analytics/..."},
-           migration_config={"script_location": "migrations/analytics", "enabled": True}
-       ),
-   ]
+.. literalinclude:: /examples/usage/usage_cli_2.py
+   :language: python
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: `multiple databases`
 
 Upgrade All Enabled Configs
 ----------------------------
