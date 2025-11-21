@@ -305,7 +305,7 @@ await config.fix_migrations(dry_run=False, update_database=False, yes=True)
 from sqlspec.adapters.sqlite import SqliteConfig
 
 config = SqliteConfig(
-    pool_config={"database": " sgmyapp.db"},
+    pool_config={"database": "myapp.db"},
     migration_config={
         "enabled": True,
         "script_location": "migrations",
