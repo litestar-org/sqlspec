@@ -24,6 +24,7 @@ AiosqlAsyncAdapter
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 AiosqlSyncAdapter
 -----------------
@@ -32,6 +33,7 @@ AiosqlSyncAdapter
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 Query Operators
 ===============
