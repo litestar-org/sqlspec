@@ -1243,7 +1243,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         await cursor.execute(sql, prepared_parameters or {})
 
         # SELECT result processing for Oracle
-        if statement.returns_rows():
+        is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
+
+        if is_select_like:
             fetched_data = await cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
             column_names = _normalize_column_names(column_names, self.driver_features)

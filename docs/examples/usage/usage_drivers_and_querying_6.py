@@ -12,24 +12,34 @@ def test_example_6_sqlite_config(tmp_path: Path) -> None:
     # start-example
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    spec = SQLSpec()
+    # Use a temporary file for the SQLite database for test isolation
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_db_file:
+        db_path = tmp_db_file.name
 
-    database_file = tmp_path / "myapp.db"
-    config = SqliteConfig(pool_config={"database": database_file.name, "timeout": 5.0, "check_same_thread": False})
+        spec = SQLSpec()
 
-    with spec.provide_session(config) as session:
-        # Create table
-        session.execute("""
-           CREATE TABLE IF NOT EXISTS usage6_users (
-               id INTEGER PRIMARY KEY,
-               name TEXT NOT NULL
-           )
-       """)
+        db = spec.add_config(
+            SqliteConfig(pool_config={"database": db_path, "timeout": 5.0, "check_same_thread": False})
+        )
 
-        # Insert with parameters
-        session.execute("INSERT INTO usage6_users (name) VALUES (?)", "Alice")
+        try:
+            with spec.provide_session(db) as session:
+                # Create table
+                session.execute("""
+                CREATE TABLE IF NOT EXISTS usage6_users (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL
+                )
+            """)
 
-        # Query
-        result = session.execute("SELECT * FROM usage6_users")
-        result.all()
-    # end-example
+                # Insert with parameters
+                session.execute("INSERT INTO usage6_users (name) VALUES (?)", "Alice")
+
+                # Query
+                result = session.execute("SELECT * FROM usage6_users")
+                result.all()
+        finally:
+            # Clean up the temporary database file
+            spec.get_config(db).close_pool()
+            Path(db_path).unlink()
+        # end-example

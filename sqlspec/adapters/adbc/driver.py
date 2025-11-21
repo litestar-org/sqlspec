@@ -513,7 +513,9 @@ class AdbcDriver(SyncDriverAdapterBase):
             self._handle_postgres_rollback(cursor)
             raise
 
-        if statement.returns_rows():
+        is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
+
+        if is_select_like:
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
 

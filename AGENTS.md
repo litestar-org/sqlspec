@@ -451,6 +451,58 @@ if supports_where(obj):
     result = obj.where("condition")
 ```
 
+### Mypyc-Compatible Metadata Class Pattern
+
+When defining data-holding classes intended for core modules (`sqlspec/core/`, `sqlspec/driver/`) that will be compiled with MyPyC, use regular classes with `__slots__` and explicitly implement `__init__`, `__repr__`, `__eq__`, and `__hash__`. This approach ensures optimal performance and MyPyC compatibility, as `dataclasses` are not directly supported by MyPyC for compilation.
+
+**Key Principles:**
+
+- **`__slots__`**: Reduces memory footprint and speeds up attribute access.
+- **Explicit `__init__`**: Defines the constructor for the class.
+- **Explicit `__repr__`**: Provides a clear string representation for debugging.
+- **Explicit `__eq__`**: Enables correct equality comparisons.
+- **Explicit `__hash__`**: Makes instances hashable, allowing them to be used in sets or as dictionary keys. The hash implementation should be based on all fields that define the object's identity.
+
+**Example Implementation:**
+
+```python
+class MyMetadata:
+    __slots__ = ("field1", "field2", "optional_field")
+
+    def __init__(self, field1: str, field2: int, optional_field: str | None = None) -> None:
+        self.field1 = field1
+        self.field2 = field2
+        self.optional_field = optional_field
+
+    def __repr__(self) -> str:
+        return f"MyMetadata(field1={self.field1!r}, field2={self.field2!r}, optional_field={self.optional_field!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MyMetadata):
+            return NotImplemented
+        return (
+            self.field1 == other.field1
+            and self.field2 == other.field2
+            and self.optional_field == other.optional_field
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.field1, self.field2, self.optional_field))
+```
+
+**When to Use:**
+
+- For all new data-holding classes in performance-critical paths (e.g., `sqlspec/driver/_common.py`).
+- When MyPyC compilation is enabled for the module containing the class.
+
+**Anti-Patterns to Avoid:**
+
+- Using `@dataclass` decorators for classes intended for MyPyC compilation.
+- Omitting `__slots__` when defining performance-critical data structures.
+- Relying on default `__eq__` or `__hash__` behavior for complex objects, especially for equality comparisons in collections.
+
+---
+
 ### Performance Patterns (MANDATORY)
 
 **PERF401 - List Operations**:
