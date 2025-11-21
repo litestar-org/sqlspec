@@ -1,7 +1,7 @@
 __all__ = ("test_manual_pool",)
 
 
-def test_manual_pool() -> None:
+async def test_manual_pool() -> None:
 
     # start-example
     import os
@@ -10,9 +10,10 @@ def test_manual_pool() -> None:
 
     from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-    pool = asyncpg.create_pool(
+    pool = await asyncpg.create_pool(
         dsn=os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db"), min_size=10, max_size=20
     )
     db = AsyncpgConfig(pool_instance=pool)
     # end-example
     assert db.pool_instance is pool
+    await pool.close()

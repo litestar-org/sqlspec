@@ -216,6 +216,25 @@ def test_observability_config_merge_combines_hooks_and_observers() -> None:
     assert observer_called == []  # observers run via runtime, dispatcher unaffected
 
 
+def test_lifecycle_dispatcher_guard_attributes_always_accessible() -> None:
+    """All guard attributes should be accessible even with no hooks (mypyc compatibility)."""
+
+    dispatcher = LifecycleDispatcher(None)
+    assert dispatcher.has_pool_create is False
+    assert dispatcher.has_pool_destroy is False
+    assert dispatcher.has_connection_create is False
+    assert dispatcher.has_connection_destroy is False
+    assert dispatcher.has_session_start is False
+    assert dispatcher.has_session_end is False
+    assert dispatcher.has_query_start is False
+    assert dispatcher.has_query_complete is False
+    assert dispatcher.has_error is False
+
+    dispatcher_with_hooks = LifecycleDispatcher(cast("dict[str, Iterable[Any]]", {"on_query_start": [lambda ctx: ctx]}))
+    assert dispatcher_with_hooks.has_query_start is True
+    assert dispatcher_with_hooks.has_pool_create is False
+
+
 def test_lifecycle_dispatcher_counts_events() -> None:
     """Lifecycle dispatcher should count emitted events for diagnostics."""
 

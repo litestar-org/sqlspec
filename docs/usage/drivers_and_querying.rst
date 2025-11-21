@@ -1,4 +1,3 @@
-=====================
 Drivers and Querying
 =====================
 
@@ -50,14 +49,12 @@ SQLSpec drivers follow a layered architecture:
 3. **Driver Layer**: Query execution and result handling
 4. **Session Layer**: Transaction management
 
-.. code-block:: python
-
-   # Typical driver usage
-   spec = SQLSpec()
-   db = spec.add_config(AsyncpgConfig(pool_config={...}))  # Config layer, registers pool
-
-   async with spec.provide_session(db) as session:  # Session layer
-       result = await session.execute("SELECT 1")       # Driver layer
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_1.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `driver architecture`
 
 PostgreSQL Drivers
 ------------------
@@ -67,34 +64,12 @@ asyncpg (Recommended for Async)
 
 Async PostgreSQL driver with native connection pooling.
 
-.. code-block:: python
-
-   from sqlspec import SQLSpec
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   spec = SQLSpec()
-   db = spec.add_config(
-       AsyncpgConfig(
-           pool_config={
-               "dsn": "postgresql://user:pass@localhost:5432/mydb",
-               "min_size": 10,
-               "max_size": 20,
-           }
-       )
-   )
-
-   async with spec.provide_session(db) as session:
-       # Basic query
-       result = await session.execute("SELECT * FROM users WHERE id = $1", 1)
-       user = result.one()
-
-       # Insert with RETURNING
-       result = await session.execute(
-           "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
-           "Alice",
-           "alice@example.com"
-       )
-       new_id = result.scalar()
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_2.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `asyncpg`
 
 **Features**:
 
@@ -109,25 +84,25 @@ psycopg (Sync/Async)
 
 Official PostgreSQL adapter with both sync and async support.
 
-.. code-block:: python
+.. tab-set::
 
-   from sqlspec.adapters.psycopg import PsycopgConfig
+   .. tab-item:: Sync
 
-   # Async version
-   config = PsycopgConfig(
-       pool_config={
-           "conninfo": "postgresql://localhost/db",
-           "min_size": 5,
-           "max_size": 10,
-       }
-   )
+      .. literalinclude:: /examples/usage/usage_drivers_and_querying_3.py
+         :language: python
+         :start-after: # start-example
+         :end-before: # end-example
+         :dedent: 2
+         :caption: `psycopg sync`
 
-   async with spec.provide_session(config) as session:
-       result = await session.execute("SELECT * FROM users")
+   .. tab-item:: Async
 
-   # Sync version (use psycopg sync config)
-   with spec.provide_session(config) as session:
-       result = session.execute("SELECT * FROM users")
+      .. literalinclude:: /examples/usage/usage_drivers_and_querying_4.py
+         :language: python
+         :start-after: # start-example
+         :end-before: # end-example
+         :dedent: 2
+         :caption: `psycopg async`
 
 **Features**:
 
@@ -142,19 +117,12 @@ psqlpy (High Performance Async)
 
 Rust-based async PostgreSQL driver for maximum performance.
 
-.. code-block:: python
-
-   from sqlspec.adapters.psqlpy import PsqlpyConfig
-
-   config = PsqlpyConfig(
-       pool_config={
-           "dsn": "postgresql://localhost/db",
-           "max_pool_size": 20,
-       }
-   )
-
-   async with spec.provide_session(config) as session:
-       result = await session.execute("SELECT * FROM users WHERE id = $1", 1)
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_5.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `psqlpy`
 
 **Features**:
 
@@ -170,36 +138,19 @@ sqlite3 (Synchronous)
 
 Python's built-in SQLite adapter.
 
-.. code-block:: python
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_6.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `sqlite config`
 
-   from sqlspec.adapters.sqlite import SqliteConfig
-
-   config = SqliteConfig(
-       pool_config={
-           "database": "myapp.db",
-           "timeout": 5.0,
-           "check_same_thread": False,
-       }
-   )
-
-   with spec.provide_session(config) as session:
-       # Create table
-       session.execute("""
-           CREATE TABLE IF NOT EXISTS users (
-               id INTEGER PRIMARY KEY,
-               name TEXT NOT NULL
-           )
-       """)
-
-       # Insert with parameters
-       session.execute(
-           "INSERT INTO users (name) VALUES (?)",
-           "Alice"
-       )
-
-       # Query
-       result = session.execute("SELECT * FROM users")
-       users = result.all()
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_7.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `sqlite`
 
 **Features**:
 
@@ -213,20 +164,12 @@ aiosqlite (Asynchronous)
 
 Async wrapper around sqlite3.
 
-.. code-block:: python
-
-   from sqlspec.adapters.aiosqlite import AiosqliteConfig
-
-   config = AiosqliteConfig(
-       pool_config={"database": "myapp.db"}
-   )
-
-   async with spec.provide_session(config) as session:
-       await session.execute(
-           "INSERT INTO users (name) VALUES (?)",
-           "Bob"
-       )
-       result = await session.execute("SELECT * FROM users")
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_8.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `aiosqlite`
 
 **Features**:
 
@@ -242,27 +185,12 @@ asyncmy (Asynchronous)
 
 Pure Python async MySQL/MariaDB driver.
 
-.. code-block:: python
-
-   from sqlspec.adapters.asyncmy import AsyncmyConfig
-
-   config = AsyncmyConfig(
-       pool_config={
-           "host": "localhost",
-           "port": 3306,
-           "user": "myuser",
-           "password": "mypassword",
-           "database": "mydb",
-           "minsize": 1,
-           "maxsize": 10,
-       }
-   )
-
-   async with spec.provide_session(config) as session:
-       result = await session.execute(
-           "SELECT * FROM users WHERE id = %s",
-           1
-       )
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_9.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `asyncmy`
 
 **Features**:
 
@@ -279,33 +207,12 @@ DuckDB (Analytical Database)
 
 In-process analytical database optimized for OLAP workloads.
 
-.. code-block:: python
-
-   from sqlspec.adapters.duckdb import DuckDBConfig
-
-   # In-memory
-   config = DuckDBConfig()
-
-   # Persistent
-   config = DuckDBConfig(
-       pool_config={"database": "analytics.duckdb"}
-   )
-
-   with spec.provide_session(config) as session:
-       # Create table from Parquet
-       session.execute("""
-           CREATE TABLE users AS
-           SELECT * FROM read_parquet('users.parquet')
-       """)
-
-       # Analytical query
-       result = session.execute("""
-           SELECT date_trunc('day', created_at) as day,
-                  count(*) as user_count
-           FROM users
-           GROUP BY day
-           ORDER BY day
-       """)
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_10.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `duckdb`
 
 **Features**:
 
@@ -319,23 +226,12 @@ Oracle Database
 
 Oracle database support with python-oracledb.
 
-.. code-block:: python
-
-   from sqlspec.adapters.oracledb import OracleDBConfig
-
-   config = OracleDBConfig(
-       pool_config={
-           "user": "myuser",
-           "password": "mypassword",
-           "dsn": "localhost:1521/ORCLPDB",
-       }
-   )
-
-   with spec.provide_session(config) as session:
-       result = session.execute(
-           "SELECT * FROM employees WHERE employee_id = :id",
-           id=100
-       )
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_11.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `oracle`
 
 **Features**:
 
@@ -386,100 +282,73 @@ execute()
 
 Execute any SQL statement and return results.
 
-.. code-block:: python
-
-   # SELECT query
-   result = session.execute("SELECT * FROM users WHERE id = ?", 1)
-
-   # INSERT query
-   result = session.execute(
-       "INSERT INTO users (name, email) VALUES (?, ?)",
-       "Alice",
-       "alice@example.com"
-   )
-
-   # UPDATE query
-   result = session.execute(
-       "UPDATE users SET email = ? WHERE id = ?",
-       "newemail@example.com",
-       1
-   )
-   print(f"Updated {result.rows_affected} rows")
-
-   # DELETE query
-   result = session.execute("DELETE FROM users WHERE id = ?", 1)
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_13.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
+   :caption: `execute`
 
 execute_many()
 ^^^^^^^^^^^^^^
 
 Execute a statement with multiple parameter sets (batch insert/update).
 
-.. code-block:: python
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-1
+   :end-before: # end-example-1
+   :dedent: 2
+   :caption: `execute_many`
 
-   # Batch insert
-   session.execute_many(
-       "INSERT INTO users (name, email) VALUES (?, ?)",
-       [
-           ("Alice", "alice@example.com"),
-           ("Bob", "bob@example.com"),
-           ("Charlie", "charlie@example.com"),
-       ]
-   )
-
-   # Batch update
-   session.execute_many(
-       "UPDATE users SET status = ? WHERE id = ?",
-       [
-           ("active", 1),
-           ("inactive", 2),
-       ]
-   )
 
 select()
 ^^^^^^^^
 
 Execute a SELECT query and return all rows.
 
-.. code-block:: python
-
-   users = session.execute("SELECT * FROM users WHERE status = ?", "active")
-   # Returns list of dictionaries: [{"id": 1, "name": "Alice", ...}, ...]
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-2
+   :end-before: # end-example-2
+   :dedent: 4
+   :caption: `select`
 
 select_one()
 ^^^^^^^^^^^^
 
 Execute a SELECT query expecting exactly one result.
 
-.. code-block:: python
-
-   user = session.select_one("SELECT * FROM users WHERE id = ?", 1)
-   # Returns single dictionary: {"id": 1, "name": "Alice", ...}
-   # Raises NotFoundError if no results
-   # Raises MultipleResultsFoundError if multiple results
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-3
+   :end-before: # end-example-3
+   :dedent: 4
+   :caption: `select_one`
 
 select_one_or_none()
 ^^^^^^^^^^^^^^^^^^^^
 
 Execute a SELECT query returning one or no results.
 
-.. code-block:: python
-
-   user = session.select_one_or_none("SELECT * FROM users WHERE email = ?", "nobody@example.com")
-   # Returns dictionary or None
-   # Raises MultipleResultsFoundError if multiple results
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-4
+   :end-before: # end-example-4
+   :dedent: 4
+   :caption: `select_one_or_none`
 
 select_value()
 ^^^^^^^^^^^^^^
 
 Execute a SELECT query returning a single scalar value.
 
-.. code-block:: python
-
-   count = session.select_value("SELECT COUNT(*) FROM users")
-   # Returns: 42
-
-   latest_id = session.select_value("SELECT MAX(id) FROM users")
-   # Returns: 100
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-5
+   :end-before: # end-example-5
+   :dedent: 4
+   :caption: `select_value`
 
 Working with Results
 --------------------
@@ -489,59 +358,34 @@ SQLResult Object
 
 All queries return a ``SQLResult`` object with rich result information.
 
-.. code-block:: python
-
-   result = session.execute("SELECT id, name, email FROM users")
-
-   # Access raw data
-   result.data              # List of dictionaries
-   result.column_names      # ["id", "name", "email"]
-   result.rows_affected     # For INSERT/UPDATE/DELETE
-   result.operation_type    # "SELECT", "INSERT", etc.
-
-   # Convenience methods
-   user = result.one()              # Single row (raises if not exactly 1)
-   user = result.one_or_none()      # Single row or None
-   value = result.scalar()          # First column of first row
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-6
+   :end-before: # end-example-6
+   :dedent: 4
+   :caption: `SQLResult object`
 
 Iterating Results
 ^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   result = session.execute("SELECT * FROM users")
-
-   # Get all rows and iterate
-   users = result.all()
-   for user in users:
-       print(f"{user['name']}: {user['email']}")
-
-   # List comprehension
-   names = [user['name'] for user in result.all()]
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-7
+   :end-before: # end-example-7
+   :dedent: 4
+   :caption: `iterating results`
 
 Schema Mapping
 ^^^^^^^^^^^^^^
 
-Map results to typed objects automatically.
+Map results to typed objects automatically.# end-example
 
-.. code-block:: python
-
-   from pydantic import BaseModel
-
-   class User(BaseModel):
-       id: int
-       name: str
-       email: str
-
-   # Execute query
-   result = session.execute("SELECT id, name, email FROM users")
-
-   # Map results to typed User instances
-   users: list[User] = result.all(schema_type=User)
-
-   # Or get single typed result
-   user_result = session.execute("SELECT id, name, email FROM users WHERE id = ?", 1)
-   user: User = user_result.one(schema_type=User)
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_14.py
+   :language: python
+   :start-after: # start-example-8
+   :end-before: # end-example-8
+   :dedent: 4
+   :caption: `schema mapping`
 
 Transactions
 ------------
@@ -549,30 +393,26 @@ Transactions
 Manual Transaction Control
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_15.py
+   :language: python
+   :caption: `manual transaction control`
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
 
-   with spec.provide_session(config) as session:
-       try:
-           session.begin()
-
-           session.execute("INSERT INTO users (name) VALUES (?)", "Alice")
-           session.execute("INSERT INTO logs (action) VALUES (?)", "user_created")
-
-           session.commit()
-       except Exception:
-           session.rollback()
-           raise
 
 Context Manager Transactions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+``session.begin()`` returns a coroutine, so wrap it in your own helper if you
+prefer context manager semantics.
 
-   async with spec.provide_session(config) as session:
-       async with session.begin():
-           await session.execute("UPDATE accounts SET balance = balance - 100 WHERE id = ?", 1)
-           await session.execute("UPDATE accounts SET balance = balance + 100 WHERE id = ?", 2)
-           # Auto-commits on success, auto-rollbacks on exception
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_16.py
+   :language: python
+   :caption: ``async transaction helper``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 2
 
 Parameter Binding
 -----------------
@@ -580,101 +420,69 @@ Parameter Binding
 Positional Parameters
 ^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   # SQLite, DuckDB (?)
-   session.execute("SELECT * FROM users WHERE id = ?", 1)
-
-   # PostgreSQL (asyncpg) ($1, $2, ...)
-   session.execute("SELECT * FROM users WHERE id = $1 AND status = $2", 1, "active")
-
-   # MySQL (%s)
-   session.execute("SELECT * FROM users WHERE id = %s", 1)
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_17.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``positional parameters``
+   :dedent: 4
 
 Named Parameters
 ^^^^^^^^^^^^^^^^
 
-.. code-block:: python
-
-   # SQLite, Oracle (:name)
-   session.execute(
-       "SELECT * FROM users WHERE id = :id AND status = :status",
-       id=1,
-       status="active"
-   )
-
-   # BigQuery (@name)
-   session.execute(
-       "SELECT * FROM users WHERE created_at >= @start_date",
-       start_date=datetime.date(2025, 1, 1)
-   )
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_18.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``named parameters``
+   :dedent: 4
 
 Type Coercion
 ^^^^^^^^^^^^^
 
 SQLSpec automatically coerces types based on driver requirements:
 
-.. code-block:: python
-
-   # Booleans to integers (SQLite)
-   session.execute("INSERT INTO users (is_active) VALUES (?)", True)
-   # SQLite receives: 1
-
-   # Datetime to ISO format (JSON databases)
-   session.execute(
-       "INSERT INTO events (timestamp) VALUES (?)",
-       datetime.datetime.now()
-   )
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_19.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``type coercion``
+   :dedent: 4
 
 Script Execution
 ----------------
 
 Execute multiple SQL statements in one call:
 
-.. code-block:: python
-
-   session.execute("""
-       CREATE TABLE users (
-           id INTEGER PRIMARY KEY,
-           name TEXT NOT NULL
-       );
-
-       CREATE TABLE posts (
-           id INTEGER PRIMARY KEY,
-           user_id INTEGER,
-           title TEXT,
-           FOREIGN KEY (user_id) REFERENCES users(id)
-       );
-
-       CREATE INDEX idx_posts_user_id ON posts(user_id);
-   """)
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_20.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``script execution``
+   :dedent: 4
 
 Performance Tips
 ----------------
 
 **1. Use Connection Pooling**
 
-.. code-block:: python
-
-   config = AsyncpgConfig(
-       pool_config={
-           "dsn": "postgresql://localhost/db",
-           "min_size": 10,
-           "max_size": 20,
-       }
-   )
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_21.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``asyncpg connection pooling``
+   :dedent: 4
 
 **2. Batch Operations**
 
 Use ``execute_many()`` for bulk inserts:
 
-.. code-block:: python
-
-   # Fast batch insert
-   session.execute_many(
-       "INSERT INTO users (name) VALUES (?)",
-       [(name,) for name in large_list]
-   )
+.. literalinclude:: /examples/usage/usage_drivers_and_querying_22.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+   :caption: ``batch inserts``
+   :dedent: 4
 
 **3. Prepared Statements**
 
