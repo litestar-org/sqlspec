@@ -1,7 +1,7 @@
-# start-example
 __all__ = ("test_upgrade_returns_list", "upgrade")
 
 
+# start-example
 def upgrade() -> list[str]:
     """Apply migration in multiple steps."""
     return [

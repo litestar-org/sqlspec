@@ -1,9 +1,9 @@
-# start-example
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 __all__ = ("test_config_structure",)
 
 
+# start-example
 config = AsyncpgConfig(
     pool_config={"dsn": "postgresql://user:pass@localhost/mydb"},
     migration_config={

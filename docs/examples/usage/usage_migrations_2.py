@@ -1,8 +1,8 @@
-# start-example
-from sqlspec.adapters.sqlite import SqliteConfig
-
 __all__ = ("test_sync_methods",)
 
+
+# start-example
+from sqlspec.adapters.sqlite import SqliteConfig
 
 config = SqliteConfig(
     pool_config={"database": "myapp.db"}, migration_config={"enabled": True, "script_location": "migrations"}

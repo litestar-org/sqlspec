@@ -1,7 +1,7 @@
-# start-example
 __all__ = ("test_template_config",)
 
 
+# start-example
 migration_config = {
     "default_format": "py",  # CLI default when --format omitted
     "title": "Acme Migration",  # Shared title for all templates

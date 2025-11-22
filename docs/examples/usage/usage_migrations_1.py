@@ -19,16 +19,26 @@ async def test_async_methods(postgres_service: PostgresService) -> None:
     # Apply migrations
     await config.migrate_up("head")
     # Or use the alias
-    await config.upgrade("head")
+    # await config.upgrade("head")
 
     # Rollback one revision
     await config.migrate_down("-1")
     # Or use the alias
-    await config.downgrade("-1")
+    # await config.downgrade("-1")
 
     # Check current version
-    current = await config.get_current_migration(verbose=True)
-    print(current)
+    await config.get_current_migration(verbose=True)
+    # Create new migration
+    await config.create_migration("add users table", file_type="sql")
+
+    # Initialize migrations directory
+    await config.init_migrations()
+
+    # Stamp database to specific revision
+    await config.stamp_migration("0003")
+
+    # Convert timestamp to sequential migrations
+    await config.fix_migrations(dry_run=False, update_database=True, yes=True)
     # end-example
     # These are just smoke tests for method presence, not actual DB calls
     assert hasattr(config, "migrate_up")
