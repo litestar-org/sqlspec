@@ -5,7 +5,7 @@ import enum
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
+from typing import Any, ClassVar, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
 
 from typing_extensions import TypeVar, dataclass_transform
 
@@ -599,7 +599,6 @@ try:
     from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
         AsyncDriverAdapterProtocol as AiosqlAsyncProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
-    from aiosql.types import ParamType as AiosqlParamType  # pyright: ignore[reportMissingImports, reportAssignmentType]
     from aiosql.types import (
         SQLOperationType as AiosqlSQLOperationType,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
@@ -624,8 +623,7 @@ except ImportError:
 
     aiosql = _AiosqlShim()  # type: ignore[assignment]
 
-    # Placeholder types for aiosql protocols
-    AiosqlParamType = Any  # type: ignore[misc]
+    AiosqlParamType: TypeAlias = dict[str, Any] | list[Any] | None
 
     class AiosqlSQLOperationType(Enum):  # type: ignore[no-redef]
         """Enumeration of aiosql operation types."""

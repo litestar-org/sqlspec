@@ -1,3 +1,4 @@
+# ruff: noqa: FBT003
 """MERGE statement builder.
 
 Provides a fluent interface for building SQL MERGE queries with
@@ -9,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
 from itertools import starmap
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -133,11 +134,11 @@ class MergeIntoClauseMixin:
         if isinstance(table, str):
             table_expr = exp.to_table(table)
             if is_explicitly_quoted(table):
-                table_expr.set("quoted", quoted=True)
+                table_expr.set("quoted", True)
                 table_expr.set("this", table.strip('"`'))
-                self._merge_target_quoted = True  # type: ignore[attr-defined]
+                cast("QueryBuilder", self)._merge_target_quoted = True  # pyright: ignore[reportPrivateUsage]
             else:
-                self._merge_target_quoted = False  # type: ignore[attr-defined]
+                cast("QueryBuilder", self)._merge_target_quoted = False  # pyright: ignore[reportPrivateUsage]
             if alias:
                 table_expr = exp.alias_(table_expr, alias, table=True)
         else:

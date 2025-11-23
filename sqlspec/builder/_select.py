@@ -1497,7 +1497,7 @@ class Select(
         assert self._expression is not None
         select_expr = cast("exp.Select", self._expression)
 
-        lock_args = {"update": True}
+        lock_args: dict[str, Any] = {"update": True}
 
         if skip_locked:
             lock_args["wait"] = False
@@ -1506,10 +1506,7 @@ class Select(
 
         if of:
             tables = [of] if isinstance(of, str) else of
-            lock_args["expressions"] = [
-                exp.to_identifier(str(t), quoted=is_explicitly_quoted(t))
-                for t in tables  # type: ignore[assignment]
-            ]
+            lock_args["expressions"] = [exp.to_identifier(str(t), quoted=is_explicitly_quoted(t)) for t in tables]
             self._lock_targets_quoted = any(is_explicitly_quoted(t) for t in tables)
         else:
             self._lock_targets_quoted = False
@@ -1541,7 +1538,7 @@ class Select(
         assert self._expression is not None
         select_expr = cast("exp.Select", self._expression)
 
-        lock_args = {"update": False}
+        lock_args: dict[str, Any] = {"update": False}
 
         if skip_locked:
             lock_args["wait"] = False
@@ -1550,10 +1547,7 @@ class Select(
 
         if of:
             tables = [of] if isinstance(of, str) else of
-            lock_args["expressions"] = [
-                exp.to_identifier(str(t), quoted=is_explicitly_quoted(t))
-                for t in tables  # type: ignore[assignment]
-            ]
+            lock_args["expressions"] = [exp.to_identifier(str(t), quoted=is_explicitly_quoted(t)) for t in tables]
             self._lock_targets_quoted = any(is_explicitly_quoted(t) for t in tables)
         else:
             self._lock_targets_quoted = False

@@ -1,3 +1,4 @@
+# ruff: noqa: FBT003
 """Base query builder with validation and parameter binding.
 
 Provides abstract base classes and core functionality for SQL query builders.
@@ -780,7 +781,7 @@ class QueryBuilder(ABC):
 
         def _strip(node: exp.Expression) -> exp.Expression:
             if isinstance(node, exp.Identifier):
-                node.set("quoted", quoted=False)
+                node.set("quoted", False)
             return node
 
         return expression.copy().transform(_strip, copy=False)
