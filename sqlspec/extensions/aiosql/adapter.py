@@ -7,7 +7,7 @@ from files using aiosql while using SQLSpec's features for execution and type ma
 
 import logging
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import AbstractAsyncContextManager, contextmanager
 from typing import Any, ClassVar, Generic, TypeVar
 
 from sqlspec.core import SQL, SQLResult, StatementConfig
@@ -324,7 +324,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase[AsyncDriverAdapterBase], AiosqlAsync
     async def select(
         self, conn: Any, query_name: str, sql: str, parameters: "AiosqlParamType", record_class: Any | None = None
     ) -> list[Any]:
-        """Execute a SELECT query and return results as list.
+        """Execute a SELECT query and return results as list (protocol-compatible).
 
         Args:
             conn: Database connection
@@ -408,7 +408,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase[AsyncDriverAdapterBase], AiosqlAsync
 
     async def select_cursor(
         self, conn: Any, query_name: str, sql: str, parameters: "AiosqlParamType"
-    ) -> "_AsyncCursorContextManager[Any]":
+    ) -> AbstractAsyncContextManager[Any]:
         """Execute a SELECT query and return cursor context manager.
 
         Args:
