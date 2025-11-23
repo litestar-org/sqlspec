@@ -1,5 +1,7 @@
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
+__all__ = ("test_extension_config", )
+
 
 def test_extension_config() -> None:
     # start-example
