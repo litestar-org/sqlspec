@@ -796,7 +796,7 @@ class QueryBuilder(ABC):
             # Remove quotes around target table only, leave alias/rest intact
             end_quote = sql_string.find('"', len('MERGE INTO "'))
             if end_quote > 0:
-                table_name = sql_string[len('MERGE INTO "'):end_quote]
+                table_name = sql_string[len('MERGE INTO "') : end_quote]
                 remainder = sql_string[end_quote + 1 :]
                 return f"MERGE INTO {table_name}{remainder}"
         return sql_string
