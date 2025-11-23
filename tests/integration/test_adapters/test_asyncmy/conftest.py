@@ -45,21 +45,32 @@ async def asyncmy_clean_driver(asyncmy_config: AsyncmyConfig) -> AsyncGenerator[
             "test_parameter_conversion",
             "transaction_test",
             "concurrent_test",
+            "arrow_users",
+            "arrow_table_test",
+            "arrow_batch_test",
+            "arrow_params_test",
+            "arrow_empty_test",
+            "arrow_null_test",
+            "arrow_polars_test",
+            "arrow_large_test",
+            "arrow_types_test",
+            "arrow_json_test",
         ]
 
         for table in cleanup_tables:
-            try:
-                await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
-            except Exception:
-                # Ignore errors if table doesn't exist
-                pass
+            await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
+
+        # Clean up stored procedures used in tests
+        cleanup_procedures = ["test_procedure", "simple_procedure"]
+
+        for proc in cleanup_procedures:
+            await driver.execute_script(f"DROP PROCEDURE IF EXISTS {proc}")
 
         yield driver
 
         # Cleanup after test
         for table in cleanup_tables:
-            try:
-                await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
-            except Exception:
-                # Ignore errors if table doesn't exist
-                pass
+            await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
+
+        for proc in cleanup_procedures:
+            await driver.execute_script(f"DROP PROCEDURE IF EXISTS {proc}")
