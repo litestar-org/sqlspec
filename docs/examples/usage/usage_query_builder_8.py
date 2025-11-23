@@ -29,6 +29,6 @@ def test_example_8(tmp_path: Path) -> None:
 
         # Subquery in FROM
         subquery = sql.select("user_id", "COUNT(*) as order_count").from_("orders").group_by("user_id")
-        query = sql.select("u.name", "o.order_count").from_("users u").join(f"({subquery}) o", "u.id = o.user_id")
+        query = sql.select("u.name", "o.order_count").from_("users u").join(subquery, "u.id = o.user_id", alias="o")
         session.execute(query)
         # end-example

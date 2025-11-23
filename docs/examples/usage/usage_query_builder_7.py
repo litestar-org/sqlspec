@@ -25,8 +25,15 @@ def test_example_7(tmp_path: Path) -> None:
         )
         # start-example
         # COUNT
-        query = sql.select("COUNT(*) as total").from_("users")
-        session.execute(query)
+        # Using raw SQL aggregation
+        raw_count = sql.select("COUNT(*) as total").from_("users")
+        row_count = session.select_value(raw_count)
+        print(row_count)
+
+        # Using the builder's count helper
+        counted = sql.select(sql.count().as_("total")).from_("users")
+        counted_value = session.select_value(counted)
+        print(counted_value)
 
         # GROUP BY
         query = sql.select("status", "COUNT(*) as count").from_("users").group_by("status")
@@ -40,9 +47,9 @@ def test_example_7(tmp_path: Path) -> None:
 
         # Multiple aggregations
         query = (
-            sql.select("DATE(created_at) as date", "COUNT(*) as orders", "SUM(total) as revenue")
+            sql.select(sql.column("created_at").as_("date"), "COUNT(*) as orders", "SUM(total) as revenue")
             .from_("orders")
-            .group_by("DATE(created_at)")
+            .group_by("date")
         )
         session.execute(query)
         # end-example

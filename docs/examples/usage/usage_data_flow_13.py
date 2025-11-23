@@ -27,19 +27,17 @@ def test_schema_mapping() -> None:
         session.execute("INSERT INTO users VALUES (1, 'Alice', 'alice@example.com', 1)")
 
         # Execute query
-        result = session.select("SELECT id, name, email, is_active FROM users")
+        result = session.select("SELECT id, name, email, is_active FROM users", schema_type=User)
         print(len(result))
 
-        # Map results to typed User instances
-        users: list[User] = result.all(schema_type=User)
-
         # Or get single typed user
-        single_result = session.select_one("SELECT id, name, email, is_active FROM users WHERE id = ?", 1)
+        single_result = session.select_one(
+            "SELECT id, name, email, is_active FROM users WHERE id = ?", 1, schema_type=User
+        )
         print(single_result)
-        user: User = User.model_validate(single_result)  # Type-safe!
     # end-example
 
     # Verify typed results
-    assert len(users) == 1
-    assert isinstance(user, User)
-    assert user.id == 1
+    assert len(result) == 1
+    assert isinstance(single_result, User)
+    assert single_result.id == 1

@@ -18,13 +18,10 @@ def test_sql_result_object() -> None:
         result = session.select("SELECT 'test' as col1, 'value' as col2")
         print(len(result))  # length of result set
 
-        # Access result data
-        rows = result.get_data()  # List of dictionaries
-        result.rows_affected  # Number of rows modified (INSERT/UPDATE/DELETE)
-        result.column_names  # Column names for SELECT
-        result.operation_type  # "SELECT", "INSERT", "UPDATE", "DELETE", "SCRIPT"
+        # Access result data (SQLResult is iterable over rows)
+        print(result)
     # end-example
 
     # Verify result properties
-    assert rows is not None
-    assert result.column_names is not None
+    assert result is not None
+    assert len(result) == 1
