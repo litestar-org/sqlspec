@@ -7,7 +7,7 @@ via pgvector-python library. Supports both sync and async connections.
 import logging
 from typing import TYPE_CHECKING, Any
 
-from psycopg import ProgrammingError
+from psycopg import ProgrammingError, errors
 
 from sqlspec.typing import NUMPY_INSTALLED, PGVECTOR_INSTALLED
 
@@ -18,6 +18,16 @@ __all__ = ("register_pgvector_async", "register_pgvector_sync")
 
 
 logger = logging.getLogger(__name__)
+
+
+def _is_missing_vector_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return (
+        "vector type not found" in message
+        or 'type "vector" does not exist' in message
+        or "vector type does not exist" in message
+        or isinstance(error, errors.UndefinedObject)
+    )
 
 
 def register_pgvector_sync(connection: "Connection[Any]") -> None:
@@ -41,9 +51,8 @@ def register_pgvector_sync(connection: "Connection[Any]") -> None:
 
         pgvector.psycopg.register_vector(connection)
         logger.debug("Registered pgvector type handlers on psycopg sync connection")
-    except (ValueError, ProgrammingError) as error:
-        message = str(error).lower()
-        if "vector type not found" in message:
+    except (ValueError, TypeError, ProgrammingError) as error:
+        if _is_missing_vector_error(error):
             logger.debug("Skipping pgvector registration - extension not enabled in database")
             return
         logger.warning("Unexpected error during pgvector registration: %s", error)
@@ -72,9 +81,8 @@ async def register_pgvector_async(connection: "AsyncConnection[Any]") -> None:
 
         await register_vector_async(connection)
         logger.debug("Registered pgvector type handlers on psycopg async connection")
-    except (ValueError, ProgrammingError) as error:
-        message = str(error).lower()
-        if "vector type not found" in message:
+    except (ValueError, TypeError, ProgrammingError) as error:
+        if _is_missing_vector_error(error):
             logger.debug("Skipping pgvector registration - extension not enabled in database")
             return
         logger.warning("Unexpected error during pgvector registration: %s", error)
