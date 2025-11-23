@@ -23,6 +23,11 @@ def test_example_32(tmp_path: Path) -> None:
             """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, status text)"""
         )
         session.execute("""CREATE TABLE if not exists orders(id integer primary key autoincrement, user_id int)""")
+
+        # Insert test data
+        session.execute("INSERT INTO users (name, status) VALUES ('Alice', 'active'), ('Bob', 'inactive')")
+        session.execute("INSERT INTO orders (user_id) VALUES (1), (1), (1), (1), (1), (1)")
+
         # start-example
         # Before: Raw SQL
         session.execute(
@@ -43,14 +48,14 @@ def test_example_32(tmp_path: Path) -> None:
 
         # After: Query Builder
         query = (
-            sql.select("u.id", "u.name", "COUNT(o.id) as order_count")
-            .from_("users u")
-            .left_join("orders o", "u.id = o.user_id")
-            .where("u.status = ?")
-            .group_by("u.id", "u.name")
-            .having("COUNT(o.id) > ?")
+            sql.select("users.id", "users.name", "COUNT(orders.id) as order_count")
+            .from_("users")
+            .left_join("orders", "users.id = orders.user_id")
+            .where("users.status = 'active'")
+            .group_by("users.id", "users.name")
+            .having("COUNT(orders.id) > 5")
             .order_by("order_count DESC")
-            .limit("?")
+            .limit(10)
         )
-        session.execute(query, "active", 5, 10)
+        session.execute(query)
         # end-example

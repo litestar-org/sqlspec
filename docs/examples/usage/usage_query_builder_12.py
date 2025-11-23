@@ -22,11 +22,14 @@ def test_example_12(tmp_path: Path) -> None:
         session.execute(
             """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text)"""
         )
+        # Insert test data
+        session.execute("INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')")
+
         # start-example
         # Update with WHERE
-        query = sql.update("users").set("email", "?").where("id = ?")
-        # SQL: UPDATE users SET email = ? WHERE id = ?
+        query = sql.update("users").set("email", "newemail@example.com").where("id = 1")
+        # SQL: UPDATE users SET email = :email WHERE id = 1
 
-        session.execute(query, 1, "newemail@example.com")
+        result = session.execute(query)
         # print(f"Updated {result.rows_affected} rows")
         # end-example

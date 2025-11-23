@@ -24,8 +24,8 @@ def test_example_9(tmp_path: Path) -> None:
         )
         # start-example
         # Single row insert
-        query = sql.insert("users").columns("name", "email").values("?", "?")
-        # SQL: INSERT INTO users (name, email) VALUES (?, ?)
+        query = sql.insert("users").columns("name", "email").values("Alice", "alice@example.com")
+        # SQL: INSERT INTO users (name, email) VALUES (:name, :email)
 
-        session.execute(query, "alice@example.com", "Alice")
+        session.execute(query)
         # end-example

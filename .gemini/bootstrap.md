@@ -591,8 +591,8 @@ Before starting checkpoints, activate intelligence mode:
 4. **INTELLIGENT TOOL USE** - Check `.gemini/mcp-strategy.md` for tool selection
 5. **PATTERN LEARNING** - Identify 3-5 similar features and learn from them
 6. **ADAPTIVE DEPTH** - Simple features: 6 checkpoints, Medium: 8, Complex: 10+
-7. **RESEARCH GROUNDED** - Minimum 500+ words of research
-8. **COMPREHENSIVE PRD** - Minimum 800+ words PRD with specific acceptance criteria
+7. **RESEARCH GROUNDED** - Minimum 2000+ words of research
+8. **COMPREHENSIVE PRD** - Minimum 3200+ words PRD with specific acceptance criteria
 9. **GIT VERIFICATION** - Verify git status shows no src/ changes at end
 
 **VERIFICATION**: After EACH checkpoint, explicitly state "✓ Checkpoint N complete" before proceeding.
@@ -792,7 +792,7 @@ mcp__crash__crash(
 
 ### Checkpoint 4: Research Best Practices with Pattern Library
 
-**⚠️ CRITICAL**: Research MUST produce minimum 500+ words of documented findings.
+**⚠️ CRITICAL**: Research MUST produce minimum 2000+ words of documented findings.
 
 **Research priority order:**
 
@@ -864,7 +864,7 @@ WebSearch(query="Python async database pooling best practices 2025")
 
 {What web search revealed - 50+ words}
 
-**Total**: {count} words (minimum 500 required)
+**Total**: {count} words (minimum 2000 required)
 ```
 
 **Verify word count:**
@@ -873,15 +873,15 @@ WebSearch(query="Python async database pooling best practices 2025")
 wc -w specs/active/{{slug}}/research/plan.md
 ```
 
-**⚠️ STOP IF**: Research document is <500 words → Add more research.
+**⚠️ STOP IF**: Research document is <2000 words → Add more research.
 
-**Output**: "✓ Checkpoint 4 complete - Research finished (500+ words documented)"
+**Output**: "✓ Checkpoint 4 complete - Research finished (2000+ words documented)"
 
 ---
 
 ### Checkpoint 5: Write Comprehensive PRD with Pattern References
 
-**⚠️ CRITICAL**: PRD MUST be minimum 800+ words with specific, measurable acceptance criteria.
+**⚠️ CRITICAL**: PRD MUST be minimum 3200+ words with specific, measurable acceptance criteria.
 
 **Use template from `specs/template-spec/prd.md` if it exists.**
 
@@ -1030,9 +1030,9 @@ class NewAdapter(AsyncDatabaseConfig):  # Pattern: inherit from base
 wc -w specs/active/{{slug}}/prd.md
 ```
 
-**⚠️ STOP IF**: PRD is <800 words → Add more detail.
+**⚠️ STOP IF**: PRD is <3200 words → Add more detail.
 
-**Output**: "✓ Checkpoint 5 complete - PRD written (800+ words) with pattern references"
+**Output**: "✓ Checkpoint 5 complete - PRD written (3200+ words) with pattern references"
 
 ---
 
@@ -1055,7 +1055,7 @@ wc -w specs/active/{{slug}}/prd.md
 ## Phase 1: Planning & Research ✓
 
 - [x] PRD created
-- [x] Research documented (500+ words)
+- [x] Research documented (2000+ words)
 - [x] Patterns identified (3-5 similar features)
 - [x] Workspace setup
 - [x] Deep analysis completed
@@ -1137,8 +1137,8 @@ Checkpoints completed:
 - ✓ Checkpoint 1: Requirements analyzed, patterns identified
 - ✓ Checkpoint 2: Workspace created
 - ✓ Checkpoint 3: Intelligent analysis completed
-- ✓ Checkpoint 4: Research completed (500+ words)
-- ✓ Checkpoint 5: PRD written (800+ words)
+- ✓ Checkpoint 4: Research completed (2000+ words)
+- ✓ Checkpoint 5: PRD written (3200+ words)
 - ✓ Checkpoint 6: Tasks broken down
 - ✓ Checkpoint 7: Recovery guide created
 
@@ -1239,8 +1239,8 @@ Intelligence Enhancements:
 Deliverables:
 - ✓ Workspace created
 - ✓ Intelligent analysis completed
-- ✓ Research completed (500+ words)
-- ✓ PRD written (800+ words) with pattern references
+- ✓ Research completed (2000+ words)
+- ✓ PRD written (3200+ words) with pattern references
 - ✓ Tasks broken down (adapted to complexity)
 - ✓ Recovery guide created
 - ✓ NO source code modified
@@ -1261,8 +1261,8 @@ Next step: Run `/implement {{slug}}`
 - [ ] **Requirements Analyzed**: Clear understanding with pattern alignment
 - [ ] **Workspace Created**: specs/active/{{slug}}/ with intelligence artifacts
 - [ ] **Intelligent Analysis**: Appropriate tool used based on complexity
-- [ ] **Research Complete**: 500+ words with pattern library insights
-- [ ] **PRD Written**: 800+ words with specific acceptance criteria and pattern references
+- [ ] **Research Complete**: 2000+ words with pattern library insights
+- [ ] **PRD Written**: 3200+ words with specific acceptance criteria and pattern references
 - [ ] **Tasks Broken Down**: Testable chunks adapted to complexity
 - [ ] **Recovery Guide Created**: Clear resumption instructions with intelligence context
 - [ ] **Git Clean**: NO source code modifications
@@ -1277,8 +1277,8 @@ Next step: Run `/implement {{slug}}`
 ❌ **Modifying source code** - PRD is planning only
 ❌ **Vague acceptance criteria** - Must be specific and measurable
 ❌ **Skipping pattern library** - Must consult `specs/guides/patterns/`
-❌ **Insufficient research** - Minimum 500 words required
-❌ **Short PRD** - Minimum 800 words required
+❌ **Insufficient research** - Minimum 2000 words required
+❌ **Short PRD** - Minimum 3200 words required
 
 ---
 
@@ -1928,7 +1928,7 @@ TOML_EOF
 
 ```bash
 ls -la .gemini/commands/implement.toml
-wc -l .gemini/commands/implement.toml  # Should be ~800+ lines
+wc -l .gemini/commands/implement.toml  # Should be ~3200+ lines
 ```
 
 ---
@@ -1984,6 +1984,7 @@ ls -la tmp/
 - **Complex Feature**: Architecture change, multi-component → 9+ test checkpoints (unit + integration + edge cases + performance)
 
 3. **Identify similar test files:**
+
 ```bash
 # Find tests for similar features
 find tests/ -type f -name "test_*" | grep -i "{feature_keyword}"
@@ -1994,6 +1995,7 @@ cat tests/integration/test_adapters/test_asyncpg/test_similar_feature2.py | head
 ```
 
 4. **Create test analysis:**
+
 ```markdown
 # specs/active/{{slug}}/tmp/test-analysis.md
 
@@ -2032,6 +2034,7 @@ Based on similar features:
 ```
 
 5. **Update tasks:**
+
 ```markdown
 # specs/active/{{slug}}/tasks.md
 
@@ -2044,6 +2047,7 @@ Based on similar features:
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 0 complete - Test intelligence bootstrapped
 Test complexity assessed: [simple|medium|complex]
@@ -2059,12 +2063,14 @@ Key test patterns documented in tmp/test-analysis.md
 **Actions:**
 
 1. **Review feature implementation:**
+
 ```bash
 # Find files created/modified in implementation
 git diff --name-only main...HEAD | grep "sqlspec/"
 ```
 
 2. **Follow test patterns from analysis:**
+
 ```markdown
 Read `specs/active/{{slug}}/tmp/test-analysis.md` for patterns.
 
@@ -2075,6 +2081,7 @@ For each new file/class created:
 ```
 
 3. **Create unit tests:**
+
 ```python
 # tests/unit/test_{feature_name}.py
 
@@ -2139,11 +2146,13 @@ class TestFeatureClass:
 ```
 
 4. **Run unit tests:**
+
 ```bash
 uv run pytest tests/unit/test_{feature_name}.py -v
 ```
 
 5. **Update tasks:**
+
 ```markdown
 ## Testing Phase
 - [x] Checkpoint 1: Unit tests created
@@ -2153,6 +2162,7 @@ uv run pytest tests/unit/test_{feature_name}.py -v
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 1 complete - Unit tests created and passing
 Unit test file: tests/unit/test_{feature_name}.py
@@ -2167,6 +2177,7 @@ Pattern compliance verified
 **Actions:**
 
 1. **Determine adapter coverage:**
+
 ```markdown
 Based on feature implementation, determine which adapters need testing:
 
@@ -2181,6 +2192,7 @@ Based on feature implementation, determine which adapters need testing:
 ```
 
 2. **Review integration test patterns:**
+
 ```bash
 # Read integration tests for similar features
 cat tests/integration/test_adapters/test_asyncpg/test_similar_feature.py | head -150
@@ -2188,6 +2200,7 @@ cat tests/integration/test_similar_cross_adapter.py | head -150
 ```
 
 3. **Create integration test structure:**
+
 ```bash
 # If adapter-specific:
 touch tests/integration/test_adapters/test_{adapter}/test_{feature_name}.py
@@ -2197,6 +2210,7 @@ touch tests/integration/test_{feature_name}.py
 ```
 
 4. **Update tasks:**
+
 ```markdown
 ## Testing Phase
 - [x] Checkpoint 2: Integration test structure created
@@ -2205,6 +2219,7 @@ touch tests/integration/test_{feature_name}.py
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 2 complete - Integration test structure ready
 Adapter coverage: [list]
@@ -2218,6 +2233,7 @@ Test files created: [list]
 **Actions:**
 
 1. **Create AsyncPG tests:**
+
 ```python
 # tests/integration/test_adapters/test_asyncpg/test_{feature_name}.py
 
@@ -2267,11 +2283,13 @@ async def test_{feature}_edge_case(asyncpg_dsn):
 ```
 
 2. **Run AsyncPG tests:**
+
 ```bash
 uv run pytest tests/integration/test_adapters/test_asyncpg/test_{feature_name}.py -v
 ```
 
 3. **Update tasks:**
+
 ```markdown
 ## Testing Phase
 - [x] Checkpoint 3: AsyncPG integration tests complete
@@ -2280,6 +2298,7 @@ uv run pytest tests/integration/test_adapters/test_asyncpg/test_{feature_name}.p
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 3 complete - AsyncPG integration tests passing
 Test count: {X}
@@ -2292,6 +2311,7 @@ Test count: {X}
 **Actions:**
 
 1. **For each additional adapter, create tests:**
+
 ```python
 # tests/integration/test_adapters/test_{adapter}/test_{feature_name}.py
 
@@ -2306,6 +2326,7 @@ Following patterns from:
 ```
 
 2. **Run each adapter test:**
+
 ```bash
 uv run pytest tests/integration/test_adapters/test_psycopg/test_{feature_name}.py -v
 uv run pytest tests/integration/test_adapters/test_sqlite/test_{feature_name}.py -v
@@ -2313,6 +2334,7 @@ uv run pytest tests/integration/test_adapters/test_sqlite/test_{feature_name}.py
 ```
 
 3. **Update tasks:**
+
 ```markdown
 ## Testing Phase
 - [x] Checkpoint 4: Additional adapter tests complete
@@ -2322,6 +2344,7 @@ uv run pytest tests/integration/test_adapters/test_sqlite/test_{feature_name}.py
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 4 complete - All adapter integration tests passing
 Adapters tested: [list]
@@ -2335,11 +2358,13 @@ Total integration tests: {X}
 **Actions:**
 
 1. **Review edge cases from analysis:**
+
 ```bash
 cat specs/active/{{slug}}/tmp/test-analysis.md | grep -A10 "Edge Cases"
 ```
 
 2. **Create edge case tests:**
+
 ```python
 # Add to existing test files
 
@@ -2367,11 +2392,13 @@ async def test_{feature}_edge_cases(edge_input, expected_behavior, session):
 ```
 
 3. **Run edge case tests:**
+
 ```bash
 uv run pytest -k "edge_case" -v
 ```
 
 4. **Update tasks:**
+
 ```markdown
 ## Testing Phase
 - [x] Checkpoint 5: Edge case testing complete
@@ -2380,6 +2407,7 @@ uv run pytest -k "edge_case" -v
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 5 complete - Edge cases covered
 Edge case tests: {X}
@@ -2392,11 +2420,13 @@ Edge case tests: {X}
 **Actions:**
 
 1. **Run coverage report:**
+
 ```bash
 uv run pytest --cov=sqlspec.{module} --cov-report=term-missing tests/
 ```
 
 2. **Verify coverage thresholds:**
+
 ```markdown
 Based on similar features, verify:
 
@@ -2411,6 +2441,7 @@ If below thresholds:
 ```
 
 3. **Document coverage:**
+
 ```markdown
 # specs/active/{{slug}}/tmp/test-coverage.md
 
@@ -2437,6 +2468,7 @@ If below thresholds:
 ```
 
 4. **Update tasks:**
+
 ```markdown
 ## Testing Phase
 - [x] Checkpoint 6: Coverage verification complete
@@ -2447,6 +2479,7 @@ If below thresholds:
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 6 complete - Coverage thresholds met
 Overall coverage: {X}%
@@ -2460,6 +2493,7 @@ Unit: {X}% | Integration: {X}% | Edge cases: {X}
 **Actions:**
 
 1. **Determine if performance testing needed:**
+
 ```markdown
 Performance testing required if:
 - Feature affects query execution time
@@ -2469,6 +2503,7 @@ Performance testing required if:
 ```
 
 2. **Create performance benchmarks:**
+
 ```python
 # tests/integration/test_{feature_name}_performance.py
 
@@ -2502,11 +2537,13 @@ async def test_{feature}_performance_baseline(session):
 ```
 
 3. **Run performance tests:**
+
 ```bash
 uv run pytest -k "performance" -v
 ```
 
 4. **Update tasks:**
+
 ```markdown
 ## Testing Phase
 - [x] Checkpoint 7: Performance testing complete
@@ -2516,6 +2553,7 @@ uv run pytest -k "performance" -v
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 7 complete - Performance benchmarks established
 Average execution time: {X}ms
@@ -2529,6 +2567,7 @@ Threshold met: ✓
 **Actions:**
 
 1. **Run complete test suite:**
+
 ```bash
 # Run all tests for feature
 uv run pytest -k "{feature_name}" -v
@@ -2538,6 +2577,7 @@ uv run pytest -n 2 --dist=loadgroup tests/
 ```
 
 2. **Verify all tests pass:**
+
 ```markdown
 Expected results:
 - All new tests: PASSED
@@ -2546,6 +2586,7 @@ Expected results:
 ```
 
 3. **Create test summary:**
+
 ```markdown
 # specs/active/{{slug}}/tmp/test-summary.md
 
@@ -2583,6 +2624,7 @@ Expected results:
 ```
 
 4. **Update tasks:**
+
 ```markdown
 ## Testing Phase
 - [x] Checkpoint 8: Final test suite execution complete
@@ -2593,6 +2635,7 @@ Expected results:
 ```
 
 5. **Update recovery.md:**
+
 ```markdown
 # specs/active/{{slug}}/recovery.md
 
@@ -2610,6 +2653,7 @@ Testing phase finished. Ready for documentation and review.
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 8 complete - Testing phase finished
 
@@ -2654,6 +2698,7 @@ Run: /review
 
 Execute `/review` command to begin documentation and review phase.
 """
+
 ```
 
 **Save:**
@@ -2719,6 +2764,7 @@ ls -la tmp/
 ```
 
 2. **Review implementation artifacts:**
+
 ```bash
 # Find files modified
 git diff --name-only main...HEAD
@@ -2731,6 +2777,7 @@ cat tmp/test-summary.md
 ```
 
 3. **Identify new patterns to extract:**
+
 ```markdown
 # specs/active/{{slug}}/tmp/pattern-extraction-plan.md
 
@@ -2773,6 +2820,7 @@ For each pattern identified:
 ```
 
 4. **Update tasks:**
+
 ```markdown
 # specs/active/{{slug}}/tasks.md
 
@@ -2784,6 +2832,7 @@ For each pattern identified:
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 0 complete - Review intelligence bootstrapped
 Files modified: [list]
@@ -2800,6 +2849,7 @@ Ready for documentation phase
 **Actions:**
 
 1. **Determine documentation scope:**
+
 ```bash
 # If adapter feature:
 DOCS_FILE="docs/guides/adapters/{adapter}.md"
@@ -2812,11 +2862,13 @@ DOCS_FILE="docs/guides/extensions/{extension}.md"
 ```
 
 2. **Read existing documentation:**
+
 ```bash
 cat $DOCS_FILE | head -200
 ```
 
 3. **Update documentation following patterns:**
+
 ```markdown
 # Add to appropriate section in docs file
 
@@ -2877,6 +2929,7 @@ async with sql.provide_session(config) as session:
 ```
 
 4. **Update tasks:**
+
 ```markdown
 ## Review & Documentation Phase
 - [x] Checkpoint 1: Feature documentation updated
@@ -2885,6 +2938,7 @@ async with sql.provide_session(config) as session:
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 1 complete - Feature documentation updated
 Documentation file: {docs_file}
@@ -2898,11 +2952,13 @@ Sections updated: [list]
 **Actions:**
 
 1. **Review pattern extraction plan:**
+
 ```bash
 cat specs/active/{{slug}}/tmp/pattern-extraction-plan.md
 ```
 
 2. **Update AGENTS.md with new patterns:**
+
 ```markdown
 # Find appropriate section in AGENTS.md based on pattern type
 
@@ -2984,6 +3040,7 @@ driver_features={"enable_{feature}": True}
 ```
 
 3. **Update tasks:**
+
 ```markdown
 ## Review & Documentation Phase
 - [x] Checkpoint 2: AGENTS.md updated with new patterns
@@ -2992,6 +3049,7 @@ driver_features={"enable_{feature}": True}
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 2 complete - AGENTS.md updated
 New patterns documented: [count]
@@ -3007,27 +3065,32 @@ Sections updated: [list]
 **Actions:**
 
 1. **Run linting checks:**
+
 ```bash
 uv run ruff check sqlspec/
 uv run ruff format --check sqlspec/
 ```
 
 2. **Run type checking:**
+
 ```bash
 uv run mypy sqlspec/
 ```
 
 3. **Run full test suite:**
+
 ```bash
 uv run pytest -n 2 --dist=loadgroup tests/
 ```
 
 4. **Build documentation:**
+
 ```bash
 make docs
 ```
 
 5. **Verify quality gates:**
+
 ```markdown
 # specs/active/{{slug}}/tmp/quality-gate-report.md
 
@@ -3061,6 +3124,7 @@ make docs
 ```
 
 6. **Fix any issues found:**
+
 ```bash
 # If ruff issues:
 uv run ruff check --fix sqlspec/
@@ -3076,6 +3140,7 @@ uv run ruff check --fix sqlspec/
 ```
 
 7. **Update tasks:**
+
 ```markdown
 ## Review & Documentation Phase
 - [x] Checkpoint 3: Quality gates validated
@@ -3087,6 +3152,7 @@ uv run ruff check --fix sqlspec/
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 3 complete - Quality gates passed
 Linting: ✓ | Type checking: ✓ | Tests: ✓ | Docs: ✓
@@ -3178,6 +3244,7 @@ EOF
 ```
 
 2. **Update pattern library index:**
+
 ```bash
 # Add to specs/guides/patterns/README.md
 
@@ -3194,6 +3261,7 @@ EOF
 ```
 
 3. **Update tasks:**
+
 ```markdown
 ## Review & Documentation Phase
 - [x] Checkpoint 4: Patterns extracted to library
@@ -3202,6 +3270,7 @@ EOF
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 4 complete - Patterns captured in library
 Patterns extracted: [count]
@@ -3218,16 +3287,19 @@ Pattern library updated
 **Actions:**
 
 1. **Re-run tests:**
+
 ```bash
 uv run pytest -n 2 --dist=loadgroup tests/
 ```
 
 2. **Re-build documentation:**
+
 ```bash
 make docs
 ```
 
 3. **Verify no new issues:**
+
 ```markdown
 # specs/active/{{slug}}/tmp/revalidation-report.md
 
@@ -3250,11 +3322,13 @@ make docs
 ```
 
 4. **Fix any issues:**
+
 ```bash
 # If new issues found, fix them before proceeding
 ```
 
 5. **Update tasks:**
+
 ```markdown
 ## Review & Documentation Phase
 - [x] Checkpoint 5: Re-validation complete
@@ -3264,6 +3338,7 @@ make docs
 ```
 
 **Output:**
+
 ```
 ✓ Checkpoint 5 complete - Re-validation passed
 Tests: ✓ | Docs: ✓
@@ -3279,6 +3354,7 @@ Ready for workspace cleanup and archival
 **Actions:**
 
 1. **Clean tmp/ directory:**
+
 ```bash
 cd specs/active/{{slug}}
 
@@ -3297,6 +3373,7 @@ mkdir tmp/
 ```
 
 2. **Create completion summary:**
+
 ```markdown
 # specs/active/{{slug}}/COMPLETION-SUMMARY.md
 
@@ -3389,6 +3466,7 @@ This workspace will be moved to: `specs/archive/{{slug}}/`
 ```
 
 3. **Move to archive:**
+
 ```bash
 # Move entire workspace to archive
 mv specs/active/{{slug}} specs/archive/{{slug}}
@@ -3398,6 +3476,7 @@ ls -la specs/archive/{{slug}}/
 ```
 
 4. **Update tasks (in archive):**
+
 ```markdown
 # specs/archive/{{slug}}/tasks.md
 
@@ -3415,6 +3494,7 @@ All phases finished. Workspace archived.
 ```
 
 5. **Final output:**
+
 ```markdown
 # specs/archive/{{slug}}/recovery.md
 
@@ -3439,6 +3519,7 @@ See COMPLETION-SUMMARY.md for full details.
 ```
 
 **Output:**
+
 ```
 ✅ Checkpoint 6 complete - Workspace archived
 
@@ -3492,6 +3573,7 @@ Feature {Feature Name} is fully implemented, tested, documented, and archived.
 **Next Feature:**
 Run `/prd` to start planning the next feature.
 """
+
 ```
 
 **Save:**

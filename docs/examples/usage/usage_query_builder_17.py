@@ -23,6 +23,7 @@ def test_example_17(tmp_path: Path) -> None:
         # Create table
         query = (
             sql.create_table("users")
+            .if_not_exists()
             .column("id", "INTEGER PRIMARY KEY")
             .column("name", "TEXT NOT NULL")
             .column("email", "TEXT UNIQUE NOT NULL")

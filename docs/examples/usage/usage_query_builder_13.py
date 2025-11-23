@@ -22,15 +22,20 @@ def test_example_13(tmp_path: Path) -> None:
         session.execute(
             """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text, updated_at timestamp)"""
         )
+        # Insert test data
+        session.execute("INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')")
+
         # start-example
         # Update multiple columns
+        from sqlglot import exp
+
         query = (
             sql.update("users")
-            .set("name", "?")
-            .set("email", "?")
-            .set("updated_at", "CURRENT_TIMESTAMP")
-            .where("id = ?")
+            .set("name", "New Name")
+            .set("email", "newemail@example.com")
+            .set("updated_at", exp.CurrentTimestamp())
+            .where("id = 1")
         )
 
-        session.execute(query, 1, "New Name", "newemail@example.com")
+        session.execute(query)
         # end-example

@@ -23,23 +23,21 @@ def test_example_14(tmp_path: Path) -> None:
         session.execute(
             """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text, status text)"""
         )
+        # Insert test data
+        session.execute("INSERT INTO users (name, email, status) VALUES ('Alice', 'alice@example.com', 'inactive')")
 
         # start-example
         # Dynamic update builder
         def update_user(user_id: Any, **fields: Any) -> Any:
             query = sql.update("users")
-            params = []
 
             for field, value in fields.items():
-                query = query.set(field, "?")
-                params.append(value)
+                query = query.set(field, value)
 
-            query = query.where("id = ?")
-            params.append(user_id)
+            query = query.where(f"id = {user_id}")
 
-            # Ensure parameter order matches expected identifiers: id, name, email, status
-            return session.execute(query, user_id, fields.get("name"), fields.get("email"), fields.get("status"))
+            return session.execute(query)
 
         # Usage
-        update_user(1, name="Alice", email="alice@example.com", status="active")
+        update_user(1, name="Alice Updated", email="alice.new@example.com", status="active")
         # end-example

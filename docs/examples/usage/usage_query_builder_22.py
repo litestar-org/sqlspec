@@ -21,15 +21,21 @@ def test_example_22(tmp_path: Path) -> None:
     with db.provide_session(config) as session:
         session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, name text)""")
         session.execute("""CREATE TABLE if not exists orders(id integer primary key autoincrement, user_id int)""")
+
+        # Insert test data
+        session.execute("INSERT INTO users (name) VALUES ('Alice'), ('Bob')")
+        session.execute("INSERT INTO orders (user_id) VALUES (1), (1), (1), (2)")
+
         # start-example
-        # WITH clause
+        # WITH clause (Common Table Expression)
         cte = sql.select("user_id", "COUNT(*) as order_count").from_("orders").group_by("user_id")
 
         query = (
-            sql.select("u.name", "c.order_count")
+            sql.select("users.name", "user_orders.order_count")
             .with_("user_orders", cte)
-            .from_("users u")
-            .join("user_orders c", "u.id = c.user_id")
+            .from_("users")
+            .join("user_orders", "users.id = user_orders.user_id")
         )
+
         session.execute(query)
         # end-example

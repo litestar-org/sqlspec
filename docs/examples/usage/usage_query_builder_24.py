@@ -24,34 +24,38 @@ def test_example_24(tmp_path: Path) -> None:
             """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text, status text)"""
         )
 
+        # Insert test data
+        session.execute(
+            "INSERT INTO users (name, email, status) VALUES ('Alice', 'alice@example.com', 'active'), ('Bob', 'bob@example.com', 'inactive')"
+        )
+
         # start-example
         class UserQueries:
             @staticmethod
-            def by_id() -> Any:
-                return sql.select("*").from_("users").where("id = ?")
+            def by_id(user_id: int) -> Any:
+                return sql.select("*").from_("users").where(f"id = {user_id}")
 
             @staticmethod
-            def by_email() -> Any:
-                return sql.select("*").from_("users").where("email = ?")
+            def by_email(email: str) -> Any:
+                return sql.select("*").from_("users").where(f"email = '{email}'")
 
             @staticmethod
-            def search(filters: Any) -> Any:
+            def search(filters: dict[str, Any]) -> Any:
                 query = sql.select("*").from_("users")
-                params = []
 
                 if "name" in filters:
-                    query = query.where("name LIKE ?")
-                    params.append(f"%{filters['name']}%")
+                    query = query.where(f"name LIKE '%{filters['name']}%'")
 
                 if "status" in filters:
-                    query = query.where("status = ?")
-                    params.append(filters["status"])
+                    query = query.where(f"status = '{filters['status']}'")
 
-                return query, params
+                return query
 
         # Usage
-        session.execute(UserQueries.by_id(), 1).one()
-        query, params = UserQueries.search({"name": "Alice", "status": "active"})
-        result = session.execute(query, *params)
-        result.all()
+        result = session.execute(UserQueries.by_id(1))
+        user = result.one()
+
+        query = UserQueries.search({"name": "Alice", "status": "active"})
+        result = session.execute(query)
+        users = result.all()
         # end-example

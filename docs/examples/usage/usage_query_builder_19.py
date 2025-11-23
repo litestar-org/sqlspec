@@ -22,10 +22,10 @@ def test_example_19(tmp_path: Path) -> None:
         session.execute("""CREATE TABLE if not exists users(id integer primary key autoincrement, email text)""")
         # start-example
         # Create index
-        query = sql.create_index("idx_users_email").table("users").columns("email")
+        query = sql.create_index("idx_users_email").on_table("users").columns("email").if_not_exists()
+        session.execute(query)
 
         # Unique index
-        query = sql.create_index("idx_users_email").table("users").columns("email").unique()
-
+        query = sql.create_index("idx_users_email_unique").on_table("users").columns("email").unique().if_not_exists()
         session.execute(query)
         # end-example

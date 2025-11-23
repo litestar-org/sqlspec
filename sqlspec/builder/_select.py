@@ -1209,10 +1209,14 @@ class CommonTableExpressionMixin:
         elif isinstance(query, exp.Expression):
             cte_select = query
         else:
-            built_query = query.to_statement()
-            cte_sql = built_query.sql
-            cte_select = exp.maybe_parse(cte_sql, dialect=self.dialect)
+            # Query is a builder - get its expression directly instead of converting to SQL
+            cte_select = query.get_expression()
+            if cte_select is None:
+                msg = f"Could not get expression from builder: {query}"
+                raise SQLBuilderError(msg)
 
+            # Get parameters from the builder's statement
+            built_query = query.to_statement()
             parameters = built_query.parameters
             if isinstance(parameters, dict):
                 param_mapping: dict[str, str] = {}
@@ -1220,8 +1224,7 @@ class CommonTableExpressionMixin:
                     unique_name = self._generate_unique_parameter_name(f"{name}_{param_name}")
                     param_mapping[param_name] = unique_name
                     self.add_parameter(param_value, name=unique_name)
-                if cte_select is not None:
-                    cte_select = self._update_placeholders_in_expression(cte_select, param_mapping)
+                cte_select = self._update_placeholders_in_expression(cte_select, param_mapping)
             elif isinstance(parameters, (list, tuple)):
                 for param_value in parameters:
                     self.add_parameter(param_value)
@@ -1232,25 +1235,12 @@ class CommonTableExpressionMixin:
             msg = f"Could not parse CTE query: {query}"
             raise SQLBuilderError(msg)
 
-        if columns:
-            cte_alias_expr = exp.alias_(cte_select, name, table=[exp.to_identifier(col) for col in columns])
-        else:
-            cte_alias_expr = exp.alias_(cte_select, name)
-
-        existing_with = expression.args.get("with")
-        if existing_with:
-            existing_with.expressions.append(cte_alias_expr)
-            if recursive:
-                existing_with.set("recursive", recursive)
-        else:
-            if isinstance(expression, (exp.Select, exp.Insert, exp.Update)):
-                updated = expression.with_(cte_alias_expr, as_=name, copy=False)
-                builder.set_expression(updated)
-                if recursive:
-                    with_clause = updated.find(exp.With)
-                    if with_clause:
-                        with_clause.set("recursive", recursive)
-            builder._with_ctes[name] = exp.CTE(this=cte_select, alias=exp.to_table(name))
+        # Always use sqlglot's with_() method - it handles everything correctly
+        # Do NOT store in _with_ctes as that causes duplication in _build_final_expression
+        if isinstance(expression, (exp.Select, exp.Insert, exp.Update)):
+            # Pass alias name and query separately - sqlglot handles the CTE wrapping
+            updated = expression.with_(name, as_=cte_select.copy(), recursive=recursive, copy=True)
+            builder.set_expression(updated)
 
         return cast("Self", builder)
 

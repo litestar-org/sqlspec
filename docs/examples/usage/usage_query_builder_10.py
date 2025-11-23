@@ -20,10 +20,18 @@ def test_example_10(tmp_path: Path) -> None:
     )
 
     with db.provide_session(config) as session:
+        session.execute(
+            """CREATE TABLE if not exists users(id integer primary key autoincrement, name text, email text)"""
+        )
         # start-example
         # Multiple value sets
-        query = sql.insert("users").columns("name", "email").values("?", "?").values("?", "?").values("?", "?")
+        query = (
+            sql.insert("users")
+            .columns("name", "email")
+            .values("Alice", "alice@example.com")
+            .values("Bob", "bob@example.com")
+            .values("Charlie", "charlie@example.com")
+        )
 
-        session.execute(query, "Alice", "alice@example.com", "Bob", "bob@example.com", "Charlie", "charlie@example.com")
+        session.execute(query)
         # end-example
-    # end-example
