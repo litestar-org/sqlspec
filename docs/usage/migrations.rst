@@ -643,4 +643,3 @@ See Also
 
 - :doc:`../usage/cli` - Complete CLI command reference
 - :doc:`../usage/configuration` - Migration configuration options
-- :doc:`../reference/migrations_api` - Migration API reference
