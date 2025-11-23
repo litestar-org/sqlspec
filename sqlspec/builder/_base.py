@@ -792,11 +792,13 @@ class QueryBuilder(ABC):
                 head, tail = sql_string.split(keyword, 1)
                 tail = tail.replace('"', "")
                 return f"{head}{keyword}{tail}"
-        # Normalize simple MERGE INTO quoting when target was unquoted
-        if sql_string.startswith('MERGE INTO "') and '"\nUSING' in sql_string and not self._merge_target_quoted:
-            prefix, rest = sql_string.split('"\nUSING', 1)
-            table_name = prefix.replace('MERGE INTO "', "MERGE INTO ")
-            return f"{table_name}\nUSING{rest}"
+        if sql_string.startswith('MERGE INTO "') and not self._merge_target_quoted:
+            # Remove quotes around target table only, leave alias/rest intact
+            end_quote = sql_string.find('"', len('MERGE INTO "'))
+            if end_quote > 0:
+                table_name = sql_string[len('MERGE INTO "'):end_quote]
+                remainder = sql_string[end_quote + 1 :]
+                return f"MERGE INTO {table_name}{remainder}"
         return sql_string
 
     def _should_identify(self, dialect: "DialectType | str | None") -> bool:
