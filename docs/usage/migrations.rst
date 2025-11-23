@@ -40,86 +40,24 @@ Async Adapters
 
 For async adapters (AsyncPG, Asyncmy, Aiosqlite, Psqlpy), migration methods return awaitables:
 
-.. code-block:: python
-
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://user:pass@localhost/mydb"},
-       migration_config={
-           "enabled": True,
-           "script_location": "migrations",
-       }
-   )
-
-   # Apply migrations
-   await config.migrate_up("head")
-   # Or use the alias
-   await config.upgrade("head")
-
-   # Rollback one revision
-   await config.migrate_down("-1")
-   # Or use the alias
-   await config.downgrade("-1")
-
-   # Check current version
-   current = await config.get_current_migration(verbose=True)
-   print(current)
-
-   # Create new migration
-   await config.create_migration("add users table", file_type="sql")
-
-   # Initialize migrations directory
-   await config.init_migrations()
-
-   # Stamp database to specific revision
-   await config.stamp_migration("0003")
-
-   # Convert timestamp to sequential migrations
-   await config.fix_migrations(dry_run=False, update_database=True, yes=True)
+.. literalinclude:: /examples/usage/usage_migrations_1.py
+   :language: python
+   :caption: `async adapters`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
 
 Sync Adapters
 -------------
 
 For sync adapters (SQLite, DuckDB), migration methods execute immediately without await:
 
-.. code-block:: python
-
-   from sqlspec.adapters.sqlite import SqliteConfig
-
-   config = SqliteConfig(
-       pool_config={"database": "myapp.db"},
-       migration_config={
-           "enabled": True,
-           "script_location": "migrations",
-       }
-   )
-
-   # Apply migrations (no await needed)
-   config.migrate_up("head")
-   # Or use the alias
-   config.upgrade("head")
-
-   # Rollback one revision
-   config.migrate_down("-1")
-   # Or use the alias
-   config.downgrade("-1")
-
-   # Check current version
-   current = config.get_current_migration(verbose=True)
-   print(current)
-
-   # Create new migration
-   config.create_migration("add users table", file_type="sql")
-
-   # Initialize migrations directory
-   config.init_migrations()
-
-   # Stamp database to specific revision
-   config.stamp_migration("0003")
-
-   # Convert timestamp to sequential migrations
-   config.fix_migrations(dry_run=False, update_database=True, yes=True)
+.. literalinclude:: /examples/usage/usage_migrations_2.py
+   :language: python
+   :caption: `sync adapters`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
 
 Available Methods
 -----------------
@@ -146,30 +84,12 @@ Migrations inherit their header text, metadata comments, and default file format
 from ``migration_config["templates"]``. Each project can define multiple
 profiles and select one globally:
 
-.. code-block:: python
-
-   migration_config={
-       "default_format": "py",      # CLI default when --format omitted
-       "title": "Acme Migration",    # Shared title for all templates
-       "author": "env:SQLSPEC_AUTHOR",  # Read from environment variable
-       "templates": {
-           "sql": {
-               "header": "-- {title} - {message}",
-               "metadata": ["-- Version: {version}", "-- Owner: {author}"],
-               "body": "-- custom SQL body"
-           },
-           "py": {
-               "docstring": """{title}\nDescription: {description}""",
-               "imports": ["from typing import Iterable"],
-               "body": """def up(context: object | None = None) -> str | Iterable[str]:
-    return "SELECT 1"
-
-def down(context: object | None = None) -> str | Iterable[str]:
-    return "DROP TABLE example;"
-"""
-           }
-       }
-   }
+.. literalinclude:: /examples/usage/usage_migrations_3.py
+   :language: python
+   :caption: `template profile`
+   :dedent: 0
+   :start-after: # start-example
+   :end-before: # end-example
 
 Template fragments accept the following variables:
 
@@ -231,21 +151,12 @@ Command Classes (Advanced)
 
 For advanced use cases requiring custom logic, you can still use command classes directly:
 
-.. code-block:: python
-
-   from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
-       migration_config={"script_location": "migrations"}
-   )
-
-   # Create commands instance
-   commands = AsyncMigrationCommands(config)
-
-   # Use commands directly
-   await commands.upgrade("head")
+.. literalinclude:: /examples/usage/usage_migrations_4.py
+      :language: python
+      :caption: `command classes`
+      :dedent: 0
+      :start-after: # start-example
+      :end-before: # end-example
 
 This approach is useful when:
 
@@ -259,19 +170,12 @@ Configuration
 
 Enable migrations in your SQLSpec configuration:
 
-.. code-block:: python
-
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-   config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://user:pass@localhost/mydb"},
-       migration_config={
-           "enabled": True,
-           "script_location": "migrations",
-           "version_table_name": "ddl_migrations",
-           "auto_sync": True,  # Enable automatic version reconciliation
-       }
-   )
+.. literalinclude:: /examples/usage/usage_migrations_5.py
+      :language: python
+      :caption: `configuration`
+      :dedent: 0
+      :start-after: # start-example
+      :end-before: # end-example
 
 Configuration Options
 ---------------------
@@ -345,44 +249,24 @@ Python Migrations
 
 Python migrations provide more flexibility for complex operations:
 
-.. code-block:: python
-
-   # migrations/0002_add_user_roles.py
-   """Add user roles table
-
-   Revision ID: 0002_add_user_roles
-   Created at: 2025-10-18 12:00:00
-   """
-
-   def upgrade():
-       """Apply migration."""
-       return """
-       CREATE TABLE user_roles (
-           id SERIAL PRIMARY KEY,
-           user_id INTEGER REFERENCES users(id),
-           role VARCHAR(50) NOT NULL
-       );
-       """
-
-   def downgrade():
-       """Revert migration."""
-       return """
-       DROP TABLE user_roles;
-       """
+.. literalinclude:: /examples/usage/usage_migrations_6.py
+         :language: python
+         :caption: `python migrations`
+         :dedent: 0
+         :start-after: # start-example
+         :end-before: # end-example
 
 **Advanced Usage:**
 
 Python migrations can also return a list of SQL statements:
 
-.. code-block:: python
+.. literalinclude:: /examples/usage/usage_migrations_7.py
+         :language: python
+         :caption: `advanced usage`
+         :dedent: 0
+         :start-after: # start-example
+         :end-before: # end-example
 
-   def upgrade():
-       """Apply migration in multiple steps."""
-       return [
-           "CREATE TABLE products (id SERIAL PRIMARY KEY);",
-           "CREATE TABLE orders (id SERIAL PRIMARY KEY, product_id INTEGER);",
-           "CREATE INDEX idx_orders_product ON orders(product_id);",
-       ]
 
 .. _hybrid-versioning-guide:
 
@@ -475,19 +359,12 @@ Version Comparison
 
 SQLSpec uses type-aware version comparison:
 
-.. code-block:: python
-
-   from sqlspec.utils.version import parse_version
-
-   v1 = parse_version("0001")
-   v2 = parse_version("20251018120000")
-
-   # Sequential < Timestamp (by design)
-   assert v1 < v2
-
-   # Same type comparisons work naturally
-   assert parse_version("0001") < parse_version("0002")
-   assert parse_version("20251018120000") < parse_version("20251019120000")
+.. literalinclude:: /examples/usage/usage_migrations_8.py
+         :language: python
+         :caption: `version comparison`
+         :dedent: 0
+         :start-after: # start-example
+         :end-before: # end-example
 
 Migration Tracking
 ==================
@@ -562,22 +439,12 @@ SQLSpec supports independent migration versioning for extensions and plugins.
 Configuration
 -------------
 
-.. code-block:: python
-
-   config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://..."},
-       migration_config={
-           "enabled": True,
-           "script_location": "migrations",
-           "include_extensions": ["litestar"],  # Enable litestar extension migrations
-       },
-       extension_config={
-           "litestar": {
-               "enable_repository_pattern": True,
-               "enable_dto_generation": False,
-           }
-       }
-   )
+.. literalinclude:: /examples/usage/usage_migrations_9.py
+         :language: python
+         :caption: `extension migrations`
+         :dedent: 0
+         :start-after: # start-example
+         :end-before: # end-example
 
 Directory Structure
 -------------------
@@ -650,21 +517,12 @@ Manual Version Reconciliation
 
 If auto-sync is disabled, manually reconcile renamed migrations:
 
-.. code-block:: python
-
-   from sqlspec.migrations.tracker import AsyncMigrationTracker
-
-   tracker = AsyncMigrationTracker()
-
-   async with config.provide_session() as session:
-       driver = session._driver
-
-       # Update version record
-       await tracker.update_version_record(
-           driver,
-           old_version="20251018120000",
-           new_version="0003"
-       )
+.. literalinclude:: /examples/usage/usage_migrations_10.py
+         :language: python
+         :caption: `manual version`
+         :dedent: 0
+         :start-after: # start-example
+         :end-before: # end-example
 
 Troubleshooting
 ===============
