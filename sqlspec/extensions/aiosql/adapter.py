@@ -6,8 +6,8 @@ from files using aiosql while using SQLSpec's features for execution and type ma
 """
 
 import logging
-from collections.abc import Generator
-from contextlib import AbstractAsyncContextManager, contextmanager
+from collections.abc import AsyncGenerator, Generator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from typing import Any, ClassVar, Generic, TypeVar
 
 from sqlspec.core import SQL, SQLResult, StatementConfig
@@ -323,8 +323,8 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase[AsyncDriverAdapterBase], AiosqlAsync
 
     async def select(
         self, conn: Any, query_name: str, sql: str, parameters: "AiosqlParamType", record_class: Any | None = None
-    ) -> list[Any]:
-        """Execute a SELECT query and return results as list (protocol-compatible).
+    ) -> AsyncGenerator[Any, None]:
+        """Execute a SELECT query and stream results (protocol-compatible).
 
         Args:
             conn: Database connection
@@ -333,8 +333,8 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase[AsyncDriverAdapterBase], AiosqlAsync
             parameters: Query parameters
             record_class: Deprecated - use schema_type in driver.execute instead
 
-        Returns:
-            List of query result rows
+        Yields:
+            Result row
 
         Note:
             The record_class parameter is ignored for compatibility. Use schema_type
@@ -347,10 +347,8 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase[AsyncDriverAdapterBase], AiosqlAsync
             )
 
         result = await self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)
-
-        if hasattr(result, "data") and result.data is not None and isinstance(result, SQLResult):
-            return list(result.data)
-        return []
+        for row in result.get_data():
+            yield row
 
     async def select_one(
         self, conn: Any, query_name: str, sql: str, parameters: "AiosqlParamType", record_class: Any | None = None
@@ -406,10 +404,10 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase[AsyncDriverAdapterBase], AiosqlAsync
             return row[0] if len(row) > 0 else None
         return row
 
-    async def select_cursor(
+    def select_cursor(
         self, conn: Any, query_name: str, sql: str, parameters: "AiosqlParamType"
     ) -> AbstractAsyncContextManager[Any]:
-        """Execute a SELECT query and return cursor context manager.
+        """Execute a SELECT query and return cursor context manager (protocol-compatible).
 
         Args:
             conn: Database connection
@@ -417,11 +415,16 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase[AsyncDriverAdapterBase], AiosqlAsync
             sql: SQL string
             parameters: Query parameters
 
-        Yields:
-            Cursor-like object with results
+        Returns:
+            Async context manager yielding a cursor-like object
         """
-        result = await self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)
-        return _AsyncCursorContextManager(AsyncCursorLike(result))
+
+        async def _cursor_cm() -> AsyncGenerator[Any, None]:
+            result = await self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)
+            async with _AsyncCursorContextManager(AsyncCursorLike(result)) as cursor:
+                yield cursor
+
+        return asynccontextmanager(_cursor_cm)()
 
     async def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: "AiosqlParamType") -> None:
         """Execute INSERT/UPDATE/DELETE.

@@ -1218,9 +1218,8 @@ class CommonDriverAttributesMixin:
                 subquery = expr.subquery(alias="grouped_data")
                 count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
             else:
-                count_expr = exp.select(exp.Count(this=exp.Star())).from_(
-                    cast("exp.Expression", expr.args.get("from")), copy=False
-                )
+                source_from = cast("exp.Expression", from_clause)
+                count_expr = exp.select(exp.Count(this=exp.Star())).from_(source_from, copy=False)
                 if expr.args.get("where"):
                     count_expr = count_expr.where(cast("exp.Expression", expr.args.get("where")), copy=False)
                 if expr.args.get("having"):

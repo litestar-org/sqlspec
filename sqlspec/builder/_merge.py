@@ -18,6 +18,7 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
+from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.serializers import to_json
@@ -131,6 +132,12 @@ class MergeIntoClauseMixin:
         table_expr: exp.Expression
         if isinstance(table, str):
             table_expr = exp.to_table(table)
+            if is_explicitly_quoted(table):
+                table_expr.set("quoted", quoted=True)
+                table_expr.set("this", table.strip('"`'))
+                self._merge_target_quoted = True  # type: ignore[attr-defined]
+            else:
+                self._merge_target_quoted = False  # type: ignore[attr-defined]
             if alias:
                 table_expr = exp.alias_(table_expr, alias, table=True)
         else:
@@ -486,14 +493,18 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
                 if parsed_condition is None:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
-                when_kwargs["condition"] = parsed_condition
-                when_kwargs["this"] = parsed_condition
+                condition_expr = parsed_condition
             elif isinstance(condition, exp.Expression):
-                when_kwargs["condition"] = condition
-                when_kwargs["this"] = condition
+                condition_expr = condition
             else:
                 msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
+
+            dialect_name = getattr(self, "dialect_name", None)
+            if dialect_name == "oracle":
+                update_expression.set("where", condition_expr)
+            else:
+                when_kwargs["condition"] = condition_expr
 
         whens = current_expr.args.get("whens")
         if not isinstance(whens, exp.Whens):
@@ -519,10 +530,8 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
                 when_kwargs["condition"] = parsed_condition
-                when_kwargs["this"] = parsed_condition
             elif isinstance(condition, exp.Expression):
                 when_kwargs["condition"] = condition
-                when_kwargs["this"] = condition
             else:
                 msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
@@ -722,6 +731,8 @@ class Merge(
 
     __slots__ = ()
     _expression: exp.Expression | None
+    _merge_target_quoted: bool
+    _lock_targets_quoted: bool
 
     def __init__(self, target_table: str | None = None, **kwargs: Any) -> None:
         """Initialize MERGE with optional target table.
@@ -733,6 +744,8 @@ class Merge(
         if "enable_optimization" not in kwargs:
             kwargs["enable_optimization"] = False
         super().__init__(**kwargs)
+        self._merge_target_quoted = False
+        self._lock_targets_quoted = False
         self._initialize_expression()
 
         if target_table:
@@ -796,9 +809,38 @@ class Merge(
 
         Returns:
             Built statement object.
-
-        Raises:
-            DialectNotSupportedError: If dialect does not support MERGE.
         """
         self._validate_dialect_support()
+        target_dialect = dialect or self.dialect
+        dialect_name = target_dialect if isinstance(target_dialect, str) else getattr(target_dialect, "__name__", None)
+        if dialect_name:
+            dialect_name = dialect_name.lower()
+        self._normalize_merge_conditions_for_dialect(dialect_name)
         return super().build(dialect=dialect)
+
+    def _normalize_merge_conditions_for_dialect(self, dialect_name: str | None) -> None:
+        """Normalize WHEN clause conditions for dialect quirks (e.g., Oracle).
+
+        Oracle requires conditional logic on UPDATE/DELETE branches to live in the
+        clause-specific WHERE, not on the WHEN predicate. Move the condition down
+        when present so generated SQL matches Oracle syntax.
+        """
+        if dialect_name != "oracle":
+            return
+
+        merge_expr = self.get_expression()
+        if not isinstance(merge_expr, exp.Merge):
+            return
+
+        whens = merge_expr.args.get("whens")
+        if not isinstance(whens, exp.Whens):
+            return
+
+        for when_expr in list(whens.expressions):
+            condition_expr = when_expr.args.get("condition")
+            if condition_expr is None:
+                continue
+            then_expr = when_expr.args.get("then")
+            if isinstance(then_expr, exp.Update):
+                then_expr.set("where", condition_expr)
+                when_expr.set("condition", None)

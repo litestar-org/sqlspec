@@ -38,6 +38,7 @@ BETWEEN_BOUND_COUNT = 2
 PAIR_LENGTH = 2
 TRIPLE_LENGTH = 3
 
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -64,6 +65,16 @@ __all__ = (
     "WhereClauseMixin",
     "WindowFunctionBuilder",
 )
+
+
+def is_explicitly_quoted(identifier: Any) -> bool:
+    """Detect if identifier was provided with explicit quotes."""
+    if not isinstance(identifier, str):
+        return False
+    stripped = identifier.strip()
+    return (stripped.startswith('"') and stripped.endswith('"')) or (
+        stripped.startswith("`") and stripped.endswith("`")
+    )
 
 
 class Case:
@@ -1495,7 +1506,13 @@ class Select(
 
         if of:
             tables = [of] if isinstance(of, str) else of
-            lock_args["expressions"] = [exp.table_(t) for t in tables]  # type: ignore[assignment]
+            lock_args["expressions"] = [
+                exp.to_identifier(str(t), quoted=is_explicitly_quoted(t))
+                for t in tables  # type: ignore[assignment]
+            ]
+            self._lock_targets_quoted = any(is_explicitly_quoted(t) for t in tables)
+        else:
+            self._lock_targets_quoted = False
 
         lock = exp.Lock(**lock_args)
 
@@ -1533,7 +1550,13 @@ class Select(
 
         if of:
             tables = [of] if isinstance(of, str) else of
-            lock_args["expressions"] = [exp.table_(t) for t in tables]  # type: ignore[assignment]
+            lock_args["expressions"] = [
+                exp.to_identifier(str(t), quoted=is_explicitly_quoted(t))
+                for t in tables  # type: ignore[assignment]
+            ]
+            self._lock_targets_quoted = any(is_explicitly_quoted(t) for t in tables)
+        else:
+            self._lock_targets_quoted = False
 
         lock = exp.Lock(**lock_args)
 

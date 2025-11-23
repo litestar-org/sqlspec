@@ -71,6 +71,8 @@ class QueryBuilder(ABC):
 
     __slots__ = (
         "_expression",
+        "_lock_targets_quoted",
+        "_merge_target_quoted",
         "_parameter_counter",
         "_parameter_name_counters",
         "_parameters",
@@ -104,6 +106,8 @@ class QueryBuilder(ABC):
         self._parameters: dict[str, Any] = {}
         self._parameter_counter: int = 0
         self._with_ctes: dict[str, exp.CTE] = {}
+        self._lock_targets_quoted = False
+        self._merge_target_quoted = False
 
     def _initialize_expression(self) -> None:
         """Initialize the base expression. Called after __init__."""
@@ -523,7 +527,14 @@ class QueryBuilder(ABC):
 
         try:
             if isinstance(final_expression, exp.Expression):
-                sql_string = final_expression.sql(dialect=target_dialect, pretty=True)
+                normalized_expression = (
+                    self._unquote_identifiers_for_oracle(final_expression)
+                    if self._is_oracle_dialect(target_dialect)
+                    else final_expression
+                )
+                identify = self._should_identify(target_dialect)
+                sql_string = normalized_expression.sql(dialect=target_dialect, pretty=True, identify=identify)
+                sql_string = self._strip_lock_identifier_quotes(sql_string)
             else:
                 sql_string = str(final_expression)
         except Exception as e:
@@ -661,7 +672,8 @@ class QueryBuilder(ABC):
         Returns:
             SQL: A SQL statement object.
         """
-        safe_query = self.build()
+        dialect_override = config.dialect if config else None
+        safe_query = self.build(dialect=dialect_override)
 
         kwargs, parameters = self._extract_statement_parameters(safe_query.parameters)
 
@@ -680,7 +692,8 @@ class QueryBuilder(ABC):
             and isinstance(self._expression, exp.Expression)
         ):
             try:
-                sql_string = self._expression.sql(dialect=config.dialect, pretty=True)
+                identify = self._should_identify(config.dialect)
+                sql_string = self._expression.sql(dialect=config.dialect, pretty=True, identify=identify)
             except Exception:
                 sql_string = safe_query.sql
 
@@ -756,6 +769,43 @@ class QueryBuilder(ABC):
         """Set query parameters (public API)."""
         self._parameters = parameters.copy()
 
+    def _is_oracle_dialect(self, dialect: "DialectType | str | None") -> bool:
+        """Check if target dialect is Oracle."""
+        if dialect is None:
+            return False
+        return str(dialect).lower() == "oracle"
+
+    def _unquote_identifiers_for_oracle(self, expression: exp.Expression) -> exp.Expression:
+        """Remove identifier quoting to avoid Oracle case-sensitive lookup issues."""
+
+        def _strip(node: exp.Expression) -> exp.Expression:
+            if isinstance(node, exp.Identifier):
+                node.set("quoted", quoted=False)
+            return node
+
+        return expression.copy().transform(_strip, copy=False)
+
+    def _strip_lock_identifier_quotes(self, sql_string: str) -> str:
+        for keyword in ("FOR UPDATE OF ", "FOR SHARE OF "):
+            if keyword in sql_string and not self._lock_targets_quoted:
+                head, tail = sql_string.split(keyword, 1)
+                tail = tail.replace('"', "")
+                return f"{head}{keyword}{tail}"
+        # Normalize simple MERGE INTO quoting when target was unquoted
+        if sql_string.startswith('MERGE INTO "') and '"\nUSING' in sql_string and not self._merge_target_quoted:
+            prefix, rest = sql_string.split('"\nUSING', 1)
+            table_name = prefix.replace('MERGE INTO "', "MERGE INTO ")
+            return f"{table_name}\nUSING{rest}"
+        return sql_string
+
+    def _should_identify(self, dialect: "DialectType | str | None") -> bool:
+        """Determine whether to quote identifiers for the given dialect."""
+        if dialect is None:
+            return True
+        dialect_name = str(dialect).lower()
+        # Oracle folds unquoted identifiers to uppercase; quoting lower-case breaks table lookup
+        return dialect_name != "oracle"
+
     @property
     def with_ctes(self) -> "dict[str, exp.CTE]":
         """Get WITH clause CTEs (public API)."""
@@ -826,7 +876,8 @@ class QueryBuilder(ABC):
             self._raise_sql_builder_error("Static expression could not be resolved.")
 
         target_dialect = str(dialect) if dialect else self.dialect_name
-        sql_string = expr.sql(dialect=target_dialect, pretty=True)
+        identify = self._should_identify(target_dialect)
+        sql_string = expr.sql(dialect=target_dialect, pretty=True, identify=identify)
         return SafeQuery(
             sql=sql_string, parameters=parameters.copy() if parameters else {}, dialect=dialect or self.dialect
         )
