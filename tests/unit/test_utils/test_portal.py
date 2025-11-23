@@ -10,6 +10,8 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.portal import Portal, PortalManager, PortalProvider, get_global_portal
 from sqlspec.utils.singleton import SingletonMeta
 
+pytestmark = pytest.mark.xdist_group("portal")
+
 
 @pytest.fixture(autouse=True)
 def _cleanup_portal_manager() -> Generator[None, None, None]:
