@@ -30,6 +30,6 @@ def test_example_12(tmp_path: Path) -> None:
         query = sql.update("users").set("email", "newemail@example.com").where("id = 1")
         # SQL: UPDATE users SET email = :email WHERE id = 1
 
-        result = session.execute(query)
+        session.execute(query)
         # print(f"Updated {result.rows_affected} rows")
         # end-example

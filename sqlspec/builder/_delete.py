@@ -27,7 +27,7 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
     Does not support JOIN operations to maintain cross-dialect compatibility.
     """
 
-    __slots__ = ("_table",)
+    __slots__ = ()
     _expression: exp.Expression | None
 
     def __init__(self, table: str | None = None, **kwargs: Any) -> None:
@@ -39,8 +39,6 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
         """
         super().__init__(**kwargs)
         self._initialize_expression()
-
-        self._table = None
 
         if table:
             self.from_(table)
@@ -75,7 +73,11 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
             SQLBuilderError: If the table is not specified.
         """
 
-        if not self._table:
+        if self._expression is None or not isinstance(self._expression, exp.Delete):
+            msg = "DELETE requires a table to be specified. Use from() to set the table."
+            raise SQLBuilderError(msg)
+
+        if self._expression.this is None:
             msg = "DELETE requires a table to be specified. Use from() to set the table."
             raise SQLBuilderError(msg)
 

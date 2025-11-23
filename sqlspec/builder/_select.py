@@ -27,7 +27,6 @@ from sqlspec.builder._parsing_utils import (
 from sqlspec.core import SQL, ParameterStyle, ParameterValidator, SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
-    has_expression_and_parameters,
     has_expression_and_sql,
     has_query_builder_parameters,
     has_sqlglot_expression,
@@ -122,13 +121,13 @@ class SubqueryBuilder:
         elif hasattr(subquery, "build") and callable(getattr(subquery, "build", None)):
             built_query = subquery.build()
             sql_text = built_query.sql if hasattr(built_query, "sql") else str(built_query)
-            parsed_expr: exp.Expression | None = exp.maybe_parse(sql_text)
+            parsed_expr: exp.Expression | None = exp.maybe_parse(sql_text, dialect=getattr(subquery, "dialect", None))
             if parsed_expr is None:
                 msg = f"Could not parse subquery SQL: {sql_text}"
                 raise SQLBuilderError(msg)
             subquery_expr = parsed_expr
         else:
-            parsed_expr = exp.maybe_parse(str(subquery))
+            parsed_expr = exp.maybe_parse(str(subquery), dialect=getattr(subquery, "dialect", None))
             if parsed_expr is None:
                 msg = f"Could not convert subquery to expression: {subquery}"
                 raise SQLBuilderError(msg)
@@ -349,6 +348,10 @@ class ReturningClauseMixin:
 class WhereClauseMixin:
     __slots__ = ()
 
+    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
+        builder = cast("SQLBuilderProtocol", self)
+        builder._merge_sql_object_parameters(sql_obj)
+
     def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -365,16 +368,6 @@ class WhereClauseMixin:
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         placeholder = exp.Placeholder(this=param_name)
         return condition_factory(col_expr, placeholder)
-
-    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
-        if not has_expression_and_parameters(sql_obj):
-            return
-
-        builder = cast("SQLBuilderProtocol", self)
-        sql_parameters = getattr(sql_obj, "parameters", {})
-        for param_name, param_value in sql_parameters.items():
-            unique_name = builder._generate_unique_parameter_name(param_name)
-            builder.add_parameter(param_value, name=unique_name)
 
     def _get_existing_where_clause(self) -> exp.Where | None:
         builder = cast("SQLBuilderProtocol", self)

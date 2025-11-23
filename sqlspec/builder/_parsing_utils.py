@@ -17,6 +17,8 @@ from sqlspec.utils.type_guards import (
     has_parameter_builder,
 )
 
+ALIAS_PARTS_EXPECTED_COUNT = 2
+
 
 def extract_column_name(column: str | exp.Column) -> str:
     """Extract column name from column expression for parameter naming.
@@ -92,6 +94,12 @@ def parse_column_expression(column_input: str | exp.Expression | Any, builder: A
 
 def parse_table_expression(table_input: str, explicit_alias: str | None = None) -> exp.Expression:
     """Parses a table string that can be a name, a name with an alias, or a subquery string."""
+    if explicit_alias is None and " " in table_input.strip():
+        parts = table_input.strip().split(None, 1)
+        if len(parts) == ALIAS_PARTS_EXPECTED_COUNT:
+            base_table, alias = parts
+            return exp.to_table(base_table, alias=alias)
+
     with contextlib.suppress(Exception):
         parsed: exp.Expression | None = exp.maybe_parse(f"SELECT * FROM {table_input}")
         if isinstance(parsed, exp.Select) and parsed.args.get("from"):

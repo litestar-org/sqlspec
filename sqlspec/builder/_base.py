@@ -6,6 +6,7 @@ Provides abstract base classes and core functionality for SQL query builders.
 import hashlib
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 import sqlglot
@@ -48,6 +49,18 @@ class SafeQuery:
         self.parameters = parameters if parameters is not None else {}
         self.dialect = dialect
 
+    def __repr__(self) -> str:
+        parameter_keys = sorted(self.parameters.keys())
+        return f"SafeQuery(sql={self.sql!r}, parameters={parameter_keys!r}, dialect={self.dialect!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SafeQuery):
+            return NotImplemented
+        return self.sql == other.sql and self.parameters == other.parameters and self.dialect == other.dialect
+
+    def __hash__(self) -> int:
+        return hash((self.sql, frozenset(self.parameters.items()), self.dialect))
+
 
 class QueryBuilder(ABC):
     """Abstract base class for SQL query builders.
@@ -59,6 +72,7 @@ class QueryBuilder(ABC):
     __slots__ = (
         "_expression",
         "_parameter_counter",
+        "_parameter_name_counters",
         "_parameters",
         "_with_ctes",
         "dialect",
@@ -86,6 +100,7 @@ class QueryBuilder(ABC):
         self.simplify_expressions = simplify_expressions
 
         self._expression: exp.Expression | None = None
+        self._parameter_name_counters: dict[str, int] = {}
         self._parameters: dict[str, Any] = {}
         self._parameter_counter: int = 0
         self._with_ctes: dict[str, exp.CTE] = {}
@@ -207,7 +222,7 @@ class QueryBuilder(ABC):
         if self._expression is None:
             self._raise_sql_builder_error("QueryBuilder expression not initialized.")
 
-        base_expression = self._expression.copy() if copy else self._expression
+        base_expression = self._expression.copy() if copy or self._with_ctes else self._expression
 
         if not self._with_ctes:
             return base_expression
@@ -343,15 +358,42 @@ class QueryBuilder(ABC):
         Returns:
             A unique parameter name that doesn't exist in current parameters
         """
+        current_index = self._parameter_name_counters.get(base_name, 0)
+
         if base_name not in self._parameters:
+            # First use keeps the base name, counter stays at 0
+            self._parameter_name_counters[base_name] = current_index
             return base_name
 
-        for i in range(1, MAX_PARAMETER_COLLISION_ATTEMPTS):
-            name = f"{base_name}_{i}"
-            if name not in self._parameters:
-                return name
+        next_index = current_index + 1
+        candidate = f"{base_name}_{next_index}"
 
-        return f"{base_name}_{uuid.uuid4().hex[:8]}"
+        while candidate in self._parameters:
+            next_index += 1
+            if next_index > MAX_PARAMETER_COLLISION_ATTEMPTS:
+                return f"{base_name}_{uuid.uuid4().hex[:8]}"
+            candidate = f"{base_name}_{next_index}"
+
+        self._parameter_name_counters[base_name] = next_index
+        return candidate
+
+    def _create_placeholder(self, value: Any, base_name: str) -> tuple[exp.Placeholder, str]:
+        """Backwards-compatible placeholder helper (delegates to create_placeholder)."""
+        return self.create_placeholder(value, base_name)
+
+    def create_placeholder(self, value: Any, base_name: str) -> tuple[exp.Placeholder, str]:
+        """Create placeholder expression with a unique parameter name.
+
+        Args:
+            value: Parameter value to bind.
+            base_name: Seed for parameter naming.
+
+        Returns:
+            Tuple of placeholder expression and the final parameter name.
+        """
+        param_name = self._generate_unique_parameter_name(base_name)
+        _, param_name = self.add_parameter(value, name=param_name)
+        return exp.Placeholder(this=param_name), param_name
 
     def _merge_cte_parameters(self, cte_name: str, parameters: dict[str, Any]) -> dict[str, str]:
         """Merge CTE parameters with unique naming to prevent collisions.
@@ -405,13 +447,15 @@ class QueryBuilder(ABC):
             self._expression = self._create_base_expression()
 
         expr_sql: str = self._expression.sql() if self._expression else "None"
+        parameters_snapshot = sorted(self._parameters.items())
+        parameters_hash = hashlib.sha256(str(parameters_snapshot).encode()).hexdigest()[:8]
 
         state_parts = [
             f"expression:{expr_sql}",
-            f"parameters:{sorted(self._parameters.items())}",
+            f"parameters_hash:{parameters_hash}",
             f"ctes:{sorted(self._with_ctes.keys())}",
             f"dialect:{dialect_name}",
-            f"schema:{self.schema}",
+            f"schema_hash:{hashlib.sha256(str(self.schema).encode()).hexdigest()[:8]}",
             f"optimization:{self.enable_optimization}",
             f"optimize_joins:{self.optimize_joins}",
             f"optimize_predicates:{self.optimize_predicates}",
@@ -551,6 +595,9 @@ class QueryBuilder(ABC):
             The optimized expression
         """
         if not self.enable_optimization:
+            return expression
+
+        if not self.optimize_joins and not self.optimize_predicates and not self.simplify_expressions:
             return expression
 
         optimizer_settings = {
@@ -717,3 +764,69 @@ class QueryBuilder(ABC):
     def generate_unique_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name (public API)."""
         return self._generate_unique_parameter_name(base_name)
+
+    def build_static_expression(
+        self,
+        expression: exp.Expression | None = None,
+        parameters: dict[str, Any] | None = None,
+        *,
+        cache_key: str | None = None,
+        expression_factory: Callable[[], exp.Expression] | None = None,
+        copy: bool = True,
+        optimize_expression: bool | None = None,
+        dialect: DialectType | None = None,
+    ) -> "SafeQuery":
+        """Compile a pre-built expression with optional caching and parameters.
+
+        Designed for hot paths that construct an AST once and reuse it with
+        different parameters, avoiding repeated parse/optimize cycles.
+
+        Args:
+            expression: Pre-built sqlglot expression to render (required when cache_key is not provided).
+            parameters: Optional parameter mapping to include in the result.
+            cache_key: When provided, the expression will be cached under this key.
+            expression_factory: Factory used to build the expression on cache miss.
+            copy: Copy the expression before rendering to avoid caller mutation.
+            optimize_expression: Override builder optimization toggle for this call.
+            dialect: Optional dialect override for SQL generation.
+
+        Returns:
+            SafeQuery containing SQL and parameters.
+        """
+
+        expr: exp.Expression | None = None
+
+        if cache_key is not None:
+            cache = get_cache()
+            cached_expr = cache.get("static_expression", cache_key)
+            if cached_expr is None:
+                if expression_factory is None:
+                    msg = "expression_factory is required when cache_key is provided"
+                    self._raise_sql_builder_error(msg)
+                expr_candidate = expression_factory()
+                if not is_expression(expr_candidate):
+                    self._raise_invalid_expression_type(expr_candidate)
+                expr_to_store = expr_candidate.copy() if copy else expr_candidate
+                should_optimize = self.enable_optimization if optimize_expression is None else optimize_expression
+                if should_optimize:
+                    expr_to_store = self._optimize_expression(expr_to_store)
+                cache.put("static_expression", cache_key, expr_to_store)
+                cached_expr = expr_to_store
+            expr = cached_expr.copy() if copy else cached_expr
+        else:
+            if expression is None:
+                msg = "expression must be provided when cache_key is not set"
+                self._raise_sql_builder_error(msg)
+            expr = expression.copy() if copy else expression
+            should_optimize = self.enable_optimization if optimize_expression is None else optimize_expression
+            if should_optimize:
+                expr = self._optimize_expression(expr)
+
+        if expr is None:
+            self._raise_sql_builder_error("Static expression could not be resolved.")
+
+        target_dialect = str(dialect) if dialect else self.dialect_name
+        sql_string = expr.sql(dialect=target_dialect, pretty=True)
+        return SafeQuery(
+            sql=sql_string, parameters=parameters.copy() if parameters else {}, dialect=dialect or self.dialect
+        )

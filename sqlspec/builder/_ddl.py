@@ -837,9 +837,7 @@ class CreateIndex(DDLBuilder):
 
         # Create Index expression with table and parameters
         index_expr = exp.Index(
-            this=exp.to_identifier(self._index_name),
-            table=exp.to_table(self._table_name),
-            params=index_params,
+            this=exp.to_identifier(self._index_name), table=exp.to_table(self._table_name), params=index_params
         )
 
         # Set where clause if provided
@@ -847,12 +845,7 @@ class CreateIndex(DDLBuilder):
             index_expr.set("where", where_expr)
 
         # Wrap in Create expression with unique and if_not_exists flags
-        return exp.Create(
-            kind="INDEX",
-            this=index_expr,
-            unique=self._unique,
-            exists=self._if_not_exists,
-        )
+        return exp.Create(kind="INDEX", this=index_expr, unique=self._unique, exists=self._if_not_exists)
 
 
 class Truncate(DDLBuilder):

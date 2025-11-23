@@ -30,7 +30,7 @@ def _handle_sql_object_condition(on: Any, builder: "SQLBuilderProtocol") -> exp.
     if hasattr(on, "parameters"):
         for param_name, param_value in on.parameters.items():
             builder.add_parameter(param_value, name=param_name)
-    parsed_expr = exp.maybe_parse(on.sql)
+    parsed_expr = exp.maybe_parse(on.sql, dialect=builder.dialect)
     return parsed_expr if parsed_expr is not None else exp.condition(str(on.sql))
 
 

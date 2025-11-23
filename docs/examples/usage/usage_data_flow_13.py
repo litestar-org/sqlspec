@@ -5,9 +5,9 @@ __all__ = ("test_schema_mapping",)
 
 def test_schema_mapping() -> None:
     """Test mapping results to typed objects."""
-
     # start-example
     from pydantic import BaseModel
+    from rich import print
 
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
@@ -27,14 +27,16 @@ def test_schema_mapping() -> None:
         session.execute("INSERT INTO users VALUES (1, 'Alice', 'alice@example.com', 1)")
 
         # Execute query
-        result = session.execute("SELECT id, name, email, is_active FROM users")
+        result = session.select("SELECT id, name, email, is_active FROM users")
+        print(len(result))
 
         # Map results to typed User instances
         users: list[User] = result.all(schema_type=User)
 
         # Or get single typed user
-        single_result = session.execute("SELECT id, name, email, is_active FROM users WHERE id = ?", 1)
-        user: User = single_result.one(schema_type=User)  # Type-safe!
+        single_result = session.select_one("SELECT id, name, email, is_active FROM users WHERE id = ?", 1)
+        print(single_result)
+        user: User = User.model_validate(single_result)  # Type-safe!
     # end-example
 
     # Verify typed results

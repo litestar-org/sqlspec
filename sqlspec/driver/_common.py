@@ -1198,7 +1198,16 @@ class CommonDriverAttributesMixin:
         expr = original_sql.expression
 
         if isinstance(expr, exp.Select):
-            if not expr.args.get("from"):
+            from_clause = expr.args.get("from")
+            if from_clause is None:
+                # Fallback: try alternate keys or inferred tables
+                from_clause = expr.args.get("froms")
+            if from_clause is None:
+                tables = list(expr.find_all(exp.Table)) if hasattr(expr, "find_all") else []
+                if tables:
+                    first_table = tables[0]
+                    from_clause = exp.from_(first_table)
+            if from_clause is None:
                 msg = (
                     "Cannot create COUNT query: SELECT statement missing FROM clause. "
                     "COUNT queries require a FROM clause to determine which table to count rows from."

@@ -204,6 +204,33 @@ def test_merge_when_matched_delete_with_condition() -> None:
     assert "WHEN MATCHED" in stmt.sql.upper()
     assert "DELETE" in stmt.sql.upper()
 
+    merge_expr = query.get_expression()
+    assert merge_expr is not None
+    whens = merge_expr.args.get("whens")
+    assert whens is not None and whens.expressions
+    last_when = whens.expressions[-1]
+    assert "condition" in last_when.args
+    assert "this" not in last_when.args
+
+
+def test_merge_when_matched_update_stores_condition_field() -> None:
+    """WHEN MATCHED UPDATE should place predicates in the condition arg."""
+    query = (
+        sql.merge()
+        .into("products", alias="t")
+        .using("staging", alias="s")
+        .on("t.id = s.id")
+        .when_matched_then_update({"price": "s.price"}, condition="s.price < t.price")
+    )
+
+    merge_expr = query.get_expression()
+    assert merge_expr is not None
+    whens = merge_expr.args.get("whens")
+    assert whens is not None and whens.expressions
+    last_when = whens.expressions[-1]
+    assert "condition" in last_when.args
+    assert "this" not in last_when.args
+
 
 def test_merge_when_not_matched_insert_with_mapping() -> None:
     """Test WHEN NOT MATCHED THEN INSERT with dict mapping."""

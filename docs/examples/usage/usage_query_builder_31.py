@@ -30,5 +30,7 @@ def test_example_31(tmp_path: Path) -> None:
         # start-example
         # SQLite JSON functions (use raw SQL)
         # Note: SQLite uses json_extract() instead of PostgreSQL's ->> operator
-        session.execute("SELECT json_extract(data, '$.name') FROM events WHERE json_extract(data, '$.name') = ?", "Alice")
+        session.execute(
+            "SELECT json_extract(data, '$.name') FROM events WHERE json_extract(data, '$.name') = ?", "Alice"
+        )
         # end-example

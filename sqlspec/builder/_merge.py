@@ -36,6 +36,14 @@ class _MergeAssignmentMixin:
 
     __slots__ = ()
 
+    def create_placeholder(self, value: Any, base_name: str) -> tuple[exp.Placeholder, str]:
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
+    def _create_placeholder(self, value: Any, base_name: str) -> tuple[exp.Placeholder, str]:
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
     def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
@@ -54,7 +62,7 @@ class _MergeAssignmentMixin:
             return False
 
         with contextlib.suppress(ParseError):
-            parsed: exp.Expression | None = exp.maybe_parse(value.strip())
+            parsed: exp.Expression | None = exp.maybe_parse(value.strip(), dialect=getattr(self, "dialect", None))
             if parsed is None:
                 return False
 
@@ -91,7 +99,7 @@ class _MergeAssignmentMixin:
         if isinstance(value, exp.Expression):
             return exp.EQ(this=column_identifier, expression=value)
         if isinstance(value, str) and self._is_column_reference(value):
-            parsed_expression: exp.Expression | None = exp.maybe_parse(value)
+            parsed_expression: exp.Expression | None = exp.maybe_parse(value, dialect=getattr(self, "dialect", None))
             if parsed_expression is None:
                 msg = f"Could not parse assignment expression: {value}"
                 raise SQLBuilderError(msg)
@@ -99,9 +107,7 @@ class _MergeAssignmentMixin:
 
         column_name = target_column if isinstance(target_column, str) else str(target_column)
         column_leaf = column_name.split(".")[-1]
-        param_name = self._generate_unique_parameter_name(column_leaf)
-        _, param_name = self.add_parameter(value, name=param_name)
-        placeholder = exp.Placeholder(this=param_name)
+        placeholder, _ = self.create_placeholder(value, column_leaf)
         return exp.EQ(this=column_identifier, expression=placeholder)
 
 
@@ -203,9 +209,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         mechanisms (AsyncPG json_serializer, Psycopg/Psqlpy JSON codecs).
         """
 
-        json_param_name = self._generate_unique_parameter_name("json_data")
         json_value = data if is_list else [data[0]]
-        _, json_param_name = self.add_parameter(json_value, name=json_param_name)
+        _, json_param_name = self.create_placeholder(json_value, "json_data")
 
         sample_values: dict[str, Any] = {}
         for record in data:
@@ -230,9 +235,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         self, data: "list[dict[str, Any]]", columns: "list[str]", alias: "str | None"
     ) -> "exp.Expression":
         """Create Oracle JSON_TABLE source (production-proven pattern from oracledb-vertexai-demo)."""
-        json_param_name = self._generate_unique_parameter_name("json_payload")
         json_value = to_json(data)
-        _, json_param_name = self.add_parameter(json_value, name=json_param_name)
+        _, json_param_name = self.create_placeholder(json_value, "json_payload")
 
         sample_values: dict[str, Any] = {}
         for record in data:
@@ -310,9 +314,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 column_name = column if isinstance(column, str) else str(column)
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
-                param_name = self._generate_unique_parameter_name(column_name)
-                _, param_name = self.add_parameter(value, name=param_name)
-                row_params.append(exp.Placeholder(this=param_name))
+                placeholder, _ = self.create_placeholder(value, column_name)
+                row_params.append(placeholder)
             parameterized_values.append(row_params)
 
         if is_list:
@@ -483,8 +486,10 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
                 if parsed_condition is None:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
+                when_kwargs["condition"] = parsed_condition
                 when_kwargs["this"] = parsed_condition
             elif isinstance(condition, exp.Expression):
+                when_kwargs["condition"] = condition
                 when_kwargs["this"] = condition
             else:
                 msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
@@ -514,8 +519,10 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
                 when_kwargs["condition"] = parsed_condition
+                when_kwargs["this"] = parsed_condition
             elif isinstance(condition, exp.Expression):
                 when_kwargs["condition"] = condition
+                when_kwargs["this"] = condition
             else:
                 msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
@@ -605,13 +612,11 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
                         raise SQLBuilderError(msg)
                     insert_values.append(parsed_value)
                 else:
-                    param_name = self._generate_unique_parameter_name(column_name.split(".")[-1])
-                    _, param_name = self.add_parameter(value, name=param_name)
-                    insert_values.append(exp.Placeholder(this=param_name))
+                    placeholder, _ = self.create_placeholder(value, column_name.split(".")[-1])
+                    insert_values.append(placeholder)
             else:
-                param_name = self._generate_unique_parameter_name(column_name.split(".")[-1])
-                _, param_name = self.add_parameter(value, name=param_name)
-                insert_values.append(exp.Placeholder(this=param_name))
+                placeholder, _ = self.create_placeholder(value, column_name.split(".")[-1])
+                insert_values.append(placeholder)
 
         insert_expr.set("this", exp.Tuple(expressions=insert_columns))
         insert_expr.set("expression", exp.Tuple(expressions=insert_values))
@@ -667,15 +672,14 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
             elif isinstance(value, exp.Expression):
                 value_expr = value
             elif isinstance(value, str) and self._is_column_reference(value):
-                parsed_value: exp.Expression | None = exp.maybe_parse(value)
+                parsed_value: exp.Expression | None = exp.maybe_parse(value, dialect=getattr(self, "dialect", None))
                 if parsed_value is None:
                     msg = f"Could not parse assignment expression: {value}"
                     raise SQLBuilderError(msg)
                 value_expr = parsed_value
             else:
-                param_name = self._generate_unique_parameter_name(column_name)
-                _, param_name = self.add_parameter(value, name=param_name)
-                value_expr = exp.Placeholder(this=param_name)
+                placeholder, _ = self.create_placeholder(value, column_name)
+                value_expr = placeholder
             set_expressions.append(exp.EQ(this=column_identifier, expression=value_expr))
 
         update_expr = exp.Update(expressions=set_expressions)

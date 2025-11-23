@@ -68,7 +68,7 @@ class Update(
         ```
     """
 
-    __slots__ = ("_table",)
+    __slots__ = ()
     _expression: exp.Expression | None
 
     def __init__(self, table: str | None = None, **kwargs: Any) -> None:

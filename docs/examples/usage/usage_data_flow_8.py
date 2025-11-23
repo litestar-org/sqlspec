@@ -16,6 +16,8 @@ def test_statement_execution() -> None:
 
     with db_manager.provide_session(db) as session:
         result = session.execute(sql_statement)
+        print(result.rows_affected)
+        print(result.parameters)
         message = result.scalar()
     # end-example
 

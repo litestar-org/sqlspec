@@ -1,5 +1,8 @@
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from sqlspec.builder import Select
 
 __all__ = ("test_example_24",)
 
@@ -32,15 +35,15 @@ def test_example_24(tmp_path: Path) -> None:
         # start-example
         class UserQueries:
             @staticmethod
-            def by_id(user_id: int) -> Any:
+            def by_id(user_id: int) -> "Select":
                 return sql.select("*").from_("users").where(f"id = {user_id}")
 
             @staticmethod
-            def by_email(email: str) -> Any:
+            def by_email(email: str) -> "Select":
                 return sql.select("*").from_("users").where(f"email = '{email}'")
 
             @staticmethod
-            def search(filters: dict[str, Any]) -> Any:
+            def search(filters: dict[str, Any]) -> "Select":
                 query = sql.select("*").from_("users")
 
                 if "name" in filters:
@@ -52,10 +55,10 @@ def test_example_24(tmp_path: Path) -> None:
                 return query
 
         # Usage
-        result = session.execute(UserQueries.by_id(1))
-        user = result.one()
+        user = session.select_one(UserQueries.by_id(1))
+        print(user)
 
         query = UserQueries.search({"name": "Alice", "status": "active"})
-        result = session.execute(query)
-        users = result.all()
+        users = session.select(query)
+        print(len(users))
         # end-example
