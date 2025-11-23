@@ -37,6 +37,8 @@ async def asyncmy_driver(asyncmy_config: AsyncmyConfig) -> AsyncGenerator[Asyncm
 async def asyncmy_clean_driver(asyncmy_config: AsyncmyConfig) -> AsyncGenerator[AsyncmyDriver, None]:
     """Create AsyncMy driver with clean database state."""
     async with asyncmy_config.provide_session() as driver:
+        # Silence MySQL "unknown table" notes during fixture cleanup to avoid noisy logs
+        await driver.execute("SET sql_notes = 0")
         # Clean up any test tables that might exist
         cleanup_tables = [
             "test_table",
@@ -66,7 +68,11 @@ async def asyncmy_clean_driver(asyncmy_config: AsyncmyConfig) -> AsyncGenerator[
         for proc in cleanup_procedures:
             await driver.execute_script(f"DROP PROCEDURE IF EXISTS {proc}")
 
+        await driver.execute("SET sql_notes = 1")
+
         yield driver
+
+        await driver.execute("SET sql_notes = 0")
 
         # Cleanup after test
         for table in cleanup_tables:
@@ -74,3 +80,5 @@ async def asyncmy_clean_driver(asyncmy_config: AsyncmyConfig) -> AsyncGenerator[
 
         for proc in cleanup_procedures:
             await driver.execute_script(f"DROP PROCEDURE IF EXISTS {proc}")
+
+        await driver.execute("SET sql_notes = 1")

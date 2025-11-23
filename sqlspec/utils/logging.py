@@ -166,6 +166,7 @@ def suppress_erroneous_sqlglot_log_messages() -> None:
     about falling back to parsing as a Command. This is expected behavior
     in SQLSpec and the warning is confusing to users.
     """
-    sqlglot_logger = logging.getLogger("sqlglot")
-    if not any(isinstance(f, SqlglotCommandFallbackFilter) for f in sqlglot_logger.filters):
-        sqlglot_logger.addFilter(SqlglotCommandFallbackFilter())
+    for logger_name in ("sqlglot", "sqlglot.scope", "sqlglot.generator"):
+        sqlglot_logger = logging.getLogger(logger_name)
+        if not any(isinstance(f, SqlglotCommandFallbackFilter) for f in sqlglot_logger.filters):
+            sqlglot_logger.addFilter(SqlglotCommandFallbackFilter())
