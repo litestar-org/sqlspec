@@ -106,7 +106,10 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Test
-        run: uv run pytest -n 2 --dist=loadgroup
+        env:
+          PYTHONFAULTHANDLER: "1"
+          PYTEST_ADDOPTS: "--max-worker-restart=0 -s"
+        run: timeout 900s uv run pytest -n 2 --dist=loadgroup
 
   # test-windows:
   #   runs-on: windows-latest
