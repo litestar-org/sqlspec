@@ -1,6 +1,7 @@
-def test_version_comparison() -> None:
-__all__ = ("test_version_comparison", )
+__all__ = ("test_version_comparison",)
 
+
+def test_version_comparison() -> None:
 
     # start-example
     from sqlspec.utils.version import parse_version

@@ -1,6 +1,7 @@
-async def test_async_command_class_methods() -> None:
-__all__ = ("test_async_command_class_methods", )
+__all__ = ("test_async_command_class_methods",)
 
+
+async def test_async_command_class_methods() -> None:
 
     # start-example
     from sqlspec.adapters.asyncpg import AsyncpgConfig
