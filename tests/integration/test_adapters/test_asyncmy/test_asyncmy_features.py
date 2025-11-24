@@ -260,7 +260,7 @@ async def test_asyncmy_sql_object_advanced_features(asyncmy_pooled_session: Asyn
         AS new_vals
         ON DUPLICATE KEY UPDATE
         score = new_vals.score + ?,
-        metadata = JSON_MERGE_PATCH(metadata, new_vals.metadata)
+        metadata = JSON_MERGE_PATCH(advanced_test.metadata, new_vals.metadata)
         """,
         "complex_test",
         '{"type": "advanced", "priority": 1}',
