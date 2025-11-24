@@ -730,7 +730,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             from google.cloud import bigquery_storage_v1
 
             # Try to create client (will fail if API not enabled or credentials missing)
-            _ = bigquery_storage_v1.BigQueryReadClient()
+            _ = bigquery_storage_v1.BigQueryReadClient()  # type: ignore[no-untyped-call]
         except ImportError:
             # Package not installed
             return False
