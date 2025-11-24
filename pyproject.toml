@@ -1,6 +1,11 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
-dependencies = ["typing-extensions", "sqlglot>=19.9.0", "mypy-extensions", "rich-click"]
+dependencies = [
+	"typing-extensions",
+	"sqlglot>=19.9.0",
+	"mypy-extensions",
+	"rich-click",
+]
 description = "SQL Experiments in Python"
 license = "MIT"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
@@ -52,76 +57,83 @@ spanner = ["google-cloud-spanner"]
 uuid = ["uuid-utils"]
 
 [dependency-groups]
-benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "rich", "rich-click", "duckdb"]
+benchmarks = [
+	"sqlalchemy[asyncio]",
+	"psutil",
+	"types-psutil",
+	"rich",
+	"rich-click",
+	"duckdb",
+]
 build = ["bump-my-version", "hatch-mypyc", "pydantic-settings"]
 dev = [
-  { include-group = "extras" },
-  { include-group = "lint" },
-  { include-group = "doc" },
-  { include-group = "test" },
-  { include-group = "build" },
-  { include-group = "benchmarks" },
+	{ include-group = "extras" },
+	{ include-group = "lint" },
+	{ include-group = "doc" },
+	{ include-group = "test" },
+	{ include-group = "build" },
+	{ include-group = "benchmarks" },
 ]
 doc = [
-  "auto-pytabs[sphinx]>=0.5.0",
-  "shibuya",
-  "sphinx",
-  "sphinx-autobuild>=2021.3.14",
-  "sphinx-copybutton>=0.5.2",
-  "sphinx-click>=6.0.0",
-  "sphinx-design>=0.5.0",
-  "sphinxcontrib-mermaid>=0.9.2",
-  "sphinx-paramlinks>=0.6.0",
-  "sphinx-togglebutton>=0.3.2",
-  "sphinx-toolbox>=3.8.1",
-  "myst-parser",
-  "sphinx-autodoc-typehints",
-  "sphinx-contributors",
-  "numpydoc",
-  "sphinx-autoapi",
-  "sphinx-iconify",
-  "sphinx-docsearch",
+	"auto-pytabs[sphinx]>=0.5.0",
+	"shibuya",
+	"sphinx",
+	"sphinx-autobuild>=2021.3.14",
+	"sphinx-copybutton>=0.5.2",
+	"sphinx-click>=6.0.0",
+	"sphinx-design>=0.5.0",
+	"sphinxcontrib-mermaid>=0.9.2",
+	"sphinx-paramlinks>=0.6.0",
+	"sphinx-togglebutton>=0.3.2",
+	"sphinx-toolbox>=3.8.1",
+	"myst-parser",
+	"sphinx-autodoc-typehints",
+	"sphinx-contributors",
+	"numpydoc",
+	"sphinx-autoapi",
+	"sphinx-iconify",
+	"sphinx-docsearch",
 ]
 extras = [
-  "adbc_driver_manager",
-  "fsspec[s3]",
-  "pgvector",
-  "pyarrow",
-  "polars",
-  "adbc_driver_sqlite",
-  "adbc_driver_postgresql",
-  "adbc_driver_flightsql",
-  "adbc_driver_bigquery",
-  "dishka",
+	"adbc_driver_manager",
+	"fsspec[s3]",
+	"pgvector",
+	"pyarrow",
+	"polars",
+	"adbc_driver_sqlite",
+	"adbc_driver_postgresql",
+	"adbc_driver_flightsql",
+	"adbc_driver_bigquery",
+	"dishka",
 ]
 lint = [
-  "mypy>=1.13.0",
-  "pre-commit>=3.5.0",
-  "pyright>=1.1.386",
-  "ruff>=0.7.1",
-  "slotscheck>=0.16.5",
-  "types-Pygments",
-  "types-colorama",
-  "types-cffi",
-  "types-protobuf",
-  "asyncpg-stubs",
-  "pyarrow-stubs",
-  "pandas-stubs",
+	"mypy>=1.13.0",
+	"pre-commit>=3.5.0",
+	"pyright>=1.1.386",
+	"ruff>=0.7.1",
+	"slotscheck>=0.16.5",
+	"types-Pygments",
+	"types-colorama",
+	"types-cffi",
+	"types-protobuf",
+	"asyncpg-stubs",
+	"pyarrow-stubs",
+	"pandas-stubs",
 
 ]
 test = [
-  "aiohttp",
-  "requests",
-  "anyio",
-  "coverage>=7.6.1",
-  "covdefaults",
-  "pytest>=8.0.0",
-  "pytest-asyncio>=0.23.8",
-  "pytest-cov>=5.0.0",
-  "pytest-databases[postgres,oracle,mysql,bigquery,spanner,minio]>=0.12.2",
-  "pytest-mock>=3.14.0",
-  "pytest-sugar>=1.0.0",
-  "pytest-xdist>=3.6.1",
+	"aiohttp",
+	"requests",
+	"anyio",
+	"coverage>=7.6.1",
+	"covdefaults",
+	"pytest>=8.0.0",
+	"pytest-asyncio>=0.23.8",
+	"pytest-cov>=5.0.0",
+	"pytest-databases[postgres,oracle,mysql,bigquery,spanner,minio]>=0.12.2",
+	"pytest-mock>=3.14.0",
+	"pytest-sugar>=1.0.0",
+	"pytest-xdist>=3.6.1",
 ]
 
 [project.scripts]
@@ -146,56 +158,56 @@ packages = ["sqlspec"]
 dependencies = ["hatch-mypyc", "hatch-cython"]
 enable-by-default = false
 exclude = [
-  "tests/**",                       # Test files
-  "sqlspec/__main__.py",            # Entry point (can't run directly when compiled)
-  "sqlspec/cli.py",                 # CLI module (not performance critical)
-  "sqlspec/typing.py",              # Type aliases
-  "sqlspec/_typing.py",             # Type aliases
-  "sqlspec/config.py",              # Main config
-  "sqlspec/adapters/**/config.py",  # Adapter configurations
-  "sqlspec/adapters/**/_types.py",  # Type definitions (mypyc incompatible)
-  "sqlspec/extensions/**",          # All extensions
-  "sqlspec/**/__init__.py",         # Init files (usually just imports)
-  "sqlspec/protocols.py",           # Protocol definitions
-  "sqlspec/builder/**/*.py",        # Builder (not performance critical)
-  "sqlspec/migrations/commands.py", # Migration command CLI (dynamic imports)
+	"tests/**",                       # Test files
+	"sqlspec/__main__.py",            # Entry point (can't run directly when compiled)
+	"sqlspec/cli.py",                 # CLI module (not performance critical)
+	"sqlspec/typing.py",              # Type aliases
+	"sqlspec/_typing.py",             # Type aliases
+	"sqlspec/config.py",              # Main config
+	"sqlspec/adapters/**/config.py",  # Adapter configurations
+	"sqlspec/adapters/**/_types.py",  # Type definitions (mypyc incompatible)
+	"sqlspec/extensions/**",          # All extensions
+	"sqlspec/**/__init__.py",         # Init files (usually just imports)
+	"sqlspec/protocols.py",           # Protocol definitions
+	"sqlspec/builder/**/*.py",        # Builder (not performance critical)
+	"sqlspec/migrations/commands.py", # Migration command CLI (dynamic imports)
 
 ]
 include = [
-  "sqlspec/core/**/*.py",          # Core module
-  "sqlspec/loader.py",             # Loader module
-  "sqlspec/storage/**/*.py",       # Storage layer
-  "sqlspec/observability/**/*.py", # Observability utilities
-  # "sqlspec/migrations/**/*.py",    # Migrations module
-  # === ADAPTER TYPE CONVERTERS ===
-  "sqlspec/adapters/adbc/type_converter.py",     # ADBC type converter
-  "sqlspec/adapters/bigquery/type_converter.py", # BigQuery type converter
-  "sqlspec/adapters/duckdb/type_converter.py",   # DuckDB type converter
-  "sqlspec/adapters/oracledb/type_converter.py", # Oracle type converter
-  "sqlspec/adapters/psqlpy/type_converter.py",   # Psqlpy type converter
+	"sqlspec/core/**/*.py",          # Core module
+	"sqlspec/loader.py",             # Loader module
+	"sqlspec/storage/**/*.py",       # Storage layer
+	"sqlspec/observability/**/*.py", # Observability utilities
+	# "sqlspec/migrations/**/*.py",    # Migrations module
+	# === ADAPTER TYPE CONVERTERS ===
+	"sqlspec/adapters/adbc/type_converter.py",     # ADBC type converter
+	"sqlspec/adapters/bigquery/type_converter.py", # BigQuery type converter
+	"sqlspec/adapters/duckdb/type_converter.py",   # DuckDB type converter
+	"sqlspec/adapters/oracledb/type_converter.py", # Oracle type converter
+	"sqlspec/adapters/psqlpy/type_converter.py",   # Psqlpy type converter
 
-  # === UTILITY MODULES ===
-  "sqlspec/utils/text.py",                # Text utilities
-  "sqlspec/utils/sync_tools.py",          # Synchronous utility functions
-  "sqlspec/utils/type_guards.py",         # Type guard utilities
-  "sqlspec/utils/fixtures.py",            # File fixture loading
-  "sqlspec/utils/data_transformation.py", # Data transformation utilities
-  "sqlspec/utils/arrow_helpers.py",       # Arrow result helpers
-  "sqlspec/utils/serializers.py",         # Serialization helpers
-  "sqlspec/utils/type_converters.py",     # Adapter type converters
-  "sqlspec/utils/correlation.py",         # Correlation context helpers
-  "sqlspec/utils/portal.py",              # Thread portal utilities
-  "sqlspec/utils/singleton.py",           # Lightweight singleton helpers
+	# === UTILITY MODULES ===
+	"sqlspec/utils/text.py",                # Text utilities
+	"sqlspec/utils/sync_tools.py",          # Synchronous utility functions
+	"sqlspec/utils/type_guards.py",         # Type guard utilities
+	"sqlspec/utils/fixtures.py",            # File fixture loading
+	"sqlspec/utils/data_transformation.py", # Data transformation utilities
+	"sqlspec/utils/arrow_helpers.py",       # Arrow result helpers
+	"sqlspec/utils/serializers.py",         # Serialization helpers
+	"sqlspec/utils/type_converters.py",     # Adapter type converters
+	"sqlspec/utils/correlation.py",         # Correlation context helpers
+	"sqlspec/utils/portal.py",              # Thread portal utilities
+	"sqlspec/utils/singleton.py",           # Lightweight singleton helpers
 
 ]
 mypy-args = [
-  "--ignore-missing-imports",
-  "--allow-untyped-defs",
-  "--allow-untyped-globals",
-  "--no-implicit-reexport",
-  "--no-warn-redundant-casts",
-  "--no-warn-unused-ignores",
-  "--follow-imports=skip",
+	"--ignore-missing-imports",
+	"--allow-untyped-defs",
+	"--allow-untyped-globals",
+	"--no-implicit-reexport",
+	"--no-warn-redundant-casts",
+	"--no-warn-unused-ignores",
+	"--follow-imports=skip",
 ]
 require-runtime-dependencies = true
 require-runtime-features = ["mypyc"]
@@ -247,7 +259,11 @@ skip = 'uv.lock'
 [tool.coverage.run]
 branch = true
 concurrency = ["multiprocessing"]
-disable_warnings = ["no-data-collected", "module-not-measured", "module-not-imported"]
+disable_warnings = [
+	"no-data-collected",
+	"module-not-measured",
+	"module-not-imported",
+]
 omit = ["*/tests/*"]
 parallel = true
 plugins = ["covdefaults"]
@@ -257,23 +273,23 @@ source = ["sqlspec"]
 [tool.coverage.report]
 # Regexes for lines to exclude from consideration
 exclude_lines = [
-  # Have to re-enable the standard pragma
-  "pragma: no cover",
+	# Have to re-enable the standard pragma
+	"pragma: no cover",
 
-  # Don't complain about missing debug-only code:
-  "def __repr__",
-  "if self\\.debug",
+	# Don't complain about missing debug-only code:
+	"def __repr__",
+	"if self\\.debug",
 
-  # Don't complain if tests don't hit defensive assertion code:
-  "raise AssertionError",
-  "raise NotImplementedError",
+	# Don't complain if tests don't hit defensive assertion code:
+	"raise AssertionError",
+	"raise NotImplementedError",
 
-  # Don't complain if non-runnable code isn't run:
-  "if 0:",
-  "if __name__ == .__main__.:",
-  "if TYPE_CHECKING:",
-  'class .*\bProtocol\):',
-  '@(abc\.)?abstractmethod',
+	# Don't complain if non-runnable code isn't run:
+	"if 0:",
+	"if __name__ == .__main__.:",
+	"if TYPE_CHECKING:",
+	'class .*\bProtocol\):',
+	'@(abc\.)?abstractmethod',
 ]
 
 [tool.pytest.ini_options]
@@ -281,47 +297,47 @@ addopts = ["-q", "-ra"]
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "auto"
 filterwarnings = [
-  "ignore::DeprecationWarning:pkg_resources.*",
-  "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
-  "ignore::DeprecationWarning:pkg_resources",
-  "ignore:You are using a Python version .+ google\\.api_core:FutureWarning",
-  "ignore::DeprecationWarning:google.rpc",
-  "ignore::DeprecationWarning:google.gcloud",
-  "ignore::DeprecationWarning:google.iam",
-  "ignore::DeprecationWarning:google",
-  "ignore::DeprecationWarning:websockets.connection",
-  "ignore::DeprecationWarning:websockets.legacy",
-  "ignore::PendingDeprecationWarning:rich_click.*",
-  "ignore:`use_markdown=` will be deprecated:PendingDeprecationWarning",
-  "ignore:`use_rich_markup=` will be deprecated:PendingDeprecationWarning",
-  "ignore:`show_metavars_column=` will be deprecated:PendingDeprecationWarning",
-  "ignore:`append_metavars_help=` will be deprecated:PendingDeprecationWarning",
+	"ignore::DeprecationWarning:pkg_resources.*",
+	"ignore:pkg_resources is deprecated as an API:DeprecationWarning",
+	"ignore::DeprecationWarning:pkg_resources",
+	"ignore:You are using a Python version .+ google\\.api_core:FutureWarning",
+	"ignore::DeprecationWarning:google.rpc",
+	"ignore::DeprecationWarning:google.gcloud",
+	"ignore::DeprecationWarning:google.iam",
+	"ignore::DeprecationWarning:google",
+	"ignore::DeprecationWarning:websockets.connection",
+	"ignore::DeprecationWarning:websockets.legacy",
+	"ignore::PendingDeprecationWarning:rich_click.*",
+	"ignore:`use_markdown=` will be deprecated:PendingDeprecationWarning",
+	"ignore:`use_rich_markup=` will be deprecated:PendingDeprecationWarning",
+	"ignore:`show_metavars_column=` will be deprecated:PendingDeprecationWarning",
+	"ignore:`append_metavars_help=` will be deprecated:PendingDeprecationWarning",
 ]
 markers = [
-  "integration: marks tests that require an external database",
-  "postgres: marks tests specific to PostgreSQL",
-  "duckdb: marks tests specific to DuckDB",
-  "sqlite: marks tests specific to SQLite",
-  "bigquery: marks tests specific to Google BigQuery",
-  "mysql: marks tests specific to MySQL",
-  "oracle: marks tests specific to Oracle",
-  "spanner: marks tests specific to Google Cloud Spanner",
-  "snowflake: marks tests specific to Snowflake",
-  "mssql: marks tests specific to Microsoft SQL Server",
-  # Driver markers
-  "adbc: marks tests using ADBC drivers",
-  "aioodbc: marks tests using aioodbc",
-  "aiosqlite: marks tests using aiosqlite",
-  "asyncmy: marks tests using asyncmy",
-  "asyncpg: marks tests using asyncpg",
-  "duckdb_driver: marks tests using the duckdb driver",
-  "google_bigquery: marks tests using google-cloud-bigquery",
-  "google_spanner: marks tests using google-cloud-spanner",
-  "oracledb: marks tests using oracledb",
-  "psycopg: marks tests using psycopg",
-  "pymssql: marks tests using pymssql",
-  "pymysql: marks tests using pymysql",
-  "psqlpy: marks tests using psqlpy",
+	"integration: marks tests that require an external database",
+	"postgres: marks tests specific to PostgreSQL",
+	"duckdb: marks tests specific to DuckDB",
+	"sqlite: marks tests specific to SQLite",
+	"bigquery: marks tests specific to Google BigQuery",
+	"mysql: marks tests specific to MySQL",
+	"oracle: marks tests specific to Oracle",
+	"spanner: marks tests specific to Google Cloud Spanner",
+	"snowflake: marks tests specific to Snowflake",
+	"mssql: marks tests specific to Microsoft SQL Server",
+	# Driver markers
+	"adbc: marks tests using ADBC drivers",
+	"aioodbc: marks tests using aioodbc",
+	"aiosqlite: marks tests using aiosqlite",
+	"asyncmy: marks tests using asyncmy",
+	"asyncpg: marks tests using asyncpg",
+	"duckdb_driver: marks tests using the duckdb driver",
+	"google_bigquery: marks tests using google-cloud-bigquery",
+	"google_spanner: marks tests using google-cloud-spanner",
+	"oracledb: marks tests using oracledb",
+	"psycopg: marks tests using psycopg",
+	"pymssql: marks tests using pymssql",
+	"pymysql: marks tests using pymysql",
+	"psqlpy: marks tests using psqlpy",
 ]
 python_files = ["test_*.py", "quickstart_*.py", "usage_*.py"]
 testpaths = ["tests", "docs/examples/quickstart", "docs/examples/usage"]
@@ -346,31 +362,31 @@ warn_unused_ignores = true
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
 module = [
-  "orjson",
-  "re2",
-  "re2.*",
-  "uvicorn.*",
-  "googleapiclient",
-  "googleapiclient.*",
-  "uvloop.*",
-  "asyncmy",
-  "asyncmy.*",
-  "pyarrow",
-  "pyarrow.*",
-  "opentelemetry.*",
-  "opentelemetry.instrumentation.*",
-  "opentelemetry",
-  "prometheus_client",
-  "prometheus_client.*",
-  "aiosql",
-  "aiosql.*",
-  "fsspec",
-  "fsspec.*",
-  "sqlglot",
-  "sqlglot.*",
-  "pgvector",
-  "pgvector.*",
-  "minio",
+	"orjson",
+	"re2",
+	"re2.*",
+	"uvicorn.*",
+	"googleapiclient",
+	"googleapiclient.*",
+	"uvloop.*",
+	"asyncmy",
+	"asyncmy.*",
+	"pyarrow",
+	"pyarrow.*",
+	"opentelemetry.*",
+	"opentelemetry.instrumentation.*",
+	"opentelemetry",
+	"prometheus_client",
+	"prometheus_client.*",
+	"aiosql",
+	"aiosql.*",
+	"fsspec",
+	"fsspec.*",
+	"sqlglot",
+	"sqlglot.*",
+	"pgvector",
+	"pgvector.*",
+	"minio",
 ]
 
 [[tool.mypy.overrides]]
@@ -384,7 +400,16 @@ module = "tests.*"
 
 [tool.pyright]
 disableBytesTypePromotions = true
-exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs", "tmp", ".tmp", ".bugs"]
+exclude = [
+	"**/node_modules",
+	"**/__pycache__",
+	".venv",
+	"tools",
+	"docs",
+	"tmp",
+	".tmp",
+	".bugs",
+]
 include = ["sqlspec", "tests"]
 pythonVersion = "3.10"
 reportMissingTypeStubs = false
@@ -414,60 +439,60 @@ skip-magic-trailing-comma = true
 extend-safe-fixes = ["TC"]
 fixable = ["ALL"]
 ignore = [
-  "A003",    # flake8-builtins - class attribute {name} is shadowing a python builtin
-  "B010",    # flake8-bugbear - do not call setattr with a constant attribute value
-  "B904",    # Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None`
-  "D100",    # pydocstyle - missing docstring in public module
-  "D101",    # pydocstyle - missing docstring in public class
-  "D102",    # pydocstyle - missing docstring in public method
-  "D103",    # pydocstyle - missing docstring in public function
-  "D104",    # pydocstyle - missing docstring in public package
-  "D105",    # pydocstyle - missing docstring in magic method
-  "D106",    # pydocstyle - missing docstring in public nested class
-  "D107",    # pydocstyle - missing docstring in __init__
-  "D202",    # pydocstyle - no blank lines allowed after function docstring
-  "D205",    # pydocstyle - 1 blank line required between summary line and description
-  "D415",    # pydocstyle - first line should end with a period, question mark, or exclamation point
-  "DOC501",  # pydocstyle - Missing raise information in docstring
-  "E501",    # pycodestyle line too long, handled by ruff format
-  "PLW2901", # pylint - for loop variable overwritten by assignment target
-  "RUF012",  # Ruff-specific rule - annotated with classvar
-  "ISC001",  # Ruff formatter incompatible
-  "A005",    # flake8 - Module `x` shadows a Python standard-library module
-  "PLC0415", # pylint - `import` should be at the top of the file
-  "FA100",   # Add `from __future__ import annotations` to simplify
-  "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed
-  "FBT001",  # Boolean-typed positional argument in function definition
-  "FBT002",  # Boolean default positional argument in function definition
-  "PLR0913", # pylint - Too many arguments in function definition
-  "ARG002",  # Unused method argument
-  "ARG001",  # Unused function argument
-  "CPY001",  # pycodestyle - Missing Copywrite notice at the top of the file
-  "RUF029",  # Ruff - function is declared as async but has no awaitable calls
-  "COM812",  # flake8-comma - Missing trailing comma
-  "PGH003",  # Use Specific ignore for pyright
-  "PLR0911", # pylint - Too many return statements
-  "PLR0912", # pylint - Too many branches
-  "PLR0914", # pylint - Too many statements
-  "PLR0915", # pylint - Too many lines in module
-  "PLR0916", # pylint - Too many statements in function
-  "PLR0917", # pylint - Too many statements in class
-  "DOC201",  # pydocstyle - Missing return statement
-  "BLE001",  # pylint -  Blind exception
-  "S101",    # S101 - Use of assert
-  "FIX002",  # Ruff - Allow the use of TODO in comments
-  "TD003",   # Ruff - Missing issue link for TODO
-  "TD002",   # Ruff - Missing author for TODO
-  "PYI036",  # pyright - Missing type annotation for `__aexit__`
-  "A002",    # ruff - function argument is shadowing a python builtin
-  "DOC202",  # pydocstyle - Code should not have a return section in the docstring
-  "SLF001",  # ruff - access of private method outside of class
-  "S608",    # ruff - Possible sql injection
-  "PLR0904", # too many public methods
-  "PLR6301", # method could be static or class method
-  "B903",    # class could be a dataclass or named tuple
-  "PLW0603", # Using the global statement to update is discouraged
-  "PLW0108", # Replace lambda expression with a def
+	"A003",    # flake8-builtins - class attribute {name} is shadowing a python builtin
+	"B010",    # flake8-bugbear - do not call setattr with a constant attribute value
+	"B904",    # Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None`
+	"D100",    # pydocstyle - missing docstring in public module
+	"D101",    # pydocstyle - missing docstring in public class
+	"D102",    # pydocstyle - missing docstring in public method
+	"D103",    # pydocstyle - missing docstring in public function
+	"D104",    # pydocstyle - missing docstring in public package
+	"D105",    # pydocstyle - missing docstring in magic method
+	"D106",    # pydocstyle - missing docstring in public nested class
+	"D107",    # pydocstyle - missing docstring in __init__
+	"D202",    # pydocstyle - no blank lines allowed after function docstring
+	"D205",    # pydocstyle - 1 blank line required between summary line and description
+	"D415",    # pydocstyle - first line should end with a period, question mark, or exclamation point
+	"DOC501",  # pydocstyle - Missing raise information in docstring
+	"E501",    # pycodestyle line too long, handled by ruff format
+	"PLW2901", # pylint - for loop variable overwritten by assignment target
+	"RUF012",  # Ruff-specific rule - annotated with classvar
+	"ISC001",  # Ruff formatter incompatible
+	"A005",    # flake8 - Module `x` shadows a Python standard-library module
+	"PLC0415", # pylint - `import` should be at the top of the file
+	"FA100",   # Add `from __future__ import annotations` to simplify
+	"ANN401",  # Dynamically typed expressions (typing.Any) are disallowed
+	"FBT001",  # Boolean-typed positional argument in function definition
+	"FBT002",  # Boolean default positional argument in function definition
+	"PLR0913", # pylint - Too many arguments in function definition
+	"ARG002",  # Unused method argument
+	"ARG001",  # Unused function argument
+	"CPY001",  # pycodestyle - Missing Copywrite notice at the top of the file
+	"RUF029",  # Ruff - function is declared as async but has no awaitable calls
+	"COM812",  # flake8-comma - Missing trailing comma
+	"PGH003",  # Use Specific ignore for pyright
+	"PLR0911", # pylint - Too many return statements
+	"PLR0912", # pylint - Too many branches
+	"PLR0914", # pylint - Too many statements
+	"PLR0915", # pylint - Too many lines in module
+	"PLR0916", # pylint - Too many statements in function
+	"PLR0917", # pylint - Too many statements in class
+	"DOC201",  # pydocstyle - Missing return statement
+	"BLE001",  # pylint -  Blind exception
+	"S101",    # S101 - Use of assert
+	"FIX002",  # Ruff - Allow the use of TODO in comments
+	"TD003",   # Ruff - Missing issue link for TODO
+	"TD002",   # Ruff - Missing author for TODO
+	"PYI036",  # pyright - Missing type annotation for `__aexit__`
+	"A002",    # ruff - function argument is shadowing a python builtin
+	"DOC202",  # pydocstyle - Code should not have a return section in the docstring
+	"SLF001",  # ruff - access of private method outside of class
+	"S608",    # ruff - Possible sql injection
+	"PLR0904", # too many public methods
+	"PLR6301", # method could be static or class method
+	"B903",    # class could be a dataclass or named tuple
+	"PLW0603", # Using the global statement to update is discouraged
+	"PLW0108", # Replace lambda expression with a def
 ]
 select = ["ALL"]
 
@@ -492,45 +517,67 @@ known-first-party = ["sqlspec", "tests"]
 split-on-trailing-comma = false
 
 [tool.ruff.lint.per-file-ignores]
-"docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127", "PLR2004"]
+"docs/**/*.*" = [
+	"S",
+	"B",
+	"DTZ",
+	"A",
+	"TC",
+	"ERA",
+	"D",
+	"RET",
+	"PLW0127",
+	"PLR2004",
+]
 "docs/examples/**" = ["T201"]
 "sqlspec/builder/mixins/**/*.*" = ["SLF001"]
 "sqlspec/extensions/adk/converters.py" = ["S403"]
 "sqlspec/migrations/utils.py" = ["S404"]
 "tests/**/*.*" = [
-  "A",
-  "ARG",
-  "B",
-  "BLE",
-  "C901",
-  "D",
-  "DTZ",
-  "EM",
-  "FBT",
-  "G",
-  "N",
-  "PGH",
-  "PIE",
-  "PLR",
-  "PLW",
-  "PTH",
-  "RSE",
-  "S",
-  "S101",
-  "SIM",
-  "TC",
-  "TRY",
-  "PT012",
-  "INP001",
-  "DOC",
-  "ERA001",
-  "SLF001",
-  "PLC",
-  "PT",
-  "PERF203",
-  "ANN",
+	"A",
+	"ARG",
+	"B",
+	"BLE",
+	"C901",
+	"D",
+	"DTZ",
+	"EM",
+	"FBT",
+	"G",
+	"N",
+	"PGH",
+	"PIE",
+	"PLR",
+	"PLW",
+	"PTH",
+	"RSE",
+	"S",
+	"S101",
+	"SIM",
+	"TC",
+	"TRY",
+	"PT012",
+	"INP001",
+	"DOC",
+	"ERA001",
+	"SLF001",
+	"PLC",
+	"PT",
+	"PERF203",
+	"ANN",
 ]
-"tools/**/*.*" = ["D", "ARG", "EM", "TRY", "G", "FBT", "S603", "F811", "PLW0127", "PLR0911"]
+"tools/**/*.*" = [
+	"D",
+	"ARG",
+	"EM",
+	"TRY",
+	"G",
+	"FBT",
+	"S603",
+	"F811",
+	"PLW0127",
+	"PLR0911",
+]
 "tools/prepare_release.py" = ["S603", "S607"]
 
 [tool.ruff.lint.flake8-tidy-imports]
