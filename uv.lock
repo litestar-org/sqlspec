@@ -313,11 +313,11 @@ wheels = [
 
 [[package]]
 name = "aiosql"
-version = "14.0"
+version = "13.4"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/aa/d9/618d0ab4ad406c974607fc563fc184e613134b40722927259e0df4147458/aiosql-14.0.tar.gz", hash = "sha256:a64da1ea088543432451881b7b1a48ad612c2de75427f340c9a82256e7689617", size = 76470, upload-time = "2025-11-21T18:04:54.476Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/98/3a/105cdf480d444ee059f3fbea65616fba006fba29d32e382fb1a4d947f4b7/aiosql-13.4.tar.gz", hash = "sha256:da6ebb4d5e735753853007a7d574e60761338fc6ca8d95d6d95b5d85d7b1354d", size = 75730, upload-time = "2025-04-09T08:27:36.593Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/19/ee/79c5ed44b9fc123b0a97f62681d6e0818de683ff57fe1b03e43156f4146c/aiosql-14.0-py3-none-any.whl", hash = "sha256:d71089a2965bd19b0bdbe99b6ef0c611b04dea4597d7d2a5de12400d1cbcd0ad", size = 25898, upload-time = "2025-11-21T18:04:52.53Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/cf/219d8fdae6b6ea9192111b68b611550852f0b082ace9f23e391dde639f28/aiosql-13.4-py3-none-any.whl", hash = "sha256:f5dc4a93484a96ee9008f8488cc1be100e1ebf08cd2135ccade89975332bf49f", size = 24783, upload-time = "2025-04-09T08:27:34.753Z" },
 ]
 
 [[package]]
@@ -1324,7 +1324,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -6195,7 +6195,7 @@ test = [
 requires-dist = [
     { name = "adbc-driver-manager", marker = "extra == 'adbc'" },
     { name = "aioodbc", marker = "extra == 'aioodbc'" },
-    { name = "aiosql", marker = "extra == 'aiosql'" },
+    { name = "aiosql", marker = "extra == 'aiosql'", specifier = "<14.0.0" },
     { name = "aiosqlite", marker = "extra == 'aiosqlite'" },
     { name = "asyncmy", marker = "extra == 'asyncmy'" },
     { name = "asyncpg", marker = "extra == 'asyncpg'" },
