@@ -16,7 +16,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from pytest_databases.docker.minio import MinioService
 
 pytestmark = [
-    pytest.mark.xdist_group("storage"),
+    pytest.mark.xdist_group("postgres"),
     pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed"),
     pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed"),
 ]

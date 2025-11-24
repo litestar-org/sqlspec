@@ -15,7 +15,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 pytestmark = [
     pytest.mark.asyncpg,
-    pytest.mark.xdist_group("storage"),
+    pytest.mark.xdist_group("postgres"),
     pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed"),
     pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed"),
 ]
