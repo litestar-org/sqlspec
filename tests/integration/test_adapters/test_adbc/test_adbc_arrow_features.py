@@ -5,12 +5,13 @@ from collections.abc import Generator
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
+from sqlspec import SQLResult
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.core import SQLResult
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
+pytestmark = pytest.mark.xdist_group("postgres")
 
-@pytest.fixture
+
 def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session for Arrow testing."""
     config = AdbcConfig(

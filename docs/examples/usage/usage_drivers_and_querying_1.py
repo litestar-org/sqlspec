@@ -3,7 +3,10 @@
 
 import os
 
+import pytest
 from pytest_databases.docker.postgres import PostgresService
+
+pytestmark = pytest.mark.xdist_group("postgres")
 
 __all__ = ("test_importable_1",)
 

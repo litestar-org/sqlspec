@@ -2,7 +2,11 @@
 
 import os
 
+import pytest
+
 from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+pytestmark = pytest.mark.xdist_group("postgres")
 
 __all__ = ("test_example_21_pool_config",)
 

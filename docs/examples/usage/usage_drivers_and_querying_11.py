@@ -1,7 +1,10 @@
 # Test module converted from docs example - code-block 11
 """Minimal smoke test for drivers_and_querying example 11."""
 
+import pytest
 from pytest_databases.docker.oracle import OracleService
+
+pytestmark = pytest.mark.xdist_group("oracle")
 
 __all__ = ("test_example_11_oracledb_config",)
 

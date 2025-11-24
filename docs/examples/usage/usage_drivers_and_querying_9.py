@@ -1,7 +1,10 @@
 # Test module converted from docs example - code-block 9
 """Minimal smoke test for drivers_and_querying example 9."""
 
+import pytest
 from pytest_databases.docker.mysql import MySQLService
+
+pytestmark = pytest.mark.xdist_group("mysql")
 
 __all__ = ("test_example_9_asyncmy_config",)
 

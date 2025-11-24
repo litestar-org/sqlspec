@@ -1,5 +1,9 @@
 """Test configuration example: Named database bindings."""
 
+import pytest
+
+pytestmark = pytest.mark.xdist_group("postgres")
+
 __all__ = ("test_named_bindings",)
 
 

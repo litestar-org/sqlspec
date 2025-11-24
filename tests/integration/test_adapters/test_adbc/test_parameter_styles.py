@@ -12,10 +12,12 @@ from datetime import date
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
+from sqlspec import SQLResult
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLSpecError
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
+
+pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.fixture

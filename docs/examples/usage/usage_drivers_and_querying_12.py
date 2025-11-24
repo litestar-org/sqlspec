@@ -5,6 +5,8 @@ import pytest
 
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
+pytestmark = pytest.mark.xdist_group("bigquery")
+
 __all__ = ("test_example_12_bigquery_config",)
 
 
