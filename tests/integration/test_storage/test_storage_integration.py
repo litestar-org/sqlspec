@@ -44,8 +44,11 @@ def local_test_setup(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def fsspec_s3_backend(minio_service: "MinioService", minio_default_bucket_name: str) -> "ObjectStoreProtocol":
+def fsspec_s3_backend(
+    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+) -> "ObjectStoreProtocol":
     """Set up FSSpec S3 backend for testing."""
+    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     return FSSpecBackend(
@@ -59,8 +62,11 @@ def fsspec_s3_backend(minio_service: "MinioService", minio_default_bucket_name: 
 
 
 @pytest.fixture
-def obstore_s3_backend(minio_service: "MinioService", minio_default_bucket_name: str) -> "ObjectStoreProtocol":
+def obstore_s3_backend(
+    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+) -> "ObjectStoreProtocol":
     """Set up ObStore S3 backend for testing."""
+    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
     s3_uri = f"s3://{minio_default_bucket_name}"
@@ -371,8 +377,11 @@ def test_registry_path_resolution(tmp_path: Path) -> None:
 
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
-def test_registry_s3_fsspec_resolution(minio_service: "MinioService", minio_default_bucket_name: str) -> None:
+def test_registry_s3_fsspec_resolution(
+    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+) -> None:
     """Test storage registry S3 resolution with FSSpec backend."""
+    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     s3_uri = f"s3://{minio_default_bucket_name}/registry_test/"
@@ -399,9 +408,10 @@ def test_registry_s3_fsspec_resolution(minio_service: "MinioService", minio_defa
 
 @pytest.mark.xdist_group("storage")
 def test_registry_alias_registration(
-    minio_service: "MinioService", minio_default_bucket_name: str, tmp_path: Path
+    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str, tmp_path: Path
 ) -> None:
     """Test storage registry alias registration and usage."""
+    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.local import LocalStore
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
@@ -462,8 +472,11 @@ def local_backend(tmp_path: Path) -> "ObjectStoreProtocol":
 
 
 @pytest.fixture
-def fsspec_s3_backend_optional(minio_service: "MinioService", minio_default_bucket_name: str) -> "ObjectStoreProtocol":
+def fsspec_s3_backend_optional(
+    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+) -> "ObjectStoreProtocol":
     """Create FSSpec S3 backend if available."""
+    _ = minio_client  # Ensures bucket is created
     if not FSSPEC_INSTALLED:
         pytest.skip("fsspec not installed")
 
@@ -481,8 +494,11 @@ def fsspec_s3_backend_optional(minio_service: "MinioService", minio_default_buck
 
 
 @pytest.fixture
-def obstore_s3_backend_optional(minio_service: "MinioService", minio_default_bucket_name: str) -> "ObjectStoreProtocol":
+def obstore_s3_backend_optional(
+    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+) -> "ObjectStoreProtocol":
     """Create ObStore S3 backend if available."""
+    _ = minio_client  # Ensures bucket is created
     if not OBSTORE_INSTALLED:
         pytest.skip("obstore not installed")
 
@@ -563,8 +579,11 @@ def test_local_backend_error_handling(tmp_path: Path) -> None:
 
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
-def test_fsspec_s3_error_handling(minio_service: "MinioService", minio_default_bucket_name: str) -> None:
+def test_fsspec_s3_error_handling(
+    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+) -> None:
     """Test FSSpec S3 backend error handling."""
+    _ = minio_client  # Ensures bucket is created
     from sqlspec.exceptions import FileNotFoundInStorageError
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
@@ -655,9 +674,10 @@ def test_registry_alias_management(tmp_path: Path) -> None:
 
 @pytest.mark.xdist_group("storage")
 def test_registry_backend_fallback_order(
-    tmp_path: Path, minio_service: "MinioService", minio_default_bucket_name: str
+    tmp_path: Path, minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
 ) -> None:
     """Test that registry follows correct backend fallback order."""
+    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.local import LocalStore
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
@@ -727,8 +747,11 @@ def test_local_arrow_operations(tmp_path: Path) -> None:
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="PyArrow not installed")
-def test_fsspec_s3_arrow_operations(minio_service: "MinioService", minio_default_bucket_name: str) -> None:
+def test_fsspec_s3_arrow_operations(
+    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+) -> None:
     """Test FSSpec S3 backend Arrow operations if pyarrow is available."""
+    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     backend = FSSpecBackend.from_config({
@@ -848,8 +871,11 @@ def test_local_metadata_operations(tmp_path: Path) -> None:
 
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
-def test_fsspec_s3_metadata_operations(minio_service: "MinioService", minio_default_bucket_name: str) -> None:
+def test_fsspec_s3_metadata_operations(
+    minio_service: "MinioService", minio_client: Minio, minio_default_bucket_name: str
+) -> None:
     """Test FSSpec S3 backend metadata operations."""
+    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     backend = FSSpecBackend.from_config({
