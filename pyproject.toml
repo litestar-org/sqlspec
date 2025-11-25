@@ -122,6 +122,7 @@ test = [
   "pytest-mock>=3.14.0",
   "pytest-sugar>=1.0.0",
   "pytest-xdist>=3.6.1",
+  "pytest-timeout>=2.3.1",
 ]
 
 [project.scripts]
@@ -241,7 +242,7 @@ version = "{current_version}"
 """
 
 [tool.codespell]
-ignore-words-list = "te,ECT,SELCT"
+ignore-words-list = "te,ECT,SELCT,froms"
 skip = 'uv.lock'
 
 [tool.coverage.run]
@@ -280,6 +281,8 @@ exclude_lines = [
 addopts = ["-q", "-ra"]
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "auto"
+timeout = 300
+timeout_method = "thread"
 filterwarnings = [
   "ignore::DeprecationWarning:pkg_resources.*",
   "ignore:pkg_resources is deprecated as an API:DeprecationWarning",

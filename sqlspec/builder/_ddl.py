@@ -819,25 +819,33 @@ class CreateIndex(DDLBuilder):
     def _create_base_expression(self) -> exp.Expression:
         if not self._index_name or not self._table_name:
             self._raise_sql_builder_error("Index name and table name must be set for CREATE INDEX.")
-        exprs: list[exp.Expression] = []
+
+        # Build column expressions - don't wrap in Ordered to avoid NULLS FIRST/LAST
+        cols: list[exp.Expression] = []
         for col in self._columns:
             if isinstance(col, str):
-                exprs.append(exp.column(col))
+                cols.append(exp.column(col))
             else:
-                exprs.append(col)
+                cols.append(col)
+
         where_expr = None
         if self._where:
             where_expr = exp.condition(self._where) if isinstance(self._where, str) else self._where
-        return exp.Create(
-            kind="INDEX",
-            this=exp.to_identifier(self._index_name),
-            table=exp.to_table(self._table_name),
-            expressions=exprs,
-            unique=self._unique,
-            exists=self._if_not_exists,
-            using=exp.to_identifier(self._using) if self._using else None,
-            where=where_expr,
+
+        # Create IndexParameters with columns
+        index_params = exp.IndexParameters(columns=cols) if cols else None
+
+        # Create Index expression with table and parameters
+        index_expr = exp.Index(
+            this=exp.to_identifier(self._index_name), table=exp.to_table(self._table_name), params=index_params
         )
+
+        # Set where clause if provided
+        if where_expr:
+            index_expr.set("where", where_expr)
+
+        # Wrap in Create expression with unique and if_not_exists flags
+        return exp.Create(kind="INDEX", this=index_expr, unique=self._unique, exists=self._if_not_exists)
 
 
 class Truncate(DDLBuilder):

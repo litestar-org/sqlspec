@@ -95,23 +95,31 @@ class CorrelationIDFilter(logging.Filter):
 
 
 class SqlglotCommandFallbackFilter(logging.Filter):
-    """Filter to suppress sqlglot's confusing 'Falling back to Command' warning.
+    """Filter to suppress sqlglot warnings we consider benign.
 
-    This filter suppresses the warning message that sqlglot emits when it
-    encounters unsupported syntax and falls back to parsing as a Command.
-    This is expected behavior in SQLSpec and the warning is confusing to users.
+    - "Falling back to parsing as a 'Command'": emitted when sqlglot hits syntax it
+      intentionally downgrades; expected in SQLSpec usage.
+    - "Cannot traverse scope …": emitted by sqlglot's scope analysis in cases where
+      SQLSpec feeds partially constructed expressions; harmless for our flows.
     """
 
+    _suppressed_substrings = (
+        "falling back to parsing as a 'command'",
+        "cannot traverse scope",
+        "locking reads using 'for update/share' are not supported",
+    )
+
     def filter(self, record: LogRecord) -> bool:
-        """Suppress the 'Falling back to Command' warning message.
+        """Suppress known-safe sqlglot warnings.
 
         Args:
             record: The log record to evaluate
 
         Returns:
-            False if the record contains the fallback warning, True otherwise
+            False if the record message matches a suppressed pattern, True otherwise.
         """
-        return "Falling back to parsing as a 'Command'" not in record.getMessage()
+        message = record.getMessage().lower()
+        return not any(substr in message for substr in self._suppressed_substrings)
 
 
 def get_logger(name: "str | None" = None) -> logging.Logger:
@@ -158,6 +166,7 @@ def suppress_erroneous_sqlglot_log_messages() -> None:
     about falling back to parsing as a Command. This is expected behavior
     in SQLSpec and the warning is confusing to users.
     """
-    sqlglot_logger = logging.getLogger("sqlglot")
-    if not any(isinstance(f, SqlglotCommandFallbackFilter) for f in sqlglot_logger.filters):
-        sqlglot_logger.addFilter(SqlglotCommandFallbackFilter())
+    for logger_name in ("sqlglot", "sqlglot.scope", "sqlglot.generator"):
+        sqlglot_logger = logging.getLogger(logger_name)
+        if not any(isinstance(f, SqlglotCommandFallbackFilter) for f in sqlglot_logger.filters):
+            sqlglot_logger.addFilter(SqlglotCommandFallbackFilter())

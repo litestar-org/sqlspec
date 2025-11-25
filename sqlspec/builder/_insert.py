@@ -34,7 +34,7 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
     Constructs SQL INSERT queries with parameter binding and validation.
     """
 
-    __slots__ = ("_columns", "_table", "_values_added_count")
+    __slots__ = ("_columns", "_values_added_count")
 
     def __init__(self, table: str | None = None, **kwargs: Any) -> None:
         """Initialize INSERT with optional table.
@@ -45,7 +45,6 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         """
         super().__init__(**kwargs)
 
-        self._table: str | None = None
         self._columns: list[str] = []
         self._values_added_count: int = 0
 
@@ -107,7 +106,8 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         Raises:
             SQLBuilderError: If `into()` has not been called to set the table.
         """
-        if not self._table:
+        insert_expr = self._get_insert_expression()
+        if insert_expr.args.get("this") is None:
             raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
 
         data_keys = list(data.keys())

@@ -1,5 +1,9 @@
 """Test configuration example: Best practice - Use connection pooling."""
 
+import pytest
+
+pytestmark = pytest.mark.xdist_group("postgres")
+
 __all__ = ("test_connection_pooling_best_practice",)
 
 

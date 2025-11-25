@@ -17,7 +17,7 @@ repos:
       - id: mixed-line-ending
       - id: trailing-whitespace
   - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: "v0.14.5"
+    rev: "v0.14.6"
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -40,7 +40,7 @@ repos:
       - id: slotscheck
         exclude: "docs|.github"
   - repo: https://github.com/sphinx-contrib/sphinx-lint
-    rev: "v1.0.1"
+    rev: "v1.0.2"
     hooks:
       - id: sphinx-lint
         args: ["--jobs", "1"]

@@ -4,7 +4,7 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from typing_extensions import Self
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlglot import exp
+    from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
@@ -385,8 +386,8 @@ class SQLBuilderProtocol(Protocol):
     _expression: "exp.Expression | None"
     _parameters: dict[str, Any]
     _parameter_counter: int
+    _parameter_name_counters: dict[str, int]
     _columns: Any  # Optional attribute for some builders
-    _table: Any  # Optional attribute for some builders
     _with_ctes: Any  # Optional attribute for some builders
     dialect: Any
     dialect_name: "str | None"
@@ -402,6 +403,14 @@ class SQLBuilderProtocol(Protocol):
 
     def _generate_unique_parameter_name(self, base_name: str) -> str:
         """Generate a unique parameter name."""
+        ...
+
+    def _create_placeholder(self, value: Any, base_name: str) -> "tuple[exp.Placeholder, str]":
+        """Create placeholder expression with bound parameter."""
+        ...
+
+    def create_placeholder(self, value: Any, base_name: str) -> "tuple[exp.Placeholder, str]":
+        """Create placeholder expression with bound parameter (public)."""
         ...
 
     def _parameterize_expression(self, expression: "exp.Expression") -> "exp.Expression":
@@ -434,6 +443,20 @@ class SQLBuilderProtocol(Protocol):
 
     def generate_unique_parameter_name(self, base_name: str) -> str:
         """Generate a unique parameter name exposed via public API."""
+        ...
+
+    def build_static_expression(
+        self,
+        expression: "exp.Expression | None" = None,
+        parameters: dict[str, Any] | None = None,
+        *,
+        cache_key: str | None = None,
+        expression_factory: "Callable[[], exp.Expression] | None" = None,
+        copy: bool = True,
+        optimize_expression: bool | None = None,
+        dialect: "DialectType | None" = None,
+    ) -> Any:
+        """Compile a pre-built expression with optional caching and parameters."""
         ...
 
 

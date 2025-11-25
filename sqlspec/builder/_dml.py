@@ -51,7 +51,6 @@ class DeleteFromClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        setattr(self, "_table", table)
         current_expr.set("this", exp.to_table(table))
         return self
 
@@ -79,7 +78,6 @@ class InsertIntoClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        setattr(self, "_table", table)
         current_expr.set("this", exp.to_table(table))
         return self
 
@@ -146,10 +144,11 @@ class InsertValuesMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        table_name = cast("str | None", self._table)  # type: ignore[attr-defined]
-        if not table_name:
+        if current_expr.args.get("this") is None:
             msg = "The target table must be set using .into() before adding values."
             raise SQLBuilderError(msg)
+
+        builder = cast("SQLBuilderProtocol", self)
 
         positional_values = list(values)
         if len(positional_values) == SINGLE_VALUE_COUNT and hasattr(positional_values[0], "items") and not kwargs:
@@ -175,9 +174,8 @@ class InsertValuesMixin:
                     row_expressions.append(extract_sql_object_expression(val, builder=self))
                     continue
                 column_name = str(col).split(".")[-1]
-                unique_name = self._generate_unique_parameter_name(column_name)
-                _, unique_name = self.add_parameter(val, name=unique_name)
-                row_expressions.append(exp.Placeholder(this=unique_name))
+                placeholder, _ = builder._create_placeholder(val, column_name)  # pyright: ignore[reportPrivateUsage]
+                row_expressions.append(placeholder)
         else:
             if column_defs and len(positional_values) != len(column_defs):
                 msg = (
@@ -197,9 +195,8 @@ class InsertValuesMixin:
                         column_name = column_token.rsplit(".", maxsplit=1)[-1]
                     else:
                         column_name = f"value_{index + 1}"
-                    unique_name = self._generate_unique_parameter_name(column_name)
-                    _, unique_name = self.add_parameter(raw_value, name=unique_name)
-                    row_expressions.append(exp.Placeholder(this=unique_name))
+                    placeholder, _ = builder._create_placeholder(raw_value, column_name)  # pyright: ignore[reportPrivateUsage]
+                    row_expressions.append(placeholder)
 
         values_node = current_expr.args.get("expression")
         tuple_expression = exp.Tuple(expressions=row_expressions)
@@ -220,17 +217,11 @@ class InsertFromSelectMixin:
     def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
-    _table: Any
-
     def add_parameter(self, value: Any, name: str | None = None) -> tuple[Any, str]:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
     def from_select(self, select_builder: SQLBuilderProtocol) -> Self:
-        if not getattr(self, "_table", None):
-            msg = "The target table must be set using .into() before adding values."
-            raise SQLBuilderError(msg)
-
         current_expr = self.get_expression()
         if current_expr is None:
             self.set_expression(exp.Insert())
@@ -241,6 +232,9 @@ class InsertFromSelectMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
+        if current_expr.args.get("this") is None:
+            msg = "The target table must be set using .into() before adding values."
+            raise SQLBuilderError(msg)
         subquery_parameters = getattr(select_builder, "_parameters", None)
         if isinstance(subquery_parameters, dict):
             builder_with_params = cast("SQLBuilderProtocol", self)
@@ -278,7 +272,6 @@ class UpdateTableClauseMixin:
 
         table_expr: exp.Expression = exp.to_table(table_name, alias=alias)
         current_expr.set("this", table_expr)
-        setattr(self, "_table", table_name)
         return self
 
 
@@ -309,12 +302,12 @@ class UpdateSetClauseMixin:
             return value_expr
         if hasattr(val, "expression") and hasattr(val, "sql"):
             return extract_sql_object_expression(val, builder=self)
+        builder = cast("SQLBuilderProtocol", self)
         column_name = col if isinstance(col, str) else str(col)
         if "." in column_name:
             column_name = column_name.split(".")[-1]
-        param_name = self._generate_unique_parameter_name(column_name)
-        param_name = self.add_parameter(val, name=param_name)[1]
-        return exp.Placeholder(this=param_name)
+        placeholder, _ = builder.create_placeholder(val, column_name)
+        return placeholder
 
     def set(self, *args: Any, **kwargs: Any) -> Self:
         current_expr = self.get_expression()

@@ -326,8 +326,8 @@ async def test_asyncmy_mysql_specific_features(asyncmy_driver: AsyncmyDriver) ->
     await driver.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "duplicate_test", 100))
 
     _ = await driver.execute(
-        """INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)
-           ON DUPLICATE KEY UPDATE value = VALUES(value) + 50""",
+        """INSERT INTO test_table (id, name, value) VALUES (?, ?, ?) AS new
+           ON DUPLICATE KEY UPDATE value = new.value + 50""",
         (1, "duplicate_test_updated", 200),
     )
 

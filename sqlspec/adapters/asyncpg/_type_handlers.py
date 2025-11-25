@@ -20,6 +20,11 @@ __all__ = ("register_json_codecs", "register_pgvector_support")
 logger = logging.getLogger(__name__)
 
 
+def _is_missing_vector_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return 'type "vector" does not exist' in message or "unknown type" in message
+
+
 async def register_json_codecs(
     connection: "AsyncpgConnection", encoder: "Callable[[Any], str]", decoder: "Callable[[str], Any]"
 ) -> None:
@@ -61,9 +66,9 @@ async def register_pgvector_support(connection: "AsyncpgConnection") -> None:
 
         await pgvector.asyncpg.register_vector(connection)
         logger.debug("Registered pgvector support on asyncpg connection")
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         message = str(exc).lower()
-        if "unknown type" in message and "vector" in message:
+        if _is_missing_vector_error(exc) or ("vector" in message and "unknown type" in message):
             logger.debug("Skipping pgvector registration because extension is unavailable")
             return
         logger.exception("Failed to register pgvector support")

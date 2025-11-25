@@ -1,3 +1,4 @@
+# ruff: noqa: F401
 """BigQuery driver implementation.
 
 Provides Google Cloud BigQuery connectivity with parameter style conversion,
@@ -727,10 +728,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             True if Storage API is available and working, False otherwise
         """
         try:
-            from google.cloud import bigquery_storage_v1  # type: ignore[attr-defined]
-
-            # Try to create client (will fail if API not enabled or credentials missing)
-            _ = bigquery_storage_v1.BigQueryReadClient()
+            from google.cloud import bigquery_storage_v1  # pyright: ignore
         except ImportError:
             # Package not installed
             return False

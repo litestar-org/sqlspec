@@ -1,5 +1,9 @@
 """Test configuration example: Basic migration configuration."""
 
+import pytest
+
+pytestmark = pytest.mark.xdist_group("postgres")
+
 __all__ = ("test_basic_migration_config",)
 
 

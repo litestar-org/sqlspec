@@ -27,7 +27,6 @@ from sqlspec.builder._parsing_utils import (
 from sqlspec.core import SQL, ParameterStyle, ParameterValidator, SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
-    has_expression_and_parameters,
     has_expression_and_sql,
     has_query_builder_parameters,
     has_sqlglot_expression,
@@ -38,6 +37,7 @@ from sqlspec.utils.type_guards import (
 BETWEEN_BOUND_COUNT = 2
 PAIR_LENGTH = 2
 TRIPLE_LENGTH = 3
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -65,6 +65,16 @@ __all__ = (
     "WhereClauseMixin",
     "WindowFunctionBuilder",
 )
+
+
+def is_explicitly_quoted(identifier: Any) -> bool:
+    """Detect if identifier was provided with explicit quotes."""
+    if not isinstance(identifier, str):
+        return False
+    stripped = identifier.strip()
+    return (stripped.startswith('"') and stripped.endswith('"')) or (
+        stripped.startswith("`") and stripped.endswith("`")
+    )
 
 
 class Case:
@@ -122,13 +132,13 @@ class SubqueryBuilder:
         elif hasattr(subquery, "build") and callable(getattr(subquery, "build", None)):
             built_query = subquery.build()
             sql_text = built_query.sql if hasattr(built_query, "sql") else str(built_query)
-            parsed_expr: exp.Expression | None = exp.maybe_parse(sql_text)
+            parsed_expr: exp.Expression | None = exp.maybe_parse(sql_text, dialect=getattr(subquery, "dialect", None))
             if parsed_expr is None:
                 msg = f"Could not parse subquery SQL: {sql_text}"
                 raise SQLBuilderError(msg)
             subquery_expr = parsed_expr
         else:
-            parsed_expr = exp.maybe_parse(str(subquery))
+            parsed_expr = exp.maybe_parse(str(subquery), dialect=getattr(subquery, "dialect", None))
             if parsed_expr is None:
                 msg = f"Could not convert subquery to expression: {subquery}"
                 raise SQLBuilderError(msg)
@@ -349,6 +359,10 @@ class ReturningClauseMixin:
 class WhereClauseMixin:
     __slots__ = ()
 
+    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
+        builder = cast("SQLBuilderProtocol", self)
+        builder._merge_sql_object_parameters(sql_obj)
+
     def get_expression(self) -> exp.Expression | None: ...
     def set_expression(self, expression: exp.Expression) -> None: ...
 
@@ -365,16 +379,6 @@ class WhereClauseMixin:
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         placeholder = exp.Placeholder(this=param_name)
         return condition_factory(col_expr, placeholder)
-
-    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
-        if not has_expression_and_parameters(sql_obj):
-            return
-
-        builder = cast("SQLBuilderProtocol", self)
-        sql_parameters = getattr(sql_obj, "parameters", {})
-        for param_name, param_value in sql_parameters.items():
-            unique_name = builder._generate_unique_parameter_name(param_name)
-            builder.add_parameter(param_value, name=unique_name)
 
     def _get_existing_where_clause(self) -> exp.Where | None:
         builder = cast("SQLBuilderProtocol", self)
@@ -1209,10 +1213,14 @@ class CommonTableExpressionMixin:
         elif isinstance(query, exp.Expression):
             cte_select = query
         else:
-            built_query = query.to_statement()
-            cte_sql = built_query.sql
-            cte_select = exp.maybe_parse(cte_sql, dialect=self.dialect)
+            # Query is a builder - get its expression directly instead of converting to SQL
+            cte_select = query.get_expression()
+            if cte_select is None:
+                msg = f"Could not get expression from builder: {query}"
+                raise SQLBuilderError(msg)
 
+            # Get parameters from the builder's statement
+            built_query = query.to_statement()
             parameters = built_query.parameters
             if isinstance(parameters, dict):
                 param_mapping: dict[str, str] = {}
@@ -1220,8 +1228,7 @@ class CommonTableExpressionMixin:
                     unique_name = self._generate_unique_parameter_name(f"{name}_{param_name}")
                     param_mapping[param_name] = unique_name
                     self.add_parameter(param_value, name=unique_name)
-                if cte_select is not None:
-                    cte_select = self._update_placeholders_in_expression(cte_select, param_mapping)
+                cte_select = self._update_placeholders_in_expression(cte_select, param_mapping)
             elif isinstance(parameters, (list, tuple)):
                 for param_value in parameters:
                     self.add_parameter(param_value)
@@ -1232,25 +1239,12 @@ class CommonTableExpressionMixin:
             msg = f"Could not parse CTE query: {query}"
             raise SQLBuilderError(msg)
 
-        if columns:
-            cte_alias_expr = exp.alias_(cte_select, name, table=[exp.to_identifier(col) for col in columns])
-        else:
-            cte_alias_expr = exp.alias_(cte_select, name)
-
-        existing_with = expression.args.get("with")
-        if existing_with:
-            existing_with.expressions.append(cte_alias_expr)
-            if recursive:
-                existing_with.set("recursive", recursive)
-        else:
-            if isinstance(expression, (exp.Select, exp.Insert, exp.Update)):
-                updated = expression.with_(cte_alias_expr, as_=name, copy=False)
-                builder.set_expression(updated)
-                if recursive:
-                    with_clause = updated.find(exp.With)
-                    if with_clause:
-                        with_clause.set("recursive", recursive)
-            builder._with_ctes[name] = exp.CTE(this=cte_select, alias=exp.to_table(name))
+        # Always use sqlglot's with_() method - it handles everything correctly
+        # Do NOT store in _with_ctes as that causes duplication in _build_final_expression
+        if isinstance(expression, (exp.Select, exp.Insert, exp.Update)):
+            # Pass alias name and query separately - sqlglot handles the CTE wrapping
+            updated = expression.with_(name, as_=cte_select.copy(), recursive=recursive, copy=True)
+            builder.set_expression(updated)
 
         return cast("Self", builder)
 
@@ -1503,7 +1497,7 @@ class Select(
         assert self._expression is not None
         select_expr = cast("exp.Select", self._expression)
 
-        lock_args = {"update": True}
+        lock_args: dict[str, Any] = {"update": True}
 
         if skip_locked:
             lock_args["wait"] = False
@@ -1512,7 +1506,10 @@ class Select(
 
         if of:
             tables = [of] if isinstance(of, str) else of
-            lock_args["expressions"] = [exp.table_(t) for t in tables]  # type: ignore[assignment]
+            lock_args["expressions"] = [exp.to_identifier(str(t), quoted=is_explicitly_quoted(t)) for t in tables]
+            self._lock_targets_quoted = any(is_explicitly_quoted(t) for t in tables)
+        else:
+            self._lock_targets_quoted = False
 
         lock = exp.Lock(**lock_args)
 
@@ -1541,7 +1538,7 @@ class Select(
         assert self._expression is not None
         select_expr = cast("exp.Select", self._expression)
 
-        lock_args = {"update": False}
+        lock_args: dict[str, Any] = {"update": False}
 
         if skip_locked:
             lock_args["wait"] = False
@@ -1550,7 +1547,10 @@ class Select(
 
         if of:
             tables = [of] if isinstance(of, str) else of
-            lock_args["expressions"] = [exp.table_(t) for t in tables]  # type: ignore[assignment]
+            lock_args["expressions"] = [exp.to_identifier(str(t), quoted=is_explicitly_quoted(t)) for t in tables]
+            self._lock_targets_quoted = any(is_explicitly_quoted(t) for t in tables)
+        else:
+            self._lock_targets_quoted = False
 
         lock = exp.Lock(**lock_args)
 
