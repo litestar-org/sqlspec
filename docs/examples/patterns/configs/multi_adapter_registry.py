@@ -1,5 +1,7 @@
 """Show how to register multiple adapters on a single SQLSpec instance."""
 
+import os
+
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
@@ -11,15 +13,12 @@ __all__ = ("build_registry", "main")
 
 def build_registry() -> "SQLSpec":
     """Create a registry with both sync and async adapters."""
+    dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
     registry = SQLSpec()
     registry.add_config(SqliteConfig(bind_key="sync_sqlite", pool_config={"database": ":memory:"}))
     registry.add_config(AiosqliteConfig(bind_key="async_sqlite", pool_config={"database": ":memory:"}))
     registry.add_config(DuckDBConfig(bind_key="duckdb_docs", pool_config={"database": ":memory:docs_duck"}))
-    registry.add_config(
-        AsyncpgConfig(
-            bind_key="asyncpg_docs", pool_config=AsyncpgPoolConfig(dsn="postgresql://user:pass@localhost:5432/db")
-        )
-    )
+    registry.add_config(AsyncpgConfig(bind_key="asyncpg_docs", pool_config=AsyncpgPoolConfig(dsn=dsn)))
     return registry
 
 

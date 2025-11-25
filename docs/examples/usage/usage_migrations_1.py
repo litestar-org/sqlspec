@@ -1,52 +1,50 @@
+"""Async migration commands via config methods."""
+
+import tempfile
+from pathlib import Path
+
+import pytest
+from pytest_databases.docker.postgres import PostgresService
+
+pytestmark = pytest.mark.xdist_group("postgres")
+
 __all__ = ("test_async_methods",)
 
 
-from pytest_databases.docker.postgres import PostgresService
-
-
 async def test_async_methods(postgres_service: PostgresService) -> None:
-    # start-example
-    from sqlspec.adapters.asyncpg import AsyncpgConfig
+    with tempfile.TemporaryDirectory() as temp_dir:
+        migration_dir = Path(temp_dir) / "migrations"
+        migration_dir.mkdir()
 
-    dsn = (
-        f"postgresql://{postgres_service.user}:{postgres_service.password}"
-        f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    )
-    config = AsyncpgConfig(
-        pool_config={"dsn": dsn}, migration_config={"enabled": True, "script_location": "migrations"}
-    )
+        # start-example
+        from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-    # Apply migrations
-    await config.migrate_up("head")
-    # Or use the alias
-    await config.upgrade("head")
+        dsn = (
+            f"postgresql://{postgres_service.user}:{postgres_service.password}"
+            f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        )
+        config = AsyncpgConfig(
+            pool_config={"dsn": dsn}, migration_config={"enabled": True, "script_location": str(migration_dir)}
+        )
 
-    # Rollback one revision
-    await config.migrate_down("-1")
-    # Or use the alias
-    await config.downgrade("-1")
+        # Initialize migrations directory (creates __init__.py if package=True)
+        await config.init_migrations()
 
-    # Check current version
-    await config.get_current_migration(verbose=True)
-    # Create new migration
-    await config.create_migration("add users table", file_type="sql")
+        # Create new migration file
+        await config.create_migration("add users table", file_type="sql")
 
-    # Initialize migrations directory
-    await config.init_migrations()
+        # Apply migrations to head
+        await config.migrate_up("head")
 
-    # Stamp database to specific revision
-    await config.stamp_migration("0003")
+        # Rollback one revision
+        await config.migrate_down("-1")
 
-    # Convert timestamp to sequential migrations
-    await config.fix_migrations(dry_run=False, update_database=True, yes=True)
-    # end-example
-    # These are just smoke tests for method presence, not actual DB calls
-    assert hasattr(config, "migrate_up")
-    assert hasattr(config, "upgrade")
-    assert hasattr(config, "migrate_down")
-    assert hasattr(config, "downgrade")
-    assert hasattr(config, "get_current_migration")
-    assert hasattr(config, "create_migration")
-    assert hasattr(config, "init_migrations")
-    assert hasattr(config, "stamp_migration")
-    assert hasattr(config, "fix_migrations")
+        # Check current version
+        await config.get_current_migration(verbose=True)
+
+        # Stamp database to specific revision
+        await config.stamp_migration("0001")
+
+        # Convert timestamp to sequential migrations
+        await config.fix_migrations(dry_run=True, update_database=False, yes=True)
+        # end-example

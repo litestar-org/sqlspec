@@ -1,3 +1,5 @@
+import os
+
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 __all__ = ("test_extension_config",)
@@ -5,8 +7,9 @@ __all__ = ("test_extension_config",)
 
 def test_extension_config() -> None:
     # start-example
+    dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
     config = AsyncpgConfig(
-        pool_config={"dsn": "postgresql://..."},
+        pool_config={"dsn": dsn},
         migration_config={
             "enabled": True,
             "script_location": "migrations",
