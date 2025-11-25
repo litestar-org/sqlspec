@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+from minio import Minio
+
+if TYPE_CHECKING:
+    from pytest_databases.docker.minio import MinioService
 
 pytest_plugins = [
     "pytest_databases.docker.postgres",
@@ -15,6 +21,24 @@ pytest_plugins = [
 
 pytestmark = pytest.mark.anyio
 here = Path(__file__).parent
+
+
+@pytest.fixture(scope="session")
+def minio_client(minio_service: MinioService, minio_default_bucket_name: str) -> Generator[Minio, None, None]:
+    """Override pytest-databases minio_client to use new minio API with keyword arguments."""
+    client = Minio(
+        endpoint=minio_service.endpoint,
+        access_key=minio_service.access_key,
+        secret_key=minio_service.secret_key,
+        secure=minio_service.secure,
+    )
+    try:
+        if not client.bucket_exists(bucket_name=minio_default_bucket_name):
+            client.make_bucket(bucket_name=minio_default_bucket_name)
+    except Exception as e:
+        msg = f"Failed to create bucket {minio_default_bucket_name}"
+        raise RuntimeError(msg) from e
+    yield client
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
