@@ -163,17 +163,7 @@ def down():
                 assert len(result.data) == 0
         finally:
             if config.pool_instance:
-                import asyncio
-
-                try:
-                    asyncio.get_running_loop()
-                    import concurrent.futures
-
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(asyncio.run, config.close_pool())
-                        future.result()
-                except RuntimeError:
-                    asyncio.run(config.close_pool())
+                await config.close_pool()
 
 
 def test_psycopg_sync_multiple_migrations_workflow(postgres_service: PostgresService) -> None:
@@ -380,17 +370,7 @@ def down():
                 assert len(users_result.data) == 0
         finally:
             if config.pool_instance:
-                import asyncio
-
-                try:
-                    asyncio.get_running_loop()
-                    import concurrent.futures
-
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(asyncio.run, config.close_pool())
-                        future.result()
-                except RuntimeError:
-                    asyncio.run(config.close_pool())
+                await config.close_pool()
 
 
 def test_psycopg_sync_migration_current_command(postgres_service: PostgresService) -> None:
@@ -509,17 +489,7 @@ def down():
             assert current_version is None or current_version == "base"
         finally:
             if config.pool_instance:
-                import asyncio
-
-                try:
-                    asyncio.get_running_loop()
-                    import concurrent.futures
-
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(asyncio.run, config.close_pool())
-                        future.result()
-                except RuntimeError:
-                    asyncio.run(config.close_pool())
+                await config.close_pool()
 
 
 def test_psycopg_sync_migration_error_handling(postgres_service: PostgresService) -> None:
@@ -618,17 +588,7 @@ def down():
                     assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
         finally:
             if config.pool_instance:
-                import asyncio
-
-                try:
-                    asyncio.get_running_loop()
-                    import concurrent.futures
-
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(asyncio.run, config.close_pool())
-                        future.result()
-                except RuntimeError:
-                    asyncio.run(config.close_pool())
+                await config.close_pool()
 
 
 def test_psycopg_sync_migration_with_transactions(postgres_service: PostgresService) -> None:
@@ -793,14 +753,4 @@ def down():
                 assert len(result.data) == 0
         finally:
             if config.pool_instance:
-                import asyncio
-
-                try:
-                    asyncio.get_running_loop()
-                    import concurrent.futures
-
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(asyncio.run, config.close_pool())
-                        future.result()
-                except RuntimeError:
-                    asyncio.run(config.close_pool())
+                await config.close_pool()
