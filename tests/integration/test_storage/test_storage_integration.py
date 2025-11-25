@@ -175,7 +175,9 @@ def test_fsspec_s3_basic_operations(
 ) -> None:
     """Test FSSpec S3 backend basic operations."""
     # Ensure bucket exists (following Advanced Alchemy pattern)
-    assert minio_client.bucket_exists(minio_default_bucket_name), f"Bucket {minio_default_bucket_name} does not exist"
+    assert minio_client.bucket_exists(bucket_name=minio_default_bucket_name), (
+        f"Bucket {minio_default_bucket_name} does not exist"
+    )
 
     # Test write and read text
     test_path = "integration_test/test.txt"
@@ -269,7 +271,9 @@ def test_obstore_s3_basic_operations(
 ) -> None:
     """Test ObStore S3 backend basic operations."""
     # Ensure bucket exists (following Advanced Alchemy pattern)
-    assert minio_client.bucket_exists(minio_default_bucket_name), f"Bucket {minio_default_bucket_name} does not exist"
+    assert minio_client.bucket_exists(bucket_name=minio_default_bucket_name), (
+        f"Bucket {minio_default_bucket_name} does not exist"
+    )
 
     test_path = "integration_test/obstore_test.txt"
 

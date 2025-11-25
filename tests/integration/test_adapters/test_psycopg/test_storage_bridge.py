@@ -87,7 +87,7 @@ def test_psycopg_sync_storage_bridge_with_minio(
             assert result.data == [{"id": 1, "label": "alpha"}, {"id": 2, "label": "beta"}, {"id": 3, "label": "gamma"}]
 
         object_name = f"{prefix}/psycopg_sync/export.parquet"
-        stat = minio_client.stat_object(minio_default_bucket_name, object_name)
+        stat = minio_client.stat_object(bucket_name=minio_default_bucket_name, object_name=object_name)
         object_size = stat.size if stat.size is not None else 0
         assert object_size > 0
     finally:
@@ -144,7 +144,7 @@ async def test_psycopg_async_storage_bridge_with_minio(
         assert rows == [{"id": 1, "label": "north"}, {"id": 2, "label": "south"}, {"id": 3, "label": "east"}]
 
         object_name = f"{prefix}/psycopg_async/export.parquet"
-        stat = minio_client.stat_object(minio_default_bucket_name, object_name)
+        stat = minio_client.stat_object(bucket_name=minio_default_bucket_name, object_name=object_name)
         object_size = stat.size if stat.size is not None else 0
         assert object_size > 0
     finally:

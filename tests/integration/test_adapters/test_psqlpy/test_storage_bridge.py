@@ -56,7 +56,7 @@ async def test_psqlpy_storage_bridge_with_minio(
         assert rows == [{"id": 1, "label": "delta"}, {"id": 2, "label": "omega"}, {"id": 3, "label": "zeta"}]
 
         object_name = f"{prefix}/psqlpy/export.parquet"
-        stat = minio_client.stat_object(minio_default_bucket_name, object_name)
+        stat = minio_client.stat_object(bucket_name=minio_default_bucket_name, object_name=object_name)
         object_size = stat.size if stat.size is not None else 0
         assert object_size > 0
     finally:

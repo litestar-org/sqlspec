@@ -60,7 +60,7 @@ def test_duckdb_storage_bridge_with_minio(
         assert rows == [(1, "alpha"), (2, "beta"), (3, "gamma")]
 
         object_name = f"{prefix}/duckdb/export.parquet"
-        stat = minio_client.stat_object(minio_default_bucket_name, object_name)
+        stat = minio_client.stat_object(bucket_name=minio_default_bucket_name, object_name=object_name)
         object_size = stat.size if stat.size is not None else 0
         assert object_size > 0
     finally:
