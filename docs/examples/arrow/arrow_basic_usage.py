@@ -75,11 +75,14 @@ async def example_adbc_native() -> None:
 # Example 2: PostgreSQL with Conversion Path
 async def example_postgres_conversion() -> None:
     """Demonstrate PostgreSQL adapter with dict → Arrow conversion."""
+    import os
+
     from sqlspec import SQLSpec
     from sqlspec.adapters.asyncpg import AsyncpgConfig
 
+    dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
     db_manager = SQLSpec()
-    asyncpg_db = db_manager.add_config(AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/test"}))
+    asyncpg_db = db_manager.add_config(AsyncpgConfig(pool_config={"dsn": dsn}))
 
     async with db_manager.provide_session(asyncpg_db) as session:
         # Create test table with PostgreSQL-specific types
