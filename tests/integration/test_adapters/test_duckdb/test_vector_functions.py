@@ -21,7 +21,10 @@ def duckdb_vector_session(duckdb_basic_session: DuckDBDriver) -> Generator[DuckD
         # Install and load VSS extension for vector distance functions
         duckdb_basic_session.execute_script("INSTALL vss")
         duckdb_basic_session.execute_script("LOAD vss")
+    except Exception as e:
+        pytest.skip(f"DuckDB VSS extension not available: {e}")
 
+    try:
         duckdb_basic_session.execute_script(
             """
             CREATE TABLE IF NOT EXISTS vector_docs (

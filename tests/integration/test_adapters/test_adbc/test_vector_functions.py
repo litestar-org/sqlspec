@@ -26,7 +26,10 @@ def adbc_postgres_vector_session(adbc_sync_driver: AdbcDriver) -> Generator[Adbc
     """Create ADBC PostgreSQL session with pgvector extension and test table."""
     try:
         adbc_sync_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
+    except Exception as e:
+        pytest.skip(f"pgvector extension not available on server: {e}")
 
+    try:
         adbc_sync_driver.execute_script(
             """
             CREATE TABLE IF NOT EXISTS vector_docs_adbc_pg (
@@ -123,7 +126,10 @@ def adbc_duckdb_vector_session(adbc_duckdb_driver: AdbcDriver) -> Generator[Adbc
         # Install and load VSS extension for vector distance functions
         adbc_duckdb_driver.execute_script("INSTALL vss")
         adbc_duckdb_driver.execute_script("LOAD vss")
+    except Exception as e:
+        pytest.skip(f"DuckDB VSS extension not available: {e}")
 
+    try:
         adbc_duckdb_driver.execute_script(
             """
             CREATE TABLE IF NOT EXISTS vector_docs_adbc_duckdb (
