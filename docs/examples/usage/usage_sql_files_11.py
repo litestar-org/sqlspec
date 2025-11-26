@@ -4,6 +4,8 @@ from docs.examples.usage.usage_sql_files_1 import create_loader
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
+__all__ = ("test_type_safe_query_execution", )
+
 
 def test_type_safe_query_execution(tmp_path: Path) -> None:
     loader, _queries = create_loader(tmp_path)

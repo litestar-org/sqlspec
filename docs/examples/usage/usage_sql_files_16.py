@@ -2,6 +2,8 @@ from pathlib import Path
 
 from docs.examples.usage.usage_sql_files_1 import create_loader
 
+__all__ = ("test_file_load_errors", )
+
 
 def test_file_load_errors(tmp_path: Path) -> None:
     loader, _queries = create_loader(tmp_path)

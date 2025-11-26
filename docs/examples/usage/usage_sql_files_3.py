@@ -2,6 +2,8 @@ from pathlib import Path
 
 from docs.examples.usage.usage_sql_files_1 import create_loader
 
+__all__ = ("test_add_queries_programmatically", )
+
 
 def test_add_queries_programmatically(tmp_path: Path) -> None:
     loader, _ = create_loader(tmp_path)

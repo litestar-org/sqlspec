@@ -6,6 +6,8 @@ from sqlspec import SQLFileLoader
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 
+__all__ = ("test_multi_database_setup_example", )
+
 
 async def test_multi_database_setup_example(tmp_path: Path, postgres_service: PostgresService) -> None:
     user_sql_path_pg = tmp_path / "sql" / "postgres"

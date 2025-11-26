@@ -1,5 +1,7 @@
 from pathlib import Path
 
+__all__ = ("test_user_management_example", )
+
 
 def test_user_management_example(tmp_path: Path) -> None:
     user_sql_path = tmp_path / "sql"

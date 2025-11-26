@@ -1,5 +1,7 @@
 from pathlib import Path
 
+__all__ = ("test_analytics_queries_example", )
+
 
 def test_analytics_queries_example(tmp_path: Path) -> None:
     from docs.examples.usage.usage_sql_files_1 import create_loader
@@ -54,9 +56,7 @@ def test_analytics_queries_example(tmp_path: Path) -> None:
             (2, 2, 102, 3, '2025-01-15'),
             (3, 3, 101, 1, '2025-01-20');
         """)
-        session.execute(
-            sales_query, start_date=datetime.date(2025, 1, 1), end_date=datetime.date(2025, 2, 1)
-        ).data
+        session.execute(sales_query, start_date=datetime.date(2025, 1, 1), end_date=datetime.date(2025, 2, 1)).data
 
         # Top products
         products_query = loader.get_sql("top_products")
