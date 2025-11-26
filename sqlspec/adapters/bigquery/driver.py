@@ -17,6 +17,7 @@ import sqlglot
 from google.api_core.retry import Retry
 from google.cloud.bigquery import ArrayQueryParameter, LoadJobConfig, QueryJob, QueryJobConfig, ScalarQueryParameter
 from google.cloud.exceptions import GoogleCloudError
+from sqlglot import exp
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.adapters.bigquery.type_converter import BigQueryTypeConverter
@@ -629,37 +630,109 @@ class BigQueryDriver(SyncDriverAdapterBase):
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """BigQuery execute_many implementation using script-based execution.
+    def _is_simple_insert_operation(self, sql: str) -> bool:
+        """Check if SQL is a simple INSERT VALUES statement.
 
-        BigQuery doesn't support traditional execute_many with parameter batching.
-        Instead, we generate a script with multiple INSERT statements using
-        AST transformation to embed literals safely.
+        Args:
+            sql: SQL string to analyze
+
+        Returns:
+            True if this is a simple INSERT with VALUES, False otherwise
+        """
+        try:
+            parsed = sqlglot.parse_one(sql, dialect="bigquery")
+            if not isinstance(parsed, exp.Insert):
+                return False
+            return parsed.expression is not None or parsed.find(exp.Values) is not None
+        except Exception:
+            return False
+
+    def _extract_table_from_insert(self, sql: str) -> str | None:
+        """Extract table name from INSERT statement using sqlglot.
+
+        Args:
+            sql: INSERT SQL statement
+
+        Returns:
+            Fully qualified table name or None if extraction fails
+        """
+        try:
+            parsed = sqlglot.parse_one(sql, dialect="bigquery")
+            if isinstance(parsed, exp.Insert):
+                table = parsed.find(exp.Table)
+                if table:
+                    parts = []
+                    if table.catalog:
+                        parts.append(table.catalog)
+                    if table.db:
+                        parts.append(table.db)
+                    parts.append(table.name)
+                    return ".".join(parts)
+        except Exception:
+            logger.debug("Failed to extract table name from INSERT statement")
+        return None
+
+    def _execute_bulk_insert(self, cursor: Any, sql: str, parameters: "list[dict[str, Any]]") -> ExecutionResult | None:
+        """Execute INSERT using Parquet bulk load.
+
+        Leverages existing storage bridge infrastructure for optimized bulk inserts.
 
         Args:
             cursor: BigQuery cursor object
-            statement: SQL statement to execute with multiple parameter sets
+            sql: INSERT SQL statement
+            parameters: List of parameter dictionaries
+
+        Returns:
+            ExecutionResult if successful, None to fall back to literal inlining
+        """
+        table_name = self._extract_table_from_insert(sql)
+        if not table_name:
+            return None
+
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            arrow_table = pa.Table.from_pylist(parameters)
+
+            buffer = io.BytesIO()
+            pq.write_table(arrow_table, buffer)
+            buffer.seek(0)
+
+            job_config = self._build_load_job_config("parquet", overwrite=False)
+            job = self.connection.load_table_from_file(buffer, table_name, job_config=job_config)
+            job.result()
+
+            return self.create_execution_result(cursor, rowcount_override=len(parameters), is_many_result=True)
+        except ImportError:
+            logger.debug("pyarrow not available, falling back to literal inlining")
+            return None
+        except Exception as e:
+            logger.debug("Bulk insert failed, falling back to literal inlining: %s", e)
+            return None
+
+    def _execute_many_with_inlining(self, cursor: Any, sql: str, parameters: "list[dict[str, Any]]") -> ExecutionResult:
+        """Execute many using literal inlining.
+
+        Fallback path for UPDATE/DELETE or when bulk insert unavailable.
+
+        Args:
+            cursor: BigQuery cursor object
+            sql: SQL statement
+            parameters: List of parameter dictionaries
 
         Returns:
             ExecutionResult with batch execution details
         """
-
-        parameters_list = statement.parameters
-
-        if not parameters_list or not isinstance(parameters_list, (list, tuple)):
-            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
-
-        base_sql = statement.sql
-
         try:
-            parsed_expression = sqlglot.parse_one(base_sql, dialect="bigquery")
+            parsed_expression = sqlglot.parse_one(sql, dialect="bigquery")
         except sqlglot.ParseError:
             parsed_expression = None
 
         script_statements = []
-        for param_set in parameters_list:
+        for param_set in parameters:
             if parsed_expression is None:
-                script_statements.append(base_sql)
+                script_statements.append(sql)
                 continue
 
             expression_copy = parsed_expression.copy()
@@ -671,9 +744,34 @@ class BigQueryDriver(SyncDriverAdapterBase):
         cursor.job.result(job_retry=self._job_retry)
 
         affected_rows = (
-            cursor.job.num_dml_affected_rows if cursor.job.num_dml_affected_rows is not None else len(parameters_list)
+            cursor.job.num_dml_affected_rows if cursor.job.num_dml_affected_rows is not None else len(parameters)
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+        """BigQuery execute_many with Parquet bulk load optimization.
+
+        Uses Parquet bulk load for INSERT operations (fast path) and falls back
+        to literal inlining for UPDATE/DELETE operations.
+
+        Args:
+            cursor: BigQuery cursor object
+            statement: SQL statement to execute with multiple parameter sets
+
+        Returns:
+            ExecutionResult with batch execution details
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        if not prepared_parameters or not isinstance(prepared_parameters, list):
+            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
+
+        if self._is_simple_insert_operation(sql):
+            result = self._execute_bulk_insert(cursor, sql, prepared_parameters)
+            if result is not None:
+                return result
+
+        return self._execute_many_with_inlining(cursor, sql, prepared_parameters)
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.
@@ -939,7 +1037,7 @@ def _build_bigquery_profile() -> DriverParameterProfile:
         preserve_parameter_format=True,
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=True,
+        preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
         custom_type_coercions={
             int: _identity,
