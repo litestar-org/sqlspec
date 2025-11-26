@@ -611,6 +611,29 @@ result = await session.select_to_arrow("SELECT * FROM users")
 df = result.to_pandas()  # Zero-copy if native path
 ```
 
+### Converting SQLResult to DataFrames
+
+Both `SQLResult` and `ArrowResult` support convenient conversion methods for data science workflows:
+
+```python
+# Standard execute returns SQLResult
+result = await session.execute("SELECT * FROM users")
+
+# Convert to pandas DataFrame
+df = result.to_pandas()
+
+# Convert to Polars DataFrame
+pl_df = result.to_polars()
+
+# Convert to Arrow Table (for SQLResult only)
+arrow_table = result.to_arrow()
+```
+
+**Key differences**:
+- `SQLResult.to_arrow()` performs dict→Arrow conversion
+- `ArrowResult` data is already in Arrow format
+- Both provide consistent API for pandas and Polars conversion
+
 ### From DataFrame-Centric to Arrow-First
 
 **Before**:
