@@ -574,6 +574,77 @@ class SQLResult(StatementResult):
 
         return next(iter(row.values()))
 
+    def to_arrow(self) -> "ArrowTable":
+        """Convert result data to Apache Arrow Table.
+
+        Returns:
+            Arrow Table containing the result data.
+
+        Raises:
+            ValueError: If no data available.
+
+        Examples:
+            >>> result = session.select("SELECT * FROM users")
+            >>> table = result.to_arrow()
+            >>> print(table.num_rows)
+            3
+        """
+        if self.data is None:
+            msg = "No data available"
+            raise ValueError(msg)
+
+        from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
+
+        return convert_dict_to_arrow(self.data, return_format="table")
+
+    def to_pandas(self) -> "PandasDataFrame":
+        """Convert result data to pandas DataFrame.
+
+        Returns:
+            pandas DataFrame containing the result data.
+
+        Raises:
+            ValueError: If no data available.
+
+        Examples:
+            >>> result = session.select("SELECT * FROM users")
+            >>> df = result.to_pandas()
+            >>> print(df.head())
+        """
+        if self.data is None:
+            msg = "No data available"
+            raise ValueError(msg)
+
+        ensure_pandas()
+
+        import pandas as pd
+
+        return pd.DataFrame(self.data)
+
+    def to_polars(self) -> "PolarsDataFrame":
+        """Convert result data to Polars DataFrame.
+
+        Returns:
+            Polars DataFrame containing the result data.
+
+        Raises:
+            ValueError: If no data available.
+
+        Examples:
+            >>> result = session.select("SELECT * FROM users")
+            >>> df = result.to_polars()
+            >>> print(df.head())
+        """
+        if self.data is None:
+            msg = "No data available"
+            raise ValueError(msg)
+
+        ensure_polars()
+
+        import polars as pl
+
+        return pl.DataFrame(self.data)
+
     def write_to_storage_sync(
         self,
         destination: "StorageDestination",
