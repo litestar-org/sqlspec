@@ -464,3 +464,68 @@ def test_bigquery_for_update_skip_locked_generates_sql_but_unsupported(
     assert "SELECT" in stmt.sql  # But the rest of the query works
 
     # BigQuery doesn't support row-level locking or transaction isolation at the row level
+
+
+def test_bigquery_execute_many_qmark_with_dict_params(bigquery_session: BigQueryDriver, driver_test_table: str) -> None:
+    """Test execute_many with QMARK placeholders and dict parameters.
+
+    This is a regression test for parameter style mismatch when using
+    QMARK (?) placeholders with dict parameters. The parameter converter
+    should properly align the dict keys with the converted @param_N style.
+    """
+    sql = f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)"
+    params = [{"id": 1, "name": "qmark_dict_a", "value": 100}, {"id": 2, "name": "qmark_dict_b", "value": 200}]
+
+    result = bigquery_session.execute_many(sql, params)
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected >= 0
+
+    verify = bigquery_session.execute(
+        f"SELECT name, value FROM {driver_test_table} WHERE name LIKE 'qmark_dict%' ORDER BY name"
+    )
+    assert verify.data is not None
+    assert len(verify.data) == 2
+    assert verify.data[0]["name"] == "qmark_dict_a"
+    assert verify.data[0]["value"] == 100
+    assert verify.data[1]["name"] == "qmark_dict_b"
+    assert verify.data[1]["value"] == 200
+
+
+def test_bigquery_execute_many_named_params(bigquery_session: BigQueryDriver, driver_test_table: str) -> None:
+    """Test execute_many with named parameters (native @name style)."""
+    sql = f"INSERT INTO {driver_test_table} (id, name, value) VALUES (@id, @name, @value)"
+    params = [{"id": 1, "name": "named_a", "value": 10}, {"id": 2, "name": "named_b", "value": 20}]
+
+    result = bigquery_session.execute_many(sql, params)
+    assert isinstance(result, SQLResult)
+
+    verify = bigquery_session.execute(
+        f"SELECT name, value FROM {driver_test_table} WHERE name LIKE 'named_%' ORDER BY name"
+    )
+    assert verify.data is not None
+    assert len(verify.data) == 2
+    assert verify.data[0]["name"] == "named_a"
+    assert verify.data[1]["name"] == "named_b"
+
+
+def test_bigquery_execute_many_update_with_inlining(bigquery_session: BigQueryDriver, driver_test_table: str) -> None:
+    """Test that UPDATE statements use literal inlining fallback."""
+    bigquery_session.execute_many(
+        f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)",
+        [(1, "update_test_a", 10), (2, "update_test_b", 20)],
+    )
+
+    sql = f"UPDATE {driver_test_table} SET value = @new_val WHERE name = @key"
+    params = [{"key": "update_test_a", "new_val": 100}, {"key": "update_test_b", "new_val": 200}]
+
+    result = bigquery_session.execute_many(sql, params)
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected >= 0
+
+    verify = bigquery_session.execute(
+        f"SELECT name, value FROM {driver_test_table} WHERE name LIKE 'update_test%' ORDER BY name"
+    )
+    assert verify.data is not None
+    assert len(verify.data) == 2
+    assert verify.data[0]["value"] == 100
+    assert verify.data[1]["value"] == 200
