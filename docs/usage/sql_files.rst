@@ -67,43 +67,20 @@ Create a SQL file with named queries using ``-- name:`` comments:
 Loading SQL Files
 ^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_1.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   from sqlspec.loader import SQLFileLoader
-
-   # Create loader
-   loader = SQLFileLoader()
-
-   # Load SQL files
-   loader.load_sql("sql/users.sql", "sql/products.sql", "sql/orders.sql")
-
-   # Or load from a directory
-   loader.load_sql("sql/")
-
-   # List available queries
-   queries = loader.list_queries()
-   print(queries)  # ['get_user_by_id', 'list_active_users', 'create_user', ...]
 
 Using Loaded Queries
 ^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_2.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   from sqlspec import SQLSpec
-   from sqlspec.adapters.sqlite import SqliteConfig
-
-   # Set up database
-   spec = SQLSpec()
-   config = SqliteConfig()
-   spec.add_config(config)
-
-   # Get SQL with parameters
-   user_query = loader.get_sql("get_user_by_id", user_id=123)
-
-   # Execute with session
-   with spec.provide_session(config) as session:
-       result = session.execute(user_query)
-       user = result.one()
 
 Query Naming Conventions
 ------------------------
@@ -194,63 +171,33 @@ Advanced Features
 Adding Queries Programmatically
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_3.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   # Add a query at runtime
-   loader.add_named_sql(
-       "health_check",
-       "SELECT 'OK' as status, CURRENT_TIMESTAMP as timestamp"
-   )
-
-   # Add with dialect
-   loader.add_named_sql(
-       "postgres_version",
-       "SELECT version()",
-       dialect="postgres"
-   )
-
-   # Use the added query
-   health_sql = loader.get_sql("health_check")
 
 Query Metadata
 ^^^^^^^^^^^^^^
 
 Get information about loaded queries:
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_4.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   # Get file info for a query
-   file_info = loader.get_file_for_query("get_user_by_id")
-   if file_info:
-       print(f"Query from: {file_info.path}")
-       print(f"Checksum: {file_info.checksum}")
-       print(f"Loaded at: {file_info.loaded_at}")
-
-   # Get all queries from a specific file
-   file_obj = loader.get_file("sql/users.sql")
-   if file_obj:
-       print(f"Contains {len(file_obj.queries)} queries")
-       for query in file_obj.queries:
-           print(f"  - {query.name}")
 
 Caching Behavior
 ^^^^^^^^^^^^^^^^
 
 The loader implements intelligent caching with 12x+ performance improvements:
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_5.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   # First load - reads from disk
-   loader.load_sql("sql/users.sql")
-
-   # Second load - uses cache (file already loaded)
-   loader.load_sql("sql/users.sql")
-
-   # Clear cache
-   loader.clear_cache()
-
-   # Force reload from disk
-   loader.load_sql("sql/users.sql")
 
 **Cache Features**
 
@@ -271,13 +218,11 @@ The loader gracefully handles directories containing both named query files and 
       queries.sql       # Named queries → loaded
       seed-data.sql     # Raw DML (no -- name:) → skipped
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_6.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   loader = SQLFileLoader()
-   loader.load_sql("migrations/")  # Only loads queries.sql
-
-   # Check what was loaded
-   queries = loader.list_queries()  # Only returns named queries
 
 **How it works:**
 
@@ -308,48 +253,31 @@ The loader supports multiple storage backends for loading SQL files.
 Local Files
 ^^^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_7.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   from pathlib import Path
-
-   # Load from Path object
-   loader.load_sql(Path("sql/users.sql"))
-
-   # Load from string path
-   loader.load_sql("sql/users.sql")
-
-   # Load directory
-   loader.load_sql("sql/")
 
 File URIs
 ^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_8.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   # Load from file:// URI
-   loader.load_sql("file:///absolute/path/to/queries.sql")
-
-   # Load from relative file URI
-   loader.load_sql("file://sql/users.sql")
 
 Cloud Storage (with fsspec)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 When ``fsspec`` is installed, load from cloud storage:
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_9.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   # S3
-   loader.load_sql("s3://my-bucket/sql/users.sql")
-
-   # Google Cloud Storage
-   loader.load_sql("gs://my-bucket/sql/users.sql")
-
-   # Azure Blob Storage
-   loader.load_sql("az://my-container/sql/users.sql")
-
-   # HTTP/HTTPS
-   loader.load_sql("https://example.com/queries/users.sql")
 
 Integration with SQLSpec
 -------------------------
@@ -359,43 +287,22 @@ Loader with SQLSpec Instance
 
 Create a SQLSpec instance with an integrated loader:
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_10.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   from sqlspec import SQLSpec
-   from sqlspec.loader import SQLFileLoader
-
-   # Create loader
-   loader = SQLFileLoader()
-   loader.load_sql("sql/")
-
-   # Create SQLSpec with loader
-   spec = SQLSpec(loader=loader)
-
-   # Access loader via SQLSpec
-   user_query = spec.loader.get_sql("get_user_by_id", user_id=1)
 
 Type-Safe Query Execution
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Combine loaded queries with schema mapping:
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_11.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   from pydantic import BaseModel
-   from datetime import datetime
-
-   class User(BaseModel):
-       id: int
-       username: str
-       email: str
-       created_at: datetime
-
-   # Load and execute with type safety
-   query = loader.get_sql("get_user_by_id", user_id=1)
-
-   with spec.provide_session(config) as session:
-       result = session.execute(query, schema_type=User)
-       user: User = result.one()  # Fully typed!
 
 Practical Examples
 ------------------
@@ -435,39 +342,11 @@ Example 1: User Management
    -- name: delete_user
    DELETE FROM users WHERE id = :user_id;
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_12.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   # Python code
-   from sqlspec import SQLSpec
-   from sqlspec.loader import SQLFileLoader
-   from sqlspec.adapters.sqlite import SqliteConfig
-
-   loader = SQLFileLoader()
-   loader.load_sql("sql/users.sql")
-
-   spec = SQLSpec()
-   config = SqliteConfig()
-   spec.add_config(config)
-
-   with spec.provide_session(config) as session:
-       # Create user
-       create_query = loader.get_sql(
-           "create_user",
-           username="alice",
-           email="alice@example.com",
-           password_hash="hashed_password"
-       )
-       result = session.execute(create_query)
-       user = result.one()
-       user_id = user['id']
-
-       # Get user
-       get_query = loader.get_sql("get_user", user_id=user_id)
-       user = session.execute(get_query).one()
-
-       # List users
-       list_query = loader.get_sql("list_users", status=True, limit=10, offset=0)
-       users = session.execute(list_query).data
 
 Example 2: Analytics Queries
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -529,44 +408,20 @@ Example 2: Analytics Queries
    WHERE co.total_spent > :min_spent
    ORDER BY co.total_spent DESC;
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_13.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   import datetime
-
-   # Load analytics queries
-   loader.load_sql("sql/analytics.sql")
-
-   # Run daily sales report
-   sales_query = loader.get_sql(
-       "daily_sales",
-       start_date=datetime.date(2025, 1, 1),
-       end_date=datetime.date(2025, 2, 1)
-   )
-   sales = session.execute(sales_query).data
-
-   # Top products
-   products_query = loader.get_sql("top_products", start_date=datetime.date(2025, 1, 1), limit=10)
-   top_products = session.execute(products_query).data
 
 Example 3: Multi-Database Setup
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_14.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   # Different SQL files for different databases
-   loader = SQLFileLoader()
-   loader.load_sql("sql/postgres/", "sql/sqlite/", "sql/shared/")
-
-   # Queries automatically select correct dialect
-   pg_query = loader.get_sql("upsert_user")  # Uses Postgres ON CONFLICT
-   sqlite_query = loader.get_sql("get_user")  # Uses shared query
-
-   # Execute on appropriate database
-   async with spec.provide_session(postgres_config) as pg_session:
-       await pg_session.execute(pg_query, **params)
-
-   with spec.provide_session(sqlite_config) as sqlite_session:
-       sqlite_session.execute(sqlite_query, user_id=1)
 
 Best Practices
 --------------
@@ -641,41 +496,29 @@ Troubleshooting
 Query Not Found
 ^^^^^^^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_15.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   try:
-       query = loader.get_sql("nonexistent_query")
-   except KeyError:
-       print("Query not found. Available queries:")
-       print(loader.list_queries())
 
 File Load Errors
 ^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_16.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
-
-   try:
-       loader.load_sql("sql/queries.sql")
-   except SQLFileNotFoundError as e:
-       print(f"File not found: {e}")
-   except SQLFileParseError as e:
-       print(f"Failed to parse SQL file: {e}")
 
 Debugging Loaded Queries
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: python
+.. literalinclude:: ../examples/usage/usage_sql_files_17.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
 
-   # Print query SQL
-   query = loader.get_sql("get_user", user_id=1)
-   print(f"SQL: {query}")
-   print(f"Parameters: {query.parameters}")
-
-   # Inspect file metadata
-   file_info = loader.get_file_for_query("get_user")
-   print(f"Loaded from: {file_info.path}")
 
 Next Steps
 ----------
