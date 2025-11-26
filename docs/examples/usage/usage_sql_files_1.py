@@ -2,7 +2,7 @@ from pathlib import Path
 
 from sqlspec import SQLFileLoader
 
-__all__ = ("create_loader", "test_loader_loads_queries" )
+__all__ = ("create_loader", "test_loader_loads_queries")
 
 
 def create_loader(tmp_path: Path) -> tuple[SQLFileLoader, list[str]]:

@@ -2,7 +2,7 @@ from pathlib import Path
 
 from docs.examples.usage.usage_sql_files_1 import create_loader
 
-__all__ = ("test_query_metadata", )
+__all__ = ("test_query_metadata",)
 
 
 def test_query_metadata(tmp_path: Path) -> None:

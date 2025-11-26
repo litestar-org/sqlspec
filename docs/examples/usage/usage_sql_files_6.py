@@ -1,6 +1,6 @@
 from sqlspec.loader import SQLFileLoader
 
-__all__ = ("test_loading_directories_with_mixed_files", )
+__all__ = ("test_loading_directories_with_mixed_files",)
 
 
 def test_loading_directories_with_mixed_files() -> None:

@@ -2,7 +2,7 @@ from pathlib import Path
 
 from docs.examples.usage.usage_sql_files_1 import create_loader
 
-__all__ = ("test_debugging_loaded_queries", )
+__all__ = ("test_debugging_loaded_queries",)
 
 
 def test_debugging_loaded_queries(tmp_path: Path) -> None:

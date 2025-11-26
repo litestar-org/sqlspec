@@ -2,7 +2,7 @@ from pathlib import Path
 
 from docs.examples.usage.usage_sql_files_1 import create_loader
 
-__all__ = ("test_local_files_loading", )
+__all__ = ("test_local_files_loading",)
 
 
 def test_local_files_loading(tmp_path: Path) -> None:

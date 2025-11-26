@@ -1,6 +1,6 @@
 from pathlib import Path
 
-__all__ = ("test_integration_with_sqlspec", )
+__all__ = ("test_integration_with_sqlspec",)
 
 
 def test_integration_with_sqlspec(tmp_path: Path) -> None:
