@@ -22,12 +22,12 @@ pytestmark_postgres = [
 
 
 @pytest.fixture
-def adbc_postgres_vector_session(adbc_postgres_driver: AdbcDriver) -> Generator[AdbcDriver, None, None]:
+def adbc_postgres_vector_session(adbc_sync_driver: AdbcDriver) -> Generator[AdbcDriver, None, None]:
     """Create ADBC PostgreSQL session with pgvector extension and test table."""
     try:
-        adbc_postgres_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
+        adbc_sync_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
 
-        adbc_postgres_driver.execute_script(
+        adbc_sync_driver.execute_script(
             """
             CREATE TABLE IF NOT EXISTS vector_docs_adbc_pg (
                 id SERIAL PRIMARY KEY,
@@ -37,21 +37,21 @@ def adbc_postgres_vector_session(adbc_postgres_driver: AdbcDriver) -> Generator[
             """
         )
 
-        adbc_postgres_driver.execute_script("TRUNCATE TABLE vector_docs_adbc_pg")
+        adbc_sync_driver.execute_script("TRUNCATE TABLE vector_docs_adbc_pg")
 
-        adbc_postgres_driver.execute(
+        adbc_sync_driver.execute(
             "INSERT INTO vector_docs_adbc_pg (content, embedding) VALUES (?, ?)", ("doc1", "[0.1, 0.2, 0.3]")
         )
-        adbc_postgres_driver.execute(
+        adbc_sync_driver.execute(
             "INSERT INTO vector_docs_adbc_pg (content, embedding) VALUES (?, ?)", ("doc2", "[0.4, 0.5, 0.6]")
         )
-        adbc_postgres_driver.execute(
+        adbc_sync_driver.execute(
             "INSERT INTO vector_docs_adbc_pg (content, embedding) VALUES (?, ?)", ("doc3", "[0.7, 0.8, 0.9]")
         )
 
-        yield adbc_postgres_driver
+        yield adbc_sync_driver
     finally:
-        adbc_postgres_driver.execute_script("DROP TABLE IF EXISTS vector_docs_adbc_pg")
+        adbc_sync_driver.execute_script("DROP TABLE IF EXISTS vector_docs_adbc_pg")
 
 
 @pytest.mark.postgres

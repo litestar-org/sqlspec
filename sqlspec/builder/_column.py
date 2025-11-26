@@ -367,7 +367,7 @@ class Column:
                 ... )
         """
         cosine_dist = self.vector_distance(other_vector, metric="cosine")
-        similarity_expr = exp.Sub(this=exp.Literal.number(1), expression=exp.Paren(this=cosine_dist._expression))
+        similarity_expr = exp.Sub(this=exp.Literal.number(1), expression=exp.Paren(this=cosine_dist._expression))  # pyright: ignore[reportPrivateUsage]
         return FunctionColumn(similarity_expr)
 
     def alias(self, alias_name: str) -> exp.Expression:
@@ -499,6 +499,10 @@ class FunctionColumn:
     def as_(self, alias: str) -> "exp.Alias":
         """Create an aliased expression using sqlglot helper."""
         return cast("exp.Alias", exp.alias_(self._expression, alias))
+
+    def cast(self, data_type: str) -> "FunctionColumn":
+        """SQL CAST() function."""
+        return FunctionColumn(exp.Cast(this=self._expression, to=exp.DataType.build(data_type)))
 
     def asc(self) -> "exp.Ordered":
         """Create an ASC ordering expression."""

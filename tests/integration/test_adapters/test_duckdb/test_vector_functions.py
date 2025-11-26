@@ -35,16 +35,13 @@ def duckdb_vector_session(duckdb_basic_session: DuckDBDriver) -> Generator[DuckD
         duckdb_basic_session.execute_script("DELETE FROM vector_docs")
 
         duckdb_basic_session.execute(
-            "INSERT INTO vector_docs (id, content, embedding) VALUES (?, ?, ?)",
-            (1, "doc1", [0.1, 0.2, 0.3]),
+            "INSERT INTO vector_docs (id, content, embedding) VALUES (?, ?, ?)", (1, "doc1", [0.1, 0.2, 0.3])
         )
         duckdb_basic_session.execute(
-            "INSERT INTO vector_docs (id, content, embedding) VALUES (?, ?, ?)",
-            (2, "doc2", [0.4, 0.5, 0.6]),
+            "INSERT INTO vector_docs (id, content, embedding) VALUES (?, ?, ?)", (2, "doc2", [0.4, 0.5, 0.6])
         )
         duckdb_basic_session.execute(
-            "INSERT INTO vector_docs (id, content, embedding) VALUES (?, ?, ?)",
-            (3, "doc3", [0.7, 0.8, 0.9]),
+            "INSERT INTO vector_docs (id, content, embedding) VALUES (?, ?, ?)", (3, "doc3", [0.7, 0.8, 0.9])
         )
 
         yield duckdb_basic_session
@@ -73,11 +70,7 @@ def test_duckdb_euclidean_distance_execution(duckdb_vector_session: DuckDBDriver
 
 def test_duckdb_euclidean_distance_threshold(duckdb_vector_session: DuckDBDriver) -> None:
     """Test DuckDB euclidean distance with threshold filter."""
-    query = (
-        sql.select("content")
-        .from_("vector_docs")
-        .where(Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.1)
-    )
+    query = sql.select("content").from_("vector_docs").where(Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.1)
 
     result = duckdb_vector_session.execute(query)
 
@@ -102,7 +95,9 @@ def test_duckdb_cosine_distance_execution(duckdb_vector_session: DuckDBDriver) -
 def test_duckdb_inner_product_execution(duckdb_vector_session: DuckDBDriver) -> None:
     """Test DuckDB inner product using negative dot product."""
     query = (
-        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"))
+        sql.select(
+            "content", Column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance")
+        )
         .from_("vector_docs")
         .order_by("distance")
     )
@@ -166,8 +161,7 @@ def test_duckdb_multiple_distance_metrics(duckdb_vector_session: DuckDBDriver) -
 def test_duckdb_distance_with_null_vectors(duckdb_vector_session: DuckDBDriver) -> None:
     """Test DuckDB vector distance handles NULL vectors correctly."""
     duckdb_vector_session.execute(
-        "INSERT INTO vector_docs (id, content, embedding) VALUES (?, ?, ?)",
-        (4, "doc_null", None),
+        "INSERT INTO vector_docs (id, content, embedding) VALUES (?, ?, ?)", (4, "doc_null", None)
     )
 
     query = (
@@ -188,10 +182,7 @@ def test_duckdb_combined_filters_and_distance(duckdb_vector_session: DuckDBDrive
     query = (
         sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
         .from_("vector_docs")
-        .where(
-            (Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0)
-            & (Column("content").in_(["doc1", "doc2"]))
-        )
+        .where((Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0) & (Column("content").in_(["doc1", "doc2"])))
         .order_by("distance")
     )
 
@@ -204,10 +195,9 @@ def test_duckdb_combined_filters_and_distance(duckdb_vector_session: DuckDBDrive
 
 def test_duckdb_similarity_score_range(duckdb_vector_session: DuckDBDriver) -> None:
     """Test DuckDB cosine similarity returns values in expected range."""
-    query = sql.select(
-        "content",
-        Column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score")
-    ).from_("vector_docs")
+    query = sql.select("content", Column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score")).from_(
+        "vector_docs"
+    )
 
     result = duckdb_vector_session.execute(query)
 
@@ -219,8 +209,7 @@ def test_duckdb_similarity_score_range(duckdb_vector_session: DuckDBDriver) -> N
 def test_duckdb_distance_zero_vector(duckdb_vector_session: DuckDBDriver) -> None:
     """Test DuckDB distance calculation with zero vector."""
     duckdb_vector_session.execute(
-        "INSERT INTO vector_docs (id, content, embedding) VALUES (?, ?, ?)",
-        (5, "zero_vec", [0.0, 0.0, 0.0]),
+        "INSERT INTO vector_docs (id, content, embedding) VALUES (?, ?, ?)", (5, "zero_vec", [0.0, 0.0, 0.0])
     )
 
     query = (
@@ -250,12 +239,10 @@ def test_duckdb_large_vectors(duckdb_vector_session: DuckDBDriver) -> None:
 
     try:
         duckdb_vector_session.execute(
-            "INSERT INTO large_vectors (id, content, embedding) VALUES (?, ?, ?)",
-            (1, "large1", [0.1] * 10),
+            "INSERT INTO large_vectors (id, content, embedding) VALUES (?, ?, ?)", (1, "large1", [0.1] * 10)
         )
         duckdb_vector_session.execute(
-            "INSERT INTO large_vectors (id, content, embedding) VALUES (?, ?, ?)",
-            (2, "large2", [0.5] * 10),
+            "INSERT INTO large_vectors (id, content, embedding) VALUES (?, ?, ?)", (2, "large2", [0.5] * 10)
         )
 
         query = (
@@ -275,10 +262,12 @@ def test_duckdb_large_vectors(duckdb_vector_session: DuckDBDriver) -> None:
 
 def test_duckdb_distance_with_aggregation(duckdb_vector_session: DuckDBDriver) -> None:
     """Test DuckDB vector distance with aggregation functions."""
-    query = sql.select(
-        Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance").min().alias("min_distance"),
-        Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance").max().alias("max_distance"),
-    ).from_("vector_docs")
+    subquery = sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance")).from_(
+        "vector_docs"
+    )
+    query = sql.select("MIN(distance) AS min_distance", "MAX(distance) AS max_distance").from_(
+        subquery, alias="distances"
+    )
 
     result = duckdb_vector_session.execute(query)
 

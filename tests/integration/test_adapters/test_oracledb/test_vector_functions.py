@@ -30,16 +30,13 @@ async def oracle_vector_session(oracle_async_driver: OracleAsyncDriver) -> Async
         )
 
         await oracle_async_driver.execute(
-            "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)",
-            ("doc1", "[0.1, 0.2, 0.3]"),
+            "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)", ("doc1", "[0.1, 0.2, 0.3]")
         )
         await oracle_async_driver.execute(
-            "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)",
-            ("doc2", "[0.4, 0.5, 0.6]"),
+            "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)", ("doc2", "[0.4, 0.5, 0.6]")
         )
         await oracle_async_driver.execute(
-            "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)",
-            ("doc3", "[0.7, 0.8, 0.9]"),
+            "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)", ("doc3", "[0.7, 0.8, 0.9]")
         )
 
         yield oracle_async_driver

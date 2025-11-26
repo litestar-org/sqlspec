@@ -239,6 +239,62 @@ config = AsyncpgConfig(
 )
 ```
 
+### Custom SQLGlot Expression Pattern
+
+For dialect-specific SQL generation (e.g., vector distance functions):
+
+```python
+# In sqlspec/builder/_custom_expressions.py
+from sqlglot import exp
+from typing import Any
+
+class CustomExpression(exp.Expression):
+    """Custom expression with dialect-aware SQL generation."""
+    arg_types = {"this": True, "expression": True, "metric": False}
+
+    def sql(self, dialect: "Any | None" = None, **opts: Any) -> str:
+        """Override sql() method for dialect-specific generation."""
+        dialect_name = str(dialect).lower() if dialect else "generic"
+
+        left_sql = self.left.sql(dialect=dialect, **opts)
+        right_sql = self.right.sql(dialect=dialect, **opts)
+
+        if dialect_name == "postgres":
+            return self._sql_postgres(left_sql, right_sql)
+        if dialect_name == "mysql":
+            return self._sql_mysql(left_sql, right_sql)
+        return self._sql_generic(left_sql, right_sql)
+
+# Register with SQLGlot generator system
+def _register_with_sqlglot() -> None:
+    from sqlglot.dialects.postgres import Postgres
+    from sqlglot.generator import Generator
+
+    def custom_sql_base(generator: "Generator", expression: "CustomExpression") -> str:
+        return expression._sql_generic(generator.sql(expression.left), generator.sql(expression.right))
+
+    Generator.TRANSFORMS[CustomExpression] = custom_sql_base
+    Postgres.Generator.TRANSFORMS[CustomExpression] = custom_sql_postgres
+
+_register_with_sqlglot()
+```
+
+**Use this pattern when**:
+- Database syntax varies significantly across dialects
+- Standard SQLGlot expressions don't match any database's native syntax
+- Need operator syntax (e.g., `<->`) vs function calls (e.g., `DISTANCE()`)
+
+**Key principles**:
+- Override `.sql()` method for dialect detection
+- Register with SQLGlot's TRANSFORMS for nested expression support
+- Store metadata (like metric) as `exp.Identifier` in `arg_types` for runtime access
+- Provide generic fallback for unsupported dialects
+
+**Example**: `VectorDistance` in `sqlspec/builder/_vector_expressions.py` generates:
+- PostgreSQL: `embedding <-> '[0.1,0.2]'` (operator)
+- MySQL: `DISTANCE(embedding, STRING_TO_VECTOR('[0.1,0.2]'), 'EUCLIDEAN')` (function)
+- Oracle: `VECTOR_DISTANCE(embedding, TO_VECTOR('[0.1,0.2]'), EUCLIDEAN)` (function)
+
 ### Error Handling
 
 - Custom exceptions inherit from `SQLSpecError` in `sqlspec/exceptions.py`

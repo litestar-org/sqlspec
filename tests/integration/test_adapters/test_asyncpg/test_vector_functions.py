@@ -238,16 +238,12 @@ async def test_postgres_distance_in_having_clause(asyncpg_vector_session: Asyncp
 
 async def test_postgres_distance_with_subquery(asyncpg_vector_session: AsyncpgDriver) -> None:
     """Test vector distance in subquery."""
-    query = (
-        sql.select("*")
-        .from_(
-            sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
-            .from_("vector_docs")
-            .where(Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0)
-            .subquery("subq")
-        )
-        .where(Column("distance") < 0.5)
+    subquery = (
+        sql.select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        .from_("vector_docs")
+        .where(Column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0)
     )
+    query = sql.select("*").from_(subquery, alias="subq").where(Column("distance") < 0.5)
 
     result = await asyncpg_vector_session.execute(query)
 

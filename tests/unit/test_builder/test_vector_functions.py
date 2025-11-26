@@ -42,8 +42,8 @@ def test_column_vector_distance_with_list() -> None:
     col = Column("embedding")
     distance = col.vector_distance([0.1, 0.2, 0.3])
 
-    assert isinstance(distance._expression, VectorDistance)
-    assert distance._expression.metric == "euclidean"
+    assert isinstance(distance._expression, VectorDistance)  # pyright: ignore[reportPrivateUsage]
+    assert distance._expression.metric == "euclidean"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_column_vector_distance_with_column() -> None:
@@ -52,8 +52,8 @@ def test_column_vector_distance_with_column() -> None:
     col2 = Column("embedding2")
     distance = col1.vector_distance(col2)
 
-    assert isinstance(distance._expression, VectorDistance)
-    assert distance._expression.metric == "euclidean"
+    assert isinstance(distance._expression, VectorDistance)  # pyright: ignore[reportPrivateUsage]
+    assert distance._expression.metric == "euclidean"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_column_vector_distance_with_expression() -> None:
@@ -62,8 +62,8 @@ def test_column_vector_distance_with_expression() -> None:
     vec_expr = exp.Array(expressions=[exp.Literal.number(0.5)])
     distance = col.vector_distance(vec_expr)
 
-    assert isinstance(distance._expression, VectorDistance)
-    assert distance._expression.metric == "euclidean"
+    assert isinstance(distance._expression, VectorDistance)  # pyright: ignore[reportPrivateUsage]
+    assert distance._expression.metric == "euclidean"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_column_vector_distance_invalid_metric() -> None:
@@ -79,7 +79,7 @@ def test_column_vector_distance_invalid_vector_type() -> None:
     col = Column("embedding")
 
     with pytest.raises(TypeError, match="Unsupported vector type"):
-        col.vector_distance("not_a_vector")
+        col.vector_distance("not_a_vector")  # type: ignore[arg-type]
 
 
 def test_column_vector_distance_all_metrics() -> None:
@@ -89,8 +89,8 @@ def test_column_vector_distance_all_metrics() -> None:
 
     for metric in valid_metrics:
         distance = col.vector_distance([0.1, 0.2], metric=metric)
-        assert isinstance(distance._expression, VectorDistance)
-        assert distance._expression.metric == metric
+        assert isinstance(distance._expression, VectorDistance)  # pyright: ignore[reportPrivateUsage]
+        assert distance._expression.metric == metric  # pyright: ignore[reportPrivateUsage]
 
 
 def test_cosine_similarity_basic() -> None:
@@ -98,13 +98,13 @@ def test_cosine_similarity_basic() -> None:
     col = Column("embedding")
     similarity = col.cosine_similarity([0.1, 0.2, 0.3])
 
-    assert isinstance(similarity._expression, exp.Sub)
+    assert isinstance(similarity._expression, exp.Sub)  # pyright: ignore[reportPrivateUsage]
 
-    left_operand = similarity._expression.this
+    left_operand = similarity._expression.this  # pyright: ignore[reportPrivateUsage]
     assert isinstance(left_operand, exp.Literal)
     assert str(left_operand.this) == "1"
 
-    right_operand = similarity._expression.expression
+    right_operand = similarity._expression.expression  # pyright: ignore[reportPrivateUsage]
     assert isinstance(right_operand, exp.Paren)
 
     inner_expr = right_operand.this
@@ -118,9 +118,9 @@ def test_cosine_similarity_with_column() -> None:
     col2 = Column("embedding2")
     similarity = col1.cosine_similarity(col2)
 
-    assert isinstance(similarity._expression, exp.Sub)
+    assert isinstance(similarity._expression, exp.Sub)  # pyright: ignore[reportPrivateUsage]
 
-    right_operand = similarity._expression.expression
+    right_operand = similarity._expression.expression  # pyright: ignore[reportPrivateUsage]
     assert isinstance(right_operand, exp.Paren)
     assert isinstance(right_operand.this, VectorDistance)
 
@@ -148,8 +148,10 @@ def test_postgres_cosine_distance_sql() -> None:
 
 def test_postgres_inner_product_sql() -> None:
     """Test PostgreSQL inner product generates vector distance operator."""
-    query = sql.select("*").from_("docs").where(
-        Column("embedding").vector_distance([0.1, 0.2], metric="inner_product") < 0.5
+    query = (
+        sql.select("*")
+        .from_("docs")
+        .where(Column("embedding").vector_distance([0.1, 0.2], metric="inner_product") < 0.5)
     )
 
     stmt = query.build(dialect="postgres")
@@ -160,8 +162,10 @@ def test_postgres_inner_product_sql() -> None:
 
 def test_postgres_euclidean_squared_fallback() -> None:
     """Test PostgreSQL euclidean_squared metric is captured."""
-    query = sql.select("*").from_("docs").where(
-        Column("embedding").vector_distance([0.1, 0.2], metric="euclidean_squared") < 0.5
+    query = (
+        sql.select("*")
+        .from_("docs")
+        .where(Column("embedding").vector_distance([0.1, 0.2], metric="euclidean_squared") < 0.5)
     )
 
     stmt = query.build(dialect="postgres")
@@ -192,8 +196,10 @@ def test_mysql_cosine_distance_sql() -> None:
 
 def test_mysql_inner_product_sql() -> None:
     """Test MySQL inner product generates DISTANCE with DOT metric."""
-    query = sql.select("*").from_("docs").where(
-        Column("embedding").vector_distance([0.1, 0.2], metric="inner_product") < 0.5
+    query = (
+        sql.select("*")
+        .from_("docs")
+        .where(Column("embedding").vector_distance([0.1, 0.2], metric="inner_product") < 0.5)
     )
 
     stmt = query.build(dialect="mysql")
@@ -233,8 +239,10 @@ def test_oracle_cosine_distance_sql() -> None:
 
 def test_oracle_inner_product_sql() -> None:
     """Test Oracle inner product generates VECTOR_DISTANCE with DOT."""
-    query = sql.select("*").from_("docs").where(
-        Column("embedding").vector_distance([0.1, 0.2], metric="inner_product") < 0.5
+    query = (
+        sql.select("*")
+        .from_("docs")
+        .where(Column("embedding").vector_distance([0.1, 0.2], metric="inner_product") < 0.5)
     )
 
     stmt = query.build(dialect="oracle")
@@ -245,8 +253,10 @@ def test_oracle_inner_product_sql() -> None:
 
 def test_oracle_euclidean_squared_sql() -> None:
     """Test Oracle euclidean_squared generates VECTOR_DISTANCE function."""
-    query = sql.select("*").from_("docs").where(
-        Column("embedding").vector_distance([0.1, 0.2], metric="euclidean_squared") < 0.5
+    query = (
+        sql.select("*")
+        .from_("docs")
+        .where(Column("embedding").vector_distance([0.1, 0.2], metric="euclidean_squared") < 0.5)
     )
 
     stmt = query.build(dialect="oracle")
@@ -286,8 +296,10 @@ def test_bigquery_cosine_distance_sql() -> None:
 
 def test_bigquery_inner_product_sql() -> None:
     """Test BigQuery inner product metric is captured."""
-    query = sql.select("*").from_("docs").where(
-        Column("embedding").vector_distance([0.1, 0.2], metric="inner_product") < 0.5
+    query = (
+        sql.select("*")
+        .from_("docs")
+        .where(Column("embedding").vector_distance([0.1, 0.2], metric="inner_product") < 0.5)
     )
 
     stmt = query.build(dialect="bigquery")
@@ -298,8 +310,10 @@ def test_bigquery_inner_product_sql() -> None:
 
 def test_bigquery_euclidean_squared_fallback() -> None:
     """Test BigQuery euclidean_squared metric is captured."""
-    query = sql.select("*").from_("docs").where(
-        Column("embedding").vector_distance([0.1, 0.2], metric="euclidean_squared") < 0.5
+    query = (
+        sql.select("*")
+        .from_("docs")
+        .where(Column("embedding").vector_distance([0.1, 0.2], metric="euclidean_squared") < 0.5)
     )
 
     stmt = query.build(dialect="bigquery")
@@ -309,44 +323,45 @@ def test_bigquery_euclidean_squared_fallback() -> None:
 
 
 def test_duckdb_euclidean_distance_sql() -> None:
-    """Test DuckDB euclidean distance uses generic VECTOR_DISTANCE function."""
+    """Test DuckDB euclidean distance uses array_distance function."""
     query = sql.select("*").from_("docs").where(Column("embedding").vector_distance([0.1, 0.2]) < 0.5)
 
     stmt = query.build(dialect="duckdb")
 
-    assert "VECTOR_DISTANCE" in stmt.sql
-    assert "EUCLIDEAN" in stmt.sql
+    assert "array_distance" in stmt.sql
     assert "embedding" in stmt.sql
 
 
 def test_duckdb_cosine_distance_sql() -> None:
-    """Test DuckDB cosine distance uses generic VECTOR_DISTANCE function."""
+    """Test DuckDB cosine distance uses array_cosine_distance function."""
     query = sql.select("*").from_("docs").where(Column("embedding").vector_distance([0.1, 0.2], metric="cosine") < 0.5)
 
     stmt = query.build(dialect="duckdb")
 
-    assert "VECTOR_DISTANCE" in stmt.sql
-    assert "COSINE" in stmt.sql
+    assert "array_cosine_distance" in stmt.sql
     assert "embedding" in stmt.sql
 
 
 def test_duckdb_inner_product_sql() -> None:
-    """Test DuckDB inner product uses generic VECTOR_DISTANCE function."""
-    query = sql.select("*").from_("docs").where(
-        Column("embedding").vector_distance([0.1, 0.2], metric="inner_product") < 0.5
+    """Test DuckDB inner product uses array_negative_inner_product function."""
+    query = (
+        sql.select("*")
+        .from_("docs")
+        .where(Column("embedding").vector_distance([0.1, 0.2], metric="inner_product") < 0.5)
     )
 
     stmt = query.build(dialect="duckdb")
 
-    assert "VECTOR_DISTANCE" in stmt.sql
-    assert "INNER_PRODUCT" in stmt.sql
+    assert "array_negative_inner_product" in stmt.sql
     assert "embedding" in stmt.sql
 
 
 def test_duckdb_euclidean_squared_fallback() -> None:
     """Test DuckDB euclidean_squared uses generic VECTOR_DISTANCE function."""
-    query = sql.select("*").from_("docs").where(
-        Column("embedding").vector_distance([0.1, 0.2], metric="euclidean_squared") < 0.5
+    query = (
+        sql.select("*")
+        .from_("docs")
+        .where(Column("embedding").vector_distance([0.1, 0.2], metric="euclidean_squared") < 0.5)
     )
 
     stmt = query.build(dialect="duckdb")
@@ -384,11 +399,7 @@ def test_distance_in_select_clause() -> None:
 def test_distance_in_order_by() -> None:
     """Test vector distance in ORDER BY clause."""
     distance_col = Column("embedding").vector_distance([0.1, 0.2])
-    query = (
-        sql.select("*", distance_col.alias("dist"))
-        .from_("docs")
-        .order_by("dist")
-    )
+    query = sql.select("*", distance_col.alias("dist")).from_("docs").order_by("dist")
 
     stmt = query.build(dialect="postgres")
 
@@ -432,9 +443,7 @@ def test_multiple_metrics_in_same_query() -> None:
 
 def test_column_to_column_distance() -> None:
     """Test distance between two vector columns."""
-    query = sql.select("*").from_("pairs").where(
-        Column("vec1").vector_distance(Column("vec2"), metric="cosine") < 0.3
-    )
+    query = sql.select("*").from_("pairs").where(Column("vec1").vector_distance(Column("vec2"), metric="cosine") < 0.3)
 
     stmt = query.build(dialect="postgres")
 
@@ -465,10 +474,10 @@ def test_comparison_operators_on_distance() -> None:
 
 def test_nested_expression_support() -> None:
     """Test VectorDistance works in nested expressions."""
-    query = sql.select(
-        Column("embedding").vector_distance([0.1, 0.2]).alias("dist")
-    ).from_("docs").where(
-        (Column("embedding").vector_distance([0.1, 0.2]) < 0.5) & (Column("status") == "active")
+    query = (
+        sql.select(Column("embedding").vector_distance([0.1, 0.2]).alias("dist"))
+        .from_("docs")
+        .where((Column("embedding").vector_distance([0.1, 0.2]) < 0.5) & (Column("status") == "active"))
     )
 
     stmt = query.build(dialect="postgres")
@@ -535,8 +544,10 @@ def test_cosine_similarity_ordering() -> None:
 
 def test_distance_with_null_handling() -> None:
     """Test vector distance with NULL check."""
-    query = sql.select("*").from_("docs").where(
-        (Column("embedding").is_not_null()) & (Column("embedding").vector_distance([0.1, 0.2]) < 0.5)
+    query = (
+        sql.select("*")
+        .from_("docs")
+        .where((Column("embedding").is_not_null()) & (Column("embedding").vector_distance([0.1, 0.2]) < 0.5))
     )
 
     stmt = query.build(dialect="postgres")

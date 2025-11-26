@@ -44,19 +44,22 @@ class VectorDistance(exp.Expression):
     @property
     def left(self) -> "exp.Expression":
         """Get the left operand (column)."""
-        return self.this
+        result: exp.Expression = self.this
+        return result
 
     @property
     def right(self) -> "exp.Expression":
         """Get the right operand (vector value)."""
-        return self.expression
+        result: exp.Expression = self.expression
+        return result
 
     @property
     def metric(self) -> str:
         """Get the distance metric as raw string (not parametrized)."""
         metric_expr = self.args.get("metric")
         if isinstance(metric_expr, exp.Identifier):
-            return metric_expr.this.lower()
+            metric_name: str = metric_expr.this
+            return metric_name.lower()
         return "euclidean"
 
     def sql(self, dialect: "Any | None" = None, **opts: Any) -> str:
@@ -143,11 +146,23 @@ class VectorDistance(exp.Expression):
         return self._sql_generic(left, right, metric)
 
     def _sql_duckdb(self, left: str, right: str, metric: str) -> str:
-        """Generate DuckDB vector distance function syntax.
+        """Generate DuckDB VSS extension function syntax.
 
-        DuckDB's array_distance() only accepts 2 parameters and computes euclidean distance.
-        For other metrics or more control, use the generic VECTOR_DISTANCE fallback.
+        DuckDB's VSS extension provides:
+        - array_distance(): L2 squared distance (euclidean)
+        - array_cosine_distance(): Cosine distance (1 - cosine_similarity)
+        - array_negative_inner_product(): Negative inner product
         """
+        function_map = {
+            "euclidean": "array_distance",
+            "cosine": "array_cosine_distance",
+            "inner_product": "array_negative_inner_product",
+        }
+
+        function_name = function_map.get(metric)
+        if function_name:
+            return f"{function_name}({left}, {right})"
+
         return self._sql_generic(left, right, metric)
 
     def _sql_generic(self, left: str, right: str, metric: str) -> str:
@@ -166,27 +181,37 @@ def _register_with_sqlglot() -> None:
 
     def vector_distance_sql_base(generator: "Generator", expression: "VectorDistance") -> str:
         """Base generator for VectorDistance expressions."""
-        return expression._sql_generic(generator.sql(expression.left), generator.sql(expression.right), expression.metric)
+        return expression._sql_generic(  # pyright: ignore[reportPrivateUsage]
+            generator.sql(expression.left), generator.sql(expression.right), expression.metric
+        )
 
     def vector_distance_sql_postgres(generator: "Generator", expression: "VectorDistance") -> str:
         """PostgreSQL generator for VectorDistance expressions."""
-        return expression._sql_postgres(generator.sql(expression.left), generator.sql(expression.right), expression.metric)
+        return expression._sql_postgres(  # pyright: ignore[reportPrivateUsage]
+            generator.sql(expression.left), generator.sql(expression.right), expression.metric
+        )
 
     def vector_distance_sql_mysql(generator: "Generator", expression: "VectorDistance") -> str:
         """MySQL generator for VectorDistance expressions."""
-        return expression._sql_mysql(generator.sql(expression.left), generator.sql(expression.right), expression.metric)
+        return expression._sql_mysql(generator.sql(expression.left), generator.sql(expression.right), expression.metric)  # pyright: ignore[reportPrivateUsage]
 
     def vector_distance_sql_oracle(generator: "Generator", expression: "VectorDistance") -> str:
         """Oracle generator for VectorDistance expressions."""
-        return expression._sql_oracle(generator.sql(expression.left), generator.sql(expression.right), expression.metric)
+        return expression._sql_oracle(  # pyright: ignore[reportPrivateUsage]
+            generator.sql(expression.left), generator.sql(expression.right), expression.metric
+        )
 
     def vector_distance_sql_bigquery(generator: "Generator", expression: "VectorDistance") -> str:
         """BigQuery generator for VectorDistance expressions."""
-        return expression._sql_bigquery(generator.sql(expression.left), generator.sql(expression.right), expression.metric)
+        return expression._sql_bigquery(  # pyright: ignore[reportPrivateUsage]
+            generator.sql(expression.left), generator.sql(expression.right), expression.metric
+        )
 
     def vector_distance_sql_duckdb(generator: "Generator", expression: "VectorDistance") -> str:
         """DuckDB generator for VectorDistance expressions."""
-        return expression._sql_duckdb(generator.sql(expression.left), generator.sql(expression.right), expression.metric)
+        return expression._sql_duckdb(  # pyright: ignore[reportPrivateUsage]
+            generator.sql(expression.left), generator.sql(expression.right), expression.metric
+        )
 
     Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_base
 

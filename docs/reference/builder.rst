@@ -635,10 +635,10 @@ Vector functions generate dialect-specific SQL:
      - ``EUCLIDEAN_DISTANCE(...)``
      - ``COSINE_DISTANCE(...)``
      - ``DOT_PRODUCT(...)``
-   * - DuckDB
-     - ``SQRT(LIST_SUM(...))``
-     - ``1 - (LIST_DOT_PRODUCT(...) / ...)``
-     - ``-LIST_DOT_PRODUCT(...)``
+   * - DuckDB (VSS extension)
+     - ``array_distance(...)``
+     - ``array_cosine_distance(...)``
+     - ``array_negative_inner_product(...)``
    * - Generic
      - ``VECTOR_DISTANCE(..., 'EUCLIDEAN')``
      - ``VECTOR_DISTANCE(..., 'COSINE')``

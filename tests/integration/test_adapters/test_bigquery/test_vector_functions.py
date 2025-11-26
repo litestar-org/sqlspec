@@ -31,15 +31,9 @@ def bigquery_vector_session(bigquery_driver: BigQueryDriver) -> Generator[BigQue
             """
         )
 
-        bigquery_driver.execute(
-            f"INSERT INTO {table_id} (id, content, embedding) VALUES (1, 'doc1', [0.1, 0.2, 0.3])"
-        )
-        bigquery_driver.execute(
-            f"INSERT INTO {table_id} (id, content, embedding) VALUES (2, 'doc2', [0.4, 0.5, 0.6])"
-        )
-        bigquery_driver.execute(
-            f"INSERT INTO {table_id} (id, content, embedding) VALUES (3, 'doc3', [0.7, 0.8, 0.9])"
-        )
+        bigquery_driver.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (1, 'doc1', [0.1, 0.2, 0.3])")
+        bigquery_driver.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (2, 'doc2', [0.4, 0.5, 0.6])")
+        bigquery_driver.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (3, 'doc3', [0.7, 0.8, 0.9])")
 
         yield bigquery_driver
     finally:
