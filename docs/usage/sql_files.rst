@@ -233,7 +233,7 @@ The loader gracefully handles directories containing both named query files and 
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 2
-   :caption: `Loading a directory with mixed SQL files using SQLFileLoader`   
+   :caption: `Loading a directory with mixed SQL files using SQLFileLoader`
 
 **How it works:**
 
