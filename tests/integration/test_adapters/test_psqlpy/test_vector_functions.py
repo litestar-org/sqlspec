@@ -20,12 +20,15 @@ pytestmark = [
 
 
 @pytest.fixture
-async def psqlpy_vector_session(psqlpy_async_driver: PsqlpyDriver) -> AsyncGenerator[PsqlpyDriver, None]:
+async def psqlpy_vector_session(psqlpy_driver: PsqlpyDriver) -> AsyncGenerator[PsqlpyDriver, None]:
     """Create psqlpy session with pgvector extension and test table."""
     try:
-        await psqlpy_async_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
+        await psqlpy_driver.execute_script("CREATE EXTENSION IF NOT EXISTS vector")
+    except Exception as e:
+        pytest.skip(f"pgvector extension not available on server: {e}")
 
-        await psqlpy_async_driver.execute_script(
+    try:
+        await psqlpy_driver.execute_script(
             """
             CREATE TABLE IF NOT EXISTS vector_docs_psqlpy (
                 id SERIAL PRIMARY KEY,
@@ -35,21 +38,21 @@ async def psqlpy_vector_session(psqlpy_async_driver: PsqlpyDriver) -> AsyncGener
             """
         )
 
-        await psqlpy_async_driver.execute_script("TRUNCATE TABLE vector_docs_psqlpy")
+        await psqlpy_driver.execute_script("TRUNCATE TABLE vector_docs_psqlpy")
 
-        await psqlpy_async_driver.execute(
+        await psqlpy_driver.execute(
             "INSERT INTO vector_docs_psqlpy (content, embedding) VALUES ($1, $2)", ("doc1", "[0.1, 0.2, 0.3]")
         )
-        await psqlpy_async_driver.execute(
+        await psqlpy_driver.execute(
             "INSERT INTO vector_docs_psqlpy (content, embedding) VALUES ($1, $2)", ("doc2", "[0.4, 0.5, 0.6]")
         )
-        await psqlpy_async_driver.execute(
+        await psqlpy_driver.execute(
             "INSERT INTO vector_docs_psqlpy (content, embedding) VALUES ($1, $2)", ("doc3", "[0.7, 0.8, 0.9]")
         )
 
-        yield psqlpy_async_driver
+        yield psqlpy_driver
     finally:
-        await psqlpy_async_driver.execute_script("DROP TABLE IF EXISTS vector_docs_psqlpy")
+        await psqlpy_driver.execute_script("DROP TABLE IF EXISTS vector_docs_psqlpy")
 
 
 async def test_psqlpy_euclidean_distance_execution(psqlpy_vector_session: PsqlpyDriver) -> None:
