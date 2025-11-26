@@ -71,6 +71,8 @@ Loading SQL Files
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :caption: `Loading SQL files with SQLFileLoader`
+   :dedent: 2
 
 
 Using Loaded Queries
@@ -80,6 +82,8 @@ Using Loaded Queries
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :caption: `Using loaded queries from SQLFileLoader`
+   :dedent: 2
 
 
 Query Naming Conventions
@@ -175,6 +179,8 @@ Adding Queries Programmatically
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Adding queries programmatically to SQLFileLoader`
 
 
 Query Metadata
@@ -186,6 +192,8 @@ Get information about loaded queries:
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Retrieving query metadata from SQLFileLoader`
 
 
 Caching Behavior
@@ -197,6 +205,8 @@ The loader implements intelligent caching with 12x+ performance improvements:
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Using caching with SQLFileLoader`
 
 
 **Cache Features**
@@ -222,7 +232,8 @@ The loader gracefully handles directories containing both named query files and 
    :language: python
    :start-after: # start-example
    :end-before: # end-example
-
+   :dedent: 2
+   :caption: `Loading a directory with mixed SQL files using SQLFileLoader`   
 
 **How it works:**
 
@@ -257,6 +268,8 @@ Local Files
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Loading SQL files from local filesystem using SQLFileLoader`
 
 
 File URIs
@@ -266,6 +279,8 @@ File URIs
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Loading SQL files from file URIs using SQLFileLoader`
 
 
 Cloud Storage (with fsspec)
@@ -277,6 +292,8 @@ When ``fsspec`` is installed, load from cloud storage:
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Loading SQL files from cloud storage using SQLFileLoader`
 
 
 Integration with SQLSpec
@@ -291,6 +308,8 @@ Create a SQLSpec instance with an integrated loader:
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Creating a SQLSpec instance with SQLFileLoader`
 
 
 Type-Safe Query Execution
@@ -302,6 +321,8 @@ Combine loaded queries with schema mapping:
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Executing type-safe queries from SQLFileLoader with SQLSpec`
 
 
 Practical Examples
@@ -346,6 +367,8 @@ Example 1: User Management
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Using user management queries from SQLFileLoader`
 
 
 Example 2: Analytics Queries
@@ -412,6 +435,8 @@ Example 2: Analytics Queries
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Using analytics queries from SQLFileLoader`
 
 
 Example 3: Multi-Database Setup
@@ -421,6 +446,8 @@ Example 3: Multi-Database Setup
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Using SQLFileLoader with multiple database dialects`
 
 
 Best Practices
@@ -500,6 +527,8 @@ Query Not Found
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Handling query not found errors with SQLFileLoader`
 
 
 File Load Errors
@@ -509,6 +538,8 @@ File Load Errors
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Handling file load errors with SQLFileLoader`
 
 
 Debugging Loaded Queries
@@ -518,6 +549,8 @@ Debugging Loaded Queries
    :language: python
    :start-after: # start-example
    :end-before: # end-example
+   :dedent: 2
+   :caption: `Debugging loaded queries with SQLFileLoader`
 
 
 Next Steps
