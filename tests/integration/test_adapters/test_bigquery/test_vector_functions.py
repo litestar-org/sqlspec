@@ -16,12 +16,12 @@ pytestmark = [pytest.mark.xdist_group("bigquery")]
 
 
 @pytest.fixture
-def bigquery_vector_session(bigquery_driver: BigQueryDriver) -> Generator[BigQueryDriver, None, None]:
+def bigquery_vector_session(bigquery_session: BigQueryDriver) -> Generator[BigQueryDriver, None, None]:
     """Create BigQuery session with test table containing array columns."""
     table_id = "vector_docs_bigquery"
 
     try:
-        bigquery_driver.execute_script(
+        bigquery_session.execute_script(
             f"""
             CREATE OR REPLACE TABLE {table_id} (
                 id INT64,
@@ -31,13 +31,13 @@ def bigquery_vector_session(bigquery_driver: BigQueryDriver) -> Generator[BigQue
             """
         )
 
-        bigquery_driver.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (1, 'doc1', [0.1, 0.2, 0.3])")
-        bigquery_driver.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (2, 'doc2', [0.4, 0.5, 0.6])")
-        bigquery_driver.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (3, 'doc3', [0.7, 0.8, 0.9])")
+        bigquery_session.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (1, 'doc1', [0.1, 0.2, 0.3])")
+        bigquery_session.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (2, 'doc2', [0.4, 0.5, 0.6])")
+        bigquery_session.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (3, 'doc3', [0.7, 0.8, 0.9])")
 
-        yield bigquery_driver
+        yield bigquery_session
     finally:
-        bigquery_driver.execute_script(f"DROP TABLE IF EXISTS {table_id}")
+        bigquery_session.execute_script(f"DROP TABLE IF EXISTS {table_id}")
 
 
 def test_bigquery_euclidean_distance_execution(bigquery_vector_session: BigQueryDriver) -> None:

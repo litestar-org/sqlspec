@@ -152,6 +152,9 @@ class VectorDistance(exp.Expression):
         - array_distance(): L2 squared distance (euclidean)
         - array_cosine_distance(): Cosine distance (1 - cosine_similarity)
         - array_negative_inner_product(): Negative inner product
+
+        Note: Array literals must be cast to DOUBLE[] since DuckDB infers
+        decimal literals as DECIMAL type, but VSS functions require DOUBLE[].
         """
         function_map = {
             "euclidean": "array_distance",
@@ -161,7 +164,8 @@ class VectorDistance(exp.Expression):
 
         function_name = function_map.get(metric)
         if function_name:
-            return f"{function_name}({left}, {right})"
+            right_cast = f"CAST({right} AS DOUBLE[])"
+            return f"{function_name}({left}, {right_cast})"
 
         return self._sql_generic(left, right, metric)
 
