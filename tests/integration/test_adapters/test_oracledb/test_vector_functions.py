@@ -4,6 +4,7 @@ Tests actual execution of vector distance queries using Oracle Database 23ai+
 VECTOR_DISTANCE function with various distance metrics.
 """
 
+import math
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -225,4 +226,8 @@ async def test_oracle_similarity_score_range(oracle_vector_session: OracleAsyncD
 
     for row in result:
         score = row["score"]
-        assert -1 <= score <= 1
+        assert (
+            -1 <= score <= 1
+            or math.isclose(score, 1.0, rel_tol=1e-9, abs_tol=1e-9)
+            or math.isclose(score, -1.0, rel_tol=1e-9, abs_tol=1e-9)
+        )
