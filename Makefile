@@ -117,7 +117,7 @@ release:                                           ## Bump version and create re
 	@make docs
 	@make clean
 	@make build
-	@uv lock --upgrade-package litestar-vite >/dev/null 2>&1
+	@uv lock --upgrade-package sqlspec >/dev/null 2>&1
 	@uv run bump-my-version bump $(bump)
 	@echo "${OK} Release complete 🎉"
 
