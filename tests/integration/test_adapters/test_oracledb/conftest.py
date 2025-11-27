@@ -57,11 +57,3 @@ async def oracle_async_session(oracle_async_config: OracleAsyncConfig) -> AsyncG
 
     async with oracle_async_config.provide_session() as driver:
         yield driver
-
-
-# Backwards-compatible alias used by vector tests
-@pytest.fixture
-async def oracle_async_driver(oracle_async_session: OracleAsyncDriver) -> AsyncGenerator[OracleAsyncDriver, None]:
-    """Alias fixture for async Oracle driver."""
-
-    yield oracle_async_session

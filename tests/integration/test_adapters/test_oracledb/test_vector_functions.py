@@ -16,10 +16,10 @@ pytestmark = [pytest.mark.xdist_group("oracle")]
 
 
 @pytest.fixture
-async def oracle_vector_session(oracle_async_driver: OracleAsyncDriver) -> AsyncGenerator[OracleAsyncDriver, None]:
+async def oracle_vector_session(oracle_async_session: OracleAsyncDriver) -> AsyncGenerator[OracleAsyncDriver, None]:
     """Create Oracle session with VECTOR support and test table."""
     try:
-        await oracle_async_driver.execute_script(
+        await oracle_async_session.execute_script(
             """
             CREATE TABLE vector_docs_oracle (
                 id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -29,19 +29,19 @@ async def oracle_vector_session(oracle_async_driver: OracleAsyncDriver) -> Async
             """
         )
 
-        await oracle_async_driver.execute(
+        await oracle_async_session.execute(
             "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)", ("doc1", "[0.1, 0.2, 0.3]")
         )
-        await oracle_async_driver.execute(
+        await oracle_async_session.execute(
             "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)", ("doc2", "[0.4, 0.5, 0.6]")
         )
-        await oracle_async_driver.execute(
+        await oracle_async_session.execute(
             "INSERT INTO vector_docs_oracle (content, embedding) VALUES (:1, :2)", ("doc3", "[0.7, 0.8, 0.9]")
         )
 
-        yield oracle_async_driver
+        yield oracle_async_session
     finally:
-        await oracle_async_driver.execute_script("DROP TABLE vector_docs_oracle")
+        await oracle_async_session.execute_script("DROP TABLE vector_docs_oracle")
 
 
 async def test_oracle_euclidean_distance_execution(oracle_vector_session: OracleAsyncDriver) -> None:
