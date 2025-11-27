@@ -254,10 +254,19 @@ class SelectClauseMixin:
         elif is_expression(table):
             from_expr = exp.alias_(table, alias) if alias else table
         elif has_query_builder_parameters(table):
-            subquery = table.build()
-            sql_text = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
-            subquery_exp = exp.paren(exp.maybe_parse(sql_text, dialect=getattr(builder, "dialect", None)))
-            from_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
+            subquery_expression = table.get_expression()
+            if subquery_expression is None:
+                msg = "Subquery builder has no expression to include in FROM clause."
+                raise SQLBuilderError(msg)
+
+            subquery_copy = subquery_expression.copy()
+            base_builder = cast("QueryBuilder", builder)
+            param_mapping = base_builder._merge_cte_parameters(alias or "subquery", table.parameters)
+            if param_mapping:
+                subquery_copy = base_builder._update_placeholders_in_expression(subquery_copy, param_mapping)
+
+            wrapped_subquery = exp.paren(subquery_copy)
+            from_expr = exp.alias_(wrapped_subquery, alias) if alias else wrapped_subquery
         else:
             from_expr = table
         builder.set_expression(select_expr.from_(from_expr, copy=False))

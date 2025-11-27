@@ -826,6 +826,10 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         "type_coercion_map": type_map,
     }
 
+    if detected_dialect == "duckdb":
+        parameter_overrides["preserve_parameter_format"] = False
+        parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK, ParameterStyle.NUMERIC}
+
     if detected_dialect in {"postgres", "postgresql"}:
         parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
 

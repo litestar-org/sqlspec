@@ -319,11 +319,25 @@ class QueryBuilder(ABC):
             A new expression with literals replaced by parameter placeholders
         """
 
+        from sqlspec.builder._vector_expressions import VectorDistance
+
         def replacer(node: exp.Expression) -> exp.Expression:
             if isinstance(node, exp.Literal):
                 if node.this in {True, False, None}:
                     return node
-                param_name = self._add_parameter(node.this, context="where")
+
+                parent = node.parent
+                if isinstance(parent, exp.Array) and node.find_ancestor(VectorDistance) is not None:
+                    return node
+
+                value = node.this
+                if node.is_number and isinstance(node.this, str):
+                    try:
+                        value = float(node.this) if "." in node.this or "e" in node.this.lower() else int(node.this)
+                    except ValueError:
+                        value = node.this
+
+                param_name = self._add_parameter(value, context="where")
                 return exp.Placeholder(this=param_name)
             return node
 

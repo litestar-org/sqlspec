@@ -161,10 +161,13 @@ class VectorDistance(exp.Expression):
             "cosine": "array_cosine_distance",
             "inner_product": "array_negative_inner_product",
         }
+        target_type = "DOUBLE[]"
+        if isinstance(self.expression, exp.Array) and self.expression.expressions:
+            target_type = f"DOUBLE[{len(self.expression.expressions)}]"
 
         function_name = function_map.get(metric)
         if function_name:
-            right_cast = f"CAST({right} AS DOUBLE[])"
+            right_cast = f"CAST({right} AS {target_type})"
             return f"{function_name}({left}, {right_cast})"
 
         return self._sql_generic(left, right, metric)
