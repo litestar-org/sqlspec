@@ -21,6 +21,11 @@ def bigquery_vector_session(bigquery_session: BigQueryDriver) -> Generator[BigQu
     table_id = "vector_docs_bigquery"
 
     try:
+        try:
+            bigquery_session.execute("SELECT EUCLIDEAN_DISTANCE([0.1, 0.2], [0.1, 0.2]) AS ok")
+        except Exception as exc:  # pragma: no cover - guard for emulator limitations
+            pytest.skip(f"BigQuery vector distance functions unavailable: {exc}")
+
         bigquery_session.execute_script(
             f"""
             CREATE OR REPLACE TABLE {table_id} (
