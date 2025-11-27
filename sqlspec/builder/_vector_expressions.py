@@ -130,7 +130,15 @@ class VectorDistance(exp.Expression):
 
         oracle_metric = metric_map.get(metric, "EUCLIDEAN")
 
-        if ("ARRAY" in right or "[" in right) and "TO_VECTOR" not in right:
+        if isinstance(self.expression, exp.Array):
+            values = []
+            for expr in self.expression.expressions:
+                if isinstance(expr, exp.Literal):
+                    values.append(str(expr.this))
+                else:  # pragma: no cover - defensive
+                    values.append(expr.sql(dialect="oracle"))
+            right = f"TO_VECTOR('[{', '.join(values)}]')"
+        elif ("ARRAY" in right or "[" in right) and "TO_VECTOR" not in right:
             right = f"TO_VECTOR({right})"
 
         return f"VECTOR_DISTANCE({left}, {right}, {oracle_metric})"

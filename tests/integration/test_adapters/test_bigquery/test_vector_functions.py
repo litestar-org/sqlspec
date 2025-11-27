@@ -4,6 +4,7 @@ Tests actual execution of vector distance queries using BigQuery's native
 distance functions (EUCLIDEAN_DISTANCE, COSINE_DISTANCE, DOT_PRODUCT).
 """
 
+import contextlib
 from collections.abc import Generator
 
 import pytest
@@ -42,7 +43,8 @@ def bigquery_vector_session(bigquery_session: BigQueryDriver) -> Generator[BigQu
 
         yield bigquery_session
     finally:
-        bigquery_session.execute_script(f"DROP TABLE IF EXISTS {table_id}")
+        with contextlib.suppress(Exception):
+            bigquery_session.execute_script(f"DROP TABLE IF EXISTS {table_id}")
 
 
 def test_bigquery_euclidean_distance_execution(bigquery_vector_session: BigQueryDriver) -> None:
