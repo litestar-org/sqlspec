@@ -6,31 +6,31 @@ Individual skills for each database adapter with adapter-specific guidance.
 
 ### PostgreSQL Adapters
 
-- **[asyncpg.md](asyncpg.md)** - AsyncPG (async, high performance)
-- **psycopg.md** - Psycopg (sync/async, feature-rich) - TODO
-- **psqlpy.md** - Psqlpy (Rust-based, extreme performance) - TODO
+- **[asyncpg.md](asyncpg.md)** - AsyncPG (async, high performance) ✅
+- **[psycopg.md](psycopg.md)** - Psycopg (sync/async, feature-rich) ✅
+- **[psqlpy.md](psqlpy.md)** - Psqlpy (Rust-based, extreme performance) ✅
 
 ### SQLite Adapters
 
-- **sqlite.md** - SQLite (sync, embedded) - TODO
-- **aiosqlite.md** - AioSQLite (async, embedded) - TODO
+- **[sqlite.md](sqlite.md)** - SQLite (sync, embedded) ✅
+- **[aiosqlite.md](aiosqlite.md)** - AioSQLite (async, embedded) ✅
 
 ### Analytics & OLAP
 
-- **duckdb.md** - DuckDB (columnar, analytics) - TODO
+- **[duckdb.md](duckdb.md)** - DuckDB (columnar, analytics) ✅
 
 ### Oracle
 
-- **oracledb.md** - Oracle Database (sync/async, enterprise) - TODO
+- **[oracledb.md](oracledb.md)** - Oracle Database (sync/async, enterprise) ✅
 
 ### MySQL/MariaDB
 
-- **asyncmy.md** - Asyncmy (async MySQL) - TODO
+- **[asyncmy.md](asyncmy.md)** - Asyncmy (async MySQL) ✅
 
 ### Cloud & Multi-Database
 
-- **bigquery.md** - Google BigQuery (data warehouse) - TODO
-- **adbc.md** - ADBC (Arrow-native, multi-database) - TODO
+- **[bigquery.md](bigquery.md)** - Google BigQuery (data warehouse) ✅
+- **[adbc.md](adbc.md)** - ADBC (Arrow-native, multi-database) ✅
 
 ## Adapter Selection Guide
 
