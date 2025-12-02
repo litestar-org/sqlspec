@@ -76,7 +76,7 @@ class Spanner(BigQuery):
                     this=exp.Literal.string(_ROW_DELETION_NAME), value=exp.Tuple(expressions=[column, interval])
                 )
 
-            if self._match_text_seq("TTL"):  # PostgreSQL-dialect style, keep for compatibility
+            if self._match_text_seq("TTL"):  # type: ignore[no-untyped-call]  # PostgreSQL-dialect style, keep for compatibility
                 self._match_text_seq("INTERVAL")  # type: ignore[no-untyped-call]
                 interval = cast("exp.Expression", self._parse_expression())
                 self._match_text_seq("ON")  # type: ignore[no-untyped-call]

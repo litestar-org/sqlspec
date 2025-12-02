@@ -1,9 +1,10 @@
 """Custom SQLGlot expressions for vector distance operations.
 
 Provides dialect-specific SQL generation for vector similarity search
-across PostgreSQL (pgvector), MySQL 9+, and Oracle 23ai+.
+across PostgreSQL (pgvector), MySQL 9+, Oracle 23ai+, BigQuery, and Spanner.
 """
 
+from contextlib import suppress
 from typing import Any
 
 from sqlglot import exp
@@ -194,11 +195,13 @@ def _register_with_sqlglot() -> None:
     from sqlglot.dialects.postgres import Postgres
     from sqlglot.generator import Generator
 
-    try:  # optional, only when Spanner dialects are present
-        from sqlspec.adapters.spanner.dialect import Spanner, Spangres
-    except Exception:  # pragma: no cover - optional import
-        Spanner = None
-        Spangres = None
+    spanner_dialect: type | None = None
+    spangres_dialect: type | None = None
+    with suppress(ImportError):
+        from sqlspec.adapters.spanner.dialect import Spangres, Spanner
+
+        spanner_dialect = Spanner
+        spangres_dialect = Spangres
 
     def vector_distance_sql_base(generator: "Generator", expression: "VectorDistance") -> str:
         """Base generator for VectorDistance expressions."""
@@ -247,10 +250,10 @@ def _register_with_sqlglot() -> None:
     Oracle.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_oracle
     BigQuery.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_bigquery
     DuckDB.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_duckdb
-    if Spanner is not None:
-        Spanner.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_spanner
-    if Spangres is not None:
-        Spangres.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_postgres
+    if spanner_dialect is not None:
+        spanner_dialect.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_spanner  # type: ignore[attr-defined]
+    if spangres_dialect is not None:
+        spangres_dialect.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_postgres  # type: ignore[attr-defined]
 
 
 _register_with_sqlglot()

@@ -156,11 +156,20 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         database = instance.database(database_id, pool=None)
 
         pool_type = cast("type[AbstractSessionPool]", self.pool_config.get("pool_type", FixedSizePool))
-        connection_keys = {"project", "instance_id", "database_id", "credentials", "client_options", "pool_type"}
-        pool_kwargs = {k: v for k, v in self.pool_config.items() if k not in connection_keys and v is not None}
 
-        if pool_type is FixedSizePool and "size" not in pool_kwargs and "max_sessions" in self.pool_config:
-            pool_kwargs["size"] = self.pool_config["max_sessions"]
+        pool_kwargs: dict[str, Any] = {}
+        if pool_type is FixedSizePool:
+            if "size" in self.pool_config:
+                pool_kwargs["size"] = self.pool_config["size"]
+            elif "max_sessions" in self.pool_config:
+                pool_kwargs["size"] = self.pool_config["max_sessions"]
+            if "labels" in self.pool_config:
+                pool_kwargs["labels"] = self.pool_config["labels"]
+        else:
+            valid_pool_keys = {"size", "labels", "ping_interval"}
+            pool_kwargs = {k: v for k, v in self.pool_config.items() if k in valid_pool_keys and v is not None}
+            if "size" not in pool_kwargs and "max_sessions" in self.pool_config:
+                pool_kwargs["size"] = self.pool_config["max_sessions"]
 
         pool_factory = cast("Callable[..., AbstractSessionPool]", pool_type)
         return pool_factory(database, **pool_kwargs)
@@ -176,7 +185,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         """Yield a Snapshot (default) or Transaction from the configured pool."""
         database = self.get_database()
         if transaction:
-            with cast("Any", database).transaction() as txn:  # type: ignore[no-untyped-call]
+            with cast("Any", database).transaction() as txn:
                 yield cast("SpannerConnection", txn)
         else:
             with cast("Any", database).snapshot() as snapshot:

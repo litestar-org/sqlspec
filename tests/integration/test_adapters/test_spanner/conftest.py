@@ -1,5 +1,5 @@
 from collections.abc import Generator
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 import pytest
 from google.api_core import exceptions as api_exceptions
@@ -17,7 +17,9 @@ pytestmark = pytest.mark.xdist_group("spanner")
 
 
 @pytest.fixture(scope="session")
-def spanner_database(spanner_service: SpannerService, spanner_connection: spanner.Client) -> Generator["Database", None, None]:
+def spanner_database(
+    spanner_service: SpannerService, spanner_connection: spanner.Client
+) -> Generator["Database", None, None]:
     """Ensure emulator instance and database exist, yield Database."""
     instance = spanner_connection.instance(spanner_service.instance_name)
     if not instance.exists():

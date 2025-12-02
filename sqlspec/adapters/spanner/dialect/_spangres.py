@@ -1,4 +1,4 @@
-"""Google Cloud Spanner PostgreSQL-interface dialect (\"Spangres\")."""
+r"""Google Cloud Spanner PostgreSQL-interface dialect ("Spangres")."""
 
 from typing import Any, cast
 

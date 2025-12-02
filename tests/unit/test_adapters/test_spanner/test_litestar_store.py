@@ -1,15 +1,16 @@
+from typing import Any
 from unittest.mock import MagicMock
 
 from sqlspec.adapters.spanner.litestar import SpannerSyncStore
 
 
-def _context_manager_yielding(value):
+def _context_manager_yielding(value: Any) -> Any:
     class _Ctx:
-        def __enter__(self):
+        def __enter__(self) -> Any:
             return value
 
-        def __exit__(self, *_):
-            return False
+        def __exit__(self, *_: Any) -> None:
+            pass
 
     return _Ctx()
 

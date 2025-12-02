@@ -1155,8 +1155,8 @@ class CreateMaterializedView(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE MATERIALIZED VIEW.")
 
-        select_expr = None
-        select_parameters = None
+        select_expr: exp.Expression | None = None
+        select_parameters: dict[str, Any] | None = None
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
@@ -1251,8 +1251,8 @@ class CreateView(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE VIEW.")
 
-        select_expr = None
-        select_parameters = None
+        select_expr: exp.Expression | None = None
+        select_parameters: dict[str, Any] | None = None
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
