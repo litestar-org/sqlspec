@@ -151,10 +151,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             msg = "instance_id and database_id are required."
             raise ImproperConfigurationError(msg)
 
-        client = cast("Any", self._get_client())
-        instance = client.instance(instance_id)
-        database = instance.database(database_id, pool=None)
-
         pool_type = cast("type[AbstractSessionPool]", self.pool_config.get("pool_type", FixedSizePool))
 
         pool_kwargs: dict[str, Any] = {}
@@ -172,7 +168,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
                 pool_kwargs["size"] = self.pool_config["max_sessions"]
 
         pool_factory = cast("Callable[..., AbstractSessionPool]", pool_type)
-        return pool_factory(database, **pool_kwargs)
+        return pool_factory(**pool_kwargs)
 
     def _close_pool(self) -> None:
         if self.pool_instance and hasattr(self.pool_instance, "close"):
