@@ -30,6 +30,7 @@ Individual skills for each database adapter with adapter-specific guidance.
 ### Cloud & Multi-Database
 
 - **[bigquery.md](bigquery.md)** - Google BigQuery (data warehouse) ✅
+- **[spanner.md](spanner.md)** - Google Cloud Spanner (globally distributed) ✅
 - **[adbc.md](adbc.md)** - ADBC (Arrow-native, multi-database) ✅
 
 ## Adapter Selection Guide
@@ -44,6 +45,7 @@ Individual skills for each database adapter with adapter-specific guidance.
 | Oracle enterprise | OracleDB | oracledb.md |
 | MySQL/MariaDB | Asyncmy | asyncmy.md |
 | Cloud data warehouse | BigQuery | bigquery.md |
+| Global scale | Spanner | spanner.md |
 | Multi-database | ADBC | adbc.md |
 | Arrow ecosystem | ADBC or DuckDB | adbc.md, duckdb.md |
 

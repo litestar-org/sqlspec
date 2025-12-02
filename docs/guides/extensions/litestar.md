@@ -95,11 +95,11 @@ config = AsyncpgConfig(
         }
     },
 )
+```
 
 ## Correlation IDs
 
 Enable request-level correlation tracking (on by default) to thread Litestar requests into SQLSpec's observability runtime. The plugin inspects `X-Request-ID`, `Traceparent`, `X-Cloud-Trace-Context`, `X-Amzn-Trace-Id`, `grpc-trace-bin`, and `X-Correlation-ID` automatically, then falls back to generating a UUID if none are present. Override the primary header with `correlation_header`, append more via `correlation_headers`, or set `auto_trace_headers=False` to opt out of the auto-detection list entirely. Observers (print SQL, custom hooks, OpenTelemetry spans) automatically attach the current `correlation_id` to their payloads. Disable the middleware with `enable_correlation_middleware=False` when another piece of infrastructure manages IDs.
-```
 
 ## Transaction Management
 
@@ -148,19 +148,11 @@ app = Litestar(
 )
 ```
 
-Adapter packages expose store classes (AsyncpgStore, AiosqliteStore, OracledbStore). Each subclass inherits `BaseSQLSpecStore`, enforces consistent schema DDL, and provides utilities such as `delete_expired()`. Run `delete_expired()` periodically or use `litestar sessions delete-expired` from the CLI.
+Every adapter exposes a store class (e.g., `AsyncpgStore`, `AiosqliteStore`, `DuckdbStore`) in its `litestar` submodule. Each subclass inherits `BaseSQLSpecStore`, enforces consistent schema DDL, and provides utilities such as `delete_expired()`. Run `delete_expired()` periodically or use `litestar sessions delete-expired` from the CLI.
 
 ## CLI Integration
 
-Litestar’s CLI picks up SQLSpec commands when you register `database_group`:
-
-```python
-from litestar.cli import LitestarCLI
-from sqlspec.extensions.litestar import database_group
-
-cli = LitestarCLI(app="app:app")
-cli.add_command(database_group, name="db")
-```
+The `SQLSpecPlugin` automatically registers the `db` command group with the Litestar CLI. No additional configuration is required.
 
 Commands include `db migrate`, `db upgrade`, `db downgrade`, and `db status`. The CLI uses the same `SQLSpec` instance that the plugin references.
 

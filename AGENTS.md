@@ -76,7 +76,7 @@ Each adapter in `sqlspec/adapters/` follows this structure:
 - `_types.py` - Adapter-specific type definitions
 - Optional: `_*_handlers.py` - Type handlers for optional features (numpy, pgvector)
 
-Supported adapters: adbc, aiosqlite, asyncmy, asyncpg, bigquery, duckdb, oracledb, psqlpy, psycopg, sqlite
+Supported adapters: adbc, aiosqlite, asyncmy, asyncpg, bigquery, duckdb, oracledb, psqlpy, psycopg, spanner, sqlite
 
 ### Key Design Patterns
 
@@ -226,6 +226,49 @@ def register_handlers(connection: "Connection") -> None:
     connection.outputtypehandler = _output_type_handler
 ```
 
+### Binary Data Encoding Pattern (Spanner)
+
+For databases requiring specific binary data encoding (e.g., Spanner's base64 requirement):
+
+```python
+# In adapter's _type_handlers.py
+import base64
+
+def bytes_to_database(value: bytes | None) -> bytes | None:
+    """Convert Python bytes to database-required format.
+
+    Spanner Python client requires base64-encoded bytes when
+    param_types.BYTES is specified.
+    """
+    if value is None:
+        return None
+    return base64.b64encode(value)
+
+def database_to_bytes(value: Any) -> bytes | None:
+    """Convert database BYTES result back to Python bytes.
+
+    Handles both raw bytes and base64-encoded bytes.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bytes | str):
+        return base64.b64decode(value)
+    return None
+```
+
+**Use this pattern when**:
+- Database client library requires specific encoding for binary data
+- Need transparent conversion between Python bytes and database format
+- Want to centralize encoding/decoding logic for reuse
+
+**Key principles**:
+- Centralize conversion functions in `_type_handlers.py`
+- Handle None/NULL values explicitly
+- Support both raw and encoded formats on read (graceful handling)
+- Use in `coerce_params_for_database()` and type converter
+
+**Example**: Spanner requires base64-encoded bytes for `param_types.BYTES` parameters, but you work with raw Python bytes in application code.
+
 ### Framework Extension Pattern
 
 All extensions use `extension_config` in database config:
@@ -294,6 +337,77 @@ _register_with_sqlglot()
 - PostgreSQL: `embedding <-> '[0.1,0.2]'` (operator)
 - MySQL: `DISTANCE(embedding, STRING_TO_VECTOR('[0.1,0.2]'), 'EUCLIDEAN')` (function)
 - Oracle: `VECTOR_DISTANCE(embedding, TO_VECTOR('[0.1,0.2]'), EUCLIDEAN)` (function)
+
+### Custom SQLglot Dialect Pattern
+
+For databases with unique SQL syntax not supported by existing sqlglot dialects:
+
+```python
+# In sqlspec/adapters/{adapter}/dialect/_dialect.py
+from sqlglot import exp
+from sqlglot.dialects.bigquery import BigQuery
+from sqlglot.tokens import TokenType
+
+class CustomDialect(BigQuery):
+    """Inherit from closest matching dialect."""
+
+    class Tokenizer(BigQuery.Tokenizer):
+        """Add custom keywords."""
+        KEYWORDS = {
+            **BigQuery.Tokenizer.KEYWORDS,
+            "INTERLEAVE": TokenType.INTERLEAVE,
+        }
+
+    class Parser(BigQuery.Parser):
+        """Override parser for custom syntax."""
+        def _parse_table_parts(self, schema=False, is_db_reference=False, wildcard=False):
+            table = super()._parse_table_parts(schema=schema, is_db_reference=is_db_reference, wildcard=wildcard)
+
+            # Parse custom clause
+            if self._match_text_seq("INTERLEAVE", "IN", "PARENT"):
+                parent = self._parse_table(schema=True, is_db_reference=True)
+                table.set("interleave_parent", parent)
+
+            return table
+
+    class Generator(BigQuery.Generator):
+        """Override generator for custom SQL output."""
+        def table_sql(self, expression, sep=" "):
+            sql = super().table_sql(expression, sep=sep)
+
+            # Generate custom clause
+            parent = expression.args.get("interleave_parent")
+            if parent:
+                sql = f"{sql}\nINTERLEAVE IN PARENT {self.sql(parent)}"
+
+            return sql
+
+# Register dialect in adapter __init__.py
+from sqlglot.dialects.dialect import Dialect
+Dialect.classes["custom"] = CustomDialect
+```
+
+**Create custom dialect when**:
+- Database has unique DDL/DML syntax not in existing dialects
+- Need to parse and validate database-specific keywords
+- Need to generate database-specific SQL from AST
+- An existing dialect provides 80%+ compatibility to inherit from
+
+**Do NOT create custom dialect if**:
+- Only parameter style differences (use parameter profiles)
+- Only type conversion differences (use type converters)
+- Only connection management differences (use config/driver)
+
+**Key principles**:
+- **Inherit from closest dialect**: Spanner inherits BigQuery (both GoogleSQL)
+- **Minimal overrides**: Only override methods that need customization
+- **Store metadata in AST**: Use `expression.set(key, value)` for custom data
+- **Handle missing tokens**: Check `getattr(TokenType, "KEYWORD", None)` before using
+- **Test thoroughly**: Unit tests for parsing/generation, integration tests with real DB
+
+**Reference implementation**: `sqlspec/adapters/spanner/dialect/` (GoogleSQL and PostgreSQL modes)
+
+**Documentation**: See `/docs/guides/architecture/custom-sqlglot-dialects.md` for full guide
 
 ### Error Handling
 

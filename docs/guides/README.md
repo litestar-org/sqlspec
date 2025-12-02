@@ -28,7 +28,9 @@ Database adapter-specific guides covering patterns, best practices, and implemen
 - [**OracleDB**](adapters/oracledb.md) - Oracle Database (comprehensive guide)
 - [**Psycopg**](adapters/psycopg.md) - Sync/Async PostgreSQL
 - [**Psqlpy**](adapters/psqlpy.md) - Rust-based async PostgreSQL
+- [**Spanner**](adapters/spanner.md) - Google Cloud Spanner with GoogleSQL and Spangres dialects
 - [**SQLite**](adapters/sqlite.md) - Embedded SQLite
+- [**Parameter Profile Registry**](adapters/parameter-profile-registry.md) - Canonical registry of adapter parameter profiles
 
 ## Performance
 
@@ -41,6 +43,14 @@ Optimization guides for SQLSpec:
 ## Features
 
 - [**Query Stack Guide**](features/query-stack.md) - Multi-statement execution, execution modes, telemetry, and troubleshooting
+- [**Upsert Operations**](upsert.md) - Database-specific upsert patterns and best practices
+- [**MERGE Statement**](builder/merge.md) - SQL MERGE statement builder and usage patterns
+
+## Cloud
+
+Cloud platform integrations:
+
+- [**Google Connectors**](cloud/google-connectors.md) - Using Cloud SQL connectors with BigQuery and Spanner
 
 ## Migrations
 
@@ -61,6 +71,10 @@ Core architecture and design patterns:
 - [**Architecture Guide**](architecture/architecture.md) - SQLSpec architecture overview
 - [**Data Flow Guide**](architecture/data-flow.md) - How data flows through SQLSpec
 - [**Architecture Patterns**](architecture/patterns.md) - Immutable stack builder, native vs. sequential branching, and telemetry requirements
+- [**Custom SQLglot Dialects**](architecture/custom-sqlglot-dialects.md) - Creating custom SQL dialects for database-specific features
+- [**Arrow Integration**](architecture/arrow-integration.md) - Apache Arrow data structures and storage bridge
+- [**Data Dictionary**](architecture/data-dictionary.md) - Metadata inspection patterns
+- [**Observability**](architecture/observability.md) - Logging, metrics, and tracing
 
 ## Extensions
 
@@ -78,6 +92,13 @@ Core architecture and design patterns:
 - [**SQLglot LLM Playbook**](quick-reference/sqlglot-llm-playbook.md) - Fast-start guide for agents leveraging SQLglot in SQLSpec
 - [**Litestar LLM Playbook**](quick-reference/litestar-llm-playbook.md) - Guidelines for wiring SQLSpec into Litestar apps quickly
 - [**MyPyC LLM Playbook**](quick-reference/mypyc-llm-playbook.md) - Compilation workflow tips for high-performance modules
+
+## Development
+
+Contributing and code quality guides:
+
+- [**Code Standards**](development/code-standards.md) - Coding style, type hints, and best practices
+- [**Implementation Patterns**](development/implementation-patterns.md) - Common patterns for implementing SQLSpec features
 
 ## Writing Documentation
 

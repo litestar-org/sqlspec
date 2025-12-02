@@ -403,6 +403,28 @@ class ADKConfig(TypedDict):
         - Ignored by non-Oracle adapters
     """
 
+    shard_count: NotRequired[int]
+    """Optional hash shard count for session/event tables to reduce hotspotting.
+
+    When set (>1), adapters that support computed shard columns will create a
+    generated shard_id using MOD(FARM_FINGERPRINT(primary_key), shard_count) and
+    include it in the primary key and filters. Ignored by adapters that do not
+    support computed shards.
+    """
+
+    session_table_options: NotRequired[str]
+    """Adapter-specific table OPTIONS/clauses for the sessions table.
+
+    Passed verbatim when supported (e.g., Spanner columnar/tiered storage). Ignored by
+    adapters without table OPTIONS support.
+    """
+
+    events_table_options: NotRequired[str]
+    """Adapter-specific table OPTIONS/clauses for the events table."""
+
+    expires_index_options: NotRequired[str]
+    """Adapter-specific options for the expires/index used in ADK stores."""
+
 
 class OpenTelemetryConfig(TypedDict):
     """Configuration options for OpenTelemetry integration.

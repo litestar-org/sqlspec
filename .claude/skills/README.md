@@ -67,16 +67,17 @@ Detailed guidance for individual database adapters:
 
 | Adapter | File | Status |
 |---------|------|--------|
-| AsyncPG (PostgreSQL async) | [asyncpg.md](sqlspec-adapters/asyncpg.md) | ✅ Complete |
-| Psycopg (PostgreSQL sync/async) | psycopg.md | 📝 Template |
-| Psqlpy (PostgreSQL Rust-based) | psqlpy.md | 📝 Template |
-| SQLite (sync) | sqlite.md | 📝 Template |
-| AioSQLite (async) | aiosqlite.md | 📝 Template |
-| DuckDB (analytics) | duckdb.md | 📝 Template |
-| Oracle | oracledb.md | 📝 Template |
-| Asyncmy (MySQL async) | asyncmy.md | 📝 Template |
-| BigQuery | bigquery.md | 📝 Template |
-| ADBC (Arrow-native) | adbc.md | 📝 Template |
+| AsyncPG (PostgreSQL async) | [asyncpg.md](sqlspec_adapters/asyncpg.md) | ✅ Complete |
+| Psycopg (PostgreSQL sync/async) | [psycopg.md](sqlspec_adapters/psycopg.md) | ✅ Complete |
+| Psqlpy (PostgreSQL Rust-based) | [psqlpy.md](sqlspec_adapters/psqlpy.md) | ✅ Complete |
+| SQLite (sync) | [sqlite.md](sqlspec_adapters/sqlite.md) | ✅ Complete |
+| AioSQLite (async) | [aiosqlite.md](sqlspec_adapters/aiosqlite.md) | ✅ Complete |
+| DuckDB (analytics) | [duckdb.md](sqlspec_adapters/duckdb.md) | ✅ Complete |
+| Oracle | [oracledb.md](sqlspec_adapters/oracledb.md) | ✅ Complete |
+| Asyncmy (MySQL async) | [asyncmy.md](sqlspec_adapters/asyncmy.md) | ✅ Complete |
+| BigQuery | [bigquery.md](sqlspec_adapters/bigquery.md) | ✅ Complete |
+| Spanner | [spanner.md](sqlspec_adapters/spanner.md) | ✅ Complete |
+| ADBC (Arrow-native) | [adbc.md](sqlspec_adapters/adbc.md) | ✅ Complete |
 
 **Note:** Template adapters follow the AsyncPG structure and can be quickly expanded when needed.
 

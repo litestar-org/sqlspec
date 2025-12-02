@@ -92,27 +92,23 @@ StatementConfig(
 )
 ```
 
-### `TypedParameter` (`sqlspec.core.parameters.types.TypedParameter`)
+### `TypedParameter` (`sqlspec.core.parameters.TypedParameter`)
 
 Carries type information through the pipeline, ensuring that data types are handled correctly by each database driver.
 
 ### Enhanced Caching Architecture (NEW)
 
-SQLSpec now implements a comprehensive multi-tier caching system:
+SQLSpec implements a comprehensive multi-tier caching system. While individual statements can toggle caching via `StatementConfig.enable_caching`, the underlying cache configuration is managed globally.
 
 ```python
-# Multi-tier caching configuration
-class CachingConfig:
-    sql_cache: bool = True           # Compiled SQL strings
-    optimized_cache: bool = True     # Post-optimization AST expressions
-    builder_cache: bool = True       # QueryBuilder instances
-    file_cache: bool = True          # SQLFileLoader with checksums
-    analysis_cache: bool = True      # Pipeline analysis results
+# Global cache configuration (via SQLSpec.configure_cache)
+# - sql_cache_size: Size of the SQL statement cache
+# - fragment_cache_size: Size of the AST fragment cache
+# - optimized_cache_size: Size of the optimized expression cache
 
 # Cache integration in StatementConfig
 StatementConfig(
-    enable_caching=True,             # Master caching switch
-    cache_config=CachingConfig(...), # Detailed cache control
+    enable_caching=True,             # Master caching switch for this statement
     # ... other configuration
 )
 ```

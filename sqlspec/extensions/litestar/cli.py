@@ -52,7 +52,7 @@ def add_sessions_delete_expired_command() -> None:
     except ImportError:
         return
 
-    @sessions_group.command("delete-expired")  # type: ignore[misc]
+    @sessions_group.command("delete-expired")  # type: ignore[untyped-decorator]
     @click.option(
         "--verbose", is_flag=True, default=False, help="Show detailed information about the cleanup operation"
     )
