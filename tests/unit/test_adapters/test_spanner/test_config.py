@@ -52,9 +52,9 @@ def test_driver_features_defaults() -> None:
     assert config.driver_features["json_serializer"] is not None
 
 
-def test_provide_connection_transaction_and_snapshot() -> None:
-    """Ensure provide_connection selects snapshot vs transaction correctly."""
-    txn_obj = object()
+def test_provide_connection_batch_and_snapshot() -> None:
+    """Ensure provide_connection selects snapshot vs batch correctly."""
+    batch_obj = object()
     snap_obj = object()
 
     class _Ctx:
@@ -68,8 +68,8 @@ def test_provide_connection_transaction_and_snapshot() -> None:
             return False
 
     class _DB:
-        def transaction(self):
-            return _Ctx(txn_obj)
+        def batch(self):
+            return _Ctx(batch_obj)
 
         def snapshot(self):
             return _Ctx(snap_obj)
@@ -78,25 +78,25 @@ def test_provide_connection_transaction_and_snapshot() -> None:
     config.get_database = lambda: _DB()  # type: ignore[assignment]
 
     with config.provide_connection(transaction=True) as conn:
-        assert conn is txn_obj
+        assert conn is batch_obj
 
     with config.provide_connection(transaction=False) as conn:
         assert conn is snap_obj
 
 
-def test_provide_session_uses_transaction_when_requested() -> None:
-    """Driver should receive transaction connection when transaction=True."""
-    txn_obj = object()
+def test_provide_session_uses_batch_when_transaction_requested() -> None:
+    """Driver should receive batch connection when transaction=True."""
+    batch_obj = object()
 
     class _Ctx:
         def __enter__(self):
-            return txn_obj
+            return batch_obj
 
         def __exit__(self, *_):
             return False
 
     class _DB:
-        def transaction(self):
+        def batch(self):
             return _Ctx()
 
         def snapshot(self):
@@ -108,22 +108,22 @@ def test_provide_session_uses_transaction_when_requested() -> None:
 
     with config.provide_session(transaction=True) as driver:
         assert isinstance(driver, _DummyDriver)
-        assert driver.connection is txn_obj
+        assert driver.connection is batch_obj
 
 
 def test_provide_write_session_alias() -> None:
-    """provide_write_session should always give a transaction-backed driver."""
-    txn_obj = object()
+    """provide_write_session should always give a batch-backed driver."""
+    batch_obj = object()
 
     class _Ctx:
         def __enter__(self):
-            return txn_obj
+            return batch_obj
 
         def __exit__(self, *_):
             return False
 
     class _DB:
-        def transaction(self):
+        def batch(self):
             return _Ctx()
 
         def snapshot(self):
@@ -134,4 +134,4 @@ def test_provide_write_session_alias() -> None:
     config.driver_type = _DummyDriver  # type: ignore[assignment,misc]
 
     with config.provide_write_session() as driver:
-        assert driver.connection is txn_obj
+        assert driver.connection is batch_obj

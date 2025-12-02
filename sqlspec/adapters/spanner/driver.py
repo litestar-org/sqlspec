@@ -1,11 +1,10 @@
 """Spanner driver implementation."""
 
 from typing import TYPE_CHECKING, Any, cast
-from uuid import UUID
 
 from google.api_core import exceptions as api_exceptions
-from google.cloud.spanner_v1 import param_types
 
+from sqlspec.adapters.spanner._type_handlers import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.spanner.type_converter import SpannerTypeConverter
 from sqlspec.core import (
@@ -235,51 +234,17 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
 
     def _infer_param_types(self, params: "dict[str, Any] | None") -> "dict[str, Any]":
-        if not params or isinstance(params, (list, tuple)):
+        """Infer Spanner param_types from Python values."""
+        if isinstance(params, (list, tuple)):
             return {}
-
-        types: dict[str, Any] = {}
-        for key, value in params.items():
-            if isinstance(value, bool):
-                types[key] = param_types.BOOL
-            elif isinstance(value, int):
-                types[key] = param_types.INT64
-            elif isinstance(value, float):
-                types[key] = param_types.FLOAT64
-            elif isinstance(value, str):
-                types[key] = param_types.STRING
-            elif isinstance(value, bytes):
-                types[key] = param_types.BYTES
-            elif isinstance(value, list):
-                if not value:
-                    continue
-                first_value = value[0]
-                if isinstance(first_value, int):
-                    types[key] = cast("Any", param_types.Array(param_types.INT64))  # type: ignore[no-untyped-call]
-                elif isinstance(first_value, str):
-                    types[key] = cast("Any", param_types.Array(param_types.STRING))  # type: ignore[no-untyped-call]
-                elif isinstance(first_value, float):
-                    types[key] = cast("Any", param_types.Array(param_types.FLOAT64))  # type: ignore[no-untyped-call]
-                elif isinstance(first_value, bool):
-                    types[key] = cast("Any", param_types.Array(param_types.BOOL))  # type: ignore[no-untyped-call]
-            elif isinstance(value, dict) and hasattr(param_types, "JSON"):
-                types[key] = param_types.JSON
-
-            if key not in types and hasattr(param_types, "JSON") and isinstance(value, (dict, list)):
-                types[key] = param_types.JSON
-        return types
+        return infer_spanner_param_types(params)
 
     def _coerce_params(self, params: "dict[str, Any] | None") -> "dict[str, Any] | None":
-        """Coerce UUIDs to bytes for BYTES(16) storage."""
-        if params is None or isinstance(params, (list, tuple)):
+        """Coerce Python types to Spanner-compatible formats."""
+        if isinstance(params, (list, tuple)):
             return None
-        coerced: dict[str, Any] = {}
-        for key, value in params.items():
-            if isinstance(value, UUID):
-                coerced[key] = value.bytes
-            else:
-                coerced[key] = value
-        return coerced
+        json_serializer = self.driver_features.get("json_serializer")
+        return coerce_params_for_spanner(params, json_serializer=json_serializer)
 
     def begin(self) -> None:
         return None

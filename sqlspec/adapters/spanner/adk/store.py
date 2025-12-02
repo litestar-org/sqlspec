@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from google.cloud.spanner_v1 import param_types
 
+from sqlspec.adapters.spanner._type_handlers import bytes_to_spanner, spanner_to_bytes
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.serializers import from_json, to_json
@@ -238,7 +239,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             "app_name": app_name,
             "user_id": user_id,
             "author": author,
-            "actions": actions,
+            "actions": bytes_to_spanner(actions),
             "long_running_tool_ids_json": long_running_serialized,
             "timestamp": datetime.now(timezone.utc),
             "content": content_serialized,
@@ -346,7 +347,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
                 "user_id": row[3],
                 "invocation_id": row[12] or "",
                 "author": row[4] or "",
-                "actions": row[5] or b"",
+                "actions": spanner_to_bytes(row[5]) or b"",
                 "long_running_tool_ids_json": row[6],
                 "branch": row[7],
                 "timestamp": row[8],
@@ -400,10 +401,10 @@ CREATE TABLE {self._session_table} (
 
     def _get_create_events_table_sql(self) -> str:
         shard_column = ""
-        parent_key = "(session_id, timestamp, id)"
+        pk = "PRIMARY KEY (session_id, timestamp, id)"
         if self._shard_count > 1:
             shard_column = f",\n  shard_id INT64 AS (MOD(FARM_FINGERPRINT(session_id), {self._shard_count})) STORED"
-            parent_key = "(shard_id, session_id, timestamp, id)"
+            pk = "PRIMARY KEY (shard_id, session_id, timestamp, id)"
         options = ""
         if self._events_table_options:
             options = f"\nOPTIONS ({self._events_table_options})"
@@ -427,8 +428,7 @@ CREATE TABLE {self._events_table} (
   interrupted BOOL,
   error_code STRING(64),
   error_message STRING(255){shard_column}
-) PRIMARY KEY {parent_key},
-  INTERLEAVE IN PARENT {self._session_table} ON DELETE CASCADE{options}
+) {pk}{options}
 """
 
     def _get_drop_tables_sql(self) -> "list[str]":

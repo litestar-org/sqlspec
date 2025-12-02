@@ -3,6 +3,14 @@
 from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.adapters.spanner import dialect
+from sqlspec.adapters.spanner._type_handlers import (
+    bytes_to_spanner,
+    coerce_params_for_spanner,
+    infer_spanner_param_types,
+    spanner_to_bytes,
+    spanner_to_uuid,
+    uuid_to_spanner,
+)
 from sqlspec.adapters.spanner.config import (
     SpannerConnectionParams,
     SpannerDriverFeatures,
@@ -20,5 +28,11 @@ __all__ = (
     "SpannerPoolParams",
     "SpannerSyncConfig",
     "SpannerSyncDriver",
+    "bytes_to_spanner",
+    "coerce_params_for_spanner",
     "dialect",
+    "infer_spanner_param_types",
+    "spanner_to_bytes",
+    "spanner_to_uuid",
+    "uuid_to_spanner",
 )

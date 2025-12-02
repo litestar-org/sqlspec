@@ -178,11 +178,17 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     def provide_connection(
         self, *args: Any, transaction: "bool" = False, **kwargs: Any
     ) -> Generator[SpannerConnection, None, None]:
-        """Yield a Snapshot (default) or Transaction from the configured pool."""
+        """Yield a Snapshot (default) or Batch context from the configured pool.
+
+        Note: Spanner does not support database.transaction() as a context manager.
+        For write operations requiring conditional logic, use database.run_in_transaction()
+        directly. The `transaction=True` option here uses database.batch() which is
+        suitable for simple insert/update/delete mutations.
+        """
         database = self.get_database()
         if transaction:
-            with cast("Any", database).transaction() as txn:
-                yield cast("SpannerConnection", txn)
+            with cast("Any", database).batch() as batch:
+                yield cast("SpannerConnection", batch)
         else:
             with cast("Any", database).snapshot() as snapshot:
                 yield cast("SpannerConnection", snapshot)

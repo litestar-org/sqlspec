@@ -26,6 +26,7 @@ This guide provides specific instructions for the `spanner` adapter.
 -   **Row-Level TTL:** Automatic row expiration via TTL policies
 -   **Session Pooling:** Built-in session pool management
 -   **UUID Handling:** Automatic UUID-to-bytes conversion
+-   **BYTES Handling:** Automatic base64 encoding/decoding for BYTES columns
 -   **JSON Support:** Native JSON type handling
 
 ## Configuration
@@ -86,6 +87,63 @@ config = SpannerSyncConfig(
         "ping_interval": 300,  # seconds
     }
 )
+```
+
+## Type Handling
+
+### BYTES Columns
+
+The Spanner Python client requires base64-encoded bytes when using `param_types.BYTES`. The adapter automatically handles encoding and decoding:
+
+```python
+from sqlspec.adapters.spanner import SpannerSyncConfig
+
+config = SpannerSyncConfig(
+    pool_config={
+        "project": "my-project",
+        "instance_id": "my-instance",
+        "database_id": "my-database",
+    }
+)
+
+# Write raw bytes - automatically base64-encoded
+with config.provide_session(transaction=True) as session:
+    data = b"Hello, Spanner!"
+    session.execute(
+        "INSERT INTO files (id, content) VALUES (@id, @content)",
+        {"id": 1, "content": data}
+    )
+
+# Read bytes - automatically base64-decoded
+with config.provide_session() as session:
+    result = session.select_one(
+        "SELECT content FROM files WHERE id = @id",
+        {"id": 1}
+    )
+    content = result["content"]  # Returns raw bytes: b"Hello, Spanner!"
+```
+
+The encoding/decoding is transparent - you work with Python bytes directly. The adapter uses:
+- `bytes_to_spanner()` - Base64-encode bytes for storage
+- `spanner_to_bytes()` - Base64-decode bytes from storage
+
+### UUID Handling
+
+UUIDs are automatically converted to 16-byte BYTES(16) format:
+
+```python
+from uuid import UUID
+
+# Write UUID - automatically converted to bytes
+user_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+session.execute(
+    "INSERT INTO users (id, name) VALUES (@id, @name)",
+    {"id": user_id, "name": "Alice"}
+)
+
+# Read UUID - automatically converted back
+result = session.select_one("SELECT id FROM users WHERE name = @name", {"name": "Alice"})
+user_id = result["id"]  # Returns UUID object
 ```
 
 ## Storage Bridge

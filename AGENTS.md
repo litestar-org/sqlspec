@@ -226,6 +226,49 @@ def register_handlers(connection: "Connection") -> None:
     connection.outputtypehandler = _output_type_handler
 ```
 
+### Binary Data Encoding Pattern (Spanner)
+
+For databases requiring specific binary data encoding (e.g., Spanner's base64 requirement):
+
+```python
+# In adapter's _type_handlers.py
+import base64
+
+def bytes_to_database(value: bytes | None) -> bytes | None:
+    """Convert Python bytes to database-required format.
+
+    Spanner Python client requires base64-encoded bytes when
+    param_types.BYTES is specified.
+    """
+    if value is None:
+        return None
+    return base64.b64encode(value)
+
+def database_to_bytes(value: Any) -> bytes | None:
+    """Convert database BYTES result back to Python bytes.
+
+    Handles both raw bytes and base64-encoded bytes.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bytes | str):
+        return base64.b64decode(value)
+    return None
+```
+
+**Use this pattern when**:
+- Database client library requires specific encoding for binary data
+- Need transparent conversion between Python bytes and database format
+- Want to centralize encoding/decoding logic for reuse
+
+**Key principles**:
+- Centralize conversion functions in `_type_handlers.py`
+- Handle None/NULL values explicitly
+- Support both raw and encoded formats on read (graceful handling)
+- Use in `coerce_params_for_database()` and type converter
+
+**Example**: Spanner requires base64-encoded bytes for `param_types.BYTES` parameters, but you work with raw Python bytes in application code.
+
 ### Framework Extension Pattern
 
 All extensions use `extension_config` in database config:
