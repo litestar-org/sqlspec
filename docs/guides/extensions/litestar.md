@@ -148,7 +148,7 @@ app = Litestar(
 )
 ```
 
-Adapter packages expose store classes (AsyncpgStore, AiosqliteStore, OracledbStore). Each subclass inherits `BaseSQLSpecStore`, enforces consistent schema DDL, and provides utilities such as `delete_expired()`. Run `delete_expired()` periodically or use `litestar sessions delete-expired` from the CLI.
+Adapter packages expose store classes (AsyncpgStore, AiosqliteStore, OracledbStore, SpannerSyncStore). Each subclass inherits `BaseSQLSpecStore`, enforces consistent schema DDL, and provides utilities such as `delete_expired()`. Run `delete_expired()` periodically or use `litestar sessions delete-expired` from the CLI.
 
 ## CLI Integration
 

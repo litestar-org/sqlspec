@@ -35,7 +35,12 @@ SQLSpec supports 10+ database backends through adapter drivers:
 
       - DuckDB (sync)
       - Oracle (sync/async)
+
+   .. grid-item-card:: Cloud Databases
+      :columns: 6
+
       - BigQuery (sync)
+      - Spanner (sync)
 
 All drivers implement a consistent API for query execution.
 
@@ -271,6 +276,39 @@ Google Cloud BigQuery for large-scale analytics.
 - Job-based execution
 - Massive scale analytics
 - Standard SQL support
+
+Google Cloud Spanner
+^^^^^^^^^^^^^^^^^^^^
+
+Globally distributed, horizontally scalable database with strong consistency.
+
+.. code-block:: python
+
+   from sqlspec.adapters.spanner import SpannerSyncConfig
+
+   config = SpannerSyncConfig(
+       pool_config={
+           "project": "my-project",
+           "instance": "my-instance",
+           "database": "my-database",
+       }
+   )
+
+   with spec.provide_session(config) as session:
+       result = session.execute("""
+           SELECT user_id, name, email
+           FROM users
+           WHERE created_at > @start_date
+       """, start_date=datetime.datetime(2025, 1, 1))
+
+**Features**:
+
+- Parameter style: ``@name`` (named_at)
+- GoogleSQL and PostgreSQL dialect modes
+- Horizontal scalability with strong consistency
+- Interleaved tables for parent-child relationships
+- Row deletion policies for automatic data lifecycle
+- Native UUID and JSON support
 
 Query Execution Methods
 ------------------------
@@ -532,6 +570,9 @@ Choose the right driver for your use case:
    * - Cloud Analytics
      - BigQuery
      - Large-scale cloud data warehousing
+   * - Global Scale
+     - Spanner
+     - Globally distributed, strongly consistent workloads
 
 Next Steps
 ----------

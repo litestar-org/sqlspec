@@ -29,6 +29,7 @@ Choose the SQLSpec adapter that matches your production database. Recommended pa
 - **MySQL / MariaDB (`asyncmy`)** – JSON support in 8.0+ / 10.5+.
 - **SQLite (`sqlite`, `aiosqlite`)** – local development and single-user agents.
 - **Oracle (`oracledb`)** – enterprise deployments with In-Memory option.
+- **Spanner (`spanner`)** – globally distributed deployments with interleaved tables for optimal query performance.
 
 ## Selecting a Store
 
@@ -42,6 +43,7 @@ Each adapter exposes a tailored store class:
 | `sqlspec.adapters.aiosqlite.adk` | `AiosqliteADKStore` | Async wrapper over SQLite |
 | `sqlspec.adapters.sqlite.adk` | `SqliteADKStore` | Sync version for scripting contexts |
 | `sqlspec.adapters.oracledb.adk` | `OracledbADKStore` | Supports `INMEMORY` option via `in_memory=True` |
+| `sqlspec.adapters.spanner.adk` | `SpannerADKStore` | Sync driver with interleaved events table for efficient queries |
 
 All store classes inherit `BaseAsyncADKStore` or `BaseSyncADKStore`. They share method signatures (`create_session`, `append_event`, `list_sessions`, `delete_session`, etc.) so you can swap databases without changing the service layer.
 
@@ -102,6 +104,48 @@ async def run_workflow() -> None:
 
 asyncio.run(run_workflow())
 ```
+
+### Spanner Example
+
+For Google Cloud Spanner deployments:
+
+```python
+from sqlspec.adapters.spanner import SpannerSyncConfig
+from sqlspec.adapters.spanner.adk import SpannerADKStore
+from sqlspec.extensions.adk import SQLSpecSessionService
+
+
+def build_spanner_service() -> SQLSpecSessionService:
+    config = SpannerSyncConfig(
+        pool_config={
+            "project": "my-project",
+            "instance_id": "my-instance",
+            "database_id": "agents",
+        },
+        extension_config={
+            "adk": {
+                "sessions_table": "adk_sessions",
+                "events_table": "adk_events",
+            }
+        },
+    )
+
+    store = SpannerADKStore(config)
+    store.create_tables()
+    return SQLSpecSessionService(store)
+
+
+def run_spanner_workflow() -> None:
+    service = build_spanner_service()
+    session = service.create_session(
+        app_name="weather_agent",
+        user_id="user-123",
+        state={"units": "metric"},
+    )
+    # Session and event operations...
+```
+
+The Spanner ADK store uses an interleaved events table for efficient queries and automatic co-location of session and event data.
 
 The service automatically normalizes identifiers, timestamps, and event payloads. `append_event()` skips partial events until they complete, mirroring Google ADK semantics.
 

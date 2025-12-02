@@ -13,6 +13,7 @@ The table below summarizes the canonical `DriverParameterProfile` entries define
 | OracleDB | `"oracledb"` | `helper` | None | `oracle` | List expansion disabled; LOB handling delegated to adapter converters. |
 | PSQLPy | `"psqlpy"` | `helper` | None | `postgres` | Decimal values currently downcast to float for driver compatibility. |
 | Psycopg | `"psycopg"` | `helper` | None | `postgres` | Array coercion delegated to psycopg adapters; JSON handled by shared converters. |
+| Spanner | `"spanner"` | `helper` | `type_coercion_overrides` (dict/list/tuple JSON coercion) | `spanner` | Uses `@param` named parameters; supports both GoogleSQL and Spangres (PostgreSQL) dialects. |
 | SQLite | `"sqlite"` | `helper` | None | `sqlite` | Shares bool/datetime handling with DuckDB and CLI defaults. |
 
 ## Adding or Updating Profiles
