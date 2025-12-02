@@ -52,7 +52,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         return await async_(self._get)(key, renew_for)
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=renew_for is not None) as driver:
             sql = f"""
             SELECT data, expires_at
             FROM {self._table_name}
@@ -108,7 +108,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         INSERT {self._table_name} (session_id, data, expires_at, created_at, updated_at)
         VALUES (@session_id, @data, @expires_at, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP())
         """
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             update_result = driver.execute(upsert_sql, params)
             if update_result.rows_affected == 0:
                 driver.execute(insert_sql, params)
@@ -120,7 +120,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE session_id = @session_id"
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             driver.execute(sql, {"session_id": key})
 
     async def delete_all(self) -> None:
@@ -128,7 +128,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
 
     def _delete_all(self) -> None:
         sql = f"DELETE FROM {self._table_name}"
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             driver.execute(sql)
 
     async def exists(self, key: str) -> bool:
@@ -173,7 +173,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         DELETE FROM {self._table_name}
         WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP()
         """
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             result = driver.execute(sql)
             return result.rows_affected or 0
 

@@ -17,6 +17,7 @@ Available adapters:
 - **DuckDB**: duckdb
 - **Oracle**: oracledb
 - **BigQuery**: bigquery
+- **Spanner**: spanner
 - **Cross-Database**: ADBC (Arrow Database Connectivity)
 
 Each adapter implementation includes:

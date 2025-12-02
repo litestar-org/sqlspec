@@ -194,6 +194,12 @@ def _register_with_sqlglot() -> None:
     from sqlglot.dialects.postgres import Postgres
     from sqlglot.generator import Generator
 
+    try:  # optional, only when Spanner dialects are present
+        from sqlspec.adapters.spanner.dialect import Spanner, Spangres
+    except Exception:  # pragma: no cover - optional import
+        Spanner = None
+        Spangres = None
+
     def vector_distance_sql_base(generator: "Generator", expression: "VectorDistance") -> str:
         """Base generator for VectorDistance expressions."""
         return expression._sql_generic(  # pyright: ignore[reportPrivateUsage]
@@ -222,6 +228,12 @@ def _register_with_sqlglot() -> None:
             generator.sql(expression.left), generator.sql(expression.right), expression.metric
         )
 
+    def vector_distance_sql_spanner(generator: "Generator", expression: "VectorDistance") -> str:
+        """Spanner generator for VectorDistance expressions (same as BigQuery)."""
+        return expression._sql_bigquery(  # pyright: ignore[reportPrivateUsage]
+            generator.sql(expression.left), generator.sql(expression.right), expression.metric
+        )
+
     def vector_distance_sql_duckdb(generator: "Generator", expression: "VectorDistance") -> str:
         """DuckDB generator for VectorDistance expressions."""
         return expression._sql_duckdb(  # pyright: ignore[reportPrivateUsage]
@@ -235,6 +247,10 @@ def _register_with_sqlglot() -> None:
     Oracle.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_oracle
     BigQuery.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_bigquery
     DuckDB.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_duckdb
+    if Spanner is not None:
+        Spanner.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_spanner
+    if Spangres is not None:
+        Spangres.Generator.TRANSFORMS[VectorDistance] = vector_distance_sql_postgres
 
 
 _register_with_sqlglot()

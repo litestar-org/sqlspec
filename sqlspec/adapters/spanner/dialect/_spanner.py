@@ -1,8 +1,8 @@
 """Google Cloud Spanner SQL dialect (GoogleSQL variant).
 
 Extends the BigQuery dialect with Spanner-only DDL features:
-`INTERLEAVE IN PARENT` for interleaved tables and `TTL INTERVAL ... ON ...`
-for row-level time-to-live policies.
+`INTERLEAVE IN PARENT` for interleaved tables and `ROW DELETION POLICY`
+for row-level time-to-live policies (GoogleSQL).
 """
 
 from typing import Any, cast
@@ -23,6 +23,7 @@ if ttl_token is not None:
     _SPANNER_KEYWORDS["TTL"] = ttl_token
 
 _TTL_MIN_COMPONENTS = 2
+_ROW_DELETION_NAME = "ROW_DELETION_POLICY"
 
 
 class Spanner(BigQuery):
@@ -34,7 +35,7 @@ class Spanner(BigQuery):
         KEYWORDS = {**BigQuery.Tokenizer.KEYWORDS, **_SPANNER_KEYWORDS}
 
     class Parser(BigQuery.Parser):
-        """Parse Spanner extensions such as INTERLEAVE and TTL clauses."""
+        """Parse Spanner extensions such as INTERLEAVE and row deletion policies."""
 
         def _parse_table_parts(
             self, schema: "bool" = False, is_db_reference: "bool" = False, wildcard: "bool" = False
@@ -59,10 +60,25 @@ class Spanner(BigQuery):
             return table
 
         def _parse_property(self) -> exp.Expression:
-            """Parse Spanner TTL property as a Property expression."""
-            if self._match_text_seq("TTL"):  # type: ignore[no-untyped-call]
+            """Parse Spanner row deletion policy or PostgreSQL-style TTL."""
+            if self._match_text_seq("ROW", "DELETION", "POLICY"):  # type: ignore[no-untyped-call]
+                self._match(TokenType.L_PAREN)  # type: ignore[no-untyped-call]
+                self._match_text_seq("OLDER_THAN")  # type: ignore[no-untyped-call]
+                self._match(TokenType.L_PAREN)  # type: ignore[no-untyped-call]
+                column = cast("exp.Expression", self._parse_id_var())
+                self._match(TokenType.COMMA)  # type: ignore[no-untyped-call]
                 self._match_text_seq("INTERVAL")  # type: ignore[no-untyped-call]
-                interval = cast("exp.Expression", self._parse_string())
+                interval = cast("exp.Expression", self._parse_expression())
+                self._match(TokenType.R_PAREN)  # type: ignore[no-untyped-call]
+                self._match(TokenType.R_PAREN)  # type: ignore[no-untyped-call]
+
+                return exp.Property(
+                    this=exp.Literal.string(_ROW_DELETION_NAME), value=exp.Tuple(expressions=[column, interval])
+                )
+
+            if self._match_text_seq("TTL"):  # PostgreSQL-dialect style, keep for compatibility
+                self._match_text_seq("INTERVAL")  # type: ignore[no-untyped-call]
+                interval = cast("exp.Expression", self._parse_expression())
                 self._match_text_seq("ON")  # type: ignore[no-untyped-call]
                 column = cast("exp.Expression", self._parse_id_var())
 
@@ -87,7 +103,16 @@ class Spanner(BigQuery):
             return sql
 
         def property_sql(self, expression: exp.Property) -> str:
-            """Render TTL property in Spanner syntax."""
+            """Render row deletion policy or TTL."""
+            if getattr(expression.this, "name", "").upper() == _ROW_DELETION_NAME:
+                values = cast("Any", expression.args.get("value"))
+                if values and getattr(values, "expressions", None) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
+                    column = self.sql(values.expressions[0])
+                    interval_sql = self.sql(values.expressions[1])
+                    if not interval_sql.upper().startswith("INTERVAL"):
+                        interval_sql = f"INTERVAL {interval_sql}"
+                    return f"ROW DELETION POLICY (OLDER_THAN({column}, {interval_sql}))"
+
             if getattr(expression.this, "name", "").upper() == "TTL":
                 values = cast("Any", expression.args.get("value"))
                 if values and getattr(values, "expressions", None) and len(values.expressions) >= _TTL_MIN_COMPONENTS:

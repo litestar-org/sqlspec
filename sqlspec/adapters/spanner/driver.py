@@ -39,6 +39,13 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import SyncDataDictionaryBase
+    from sqlspec.storage import (
+        StorageBridgeJob,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
 
 __all__ = (
     "SpannerDataDictionary",
@@ -228,7 +235,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
 
     def _infer_param_types(self, params: "dict[str, Any] | None") -> "dict[str, Any]":
-        if not params:
+        if not params or isinstance(params, list):
             return {}
 
         types: dict[str, Any] = {}
@@ -264,7 +271,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def _coerce_params(self, params: "dict[str, Any] | None") -> "dict[str, Any] | None":
         """Coerce UUIDs to bytes for BYTES(16) storage."""
-        if params is None:
+        if params is None or isinstance(params, list):
             return None
         coerced: dict[str, Any] = {}
         for key, value in params.items():
@@ -296,6 +303,85 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         arrow_data = convert_dict_to_arrow(result.data or [], return_format=kwargs.get("return_format", "table"))
         return create_arrow_result(result.statement, arrow_data, rows_affected=result.rows_affected)
+
+    def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, Any] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute query and stream Arrow results to storage."""
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline: SyncStoragePipeline = cast("SyncStoragePipeline", self._storage_pipeline())
+        telemetry_payload = self._write_result_to_storage_sync(
+            arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into Spanner table via batch mutations."""
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+
+        if overwrite:
+            self._truncate_table_sync(table)
+
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            insert_sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join('@p' + str(i) for i in range(len(columns)))})"
+            batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
+            for record in records:
+                params = {f"p{i}": val for i, val in enumerate(record)}
+                coerced = self._coerce_params(params)
+                batch_args.append((insert_sql, coerced, self._infer_param_types(coerced)))
+
+            conn = cast("Any", self.connection)
+            if hasattr(conn, "batch_update"):
+                conn.batch_update(batch_args)
+            else:
+                for batch_sql, batch_params, batch_types in batch_args:
+                    conn.execute_sql(batch_sql, params=batch_params, param_types=batch_types)
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, Any] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load artifacts from storage into Spanner table."""
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
+    def _truncate_table_sync(self, table: str) -> None:
+        """Delete all rows from table (Spanner doesn't have TRUNCATE)."""
+        delete_sql = f"DELETE FROM {table} WHERE TRUE"
+        conn = cast("Any", self.connection)
+        if hasattr(conn, "execute_update"):
+            conn.execute_update(delete_sql)
 
 
 def _build_spanner_profile() -> DriverParameterProfile:

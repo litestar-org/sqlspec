@@ -1,82 +1,47 @@
 from collections.abc import Generator
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from google.auth.credentials import AnonymousCredentials
+from google.api_core import exceptions as api_exceptions
 from google.cloud import spanner
+from pytest_databases.docker.spanner import SpannerService
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.spanner import SpannerSyncConfig, SpannerSyncDriver
 
+if TYPE_CHECKING:
+    from google.cloud.spanner_v1.database import Database
 
-def _start_spanner_service() -> "Any | None":
-    try:
-        from pytest_databases.docker.spanner import SpannerService  # type: ignore[import-not-found]
-    except Exception:  # pragma: no cover - optional dependency
-        return None
 
-    service = cast("Any", SpannerService)()  # type: ignore[call-arg]
-    if hasattr(service, "start"):
-        service.start()
-    return service
+pytestmark = pytest.mark.xdist_group("spanner")
 
 
 @pytest.fixture(scope="session")
-def spanner_service() -> Generator[Any, None, None]:
-    service = _start_spanner_service()
-    if service is None:
-        pytest.skip("pytest-databases spanner service not available")
-    try:
-        yield service
-    finally:
-        if hasattr(service, "stop"):
-            service.stop()
-
-
-@pytest.fixture(scope="session")
-def spanner_client(spanner_service: Any) -> Generator[spanner.Client, None, None]:
-    host = getattr(spanner_service, "host", "localhost")
-    port = getattr(spanner_service, "port", 9010)
-    project_id = getattr(spanner_service, "project", "test-project")
-    endpoint = f"{host}:{port}"
-
-    client = spanner.Client(
-        project=project_id,
-        credentials=cast(Any, AnonymousCredentials()),  # type: ignore[no-untyped-call]
-        client_options={"api_endpoint": endpoint},
-    )
-
-    instance_id = getattr(spanner_service, "instance_id", getattr(spanner_service, "instance", "test-instance"))
-    database_id = getattr(spanner_service, "database_id", getattr(spanner_service, "database", "test-database"))
-
-    instance = client.instance(instance_id)
+def spanner_database(spanner_service: SpannerService, spanner_connection: spanner.Client) -> Generator["Database", None, None]:
+    """Ensure emulator instance and database exist, yield Database."""
+    instance = spanner_connection.instance(spanner_service.instance_name)
     if not instance.exists():
-        config_name = f"{client.project_name}/instanceConfigs/emulator-config"
-        instance = client.instance(instance_id, configuration_name=config_name)
+        config_name = f"{spanner_connection.project_name}/instanceConfigs/emulator-config"
+        instance = spanner_connection.instance(spanner_service.instance_name, configuration_name=config_name)
         instance.create().result(300)
 
-    database = instance.database(database_id)
+    database = instance.database(spanner_service.database_name)
     if not database.exists():
         database.create().result(300)
 
-    yield client
+    yield database
 
 
 @pytest.fixture
-def spanner_config(spanner_service: Any, spanner_client: spanner.Client) -> SpannerSyncConfig:
-    host = getattr(spanner_service, "host", "localhost")
-    port = getattr(spanner_service, "port", 9010)
-    project_id = getattr(spanner_service, "project", "test-project")
-    instance_id = getattr(spanner_service, "instance_id", getattr(spanner_service, "instance", "test-instance"))
-    database_id = getattr(spanner_service, "database_id", getattr(spanner_service, "database", "test-database"))
-    api_endpoint = f"{host}:{port}"
+def spanner_config(spanner_service: SpannerService, spanner_connection: spanner.Client) -> SpannerSyncConfig:
+    api_endpoint = f"{spanner_service.host}:{spanner_service.port}"
 
     return SpannerSyncConfig(
         pool_config={
-            "project": project_id,
-            "instance_id": instance_id,
-            "database_id": database_id,
-            "credentials": cast(Any, AnonymousCredentials()),  # type: ignore[no-untyped-call]
+            "project": spanner_service.project,
+            "instance_id": spanner_service.instance_name,
+            "database_id": spanner_service.database_name,
+            "credentials": spanner_service.credentials,
             "client_options": {"api_endpoint": api_endpoint},
             "min_sessions": 1,
             "max_sessions": 5,
@@ -87,6 +52,61 @@ def spanner_config(spanner_service: Any, spanner_client: spanner.Client) -> Span
 @pytest.fixture
 def spanner_session(spanner_config: SpannerSyncConfig) -> Generator[SpannerSyncDriver, None, None]:
     sql = SQLSpec()
-    sql.add_config(spanner_config)
-    with sql.provide_session(spanner_config) as session:
+    c = sql.add_config(spanner_config)
+    with sql.provide_session(c) as session:
         yield session
+
+
+def run_ddl(database: "Database", statements: "list[str]", timeout: int = 300) -> None:
+    """Execute DDL statements on Spanner database."""
+    operation = database.update_ddl(statements)  # type: ignore[no-untyped-call]
+    operation.result(timeout)
+
+
+def drop_table_if_exists(database: "Database", table_name: str) -> None:
+    """Drop a table if it exists, ignoring errors."""
+    try:
+        run_ddl(database, [f"DROP TABLE {table_name}"])
+    except api_exceptions.GoogleAPICallError:
+        pass
+
+
+@pytest.fixture
+def test_users_table(spanner_database: "Database") -> Generator[str, None, None]:
+    """Create test_users table for CRUD tests."""
+    table_name = "test_users"
+    drop_table_if_exists(spanner_database, table_name)
+
+    ddl = f"""
+    CREATE TABLE {table_name} (
+        id STRING(36) NOT NULL,
+        name STRING(100),
+        email STRING(255),
+        age INT64
+    ) PRIMARY KEY (id)
+    """
+    run_ddl(spanner_database, [ddl])
+
+    yield table_name
+
+    drop_table_if_exists(spanner_database, table_name)
+
+
+@pytest.fixture
+def test_arrow_table(spanner_database: "Database") -> Generator[str, None, None]:
+    """Create test table for Arrow tests."""
+    table_name = "test_arrow_data"
+    drop_table_if_exists(spanner_database, table_name)
+
+    ddl = f"""
+    CREATE TABLE {table_name} (
+        id INT64 NOT NULL,
+        name STRING(100),
+        value INT64
+    ) PRIMARY KEY (id)
+    """
+    run_ddl(spanner_database, [ddl])
+
+    yield table_name
+
+    drop_table_if_exists(spanner_database, table_name)

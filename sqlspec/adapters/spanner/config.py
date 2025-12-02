@@ -61,6 +61,11 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     driver_type: ClassVar[type["SpannerSyncDriver"]] = SpannerSyncDriver
     connection_type: ClassVar[type["SpannerConnection"]] = cast("type[SpannerConnection]", SpannerConnection)
     supports_transactional_ddl: ClassVar[bool] = False
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = False
+    supports_native_parquet_import: ClassVar[bool] = False
+    requires_staging_for_load: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -165,23 +170,37 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             cast("Any", self.pool_instance).close()
 
     @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> Generator[SpannerConnection, None, None]:
-        """Yield a Snapshot or Transaction from the configured pool."""
+    def provide_connection(
+        self, *args: Any, transaction: "bool" = False, **kwargs: Any
+    ) -> Generator[SpannerConnection, None, None]:
+        """Yield a Snapshot (default) or Transaction from the configured pool."""
         database = self.get_database()
-        with cast("Any", database).snapshot() as snapshot:
-            yield cast("SpannerConnection", snapshot)
+        if transaction:
+            with cast("Any", database).transaction() as txn:  # type: ignore[no-untyped-call]
+                yield cast("SpannerConnection", txn)
+        else:
+            with cast("Any", database).snapshot() as snapshot:
+                yield cast("SpannerConnection", snapshot)
 
     @contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self, *args: Any, statement_config: "StatementConfig | None" = None, transaction: "bool" = False, **kwargs: Any
     ) -> Generator[SpannerSyncDriver, None, None]:
-        with self.provide_connection(*args, **kwargs) as connection:
+        with self.provide_connection(*args, transaction=transaction, **kwargs) as connection:
             driver = self.driver_type(
                 connection=connection,
                 statement_config=statement_config or self.statement_config,
                 driver_features=self.driver_features,
             )
             yield self._prepare_driver(driver)
+
+    @contextmanager
+    def provide_write_session(
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+    ) -> Generator[SpannerSyncDriver, None, None]:
+        """Convenience wrapper that always yields a write-capable transaction session."""
+        with self.provide_session(*args, statement_config=statement_config, transaction=True, **kwargs) as driver:
+            yield driver
 
     def get_signature_namespace(self) -> dict[str, Any]:
         namespace = super().get_signature_namespace()
