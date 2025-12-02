@@ -12,9 +12,7 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(scope="session")
-def spanner_litestar_config(
-    spanner_service: SpannerService, spanner_database: "Database"
-) -> SpannerSyncConfig:
+def spanner_litestar_config(spanner_service: SpannerService, spanner_database: "Database") -> SpannerSyncConfig:
     api_endpoint = f"{spanner_service.host}:{spanner_service.port}"
 
     return SpannerSyncConfig(

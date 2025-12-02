@@ -1,5 +1,5 @@
 from collections.abc import Generator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 from pytest_databases.docker.spanner import SpannerService
@@ -12,9 +12,7 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(scope="session")
-def spanner_adk_config(
-    spanner_service: SpannerService, spanner_database: "Database"
-) -> SpannerSyncConfig:
+def spanner_adk_config(spanner_service: SpannerService, spanner_database: "Database") -> SpannerSyncConfig:
     api_endpoint = f"{spanner_service.host}:{spanner_service.port}"
 
     return SpannerSyncConfig(

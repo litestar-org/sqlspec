@@ -3,7 +3,6 @@
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1 import param_types
 
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
@@ -364,12 +363,17 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         ]
 
     def create_tables(self) -> None:
-        ddl_statements = [self._get_create_sessions_table_sql(), self._get_create_events_table_sql()]
-        operation = self._database().update_ddl(ddl_statements)  # type: ignore[no-untyped-call]
-        try:
-            operation.result(300)
-        except api_exceptions.AlreadyExists:
-            return
+        database = self._database()
+        existing_tables = {t.table_id for t in database.list_tables()}  # type: ignore[no-untyped-call]
+
+        ddl_statements: list[str] = []
+        if self._session_table not in existing_tables:
+            ddl_statements.append(self._get_create_sessions_table_sql())
+        if self._events_table not in existing_tables:
+            ddl_statements.append(self._get_create_events_table_sql())
+
+        if ddl_statements:
+            database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
 
     def _get_create_sessions_table_sql(self) -> str:
         owner_line = ""
@@ -411,7 +415,7 @@ CREATE TABLE {self._events_table} (
   user_id STRING(128) NOT NULL,
   invocation_id STRING(128),
   author STRING(64),
-  actions BYTES,
+  actions BYTES(MAX),
   long_running_tool_ids_json JSON,
   branch STRING(64),
   timestamp TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),

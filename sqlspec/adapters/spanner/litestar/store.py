@@ -3,8 +3,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from google.api_core import exceptions as api_exceptions
-
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
@@ -67,7 +65,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
                 AND session_id = @session_id
                 AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP())
                 """
-            result = driver.select_one(sql, {"session_id": key})
+            result = driver.select_one_or_none(sql, {"session_id": key})
             if result is None:
                 return None
 
@@ -142,7 +140,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         LIMIT 1
         """
         with self._config.provide_session() as driver:
-            row = driver.select_one(sql, {"session_id": key})
+            row = driver.select_one_or_none(sql, {"session_id": key})
             return row is not None
 
     async def expires_in(self, key: str) -> "int | None":
@@ -156,7 +154,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
         with self._config.provide_session() as driver:
-            row = driver.select_one(sql, {"session_id": key})
+            row = driver.select_one_or_none(sql, {"session_id": key})
             if row is None:
                 return None
             expires_at = self._timestamp_to_datetime(row.get("expires_at"))
@@ -181,11 +179,12 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         await async_(self._create_table)()
 
     def _create_table(self) -> None:
-        ddl_statements = [self._get_create_table_sql(), self._get_create_index_sql()]
-        try:
-            self._config.get_database().update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
-        except api_exceptions.AlreadyExists:
-            return
+        database = self._config.get_database()
+        existing_tables = {t.table_id for t in database.list_tables()}  # type: ignore[no-untyped-call]
+
+        if self._table_name not in existing_tables:
+            ddl_statements = [self._get_create_table_sql(), self._get_create_index_sql()]
+            database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
 
     def _get_create_table_sql(self) -> str:
         shard_column = ""
