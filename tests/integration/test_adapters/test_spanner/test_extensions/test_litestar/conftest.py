@@ -1,28 +1,28 @@
 from collections.abc import AsyncGenerator
-from typing import Any, cast
+from typing import TYPE_CHECKING
 
 import pytest
-from google.auth.credentials import AnonymousCredentials
+from pytest_databases.docker.spanner import SpannerService
 
 from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.adapters.spanner.litestar import SpannerSyncStore
 
+if TYPE_CHECKING:
+    from google.cloud.spanner_v1.database import Database
+
 
 @pytest.fixture(scope="session")
-def spanner_litestar_config(spanner_service: Any) -> SpannerSyncConfig:
-    host = getattr(spanner_service, "host", "localhost")
-    port = getattr(spanner_service, "port", 9010)
-    project_id = getattr(spanner_service, "project", "test-project")
-    instance_id = getattr(spanner_service, "instance_id", getattr(spanner_service, "instance", "test-instance"))
-    database_id = getattr(spanner_service, "database_id", getattr(spanner_service, "database", "test-database"))
-    api_endpoint = f"{host}:{port}"
+def spanner_litestar_config(
+    spanner_service: SpannerService, spanner_database: "Database"
+) -> SpannerSyncConfig:
+    api_endpoint = f"{spanner_service.host}:{spanner_service.port}"
 
     return SpannerSyncConfig(
         pool_config={
-            "project": project_id,
-            "instance_id": instance_id,
-            "database_id": database_id,
-            "credentials": cast(Any, AnonymousCredentials()),  # type: ignore[no-untyped-call]
+            "project": spanner_service.project,
+            "instance_id": spanner_service.instance_name,
+            "database_id": spanner_service.database_name,
+            "credentials": spanner_service.credentials,
             "client_options": {"api_endpoint": api_endpoint},
             "min_sessions": 1,
             "max_sessions": 5,

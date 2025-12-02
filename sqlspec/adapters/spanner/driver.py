@@ -235,7 +235,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
 
     def _infer_param_types(self, params: "dict[str, Any] | None") -> "dict[str, Any]":
-        if not params or isinstance(params, list):
+        if not params or isinstance(params, (list, tuple)):
             return {}
 
         types: dict[str, Any] = {}
@@ -271,7 +271,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def _coerce_params(self, params: "dict[str, Any] | None") -> "dict[str, Any] | None":
         """Coerce UUIDs to bytes for BYTES(16) storage."""
-        if params is None or isinstance(params, list):
+        if params is None or isinstance(params, (list, tuple)):
             return None
         coerced: dict[str, Any] = {}
         for key, value in params.items():

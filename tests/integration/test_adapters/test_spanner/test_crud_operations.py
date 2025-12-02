@@ -84,7 +84,7 @@ def test_insert_select_update_delete(
     database.run_in_transaction(delete_user)  # type: ignore[no-untyped-call]
 
     with spanner_config.provide_session() as session:
-        result = session.select_one(f"SELECT id FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        result = session.select_one_or_none(f"SELECT id FROM {test_users_table} WHERE id = @id", {"id": user_id})
         assert result is None
 
 
