@@ -678,6 +678,94 @@ bigquery
    :undoc-members:
    :show-inheritance:
 
+Spanner
+=======
+
+spanner
+-------
+
+.. currentmodule:: sqlspec.adapters.spanner
+
+**Homepage**: https://github.com/googleapis/python-spanner
+
+**PyPI**: https://pypi.org/project/google-cloud-spanner/
+
+**Concurrency**: Sync-only
+
+**Connection Pooling**: Native session pooling via ``google.cloud.spanner_v1.pool``
+
+**Parameter Style**: ``@param1, @param2`` (named parameters)
+
+**Special Features**:
+
+- Google Cloud Spanner integration
+- Full ACID transactions
+- Interleaved tables for co-location
+- Row-level TTL policies
+- Custom SQLglot dialect (GoogleSQL and PostgreSQL modes)
+- Native Arrow support via conversion
+- UUID auto-conversion
+- JSON type handling
+
+**Known Limitations**:
+
+- Synchronous only (no async support in current implementation)
+- DDL operations require separate admin API calls
+- Requires Google Cloud credentials
+- 20,000 mutation limit per transaction
+
+**Installation**:
+
+.. code-block:: bash
+
+   uv add sqlspec[spanner]
+
+**Configuration**:
+
+.. code-block:: python
+
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.spanner import SpannerSyncConfig
+
+   sql = SQLSpec()
+   db = sql.add_config(
+       SpannerSyncConfig(
+           pool_config={
+               "project": "my-project-id",
+               "instance_id": "my-instance",
+               "database_id": "my-database",
+               "min_sessions": 5,
+               "max_sessions": 20
+           }
+       )
+   )
+
+   # Read-only snapshot (default)
+   with sql.provide_session(db) as session:
+       result = session.select(
+           "SELECT * FROM users WHERE id = @user_id",
+           {"user_id": 1}
+       )
+
+   # Write transaction
+   with sql.provide_session(db, transaction=True) as session:
+       session.execute(
+           "UPDATE users SET active = TRUE WHERE id = @user_id",
+           {"user_id": 1}
+       )
+
+**API Reference**:
+
+.. autoclass:: SpannerSyncConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: SpannerSyncDriver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Oracle
 ======
 
@@ -922,20 +1010,20 @@ ADBC (Arrow Database Connectivity)
 
 .. code-block:: bash
 
-   # PostgreSQL backend
-   uv add sqlspec[adbc-postgresql]
+    # PostgreSQL backend
+    uv add sqlspec[adbc] adbc-driver-postgresql
 
-   # SQLite backend
-   uv add sqlspec[adbc-sqlite]
+    # SQLite backend
+    uv add sqlspec[adbc] adbc-driver-sqlite
 
-   # DuckDB backend
-   uv add sqlspec[adbc-duckdb]
+    # DuckDB backend
+    uv add sqlspec[adbc] adbc-driver-duckdb
 
-   # BigQuery backend
-   uv add sqlspec[adbc-bigquery]
+    # BigQuery backend
+    uv add sqlspec[adbc] adbc-driver-bigquery
 
-   # Snowflake backend
-   uv add sqlspec[adbc-snowflake]
+    # Snowflake backend
+    uv add sqlspec[adbc] adbc-driver-snowflake
 
 **Configuration (PostgreSQL)**:
 

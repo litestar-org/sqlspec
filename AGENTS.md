@@ -76,7 +76,7 @@ Each adapter in `sqlspec/adapters/` follows this structure:
 - `_types.py` - Adapter-specific type definitions
 - Optional: `_*_handlers.py` - Type handlers for optional features (numpy, pgvector)
 
-Supported adapters: adbc, aiosqlite, asyncmy, asyncpg, bigquery, duckdb, oracledb, psqlpy, psycopg, sqlite
+Supported adapters: adbc, aiosqlite, asyncmy, asyncpg, bigquery, duckdb, oracledb, psqlpy, psycopg, spanner, sqlite
 
 ### Key Design Patterns
 
@@ -294,6 +294,77 @@ _register_with_sqlglot()
 - PostgreSQL: `embedding <-> '[0.1,0.2]'` (operator)
 - MySQL: `DISTANCE(embedding, STRING_TO_VECTOR('[0.1,0.2]'), 'EUCLIDEAN')` (function)
 - Oracle: `VECTOR_DISTANCE(embedding, TO_VECTOR('[0.1,0.2]'), EUCLIDEAN)` (function)
+
+### Custom SQLglot Dialect Pattern
+
+For databases with unique SQL syntax not supported by existing sqlglot dialects:
+
+```python
+# In sqlspec/adapters/{adapter}/dialect/_dialect.py
+from sqlglot import exp
+from sqlglot.dialects.bigquery import BigQuery
+from sqlglot.tokens import TokenType
+
+class CustomDialect(BigQuery):
+    """Inherit from closest matching dialect."""
+
+    class Tokenizer(BigQuery.Tokenizer):
+        """Add custom keywords."""
+        KEYWORDS = {
+            **BigQuery.Tokenizer.KEYWORDS,
+            "INTERLEAVE": TokenType.INTERLEAVE,
+        }
+
+    class Parser(BigQuery.Parser):
+        """Override parser for custom syntax."""
+        def _parse_table_parts(self, schema=False, is_db_reference=False, wildcard=False):
+            table = super()._parse_table_parts(schema=schema, is_db_reference=is_db_reference, wildcard=wildcard)
+
+            # Parse custom clause
+            if self._match_text_seq("INTERLEAVE", "IN", "PARENT"):
+                parent = self._parse_table(schema=True, is_db_reference=True)
+                table.set("interleave_parent", parent)
+
+            return table
+
+    class Generator(BigQuery.Generator):
+        """Override generator for custom SQL output."""
+        def table_sql(self, expression, sep=" "):
+            sql = super().table_sql(expression, sep=sep)
+
+            # Generate custom clause
+            parent = expression.args.get("interleave_parent")
+            if parent:
+                sql = f"{sql}\nINTERLEAVE IN PARENT {self.sql(parent)}"
+
+            return sql
+
+# Register dialect in adapter __init__.py
+from sqlglot.dialects.dialect import Dialect
+Dialect.classes["custom"] = CustomDialect
+```
+
+**Create custom dialect when**:
+- Database has unique DDL/DML syntax not in existing dialects
+- Need to parse and validate database-specific keywords
+- Need to generate database-specific SQL from AST
+- An existing dialect provides 80%+ compatibility to inherit from
+
+**Do NOT create custom dialect if**:
+- Only parameter style differences (use parameter profiles)
+- Only type conversion differences (use type converters)
+- Only connection management differences (use config/driver)
+
+**Key principles**:
+- **Inherit from closest dialect**: Spanner inherits BigQuery (both GoogleSQL)
+- **Minimal overrides**: Only override methods that need customization
+- **Store metadata in AST**: Use `expression.set(key, value)` for custom data
+- **Handle missing tokens**: Check `getattr(TokenType, "KEYWORD", None)` before using
+- **Test thoroughly**: Unit tests for parsing/generation, integration tests with real DB
+
+**Reference implementation**: `sqlspec/adapters/spanner/dialect/` (GoogleSQL and PostgreSQL modes)
+
+**Documentation**: See `/docs/guides/architecture/custom-sqlglot-dialects.md` for full guide
 
 ### Error Handling
 
