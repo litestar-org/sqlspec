@@ -178,19 +178,37 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     def provide_connection(
         self, *args: Any, transaction: "bool" = False, **kwargs: Any
     ) -> Generator[SpannerConnection, None, None]:
-        """Yield a Snapshot (default) or Batch context from the configured pool.
+        """Yield a Snapshot (default) or Transaction context from the configured pool.
 
-        Note: Spanner does not support database.transaction() as a context manager.
-        For write operations requiring conditional logic, use database.run_in_transaction()
-        directly. The `transaction=True` option here uses database.batch() which is
-        suitable for simple insert/update/delete mutations.
+        Args:
+            *args: Additional positional arguments (unused, for interface compatibility).
+            transaction: If True, yields a Transaction context that supports
+                execute_update() for DML statements. If False (default), yields
+                a read-only Snapshot context for SELECT queries.
+            **kwargs: Additional keyword arguments (unused, for interface compatibility).
+
+        Note: For complex transactional logic with retries, use database.run_in_transaction()
+        directly. The Transaction context here auto-commits on successful exit.
         """
         database = self.get_database()
         if transaction:
-            with cast("Any", database).batch() as batch:
-                yield cast("SpannerConnection", batch)
+            session = cast("Any", database).session()
+            session.create()
+            try:
+                txn = session.transaction()
+                txn.__enter__()
+                try:
+                    yield cast("SpannerConnection", txn)
+                    if hasattr(txn, "_transaction_id") and txn._transaction_id is not None:
+                        txn.commit()
+                except Exception:
+                    if hasattr(txn, "_transaction_id") and txn._transaction_id is not None:
+                        txn.rollback()
+                    raise
+            finally:
+                session.delete()
         else:
-            with cast("Any", database).snapshot() as snapshot:
+            with cast("Any", database).snapshot(multi_use=True) as snapshot:
                 yield cast("SpannerConnection", snapshot)
 
     @contextmanager
@@ -209,7 +227,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     def provide_write_session(
         self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> Generator[SpannerSyncDriver, None, None]:
-        """Convenience wrapper that always yields a write-capable transaction session."""
         with self.provide_session(*args, statement_config=statement_config, transaction=True, **kwargs) as driver:
             yield driver
 

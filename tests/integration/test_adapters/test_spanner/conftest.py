@@ -35,7 +35,11 @@ def spanner_database(
 
 
 @pytest.fixture
-def spanner_config(spanner_service: SpannerService, spanner_connection: spanner.Client) -> SpannerSyncConfig:
+def spanner_config(
+    spanner_service: SpannerService, spanner_connection: spanner.Client, spanner_database: "Database"
+) -> SpannerSyncConfig:
+    """Create SpannerSyncConfig after ensuring database exists."""
+    _ = spanner_database  # Ensure database is created before config
     api_endpoint = f"{spanner_service.host}:{spanner_service.port}"
 
     return SpannerSyncConfig(
@@ -53,9 +57,24 @@ def spanner_config(spanner_service: SpannerService, spanner_connection: spanner.
 
 @pytest.fixture
 def spanner_session(spanner_config: SpannerSyncConfig) -> Generator[SpannerSyncDriver, None, None]:
+    """Read-only session for SELECT operations."""
     sql = SQLSpec()
     c = sql.add_config(spanner_config)
     with sql.provide_session(c) as session:
+        yield session
+
+
+@pytest.fixture
+def spanner_write_session(spanner_config: SpannerSyncConfig) -> Generator[SpannerSyncDriver, None, None]:
+    """Write-capable session for DML operations (INSERT/UPDATE/DELETE)."""
+    with spanner_config.provide_write_session() as session:
+        yield session
+
+
+@pytest.fixture
+def spanner_read_session(spanner_config: SpannerSyncConfig) -> Generator[SpannerSyncDriver, None, None]:
+    """Read-only session for SELECT operations."""
+    with spanner_config.provide_session() as session:
         yield session
 
 
