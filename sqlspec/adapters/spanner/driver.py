@@ -204,32 +204,21 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             raise SQLConversionError(msg)
         conn = cast("Any", cursor)
 
-        parameter_sets = statement.parameters if isinstance(statement.parameters, list) else []
-        if not parameter_sets:
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        if not prepared_parameters or not isinstance(prepared_parameters, list):
             msg = "execute_many requires at least one parameter set"
             raise SQLConversionError(msg)
 
-        base_params = parameter_sets[0]
-        base_statement = self.prepare_statement(
-            statement.raw_sql, *[base_params], statement_config=statement.statement_config
-        )
-        compiled_sql, _ = self._get_compiled_sql(base_statement, self.statement_config)
-
-        batch_inputs: list[dict[str, Any]] = []
-        for params in parameter_sets:
-            per_statement = self.prepare_statement(
-                statement.raw_sql, *[params], statement_config=statement.statement_config
-            )
-            _, processed_params = self._get_compiled_sql(per_statement, self.statement_config)
-            coerced_params = self._coerce_params(processed_params)
+        batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
+        for params in prepared_parameters:
+            coerced_params = self._coerce_params(params)
             if coerced_params is None:
                 coerced_params = {}
-            batch_inputs.append(coerced_params)
+            batch_args.append((sql, coerced_params, self._infer_param_types(coerced_params)))
 
-        batch_args = [(compiled_sql, p, self._infer_param_types(p)) for p in batch_inputs]
-
-        row_counts = conn.batch_update(batch_args)
-        total_rows = int(sum(int(count) for count in row_counts))
+        _status, row_counts = conn.batch_update(batch_args)
+        total_rows = sum(row_counts) if row_counts else 0
 
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
 
@@ -350,7 +339,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
 
 def _build_spanner_profile() -> DriverParameterProfile:
-    type_coercions: dict[type, Any] = {dict: to_json, list: to_json, tuple: to_json}
+    type_coercions: dict[type, Any] = {dict: to_json}
     return DriverParameterProfile(
         name="Spanner",
         default_style=ParameterStyle.NAMED_AT,
@@ -358,14 +347,14 @@ def _build_spanner_profile() -> DriverParameterProfile:
         default_execution_style=ParameterStyle.NAMED_AT,
         supported_execution_styles={ParameterStyle.NAMED_AT},
         has_native_list_expansion=True,
-        json_serializer_strategy="helper",
+        json_serializer_strategy="none",
         default_dialect="spanner",
         preserve_parameter_format=True,
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=True,
         custom_type_coercions=type_coercions,
-        extras={"type_coercion_overrides": type_coercions},
+        extras={},
     )
 
 
@@ -373,5 +362,5 @@ _SPANNER_PROFILE = _build_spanner_profile()
 register_driver_profile("spanner", _SPANNER_PROFILE)
 
 spanner_statement_config = build_statement_config_from_profile(
-    _SPANNER_PROFILE, statement_overrides={"dialect": "spanner"}, json_serializer=to_json
+    _SPANNER_PROFILE, statement_overrides={"dialect": "spanner"}
 )

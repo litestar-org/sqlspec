@@ -501,6 +501,7 @@ split-on-trailing-comma = false
 "sqlspec/builder/mixins/**/*.*" = ["SLF001"]
 "sqlspec/extensions/adk/converters.py" = ["S403"]
 "sqlspec/migrations/utils.py" = ["S404"]
+"sqlspec/adapters/spanner/config.py" = ["PLC2801"]
 "tests/**/*.*" = [
   "A",
   "ARG",

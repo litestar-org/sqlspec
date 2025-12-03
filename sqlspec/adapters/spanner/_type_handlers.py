@@ -8,7 +8,7 @@ explicit param_types mapping. This module provides helpers to:
 """
 
 import base64
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -167,6 +167,8 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
             types[key] = param_types.BYTES
         elif isinstance(value, datetime):
             types[key] = param_types.TIMESTAMP
+        elif isinstance(value, date):
+            types[key] = param_types.DATE
         elif isinstance(value, dict) and hasattr(param_types, "JSON"):
             types[key] = param_types.JSON
         elif isinstance(value, list):
