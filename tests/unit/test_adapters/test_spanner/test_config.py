@@ -53,8 +53,7 @@ def test_driver_features_defaults() -> None:
 
 
 def test_provide_connection_batch_and_snapshot() -> None:
-    """Ensure provide_connection selects snapshot vs batch correctly."""
-    batch_obj = object()
+    """Ensure provide_connection selects snapshot vs transaction correctly."""
     snap_obj = object()
 
     class _Ctx:
@@ -67,39 +66,88 @@ def test_provide_connection_batch_and_snapshot() -> None:
         def __exit__(self, *_):
             return False
 
-    class _DB:
-        def batch(self):
-            return _Ctx(batch_obj)
+    class _Txn:
+        _transaction_id = "test-txn-id"
 
-        def snapshot(self):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    class _Session:
+        def create(self):
+            pass
+
+        def delete(self):
+            pass
+
+        def transaction(self):
+            return _Txn()
+
+    class _DB:
+        def session(self):
+            return _Session()
+
+        def snapshot(self, multi_use: bool = False):
             return _Ctx(snap_obj)
 
     config = SpannerSyncConfig(pool_config={"project": "p", "instance_id": "i", "database_id": "d"})
     config.get_database = lambda: _DB()  # type: ignore[assignment]
 
     with config.provide_connection(transaction=True) as conn:
-        assert conn is batch_obj
+        assert isinstance(conn, _Txn)
 
     with config.provide_connection(transaction=False) as conn:
         assert conn is snap_obj
 
 
 def test_provide_session_uses_batch_when_transaction_requested() -> None:
-    """Driver should receive batch connection when transaction=True."""
-    batch_obj = object()
+    """Driver should receive transaction connection when transaction=True."""
+
+    class _Txn:
+        _transaction_id = "test-txn-id"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    class _Session:
+        def create(self):
+            pass
+
+        def delete(self):
+            pass
+
+        def transaction(self):
+            return _Txn()
 
     class _Ctx:
         def __enter__(self):
-            return batch_obj
+            return object()
 
         def __exit__(self, *_):
             return False
 
     class _DB:
-        def batch(self):
-            return _Ctx()
+        def session(self):
+            return _Session()
 
-        def snapshot(self):
+        def snapshot(self, multi_use: bool = False):
             return _Ctx()
 
     config = SpannerSyncConfig(pool_config={"project": "p", "instance_id": "i", "database_id": "d"})
@@ -108,25 +156,49 @@ def test_provide_session_uses_batch_when_transaction_requested() -> None:
 
     with config.provide_session(transaction=True) as driver:
         assert isinstance(driver, _DummyDriver)
-        assert driver.connection is batch_obj
+        assert isinstance(driver.connection, _Txn)
 
 
 def test_provide_write_session_alias() -> None:
-    """provide_write_session should always give a batch-backed driver."""
-    batch_obj = object()
+    """provide_write_session should always give a transaction-backed driver."""
+
+    class _Txn:
+        _transaction_id = "test-txn-id"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    class _Session:
+        def create(self):
+            pass
+
+        def delete(self):
+            pass
+
+        def transaction(self):
+            return _Txn()
 
     class _Ctx:
         def __enter__(self):
-            return batch_obj
+            return object()
 
         def __exit__(self, *_):
             return False
 
     class _DB:
-        def batch(self):
-            return _Ctx()
+        def session(self):
+            return _Session()
 
-        def snapshot(self):
+        def snapshot(self, multi_use: bool = False):
             return _Ctx()
 
     config = SpannerSyncConfig(pool_config={"project": "p", "instance_id": "i", "database_id": "d"})
@@ -134,4 +206,4 @@ def test_provide_write_session_alias() -> None:
     config.driver_type = _DummyDriver  # type: ignore[assignment,misc]
 
     with config.provide_write_session() as driver:
-        assert driver.connection is batch_obj
+        assert isinstance(driver.connection, _Txn)

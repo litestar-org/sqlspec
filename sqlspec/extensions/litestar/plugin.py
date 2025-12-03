@@ -71,11 +71,16 @@ TRACE_CONTEXT_FALLBACK_HEADERS: tuple[str, ...] = (
 CORRELATION_STATE_KEY = "sqlspec_correlation_id"
 
 __all__ = (
+    "CORRELATION_STATE_KEY",
     "DEFAULT_COMMIT_MODE",
     "DEFAULT_CONNECTION_KEY",
+    "DEFAULT_CORRELATION_HEADER",
     "DEFAULT_POOL_KEY",
     "DEFAULT_SESSION_KEY",
+    "TRACE_CONTEXT_FALLBACK_HEADERS",
     "CommitMode",
+    "CorrelationMiddleware",
+    "PluginConfigState",
     "SQLSpecPlugin",
 )
 
@@ -117,7 +122,7 @@ def _build_correlation_headers(*, primary: str, configured: list[str], auto_trac
     return tuple(_dedupe_headers(header_order))
 
 
-class _CorrelationMiddleware:
+class CorrelationMiddleware:
     __slots__ = ("_app", "_headers")
 
     def __init__(self, app: "ASGIApp", *, headers: tuple[str, ...]) -> None:
@@ -153,7 +158,7 @@ class _CorrelationMiddleware:
 
 
 @dataclass
-class _PluginConfigState:
+class PluginConfigState:
     """Internal state for each database configuration."""
 
     config: "DatabaseConfigProtocol[Any, Any, Any]"
@@ -219,7 +224,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         """
         self._sqlspec = sqlspec
 
-        self._plugin_configs: list[_PluginConfigState] = []
+        self._plugin_configs: list[PluginConfigState] = []
         for cfg in self._sqlspec.configs.values():
             config_union = cast(
                 "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
@@ -276,9 +281,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         self,
         config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
         settings: "dict[str, Any]",
-    ) -> _PluginConfigState:
+    ) -> PluginConfigState:
         """Create plugin state with handlers for the given configuration."""
-        state = _PluginConfigState(
+        state = PluginConfigState(
             config=config,
             connection_key=settings["connection_key"],
             pool_key=settings["pool_key"],
@@ -296,7 +301,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             self._setup_handlers(state)
         return state
 
-    def _setup_handlers(self, state: _PluginConfigState) -> None:
+    def _setup_handlers(self, state: PluginConfigState) -> None:
         """Setup handlers for the plugin state."""
         connection_key = state.connection_key
         pool_key = state.pool_key
@@ -403,7 +408,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 app_config.type_decoders = decoders_list
 
         if self._correlation_headers:
-            middleware = DefineMiddleware(_CorrelationMiddleware, headers=self._correlation_headers)
+            middleware = DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers)
             existing_middleware = list(app_config.middleware or [])
             existing_middleware.append(middleware)
             app_config.middleware = existing_middleware
@@ -579,7 +584,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
     def _get_plugin_state(
         self, key: "str | SyncConfigT | AsyncConfigT | type[SyncConfigT | AsyncConfigT]"
-    ) -> _PluginConfigState:
+    ) -> PluginConfigState:
         """Get plugin state for a configuration by key."""
         if isinstance(key, str):
             for state in self._plugin_configs:
