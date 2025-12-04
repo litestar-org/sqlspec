@@ -415,6 +415,83 @@ Dialect.classes["custom"] = CustomDialect
 - Use `wrap_exceptions` context manager in adapter layer
 - Two-tier pattern: graceful skip (DEBUG) for expected conditions, hard errors for malformed input
 
+### CLI Sync/Async Dispatch Pattern
+
+When implementing CLI commands that support both sync and async database adapters:
+
+**Problem:** Sync adapters (SQLite, DuckDB, BigQuery, ADBC, Spanner sync, Psycopg sync, Oracle sync) fail with `await_ cannot be called from within an async task` if wrapped in an event loop.
+
+**Solution:** Partition configs and execute sync/async batches separately:
+
+```python
+def _execute_for_config(
+    config: "AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]",
+    sync_fn: "Callable[[], Any]",
+    async_fn: "Callable[[], Any]",
+) -> Any:
+    """Execute with appropriate sync/async handling."""
+    from sqlspec.utils.sync_tools import run_
+
+    if config.is_async:
+        return run_(async_fn)()
+    return sync_fn()
+
+def _partition_configs_by_async(
+    configs: "list[tuple[str, Any]]",
+) -> "tuple[list[tuple[str, Any]], list[tuple[str, Any]]]":
+    """Partition configs into sync and async groups."""
+    sync_configs = [(name, cfg) for name, cfg in configs if not cfg.is_async]
+    async_configs = [(name, cfg) for name, cfg in configs if cfg.is_async]
+    return sync_configs, async_configs
+```
+
+**Usage pattern for single-config operations:**
+
+```python
+def _operation_for_config(config: Any) -> None:
+    migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
+        create_migration_commands(config=config)
+    )
+
+    def sync_operation() -> None:
+        migration_commands.operation(<args>)
+
+    async def async_operation() -> None:
+        await cast("AsyncMigrationCommands[Any]", migration_commands).operation(<args>)
+
+    _execute_for_config(config, sync_operation, async_operation)
+```
+
+**Usage pattern for multi-config operations:**
+
+```python
+# Partition first
+sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
+
+# Process sync configs directly (no event loop)
+for config_name, config in sync_configs:
+    _operation_for_config(config)
+
+# Process async configs via single run_() call
+if async_configs:
+    async def _run_async_configs() -> None:
+        for config_name, config in async_configs:
+            migration_commands: AsyncMigrationCommands[Any] = cast(
+                "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
+            )
+            await migration_commands.operation(<args>)
+
+    run_(_run_async_configs)()
+```
+
+**Key principles:**
+- Sync configs must execute outside event loop (direct function calls)
+- Async configs must execute inside event loop (via `run_()`)
+- Multi-config operations should batch sync and async separately for efficiency
+- Use `cast()` in async contexts for type safety with migration commands
+
+**Reference implementation:** `sqlspec/cli.py` (lines 218-255, 311-724)
+
 ## Collaboration Guidelines
 
 - Challenge suboptimal requests constructively
