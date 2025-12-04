@@ -10,7 +10,6 @@ Tests focused on MigrationCommands class behavior including:
 - Command routing and parameter passing
 """
 
-import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -49,33 +48,31 @@ def test_migration_commands_async_config_initialization(async_config: AiosqliteC
     assert hasattr(commands, "runner")
 
 
-def test_migration_commands_sync_init_delegation(sync_config: SqliteConfig) -> None:
+def test_migration_commands_sync_init_delegation(tmp_path: Path, sync_config: SqliteConfig) -> None:
     """Test that sync config init is delegated directly to sync implementation."""
     with patch.object(SyncMigrationCommands, "init") as mock_init:
         commands = SyncMigrationCommands(sync_config)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            migration_dir = str(Path(temp_dir) / "migrations")
+        migration_dir = str(tmp_path / "migrations")
 
-            commands.init(migration_dir, package=False)
+        commands.init(migration_dir, package=False)
 
-            mock_init.assert_called_once_with(migration_dir, package=False)
+        mock_init.assert_called_once_with(migration_dir, package=False)
 
 
-async def test_migration_commands_async_init_delegation(async_config: AiosqliteConfig) -> None:
+async def test_migration_commands_async_init_delegation(tmp_path: Path, async_config: AiosqliteConfig) -> None:
     """Test that async config init calls async method directly."""
     from typing import cast
 
     with patch.object(AsyncMigrationCommands, "init", new_callable=AsyncMock) as mock_init:
         commands = cast(AsyncMigrationCommands, create_migration_commands(async_config))
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            migration_dir = str(Path(temp_dir) / "migrations")
+        migration_dir = str(tmp_path / "migrations")
 
-            await commands.init(migration_dir, package=True)
+        await commands.init(migration_dir, package=True)
 
-            # Verify the async method was called directly
-            mock_init.assert_called_once_with(migration_dir, package=True)
+        # Verify the async method was called directly
+        mock_init.assert_called_once_with(migration_dir, package=True)
 
 
 def test_migration_commands_sync_current_delegation(sync_config: SqliteConfig) -> None:
@@ -232,30 +229,28 @@ def test_async_migration_commands_initialization(async_config: AiosqliteConfig) 
     assert hasattr(commands, "runner")
 
 
-def test_sync_migration_commands_init_creates_directory(sync_config: SqliteConfig) -> None:
+def test_sync_migration_commands_init_creates_directory(tmp_path: Path, sync_config: SqliteConfig) -> None:
     """Test that SyncMigrationCommands init creates migration directory structure."""
     commands = SyncMigrationCommands(sync_config)
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        commands.init(str(migration_dir), package=True)
+    commands.init(str(migration_dir), package=True)
 
-        assert migration_dir.exists()
-        assert (migration_dir / "__init__.py").exists()
+    assert migration_dir.exists()
+    assert (migration_dir / "__init__.py").exists()
 
 
-def test_sync_migration_commands_init_without_package(sync_config: SqliteConfig) -> None:
+def test_sync_migration_commands_init_without_package(tmp_path: Path, sync_config: SqliteConfig) -> None:
     """Test that SyncMigrationCommands init creates directory without __init__.py when package=False."""
     commands = SyncMigrationCommands(sync_config)
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        commands.init(str(migration_dir), package=False)
+    commands.init(str(migration_dir), package=False)
 
-        assert migration_dir.exists()
-        assert not (migration_dir / "__init__.py").exists()
+    assert migration_dir.exists()
+    assert not (migration_dir / "__init__.py").exists()
 
 
 async def test_migration_commands_error_propagation(async_config: AiosqliteConfig) -> None:

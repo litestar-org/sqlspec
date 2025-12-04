@@ -9,9 +9,7 @@ Tests real file system operations including:
 """
 
 import os
-import tempfile
 import time
-from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -22,21 +20,13 @@ from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import SQLFileLoader
 
 
-@pytest.fixture
-def temp_workspace() -> Generator[Path, None, None]:
-    """Create a temporary workspace for file system tests."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        workspace = Path(temp_dir)
-        yield workspace
-
-
-def test_load_single_file_from_filesystem(temp_workspace: Path) -> None:
+def test_load_single_file_from_filesystem(tmp_path: Path) -> None:
     """Test loading a single SQL file from the file system.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    sql_file = temp_workspace / "test_queries.sql"
+    sql_file = tmp_path / "test_queries.sql"
     sql_file.write_text("""
 -- name: get_user_count
 SELECT COUNT(*) as total_users FROM users;
@@ -57,13 +47,13 @@ SELECT id, name FROM users WHERE active = true;
     assert "COUNT(*)" in user_count_sql.sql
 
 
-def test_load_multiple_files_from_filesystem(temp_workspace: Path) -> None:
+def test_load_multiple_files_from_filesystem(tmp_path: Path) -> None:
     """Test loading multiple SQL files from the file system.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    users_file = temp_workspace / "users.sql"
+    users_file = tmp_path / "users.sql"
     users_file.write_text("""
 -- name: create_user
 INSERT INTO users (name, email) VALUES (:name, :email);
@@ -72,7 +62,7 @@ INSERT INTO users (name, email) VALUES (:name, :email);
 UPDATE users SET email = :email WHERE id = :user_id;
 """)
 
-    products_file = temp_workspace / "products.sql"
+    products_file = tmp_path / "products.sql"
     products_file.write_text("""
 -- name: list_products
 SELECT id, name, price FROM products ORDER BY name;
@@ -95,13 +85,13 @@ SELECT * FROM products WHERE id = :product_id;
     assert str(products_file) in files
 
 
-def test_load_directory_structure_from_filesystem(temp_workspace: Path) -> None:
+def test_load_directory_structure_from_filesystem(tmp_path: Path) -> None:
     """Test loading entire directory structures from file system.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    queries_dir = temp_workspace / "queries"
+    queries_dir = tmp_path / "queries"
     queries_dir.mkdir()
 
     analytics_dir = queries_dir / "analytics"
@@ -110,7 +100,7 @@ def test_load_directory_structure_from_filesystem(temp_workspace: Path) -> None:
     admin_dir = queries_dir / "admin"
     admin_dir.mkdir()
 
-    (temp_workspace / "root.sql").write_text("""
+    (tmp_path / "root.sql").write_text("""
 -- name: health_check
 SELECT 'OK' as status;
 """)
@@ -134,7 +124,7 @@ DELETE FROM logs WHERE created_at < :cutoff_date;
 """)
 
     loader = SQLFileLoader()
-    loader.load_sql(temp_workspace)
+    loader.load_sql(tmp_path)
 
     queries = loader.list_queries()
 
@@ -146,13 +136,13 @@ DELETE FROM logs WHERE created_at < :cutoff_date;
     assert "queries.admin.cleanup_old_logs" in queries
 
 
-def test_file_content_encoding_handling(temp_workspace: Path) -> None:
+def test_file_content_encoding_handling(tmp_path: Path) -> None:
     """Test handling of different file encodings.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    utf8_file = temp_workspace / "utf8_queries.sql"
+    utf8_file = tmp_path / "utf8_queries.sql"
     utf8_content = """
 -- name: unicode_query
 -- Test with Unicode: 测试 файл עברית
@@ -170,13 +160,13 @@ SELECT 'Unicode test: 测试' as message;
     assert isinstance(sql, SQL)
 
 
-def test_file_modification_detection(temp_workspace: Path) -> None:
+def test_file_modification_detection(tmp_path: Path) -> None:
     """Test detection of file modifications.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    sql_file = temp_workspace / "modifiable.sql"
+    sql_file = tmp_path / "modifiable.sql"
     original_content = """
 -- name: original_query
 SELECT 'original' as version;
@@ -208,19 +198,19 @@ SELECT 'new' as status;
     assert "original_query" not in queries
 
 
-def test_symlink_resolution(temp_workspace: Path) -> None:
+def test_symlink_resolution(tmp_path: Path) -> None:
     """Test resolution of symbolic links.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    original_file = temp_workspace / "original.sql"
+    original_file = tmp_path / "original.sql"
     original_file.write_text("""
 -- name: symlinked_query
 SELECT 'from symlink' as source;
 """)
 
-    symlink_file = temp_workspace / "linked.sql"
+    symlink_file = tmp_path / "linked.sql"
     try:
         symlink_file.symlink_to(original_file)
     except OSError:
@@ -233,30 +223,30 @@ SELECT 'from symlink' as source;
     assert "symlinked_query" in queries
 
 
-def test_nonexistent_file_error(temp_workspace: Path) -> None:
+def test_nonexistent_file_error(tmp_path: Path) -> None:
     """Test error handling for nonexistent files.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
 
     Raises:
         SQLFileNotFoundError: When attempting to load nonexistent file.
     """
     loader = SQLFileLoader()
-    nonexistent_file = temp_workspace / "does_not_exist.sql"
+    nonexistent_file = tmp_path / "does_not_exist.sql"
 
     with pytest.raises(SQLFileNotFoundError):
         loader.load_sql(nonexistent_file)
 
 
-def test_nonexistent_directory_handling(temp_workspace: Path) -> None:
+def test_nonexistent_directory_handling(tmp_path: Path) -> None:
     """Test handling of nonexistent directories.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
     loader = SQLFileLoader()
-    nonexistent_dir = temp_workspace / "does_not_exist"
+    nonexistent_dir = tmp_path / "does_not_exist"
 
     loader.load_sql(nonexistent_dir)
 
@@ -264,11 +254,11 @@ def test_nonexistent_directory_handling(temp_workspace: Path) -> None:
     assert loader.list_files() == []
 
 
-def test_permission_denied_error(temp_workspace: Path) -> None:
+def test_permission_denied_error(tmp_path: Path) -> None:
     """Test handling of permission denied errors.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
 
     Raises:
         SQLFileParseError: When file permissions prevent reading.
@@ -276,7 +266,7 @@ def test_permission_denied_error(temp_workspace: Path) -> None:
     if os.name == "nt":
         pytest.skip("Permission testing not reliable on Windows")
 
-    restricted_file = temp_workspace / "restricted.sql"
+    restricted_file = tmp_path / "restricted.sql"
     restricted_file.write_text("""
 -- name: restricted_query
 SELECT 'restricted' as access;
@@ -293,13 +283,13 @@ SELECT 'restricted' as access;
         restricted_file.chmod(0o644)
 
 
-def test_corrupted_file_handling(temp_workspace: Path) -> None:
+def test_corrupted_file_handling(tmp_path: Path) -> None:
     """Test handling of SQL files without named statements.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    corrupted_file = temp_workspace / "corrupted.sql"
+    corrupted_file = tmp_path / "corrupted.sql"
 
     corrupted_file.write_text("""
 This is not a valid SQL file with named queries.
@@ -315,13 +305,13 @@ Just random text that should be gracefully skipped.
     assert str(corrupted_file) not in loader._files  # pyright: ignore
 
 
-def test_empty_file_handling(temp_workspace: Path) -> None:
+def test_empty_file_handling(tmp_path: Path) -> None:
     """Test handling of empty files.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    empty_file = temp_workspace / "empty.sql"
+    empty_file = tmp_path / "empty.sql"
     empty_file.write_text("")
 
     loader = SQLFileLoader()
@@ -332,16 +322,16 @@ def test_empty_file_handling(temp_workspace: Path) -> None:
     assert str(empty_file) not in loader._files  # pyright: ignore
 
 
-def test_binary_file_handling(temp_workspace: Path) -> None:
+def test_binary_file_handling(tmp_path: Path) -> None:
     """Test handling of binary files with .sql extension.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
 
     Raises:
         SQLFileParseError: When file contains binary data that can't be decoded.
     """
-    binary_file = temp_workspace / "binary.sql"
+    binary_file = tmp_path / "binary.sql"
 
     Path(binary_file).write_bytes(b"\xff\xfe\xfd\xfc")
 
@@ -351,13 +341,13 @@ def test_binary_file_handling(temp_workspace: Path) -> None:
         loader.load_sql(binary_file)
 
 
-def test_large_file_loading_performance(temp_workspace: Path) -> None:
+def test_large_file_loading_performance(tmp_path: Path) -> None:
     """Test performance with large SQL files.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    large_file = temp_workspace / "large_queries.sql"
+    large_file = tmp_path / "large_queries.sql"
 
     large_content = "\n".join(
         f"""
@@ -390,13 +380,13 @@ LIMIT 1000;
     assert load_time < 5.0, f"Loading took too long: {load_time:.2f}s"
 
 
-def test_many_small_files_performance(temp_workspace: Path) -> None:
+def test_many_small_files_performance(tmp_path: Path) -> None:
     """Test performance with many small SQL files.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    files_dir = temp_workspace / "many_files"
+    files_dir = tmp_path / "many_files"
     files_dir.mkdir()
 
     for i in range(100):
@@ -420,13 +410,13 @@ SELECT {i} as file_number, 'small file {i}' as description;
     assert load_time < 10.0, f"Loading took too long: {load_time:.2f}s"
 
 
-def test_deep_directory_structure_performance(temp_workspace: Path) -> None:
+def test_deep_directory_structure_performance(tmp_path: Path) -> None:
     """Test performance with deep directory structures.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    current_path = temp_workspace
+    current_path = tmp_path
     for level in range(10):
         current_path = current_path / f"level_{level}"
         current_path.mkdir()
@@ -440,7 +430,7 @@ SELECT {level} as depth_level, 'level {level}' as description;
     loader = SQLFileLoader()
 
     start_time = time.time()
-    loader.load_sql(temp_workspace)
+    loader.load_sql(tmp_path)
     end_time = time.time()
 
     load_time = end_time - start_time
@@ -455,13 +445,13 @@ SELECT {level} as depth_level, 'level {level}' as description;
     assert load_time < 5.0, f"Loading took too long: {load_time:.2f}s"
 
 
-def test_concurrent_file_modification(temp_workspace: Path) -> None:
+def test_concurrent_file_modification(tmp_path: Path) -> None:
     """Test handling of concurrent file modifications.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    shared_file = temp_workspace / "shared.sql"
+    shared_file = tmp_path / "shared.sql"
 
     shared_file.write_text("""
 -- name: shared_query_v1
@@ -492,13 +482,13 @@ SELECT 'version 2' as version;
     assert "shared_query_v2" not in loader2.list_queries()
 
 
-def test_multiple_loaders_same_file(temp_workspace: Path) -> None:
+def test_multiple_loaders_same_file(tmp_path: Path) -> None:
     """Test multiple loaders accessing the same file.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    sql_file = temp_workspace / "multi_access.sql"
+    sql_file = tmp_path / "multi_access.sql"
     sql_file.write_text("""
 -- name: multi_access_query
 SELECT 'accessed by multiple loaders' as message;
@@ -517,14 +507,14 @@ SELECT 'accessed by multiple loaders' as message;
         assert isinstance(sql, SQL)
 
 
-def test_loader_isolation(temp_workspace: Path) -> None:
+def test_loader_isolation(tmp_path: Path) -> None:
     """Test that loaders are properly isolated from each other.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    file1 = temp_workspace / "loader1.sql"
-    file2 = temp_workspace / "loader2.sql"
+    file1 = tmp_path / "loader1.sql"
+    file2 = tmp_path / "loader2.sql"
 
     file1.write_text("""
 -- name: loader1_query
@@ -552,14 +542,14 @@ SELECT 'from loader 2' as source;
     assert "loader2_query" not in queries1
 
 
-def test_file_cache_persistence_across_loaders(temp_workspace: Path) -> None:
+def test_file_cache_persistence_across_loaders(tmp_path: Path) -> None:
     """Test that file cache persists across different loader instances.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
 
-    sql_file = temp_workspace / "cached.sql"
+    sql_file = tmp_path / "cached.sql"
     sql_file.write_text("""
 -- name: cached_query
 SELECT 'cached content' as status;
@@ -586,14 +576,14 @@ SELECT 'cached content' as status;
         assert cache_load_time < 1.0
 
 
-def test_cache_invalidation_on_file_change(temp_workspace: Path) -> None:
+def test_cache_invalidation_on_file_change(tmp_path: Path) -> None:
     """Test cache invalidation when files change.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
 
-    sql_file = temp_workspace / "changing.sql"
+    sql_file = tmp_path / "changing.sql"
 
     original_content = """
 -- name: changing_query_v1
@@ -626,16 +616,16 @@ SELECT 'version 2' as version;
         assert "changing_query_v1" not in queries
 
 
-def test_cache_behavior_with_file_deletion(temp_workspace: Path) -> None:
+def test_cache_behavior_with_file_deletion(tmp_path: Path) -> None:
     """Test cache behavior when cached files are deleted.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
 
     Raises:
         SQLFileNotFoundError: When attempting to load deleted file.
     """
-    sql_file = temp_workspace / "deletable.sql"
+    sql_file = tmp_path / "deletable.sql"
     sql_file.write_text("""
 -- name: deletable_query
 SELECT 'will be deleted' as status;
@@ -656,14 +646,14 @@ SELECT 'will be deleted' as status;
     assert "deletable_query" in loader.list_queries()
 
 
-def test_unicode_file_names(temp_workspace: Path) -> None:
+def test_unicode_file_names(tmp_path: Path) -> None:
     """Test handling of Unicode file names.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
     try:
-        unicode_file = temp_workspace / "测试_файл_test.sql"
+        unicode_file = tmp_path / "测试_файл_test.sql"
         unicode_file.write_text(
             """
 -- name: unicode_filename_query
@@ -681,13 +671,13 @@ SELECT 'Unicode filename works' as message;
     assert "unicode_filename_query" in queries
 
 
-def test_unicode_file_content(temp_workspace: Path) -> None:
+def test_unicode_file_content(tmp_path: Path) -> None:
     """Test handling of Unicode content in files.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    unicode_file = temp_workspace / "unicode_content.sql"
+    unicode_file = tmp_path / "unicode_content.sql"
 
     unicode_content = """
 -- name: unicode_content_query
@@ -708,13 +698,13 @@ SELECT 'Unicode: 测试 тест עברית' as multilingual_message,
     assert "Unicode: 测试 тест עברית" in sql.sql
 
 
-def test_mixed_encoding_handling(temp_workspace: Path) -> None:
+def test_mixed_encoding_handling(tmp_path: Path) -> None:
     """Test handling of different encodings.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
-    utf8_file = temp_workspace / "utf8.sql"
+    utf8_file = tmp_path / "utf8.sql"
     utf8_file.write_text(
         """
 -- name: utf8_query
@@ -723,7 +713,7 @@ SELECT 'UTF-8: 测试' as message;
         encoding="utf-8",
     )
 
-    latin1_file = temp_workspace / "latin1.sql"
+    latin1_file = tmp_path / "latin1.sql"
     latin1_content = """
 -- name: latin1_query
 SELECT 'Latin-1: café' as message;
@@ -741,14 +731,14 @@ SELECT 'Latin-1: café' as message;
     assert "latin1_query" in latin1_loader.list_queries()
 
 
-def test_special_characters_in_paths(temp_workspace: Path) -> None:
+def test_special_characters_in_paths(tmp_path: Path) -> None:
     """Test handling of special characters in file paths.
 
     Args:
-        temp_workspace: Temporary directory for test files.
+        tmp_path: Temporary directory for test files.
     """
     try:
-        special_dir = temp_workspace / "special-chars_&_symbols!@#$"
+        special_dir = tmp_path / "special-chars_&_symbols!@#$"
         special_dir.mkdir()
 
         special_file = special_dir / "query-file_with&symbols.sql"

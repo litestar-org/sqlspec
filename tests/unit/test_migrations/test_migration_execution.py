@@ -10,10 +10,6 @@ Tests migration execution including:
 - Migration file processing
 """
 
-from __future__ import annotations
-
-import tempfile
-from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
@@ -27,20 +23,10 @@ pytestmark = pytest.mark.xdist_group("migrations")
 
 
 @pytest.fixture
-def temp_workspace() -> Generator[Path, None, None]:
-    """Create a temporary workspace for migration tests."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        workspace = Path(temp_dir)
-        yield workspace
-
-
-@pytest.fixture
 def temp_workspace_with_migrations(tmp_path: Path) -> Path:
     """Create a temporary workspace with migrations directory for tests."""
-
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-
     return tmp_path
 
 

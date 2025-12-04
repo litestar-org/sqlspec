@@ -9,10 +9,7 @@ event loop"
 The tests use the full CLI workflow: init -> create-migration -> upgrade -> downgrade
 """
 
-import os
-import shutil
 import sys
-import tempfile
 import uuid
 from collections.abc import Generator
 from pathlib import Path
@@ -26,16 +23,10 @@ MODULE_PREFIX = "cli_sync_adapter_test_"
 
 
 @pytest.fixture
-def temp_project_dir() -> Generator[Path, None, None]:
+def temp_project_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path, None, None]:
     """Create a temporary project directory with cleanup."""
-    temp_dir = Path(tempfile.mkdtemp())
-    original_dir = os.getcwd()
-    os.chdir(temp_dir)
-
-    yield temp_dir
-
-    os.chdir(original_dir)
-    shutil.rmtree(temp_dir, ignore_errors=True)
+    monkeypatch.chdir(tmp_path)
+    yield tmp_path
 
 
 @pytest.fixture

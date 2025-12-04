@@ -1,6 +1,5 @@
 """Integration tests for OracleDB migration workflow."""
 
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -13,34 +12,33 @@ from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCom
 pytestmark = pytest.mark.xdist_group("oracle")
 
 
-def test_oracledb_sync_migration_full_workflow(oracle_23ai_service: OracleService) -> None:
+def test_oracledb_sync_migration_full_workflow(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test full OracleDB sync migration workflow: init -> create -> upgrade -> downgrade."""
 
     test_id = "oracledb_sync_full"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = OracleSyncConfig(
-            pool_config={
-                "host": oracle_23ai_service.host,
-                "port": oracle_23ai_service.port,
-                "service_name": oracle_23ai_service.service_name,
-                "user": oracle_23ai_service.user,
-                "password": oracle_23ai_service.password,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+    config = OracleSyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
-        commands.init(str(migration_dir), package=True)
+    commands.init(str(migration_dir), package=True)
 
-        assert migration_dir.exists()
-        assert (migration_dir / "__init__.py").exists()
+    assert migration_dir.exists()
+    assert (migration_dir / "__init__.py").exists()
 
-        migration_content = f'''"""Initial schema migration."""
+    migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -60,69 +58,62 @@ def down():
     return ["DROP TABLE {users_table}"]
 '''
 
-        migration_file = migration_dir / "0001_create_users.py"
-        migration_file.write_text(migration_content)
+    migration_file = migration_dir / "0001_create_users.py"
+    migration_file.write_text(migration_content)
 
-        try:
-            commands.upgrade()
+    try:
+        commands.upgrade()
 
-            with config.provide_session() as driver:
-                result = driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
-                )
-                assert len(result.data) == 1
+        with config.provide_session() as driver:
+            result = driver.execute(f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'")
+            assert len(result.data) == 1
 
-                driver.execute(
-                    f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com")
-                )
+            driver.execute(f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com"))
 
-                users_result = driver.execute(f"SELECT * FROM {users_table}")
-                assert len(users_result.data) == 1
-                assert users_result.data[0]["name"] == "John Doe"
-                assert users_result.data[0]["email"] == "john@example.com"
+            users_result = driver.execute(f"SELECT * FROM {users_table}")
+            assert len(users_result.data) == 1
+            assert users_result.data[0]["name"] == "John Doe"
+            assert users_result.data[0]["email"] == "john@example.com"
 
-            commands.downgrade("base")
+        commands.downgrade("base")
 
-            with config.provide_session() as driver:
-                result = driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
-                )
-                assert len(result.data) == 0
-        finally:
-            if config.pool_instance:
-                config.close_pool()
+        with config.provide_session() as driver:
+            result = driver.execute(f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'")
+            assert len(result.data) == 0
+    finally:
+        if config.pool_instance:
+            config.close_pool()
 
 
-async def test_oracledb_async_migration_full_workflow(oracle_23ai_service: OracleService) -> None:
+async def test_oracledb_async_migration_full_workflow(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test full OracleDB async migration workflow: init -> create -> upgrade -> downgrade."""
 
     test_id = "oracledb_async_full"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = OracleAsyncConfig(
-            pool_config={
-                "host": oracle_23ai_service.host,
-                "port": oracle_23ai_service.port,
-                "service_name": oracle_23ai_service.service_name,
-                "user": oracle_23ai_service.user,
-                "password": oracle_23ai_service.password,
-                "min": 1,
-                "max": 5,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = OracleAsyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 5,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        await commands.init(str(migration_dir), package=True)
+    await commands.init(str(migration_dir), package=True)
 
-        assert migration_dir.exists()
-        assert (migration_dir / "__init__.py").exists()
+    assert migration_dir.exists()
+    assert (migration_dir / "__init__.py").exists()
 
-        migration_content = f'''"""Initial schema migration."""
+    migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -142,40 +133,40 @@ def down():
     return ["DROP TABLE {users_table}"]
 '''
 
-        migration_file = migration_dir / "0001_create_users.py"
-        migration_file.write_text(migration_content)
+    migration_file = migration_dir / "0001_create_users.py"
+    migration_file.write_text(migration_content)
 
-        try:
-            await commands.upgrade()
+    try:
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                result = await driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
-                )
-                assert len(result.data) == 1
+        async with config.provide_session() as driver:
+            result = await driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
+            )
+            assert len(result.data) == 1
 
-                await driver.execute(
-                    f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com")
-                )
+            await driver.execute(
+                f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com")
+            )
 
-                users_result = await driver.execute(f"SELECT * FROM {users_table}")
-                assert len(users_result.data) == 1
-                assert users_result.data[0]["name"] == "John Doe"
-                assert users_result.data[0]["email"] == "john@example.com"
+            users_result = await driver.execute(f"SELECT * FROM {users_table}")
+            assert len(users_result.data) == 1
+            assert users_result.data[0]["name"] == "John Doe"
+            assert users_result.data[0]["email"] == "john@example.com"
 
-            await commands.downgrade("base")
+        await commands.downgrade("base")
 
-            async with config.provide_session() as driver:
-                result = await driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
-                )
-                assert len(result.data) == 0
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        async with config.provide_session() as driver:
+            result = await driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
+            )
+            assert len(result.data) == 0
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-def test_oracledb_sync_multiple_migrations_workflow(oracle_23ai_service: OracleService) -> None:
+def test_oracledb_sync_multiple_migrations_workflow(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test OracleDB sync workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
     test_id = "oracledb_sync_multiple"
@@ -183,24 +174,23 @@ def test_oracledb_sync_multiple_migrations_workflow(oracle_23ai_service: OracleS
     users_table = f"users_{test_id}"
     posts_table = f"posts_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = OracleSyncConfig(
-            pool_config={
-                "host": oracle_23ai_service.host,
-                "port": oracle_23ai_service.port,
-                "service_name": oracle_23ai_service.service_name,
-                "user": oracle_23ai_service.user,
-                "password": oracle_23ai_service.password,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+    config = OracleSyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
-        commands.init(str(migration_dir), package=True)
+    commands.init(str(migration_dir), package=True)
 
-        migration1_content = f'''"""Create users table."""
+    migration1_content = f'''"""Create users table."""
 
 
 def up():
@@ -219,9 +209,9 @@ def down():
     """Drop users table."""
     return ["DROP TABLE {users_table}"]
 '''
-        (migration_dir / "0001_create_users.py").write_text(migration1_content)
+    (migration_dir / "0001_create_users.py").write_text(migration1_content)
 
-        migration2_content = f'''"""Create posts table."""
+    migration2_content = f'''"""Create posts table."""
 
 
 def up():
@@ -242,54 +232,52 @@ def down():
     """Drop posts table."""
     return ["DROP TABLE {posts_table}"]
 '''
-        (migration_dir / "0002_create_posts.py").write_text(migration2_content)
+    (migration_dir / "0002_create_posts.py").write_text(migration2_content)
 
-        try:
-            commands.upgrade()
+    try:
+        commands.upgrade()
 
-            with config.provide_session() as driver:
-                users_result = driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
-                )
-                posts_result = driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{posts_table.upper()}'"
-                )
-                assert len(users_result.data) == 1
-                assert len(posts_result.data) == 1
+        with config.provide_session() as driver:
+            users_result = driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
+            )
+            posts_result = driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name = '{posts_table.upper()}'"
+            )
+            assert len(users_result.data) == 1
+            assert len(posts_result.data) == 1
 
-                driver.execute(
-                    f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com")
-                )
-                driver.execute(
-                    f"INSERT INTO {posts_table} (title, content, user_id) VALUES (:1, :2, :3)",
-                    ("Test Post", "This is a test post", 1),
-                )
+            driver.execute(f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com"))
+            driver.execute(
+                f"INSERT INTO {posts_table} (title, content, user_id) VALUES (:1, :2, :3)",
+                ("Test Post", "This is a test post", 1),
+            )
 
-            commands.downgrade("0001")
+        commands.downgrade("0001")
 
-            with config.provide_session() as driver:
-                users_result = driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
-                )
-                posts_result = driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{posts_table.upper()}'"
-                )
-                assert len(users_result.data) == 1
-                assert len(posts_result.data) == 0
+        with config.provide_session() as driver:
+            users_result = driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
+            )
+            posts_result = driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name = '{posts_table.upper()}'"
+            )
+            assert len(users_result.data) == 1
+            assert len(posts_result.data) == 0
 
-            commands.downgrade("base")
+        commands.downgrade("base")
 
-            with config.provide_session() as driver:
-                users_result = driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name IN ('{users_table.upper()}', '{posts_table.upper()}')"
-                )
-                assert len(users_result.data) == 0
-        finally:
-            if config.pool_instance:
-                config.close_pool()
+        with config.provide_session() as driver:
+            users_result = driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name IN ('{users_table.upper()}', '{posts_table.upper()}')"
+            )
+            assert len(users_result.data) == 0
+    finally:
+        if config.pool_instance:
+            config.close_pool()
 
 
-async def test_oracledb_async_multiple_migrations_workflow(oracle_23ai_service: OracleService) -> None:
+async def test_oracledb_async_multiple_migrations_workflow(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test OracleDB async workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
     test_id = "oracledb_async_multiple"
@@ -297,26 +285,25 @@ async def test_oracledb_async_multiple_migrations_workflow(oracle_23ai_service: 
     users_table = f"users_{test_id}"
     posts_table = f"posts_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = OracleAsyncConfig(
-            pool_config={
-                "host": oracle_23ai_service.host,
-                "port": oracle_23ai_service.port,
-                "service_name": oracle_23ai_service.service_name,
-                "user": oracle_23ai_service.user,
-                "password": oracle_23ai_service.password,
-                "min": 1,
-                "max": 5,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = OracleAsyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 5,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        await commands.init(str(migration_dir), package=True)
+    await commands.init(str(migration_dir), package=True)
 
-        migration1_content = f'''"""Create users table."""
+    migration1_content = f'''"""Create users table."""
 
 
 def up():
@@ -335,9 +322,9 @@ def down():
     """Drop users table."""
     return ["DROP TABLE {users_table}"]
 '''
-        (migration_dir / "0001_create_users.py").write_text(migration1_content)
+    (migration_dir / "0001_create_users.py").write_text(migration1_content)
 
-        migration2_content = f'''"""Create posts table."""
+    migration2_content = f'''"""Create posts table."""
 
 
 def up():
@@ -358,82 +345,81 @@ def down():
     """Drop posts table."""
     return ["DROP TABLE {posts_table}"]
 '''
-        (migration_dir / "0002_create_posts.py").write_text(migration2_content)
+    (migration_dir / "0002_create_posts.py").write_text(migration2_content)
 
-        try:
-            await commands.upgrade()
+    try:
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                users_result = await driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
-                )
-                posts_result = await driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{posts_table.upper()}'"
-                )
-                assert len(users_result.data) == 1
-                assert len(posts_result.data) == 1
+        async with config.provide_session() as driver:
+            users_result = await driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
+            )
+            posts_result = await driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name = '{posts_table.upper()}'"
+            )
+            assert len(users_result.data) == 1
+            assert len(posts_result.data) == 1
 
-                await driver.execute(
-                    f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com")
-                )
-                await driver.execute(
-                    f"INSERT INTO {posts_table} (title, content, user_id) VALUES (:1, :2, :3)",
-                    ("Test Post", "This is a test post", 1),
-                )
+            await driver.execute(
+                f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com")
+            )
+            await driver.execute(
+                f"INSERT INTO {posts_table} (title, content, user_id) VALUES (:1, :2, :3)",
+                ("Test Post", "This is a test post", 1),
+            )
 
-            await commands.downgrade("0001")
+        await commands.downgrade("0001")
 
-            async with config.provide_session() as driver:
-                users_result = await driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
-                )
-                posts_result = await driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name = '{posts_table.upper()}'"
-                )
-                assert len(users_result.data) == 1
-                assert len(posts_result.data) == 0
+        async with config.provide_session() as driver:
+            users_result = await driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name = '{users_table.upper()}'"
+            )
+            posts_result = await driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name = '{posts_table.upper()}'"
+            )
+            assert len(users_result.data) == 1
+            assert len(posts_result.data) == 0
 
-            await commands.downgrade("base")
+        await commands.downgrade("base")
 
-            async with config.provide_session() as driver:
-                users_result = await driver.execute(
-                    f"SELECT table_name FROM user_tables WHERE table_name IN ('{users_table.upper()}', '{posts_table.upper()}')"
-                )
-                assert len(users_result.data) == 0
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        async with config.provide_session() as driver:
+            users_result = await driver.execute(
+                f"SELECT table_name FROM user_tables WHERE table_name IN ('{users_table.upper()}', '{posts_table.upper()}')"
+            )
+            assert len(users_result.data) == 0
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-def test_oracledb_sync_migration_current_command(oracle_23ai_service: OracleService) -> None:
+def test_oracledb_sync_migration_current_command(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test the current migration command shows correct version for OracleDB sync."""
 
     test_id = "oracledb_sync_current"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = OracleSyncConfig(
-            pool_config={
-                "host": oracle_23ai_service.host,
-                "port": oracle_23ai_service.port,
-                "service_name": oracle_23ai_service.service_name,
-                "user": oracle_23ai_service.user,
-                "password": oracle_23ai_service.password,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+    config = OracleSyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
-        try:
-            commands.init(str(migration_dir), package=True)
+    try:
+        commands.init(str(migration_dir), package=True)
 
-            current_version = commands.current()
-            assert current_version is None or current_version == "base"
+        current_version = commands.current()
+        assert current_version is None or current_version == "base"
 
-            migration_content = f'''"""Initial schema migration."""
+        migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -450,53 +436,52 @@ def down():
     """Drop users table."""
     return ["DROP TABLE {users_table}"]
 '''
-            (migration_dir / "0001_create_users.py").write_text(migration_content)
+        (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            commands.upgrade()
+        commands.upgrade()
 
-            current_version = commands.current()
-            assert current_version == "0001"
+        current_version = commands.current()
+        assert current_version == "0001"
 
-            commands.downgrade("base")
+        commands.downgrade("base")
 
-            current_version = commands.current()
-            assert current_version is None or current_version == "base"
-        finally:
-            if config.pool_instance:
-                config.close_pool()
+        current_version = commands.current()
+        assert current_version is None or current_version == "base"
+    finally:
+        if config.pool_instance:
+            config.close_pool()
 
 
-async def test_oracledb_async_migration_current_command(oracle_23ai_service: OracleService) -> None:
+async def test_oracledb_async_migration_current_command(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test the current migration command shows correct version for OracleDB async."""
 
     test_id = "oracledb_async_current"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = OracleAsyncConfig(
-            pool_config={
-                "host": oracle_23ai_service.host,
-                "port": oracle_23ai_service.port,
-                "service_name": oracle_23ai_service.service_name,
-                "user": oracle_23ai_service.user,
-                "password": oracle_23ai_service.password,
-                "min": 1,
-                "max": 5,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = OracleAsyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 5,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        try:
-            await commands.init(str(migration_dir), package=True)
+    try:
+        await commands.init(str(migration_dir), package=True)
 
-            current_version = await commands.current()
-            assert current_version is None or current_version == "base"
+        current_version = await commands.current()
+        assert current_version is None or current_version == "base"
 
-            migration_content = f'''"""Initial schema migration."""
+        migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -513,47 +498,46 @@ def down():
     """Drop users table."""
     return ["DROP TABLE {users_table}"]
 '''
-            (migration_dir / "0001_create_users.py").write_text(migration_content)
+        (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            await commands.upgrade()
+        await commands.upgrade()
 
-            current_version = await commands.current()
-            assert current_version == "0001"
+        current_version = await commands.current()
+        assert current_version == "0001"
 
-            await commands.downgrade("base")
+        await commands.downgrade("base")
 
-            current_version = await commands.current()
-            assert current_version is None or current_version == "base"
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        current_version = await commands.current()
+        assert current_version is None or current_version == "base"
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-def test_oracledb_sync_migration_error_handling(oracle_23ai_service: OracleService) -> None:
+def test_oracledb_sync_migration_error_handling(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test OracleDB sync migration error handling."""
 
     test_id = "oracledb_sync_error"
     migration_table = f"sqlspec_migrations_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = OracleSyncConfig(
-            pool_config={
-                "host": oracle_23ai_service.host,
-                "port": oracle_23ai_service.port,
-                "service_name": oracle_23ai_service.service_name,
-                "user": oracle_23ai_service.user,
-                "password": oracle_23ai_service.password,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+    config = OracleSyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
-        try:
-            commands.init(str(migration_dir), package=True)
+    try:
+        commands.init(str(migration_dir), package=True)
 
-            migration_content = '''"""Migration with invalid SQL."""
+        migration_content = '''"""Migration with invalid SQL."""
 
 
 def up():
@@ -565,45 +549,44 @@ def down():
     """Drop table."""
     return ["DROP TABLE invalid_table"]
 '''
-            (migration_dir / "0001_invalid.py").write_text(migration_content)
+        (migration_dir / "0001_invalid.py").write_text(migration_content)
 
-            commands.upgrade()
+        commands.upgrade()
 
-            with config.provide_session() as driver:
-                count = driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
-                assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
-        finally:
-            if config.pool_instance:
-                config.close_pool()
+        with config.provide_session() as driver:
+            count = driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
+            assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
+    finally:
+        if config.pool_instance:
+            config.close_pool()
 
 
-async def test_oracledb_async_migration_error_handling(oracle_23ai_service: OracleService) -> None:
+async def test_oracledb_async_migration_error_handling(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test OracleDB async migration error handling."""
 
     test_id = "oracledb_async_error"
     migration_table = f"sqlspec_migrations_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = OracleAsyncConfig(
-            pool_config={
-                "host": oracle_23ai_service.host,
-                "port": oracle_23ai_service.port,
-                "service_name": oracle_23ai_service.service_name,
-                "user": oracle_23ai_service.user,
-                "password": oracle_23ai_service.password,
-                "min": 1,
-                "max": 5,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = OracleAsyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 5,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        try:
-            await commands.init(str(migration_dir), package=True)
+    try:
+        await commands.init(str(migration_dir), package=True)
 
-            migration_content = '''"""Migration with invalid SQL."""
+        migration_content = '''"""Migration with invalid SQL."""
 
 
 def up():
@@ -615,44 +598,43 @@ def down():
     """Drop table."""
     return ["DROP TABLE invalid_table"]
 '''
-            (migration_dir / "0001_invalid.py").write_text(migration_content)
+        (migration_dir / "0001_invalid.py").write_text(migration_content)
 
-            await commands.upgrade()
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                count = await driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
-                assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        async with config.provide_session() as driver:
+            count = await driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
+            assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-def test_oracledb_sync_migration_with_transactions(oracle_23ai_service: OracleService) -> None:
+def test_oracledb_sync_migration_with_transactions(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test OracleDB sync migrations work properly with transactions."""
 
     test_id = "oracledb_sync_trans"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = OracleSyncConfig(
-            pool_config={
-                "host": oracle_23ai_service.host,
-                "port": oracle_23ai_service.port,
-                "service_name": oracle_23ai_service.service_name,
-                "user": oracle_23ai_service.user,
-                "password": oracle_23ai_service.password,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+    config = OracleSyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
-        try:
-            commands.init(str(migration_dir), package=True)
+    try:
+        commands.init(str(migration_dir), package=True)
 
-            migration_content = f'''"""Initial schema migration."""
+        migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -670,75 +652,74 @@ def down():
     """Drop users table."""
     return ["DROP TABLE {users_table}"]
 '''
-            (migration_dir / "0001_create_users.py").write_text(migration_content)
+        (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            commands.upgrade()
+        commands.upgrade()
 
-            with config.provide_session() as driver:
-                driver.begin()
-                try:
-                    driver.execute(
-                        f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)",
-                        ("Transaction User", "trans@example.com"),
-                    )
-
-                    result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
-                    assert len(result.data) == 1
-                    driver.commit()
-                except Exception:
-                    driver.rollback()
-                    raise
+        with config.provide_session() as driver:
+            driver.begin()
+            try:
+                driver.execute(
+                    f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)",
+                    ("Transaction User", "trans@example.com"),
+                )
 
                 result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
                 assert len(result.data) == 1
+                driver.commit()
+            except Exception:
+                driver.rollback()
+                raise
 
-            with config.provide_session() as driver:
-                driver.begin()
-                try:
-                    driver.execute(
-                        f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)",
-                        ("Rollback User", "rollback@example.com"),
-                    )
+            result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
+            assert len(result.data) == 1
 
-                    raise Exception("Intentional rollback")
-                except Exception:
-                    driver.rollback()
+        with config.provide_session() as driver:
+            driver.begin()
+            try:
+                driver.execute(
+                    f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)",
+                    ("Rollback User", "rollback@example.com"),
+                )
 
-                result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
-                assert len(result.data) == 0
-        finally:
-            if config.pool_instance:
-                config.close_pool()
+                raise Exception("Intentional rollback")
+            except Exception:
+                driver.rollback()
+
+            result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
+            assert len(result.data) == 0
+    finally:
+        if config.pool_instance:
+            config.close_pool()
 
 
-async def test_oracledb_async_migration_with_transactions(oracle_23ai_service: OracleService) -> None:
+async def test_oracledb_async_migration_with_transactions(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test OracleDB async migrations work properly with transactions."""
 
     test_id = "oracledb_async_trans"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = OracleAsyncConfig(
-            pool_config={
-                "host": oracle_23ai_service.host,
-                "port": oracle_23ai_service.port,
-                "service_name": oracle_23ai_service.service_name,
-                "user": oracle_23ai_service.user,
-                "password": oracle_23ai_service.password,
-                "min": 1,
-                "max": 5,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = OracleAsyncConfig(
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 5,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        try:
-            await commands.init(str(migration_dir), package=True)
+    try:
+        await commands.init(str(migration_dir), package=True)
 
-            migration_content = f'''"""Initial schema migration."""
+        migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -756,48 +737,50 @@ def down():
     """Drop users table."""
     return ["DROP TABLE {users_table}"]
 '''
-            (migration_dir / "0001_create_users.py").write_text(migration_content)
+        (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            await commands.upgrade()
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                await driver.begin()
-                try:
-                    await driver.execute(
-                        f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)",
-                        ("Transaction User", "trans@example.com"),
-                    )
-
-                    result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
-                    assert len(result.data) == 1
-                    await driver.commit()
-                except Exception:
-                    await driver.rollback()
-                    raise
+        async with config.provide_session() as driver:
+            await driver.begin()
+            try:
+                await driver.execute(
+                    f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)",
+                    ("Transaction User", "trans@example.com"),
+                )
 
                 result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
                 assert len(result.data) == 1
+                await driver.commit()
+            except Exception:
+                await driver.rollback()
+                raise
 
-            async with config.provide_session() as driver:
-                await driver.begin()
-                try:
-                    await driver.execute(
-                        f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)",
-                        ("Rollback User", "rollback@example.com"),
-                    )
+            result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
+            assert len(result.data) == 1
 
-                    raise Exception("Intentional rollback")
-                except Exception:
-                    await driver.rollback()
+        async with config.provide_session() as driver:
+            await driver.begin()
+            try:
+                await driver.execute(
+                    f"INSERT INTO {users_table} (name, email) VALUES (:1, :2)",
+                    ("Rollback User", "rollback@example.com"),
+                )
 
-                result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
-                assert len(result.data) == 0
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+                raise Exception("Intentional rollback")
+            except Exception:
+                await driver.rollback()
+
+            result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
+            assert len(result.data) == 0
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-async def test_oracledb_async_schema_migration_from_old_format(oracle_23ai_service: OracleService) -> None:
+async def test_oracledb_async_schema_migration_from_old_format(
+    tmp_path: Path, oracle_23ai_service: OracleService
+) -> None:
     """Test automatic schema migration from old format (without execution_sequence) to new format.
 
     This simulates the scenario where a user has an existing database with the old schema
@@ -872,7 +855,7 @@ async def test_oracledb_async_schema_migration_from_old_format(oracle_23ai_servi
             await config.close_pool()
 
 
-def test_oracledb_sync_schema_migration_from_old_format(oracle_23ai_service: OracleService) -> None:
+def test_oracledb_sync_schema_migration_from_old_format(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
     """Test automatic schema migration from old format (without execution_sequence) to new format (sync version).
 
     This simulates the scenario where a user has an existing database with the old schema

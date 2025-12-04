@@ -10,9 +10,6 @@ Tests for Migration core functionality including:
 - Error handling and validation
 """
 
-from __future__ import annotations
-
-import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
@@ -124,14 +121,13 @@ def test_calculate_checksum_unicode_content() -> None:
     assert len(checksum) == 32
 
 
-def test_get_migration_files_sync_empty_directory() -> None:
+def test_get_migration_files_sync_empty_directory(tmp_path: Path) -> None:
     """Test getting migration files from empty directory."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
-        runner = MockMigrationRunner(migrations_path)
+    migrations_path = tmp_path
+    runner = MockMigrationRunner(migrations_path)
 
-        files = runner._get_migration_files_sync()
-        assert files == []
+    files = runner._get_migration_files_sync()
+    assert files == []
 
 
 def test_get_migration_files_sync_nonexistent_directory() -> None:
@@ -143,88 +139,83 @@ def test_get_migration_files_sync_nonexistent_directory() -> None:
     assert files == []
 
 
-def test_get_migration_files_sync_with_sql_files() -> None:
+def test_get_migration_files_sync_with_sql_files(tmp_path: Path) -> None:
     """Test getting migration files with SQL files."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        (migrations_path / "0001_initial.sql").write_text("-- Initial migration")
-        (migrations_path / "0003_add_indexes.sql").write_text("-- Add indexes")
-        (migrations_path / "0002_add_users.sql").write_text("-- Add users table")
+    (migrations_path / "0001_initial.sql").write_text("-- Initial migration")
+    (migrations_path / "0003_add_indexes.sql").write_text("-- Add indexes")
+    (migrations_path / "0002_add_users.sql").write_text("-- Add users table")
 
-        (migrations_path / "README.md").write_text("# Migrations")
-        (migrations_path / "config.json").write_text("{}")
+    (migrations_path / "README.md").write_text("# Migrations")
+    (migrations_path / "config.json").write_text("{}")
 
-        runner = MockMigrationRunner(migrations_path)
-        files = runner._get_migration_files_sync()
+    runner = MockMigrationRunner(migrations_path)
+    files = runner._get_migration_files_sync()
 
-        assert len(files) == 3
-        assert files[0][0] == "0001"
-        assert files[1][0] == "0002"
-        assert files[2][0] == "0003"
+    assert len(files) == 3
+    assert files[0][0] == "0001"
+    assert files[1][0] == "0002"
+    assert files[2][0] == "0003"
 
-        assert files[0][1].name == "0001_initial.sql"
-        assert files[1][1].name == "0002_add_users.sql"
-        assert files[2][1].name == "0003_add_indexes.sql"
+    assert files[0][1].name == "0001_initial.sql"
+    assert files[1][1].name == "0002_add_users.sql"
+    assert files[2][1].name == "0003_add_indexes.sql"
 
 
-def test_get_migration_files_sync_with_python_files() -> None:
+def test_get_migration_files_sync_with_python_files(tmp_path: Path) -> None:
     """Test getting migration files with Python files."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        (migrations_path / "0001_initial.py").write_text("# Initial migration")
-        (migrations_path / "0002_data_migration.py").write_text("# Data migration")
+    (migrations_path / "0001_initial.py").write_text("# Initial migration")
+    (migrations_path / "0002_data_migration.py").write_text("# Data migration")
 
-        runner = MockMigrationRunner(migrations_path)
-        files = runner._get_migration_files_sync()
+    runner = MockMigrationRunner(migrations_path)
+    files = runner._get_migration_files_sync()
 
-        assert len(files) == 2
-        assert files[0][0] == "0001"
-        assert files[1][0] == "0002"
+    assert len(files) == 2
+    assert files[0][0] == "0001"
+    assert files[1][0] == "0002"
 
 
-def test_get_migration_files_sync_mixed_types() -> None:
+def test_get_migration_files_sync_mixed_types(tmp_path: Path) -> None:
     """Test getting migration files with mixed SQL and Python files."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        (migrations_path / "0001_initial.sql").write_text("-- SQL migration")
-        (migrations_path / "0002_data_migration.py").write_text("# Python migration")
-        (migrations_path / "0003_add_indexes.sql").write_text("-- Another SQL migration")
+    (migrations_path / "0001_initial.sql").write_text("-- SQL migration")
+    (migrations_path / "0002_data_migration.py").write_text("# Python migration")
+    (migrations_path / "0003_add_indexes.sql").write_text("-- Another SQL migration")
 
-        runner = MockMigrationRunner(migrations_path)
-        files = runner._get_migration_files_sync()
+    runner = MockMigrationRunner(migrations_path)
+    files = runner._get_migration_files_sync()
 
-        assert len(files) == 3
-        assert files[0][0] == "0001"
-        assert files[1][0] == "0002"
-        assert files[2][0] == "0003"
+    assert len(files) == 3
+    assert files[0][0] == "0001"
+    assert files[1][0] == "0002"
+    assert files[2][0] == "0003"
 
 
-def test_get_migration_files_sync_hidden_files_ignored() -> None:
+def test_get_migration_files_sync_hidden_files_ignored(tmp_path: Path) -> None:
     """Test that hidden files are ignored."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        (migrations_path / "0001_visible.sql").write_text("-- Visible migration")
-        (migrations_path / ".0002_hidden.sql").write_text("-- Hidden migration")
-        (migrations_path / ".gitkeep").write_text("")
+    (migrations_path / "0001_visible.sql").write_text("-- Visible migration")
+    (migrations_path / ".0002_hidden.sql").write_text("-- Hidden migration")
+    (migrations_path / ".gitkeep").write_text("")
 
-        runner = MockMigrationRunner(migrations_path)
-        files = runner._get_migration_files_sync()
+    runner = MockMigrationRunner(migrations_path)
+    files = runner._get_migration_files_sync()
 
-        assert len(files) == 1
-        assert files[0][1].name == "0001_visible.sql"
+    assert len(files) == 1
+    assert files[0][1].name == "0001_visible.sql"
 
 
-def test_load_migration_metadata_sql_file() -> None:
+def test_load_migration_metadata_sql_file(tmp_path: Path) -> None:
     """Test loading metadata from SQL migration file."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        migration_file = migrations_path / "0001_create_users.sql"
-        migration_content = """
+    migration_file = migrations_path / "0001_create_users.sql"
+    migration_content = """
 -- name: migrate-0001-up
 CREATE TABLE users (
     id INTEGER PRIMARY KEY,
@@ -235,37 +226,36 @@ CREATE TABLE users (
 -- name: migrate-0001-down
 DROP TABLE users;
 """
-        migration_file.write_text(migration_content)
+    migration_file.write_text(migration_content)
 
-        runner = MockMigrationRunner(migrations_path)
+    runner = MockMigrationRunner(migrations_path)
 
-        runner.loader.clear_cache = Mock()
-        runner.loader.load_sql = Mock()
-        runner.loader.has_query = Mock(side_effect=lambda query: True)
+    runner.loader.clear_cache = Mock()
+    runner.loader.load_sql = Mock()
+    runner.loader.has_query = Mock(side_effect=lambda query: True)
 
-        with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
-            mock_loader = Mock()
-            mock_loader.validate_migration_file = Mock()
-            mock_get_loader.return_value = mock_loader
+    with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+        mock_loader = Mock()
+        mock_loader.validate_migration_file = Mock()
+        mock_get_loader.return_value = mock_loader
 
-            metadata = runner._load_migration_metadata(migration_file)
+        metadata = runner._load_migration_metadata(migration_file)
 
-        assert metadata["version"] == "0001"
-        assert metadata["description"] == "create_users"
-        assert metadata["file_path"] == migration_file
-        assert metadata["has_upgrade"] is True
-        assert metadata["has_downgrade"] is True
-        assert isinstance(metadata["checksum"], str)
-        assert len(metadata["checksum"]) == 32
+    assert metadata["version"] == "0001"
+    assert metadata["description"] == "create_users"
+    assert metadata["file_path"] == migration_file
+    assert metadata["has_upgrade"] is True
+    assert metadata["has_downgrade"] is True
+    assert isinstance(metadata["checksum"], str)
+    assert len(metadata["checksum"]) == 32
 
 
-def test_load_migration_metadata_python_file_sync() -> None:
+def test_load_migration_metadata_python_file_sync(tmp_path: Path) -> None:
     """Test loading metadata from Python migration file with sync functions."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        migration_file = migrations_path / "0001_data_migration.py"
-        migration_content = '''
+    migration_file = migrations_path / "0001_data_migration.py"
+    migration_content = '''
 def up():
     """Upgrade migration."""
     return ["INSERT INTO users (name, email) VALUES ('admin', 'admin@example.com');"]
@@ -274,38 +264,37 @@ def down():
     """Downgrade migration."""
     return ["DELETE FROM users WHERE name = 'admin';"]
 '''
-        migration_file.write_text(migration_content)
+    migration_file.write_text(migration_content)
 
-        runner = MockMigrationRunner(migrations_path)
+    runner = MockMigrationRunner(migrations_path)
 
-        with (
-            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
-            patch("sqlspec.migrations.base.await_") as mock_await,
-        ):
-            mock_loader = Mock()
-            mock_loader.validate_migration_file = Mock()
-            mock_loader.get_up_sql = Mock()
-            mock_loader.get_down_sql = Mock()
-            mock_get_loader.return_value = mock_loader
+    with (
+        patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+        patch("sqlspec.migrations.base.await_") as mock_await,
+    ):
+        mock_loader = Mock()
+        mock_loader.validate_migration_file = Mock()
+        mock_loader.get_up_sql = Mock()
+        mock_loader.get_down_sql = Mock()
+        mock_get_loader.return_value = mock_loader
 
-            mock_await.return_value = Mock(return_value=True)
+        mock_await.return_value = Mock(return_value=True)
 
-            metadata = runner._load_migration_metadata(migration_file)
+        metadata = runner._load_migration_metadata(migration_file)
 
-        assert metadata["version"] == "0001"
-        assert metadata["description"] == "data_migration"
-        assert metadata["file_path"] == migration_file
-        assert metadata["has_upgrade"] is True
-        assert metadata["has_downgrade"] is True
+    assert metadata["version"] == "0001"
+    assert metadata["description"] == "data_migration"
+    assert metadata["file_path"] == migration_file
+    assert metadata["has_upgrade"] is True
+    assert metadata["has_downgrade"] is True
 
 
-def test_load_migration_metadata_python_file_async() -> None:
+def test_load_migration_metadata_python_file_async(tmp_path: Path) -> None:
     """Test loading metadata from Python migration file with async functions."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        migration_file = migrations_path / "0001_async_migration.py"
-        migration_content = '''
+    migration_file = migrations_path / "0001_async_migration.py"
+    migration_content = '''
 import asyncio
 
 async def up():
@@ -318,38 +307,37 @@ async def down():
     await asyncio.sleep(0.001)
     return ["DELETE FROM users WHERE name = 'admin';"]
 '''
-        migration_file.write_text(migration_content)
+    migration_file.write_text(migration_content)
 
-        runner = MockMigrationRunner(migrations_path)
+    runner = MockMigrationRunner(migrations_path)
 
-        with (
-            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
-            patch("sqlspec.migrations.base.await_") as mock_await,
-        ):
-            mock_loader = Mock()
-            mock_loader.validate_migration_file = Mock()
-            mock_loader.get_up_sql = Mock()
-            mock_loader.get_down_sql = Mock()
-            mock_get_loader.return_value = mock_loader
+    with (
+        patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+        patch("sqlspec.migrations.base.await_") as mock_await,
+    ):
+        mock_loader = Mock()
+        mock_loader.validate_migration_file = Mock()
+        mock_loader.get_up_sql = Mock()
+        mock_loader.get_down_sql = Mock()
+        mock_get_loader.return_value = mock_loader
 
-            mock_await.return_value = Mock(return_value=True)
+        mock_await.return_value = Mock(return_value=True)
 
-            metadata = runner._load_migration_metadata(migration_file)
+        metadata = runner._load_migration_metadata(migration_file)
 
-        assert metadata["version"] == "0001"
-        assert metadata["description"] == "async_migration"
-        assert metadata["file_path"] == migration_file
-        assert metadata["has_upgrade"] is True
-        assert metadata["has_downgrade"] is True
+    assert metadata["version"] == "0001"
+    assert metadata["description"] == "async_migration"
+    assert metadata["file_path"] == migration_file
+    assert metadata["has_upgrade"] is True
+    assert metadata["has_downgrade"] is True
 
 
-def test_load_migration_metadata_python_file_mixed() -> None:
+def test_load_migration_metadata_python_file_mixed(tmp_path: Path) -> None:
     """Test loading metadata from Python migration file with mixed sync/async functions."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        migration_file = migrations_path / "0001_mixed_migration.py"
-        migration_content = '''
+    migration_file = migrations_path / "0001_mixed_migration.py"
+    migration_content = '''
 import asyncio
 
 def up():
@@ -361,38 +349,37 @@ async def down():
     await asyncio.sleep(0.001)
     return ["DELETE FROM users WHERE name = 'admin';"]
 '''
-        migration_file.write_text(migration_content)
+    migration_file.write_text(migration_content)
 
-        runner = MockMigrationRunner(migrations_path)
+    runner = MockMigrationRunner(migrations_path)
 
-        with (
-            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
-            patch("sqlspec.migrations.base.await_") as mock_await,
-        ):
-            mock_loader = Mock()
-            mock_loader.validate_migration_file = Mock()
-            mock_loader.get_up_sql = Mock()
-            mock_loader.get_down_sql = Mock()
-            mock_get_loader.return_value = mock_loader
+    with (
+        patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+        patch("sqlspec.migrations.base.await_") as mock_await,
+    ):
+        mock_loader = Mock()
+        mock_loader.validate_migration_file = Mock()
+        mock_loader.get_up_sql = Mock()
+        mock_loader.get_down_sql = Mock()
+        mock_get_loader.return_value = mock_loader
 
-            mock_await.return_value = Mock(return_value=True)
+        mock_await.return_value = Mock(return_value=True)
 
-            metadata = runner._load_migration_metadata(migration_file)
+        metadata = runner._load_migration_metadata(migration_file)
 
-        assert metadata["version"] == "0001"
-        assert metadata["description"] == "mixed_migration"
-        assert metadata["file_path"] == migration_file
-        assert metadata["has_upgrade"] is True
-        assert metadata["has_downgrade"] is True
+    assert metadata["version"] == "0001"
+    assert metadata["description"] == "mixed_migration"
+    assert metadata["file_path"] == migration_file
+    assert metadata["has_upgrade"] is True
+    assert metadata["has_downgrade"] is True
 
 
-def test_load_multiple_mixed_migrations() -> None:
+def test_load_multiple_mixed_migrations(tmp_path: Path) -> None:
     """Test loading multiple migrations with mixed SQL and Python (sync/async) files."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        sql_migration = migrations_path / "0001_create_tables.sql"
-        sql_content = """
+    sql_migration = migrations_path / "0001_create_tables.sql"
+    sql_content = """
 -- up
 CREATE TABLE users (
     id INTEGER PRIMARY KEY,
@@ -413,10 +400,10 @@ CREATE TABLE posts (
 DROP TABLE posts;
 DROP TABLE users;
 """
-        sql_migration.write_text(sql_content)
+    sql_migration.write_text(sql_content)
 
-        python_sync_migration = migrations_path / "0002_seed_data.py"
-        python_sync_content = '''
+    python_sync_migration = migrations_path / "0002_seed_data.py"
+    python_sync_content = '''
 def up():
     """Sync upgrade migration to seed initial data."""
     return [
@@ -432,10 +419,10 @@ def down():
         "DELETE FROM users WHERE email IN ('admin@example.com', 'user1@example.com');"
     ]
 '''
-        python_sync_migration.write_text(python_sync_content)
+    python_sync_migration.write_text(python_sync_content)
 
-        python_async_migration = migrations_path / "0003_async_data_processing.py"
-        python_async_content = '''
+    python_async_migration = migrations_path / "0003_async_data_processing.py"
+    python_async_content = '''
 import asyncio
 
 async def up():
@@ -454,10 +441,10 @@ async def down():
         "UPDATE users SET name = LOWER(name) WHERE id > 0;"
     ]
 '''
-        python_async_migration.write_text(python_async_content)
+    python_async_migration.write_text(python_async_content)
 
-        sql_migration2 = migrations_path / "0004_add_indexes.sql"
-        sql_content2 = """
+    sql_migration2 = migrations_path / "0004_add_indexes.sql"
+    sql_content2 = """
 -- up
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_posts_user_id ON posts(user_id);
@@ -468,10 +455,10 @@ DROP INDEX idx_posts_title;
 DROP INDEX idx_posts_user_id;
 DROP INDEX idx_users_email;
 """
-        sql_migration2.write_text(sql_content2)
+    sql_migration2.write_text(sql_content2)
 
-        python_mixed_migration = migrations_path / "0005_mixed_operations.py"
-        python_mixed_content = '''
+    python_mixed_migration = migrations_path / "0005_mixed_operations.py"
+    python_mixed_content = '''
 import asyncio
 
 def up():
@@ -483,115 +470,113 @@ async def down():
     await asyncio.sleep(0.001)
     return ["ALTER TABLE users DROP COLUMN last_login;"]
 '''
-        python_mixed_migration.write_text(python_mixed_content)
+    python_mixed_migration.write_text(python_mixed_content)
 
-        runner = MockMigrationRunner(migrations_path)
+    runner = MockMigrationRunner(migrations_path)
 
-        runner.loader.has_query = Mock(return_value=True)
-        runner.loader.load_sql = Mock()
-        runner.loader.clear_cache = Mock()
+    runner.loader.has_query = Mock(return_value=True)
+    runner.loader.load_sql = Mock()
+    runner.loader.clear_cache = Mock()
 
-        migration_files = sorted(migrations_path.glob("*"), key=lambda p: p.name)
+    migration_files = sorted(migrations_path.glob("*"), key=lambda p: p.name)
 
-        with (
-            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
-            patch("sqlspec.migrations.base.await_") as mock_await,
-        ):
-            mock_loader = Mock()
-            mock_loader.validate_migration_file = Mock()
-            mock_loader.get_up_sql = Mock()
-            mock_loader.get_down_sql = Mock()
-            mock_get_loader.return_value = mock_loader
+    with (
+        patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+        patch("sqlspec.migrations.base.await_") as mock_await,
+    ):
+        mock_loader = Mock()
+        mock_loader.validate_migration_file = Mock()
+        mock_loader.get_up_sql = Mock()
+        mock_loader.get_down_sql = Mock()
+        mock_get_loader.return_value = mock_loader
 
-            mock_await.return_value = Mock(return_value=True)
+        mock_await.return_value = Mock(return_value=True)
 
-            all_metadata = []
-            for migration_file in migration_files:
-                metadata = runner._load_migration_metadata(migration_file)
-                all_metadata.append(metadata)
+        all_metadata = []
+        for migration_file in migration_files:
+            metadata = runner._load_migration_metadata(migration_file)
+            all_metadata.append(metadata)
 
-        assert len(all_metadata) == 5
+    assert len(all_metadata) == 5
 
-        sql_metadata = [m for m in all_metadata if m["file_path"].suffix == ".sql"]
-        assert len(sql_metadata) == 2
+    sql_metadata = [m for m in all_metadata if m["file_path"].suffix == ".sql"]
+    assert len(sql_metadata) == 2
 
-        python_metadata = [m for m in all_metadata if m["file_path"].suffix == ".py"]
-        assert len(python_metadata) == 3
+    python_metadata = [m for m in all_metadata if m["file_path"].suffix == ".py"]
+    assert len(python_metadata) == 3
 
-        expected_migrations = [
-            {"version": "0001", "description": "create_tables", "type": "sql"},
-            {"version": "0002", "description": "seed_data", "type": "python_sync"},
-            {"version": "0003", "description": "async_data_processing", "type": "python_async"},
-            {"version": "0004", "description": "add_indexes", "type": "sql"},
-            {"version": "0005", "description": "mixed_operations", "type": "python_mixed"},
-        ]
+    expected_migrations = [
+        {"version": "0001", "description": "create_tables", "type": "sql"},
+        {"version": "0002", "description": "seed_data", "type": "python_sync"},
+        {"version": "0003", "description": "async_data_processing", "type": "python_async"},
+        {"version": "0004", "description": "add_indexes", "type": "sql"},
+        {"version": "0005", "description": "mixed_operations", "type": "python_mixed"},
+    ]
 
-        for i, expected in enumerate(expected_migrations):
-            metadata = all_metadata[i]
-            assert metadata["version"] == expected["version"]
-            assert metadata["description"] == expected["description"]
-            assert metadata["has_upgrade"] is True
-            assert metadata["has_downgrade"] is True
+    for i, expected in enumerate(expected_migrations):
+        metadata = all_metadata[i]
+        assert metadata["version"] == expected["version"]
+        assert metadata["description"] == expected["description"]
+        assert metadata["has_upgrade"] is True
+        assert metadata["has_downgrade"] is True
 
-            if expected["type"] == "sql":
-                assert metadata["file_path"].suffix == ".sql"
-            else:
-                assert metadata["file_path"].suffix == ".py"
+        if expected["type"] == "sql":
+            assert metadata["file_path"].suffix == ".sql"
+        else:
+            assert metadata["file_path"].suffix == ".py"
 
 
-def test_load_migration_metadata_no_downgrade() -> None:
+def test_load_migration_metadata_no_downgrade(tmp_path: Path) -> None:
     """Test loading metadata when no downgrade is available."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        migration_file = migrations_path / "0001_irreversible.sql"
-        migration_content = """
+    migration_file = migrations_path / "0001_irreversible.sql"
+    migration_content = """
 -- name: migrate-0001-up
 CREATE TABLE users (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL
 );
 """
-        migration_file.write_text(migration_content)
+    migration_file.write_text(migration_content)
 
-        runner = MockMigrationRunner(migrations_path)
+    runner = MockMigrationRunner(migrations_path)
 
-        runner.loader.clear_cache = Mock()
-        runner.loader.load_sql = Mock()
-        runner.loader.has_query = Mock(side_effect=lambda query: query.endswith("-up"))
+    runner.loader.clear_cache = Mock()
+    runner.loader.load_sql = Mock()
+    runner.loader.has_query = Mock(side_effect=lambda query: query.endswith("-up"))
 
-        with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
-            mock_loader = Mock()
-            mock_loader.validate_migration_file = Mock()
-            mock_get_loader.return_value = mock_loader
+    with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+        mock_loader = Mock()
+        mock_loader.validate_migration_file = Mock()
+        mock_get_loader.return_value = mock_loader
 
-            metadata = runner._load_migration_metadata(migration_file)
+        metadata = runner._load_migration_metadata(migration_file)
 
-        assert metadata["has_upgrade"] is True
-        assert metadata["has_downgrade"] is False
+    assert metadata["has_upgrade"] is True
+    assert metadata["has_downgrade"] is False
 
 
-def test_load_migration_metadata_invalid_version() -> None:
+def test_load_migration_metadata_invalid_version(tmp_path: Path) -> None:
     """Test loading metadata with invalid version format."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migrations_path = Path(temp_dir)
+    migrations_path = tmp_path
 
-        migration_file = migrations_path / "invalid_name.sql"
-        migration_content = "CREATE TABLE test (id INTEGER);"
-        migration_file.write_text(migration_content)
+    migration_file = migrations_path / "invalid_name.sql"
+    migration_content = "CREATE TABLE test (id INTEGER);"
+    migration_file.write_text(migration_content)
 
-        runner = MockMigrationRunner(migrations_path)
+    runner = MockMigrationRunner(migrations_path)
 
-        with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
-            mock_loader = Mock()
-            mock_loader.validate_migration_file = Mock()
-            mock_get_loader.return_value = mock_loader
+    with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+        mock_loader = Mock()
+        mock_loader.validate_migration_file = Mock()
+        mock_get_loader.return_value = mock_loader
 
-            metadata = runner._load_migration_metadata(migration_file)
+        metadata = runner._load_migration_metadata(migration_file)
 
-        assert metadata["version"] is None
+    assert metadata["version"] is None
 
-        assert metadata["description"] == "name"
+    assert metadata["description"] == "name"
 
 
 def test_get_migration_sql_upgrade() -> None:

@@ -313,85 +313,83 @@ SELECT 2;
     assert set(cached_file.statement_names) == {"test_query_1", "test_query_2"}
 
 
-def test_namespace_handling_in_cache() -> None:
+def test_namespace_handling_in_cache(tmp_path: Path) -> None:
     """Test proper namespace handling in cached data."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "analytics").mkdir()
-        sql_file = base_path / "analytics" / "reports.sql"
-        sql_file.write_text("""
+    (base_path / "analytics").mkdir()
+    sql_file = base_path / "analytics" / "reports.sql"
+    sql_file.write_text("""
 -- name: user_report
 SELECT COUNT(*) FROM users;
 """)
 
-        loader = SQLFileLoader()
+    loader = SQLFileLoader()
 
-        with (
-            patch("sqlspec.loader.get_cache_config") as mock_config,
-            patch("sqlspec.loader.get_cache") as mock_cache_factory,
-        ):
-            mock_cache_config = Mock()
-            mock_cache_config.compiled_cache_enabled = True
-            mock_config.return_value = mock_cache_config
+    with (
+        patch("sqlspec.loader.get_cache_config") as mock_config,
+        patch("sqlspec.loader.get_cache") as mock_cache_factory,
+    ):
+        mock_cache_config = Mock()
+        mock_cache_config.compiled_cache_enabled = True
+        mock_config.return_value = mock_cache_config
 
-            mock_cache = Mock()
-            mock_cache.get.return_value = None
-            mock_cache_factory.return_value = mock_cache
+        mock_cache = Mock()
+        mock_cache.get.return_value = None
+        mock_cache_factory.return_value = mock_cache
 
-            loader.load_sql(base_path)
+        loader.load_sql(base_path)
 
-            assert "analytics.user_report" in loader._queries
+        assert "analytics.user_report" in loader._queries
 
-            mock_cache.put.assert_called()
-            cache_call_args = mock_cache.put.call_args[0]
-            assert cache_call_args[0] == "file"  # First arg should be "file" namespace
-            cached_data = cache_call_args[2]  # Third arg is the value in MultiLevelCache.put
+        mock_cache.put.assert_called()
+        cache_call_args = mock_cache.put.call_args[0]
+        assert cache_call_args[0] == "file"  # First arg should be "file" namespace
+        cached_data = cache_call_args[2]  # Third arg is the value in MultiLevelCache.put
 
-            assert isinstance(cached_data, CachedSQLFile)
+        assert isinstance(cached_data, CachedSQLFile)
 
-            assert "user_report" in cached_data.parsed_statements
-            assert "analytics.user_report" not in cached_data.parsed_statements
+        assert "user_report" in cached_data.parsed_statements
+        assert "analytics.user_report" not in cached_data.parsed_statements
 
 
-def test_cache_restoration_with_namespace() -> None:
+def test_cache_restoration_with_namespace(tmp_path: Path) -> None:
     """Test proper namespace restoration when loading from cache."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "reports").mkdir()
-        sql_file = base_path / "reports" / "daily.sql"
-        content = """
+    (base_path / "reports").mkdir()
+    sql_file = base_path / "reports" / "daily.sql"
+    content = """
 -- name: daily_users
 SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE;
 """
-        sql_file.write_text(content)
+    sql_file.write_text(content)
 
-        cached_sql_file = SQLFile(content, str(sql_file))
-        cached_statements = {
-            "daily_users": NamedStatement("daily_users", "SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE")
-        }
-        cached_file = CachedSQLFile(cached_sql_file, cached_statements)
+    cached_sql_file = SQLFile(content, str(sql_file))
+    cached_statements = {
+        "daily_users": NamedStatement("daily_users", "SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE")
+    }
+    cached_file = CachedSQLFile(cached_sql_file, cached_statements)
 
-        loader = SQLFileLoader()
+    loader = SQLFileLoader()
 
-        with (
-            patch("sqlspec.loader.get_cache_config") as mock_config,
-            patch("sqlspec.loader.get_cache") as mock_cache_factory,
-            patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True),
-        ):
-            mock_cache_config = Mock()
-            mock_cache_config.compiled_cache_enabled = True
-            mock_config.return_value = mock_cache_config
+    with (
+        patch("sqlspec.loader.get_cache_config") as mock_config,
+        patch("sqlspec.loader.get_cache") as mock_cache_factory,
+        patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True),
+    ):
+        mock_cache_config = Mock()
+        mock_cache_config.compiled_cache_enabled = True
+        mock_config.return_value = mock_cache_config
 
-            mock_cache = Mock()
-            mock_cache.get.return_value = cached_file
-            mock_cache_factory.return_value = mock_cache
+        mock_cache = Mock()
+        mock_cache.get.return_value = cached_file
+        mock_cache_factory.return_value = mock_cache
 
-            loader._load_single_file(sql_file, "reports")
+        loader._load_single_file(sql_file, "reports")
 
-            assert "reports.daily_users" in loader._queries
-            assert "daily_users" not in loader._queries
+        assert "reports.daily_users" in loader._queries
+        assert "daily_users" not in loader._queries
 
 
 def test_cache_clear_integration() -> None:

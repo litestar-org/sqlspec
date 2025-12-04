@@ -1,7 +1,6 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for StorageRegistry."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -46,95 +45,79 @@ def test_register_alias() -> None:
     assert "test_store" in registry.list_aliases()
 
 
-def test_get_local_backend() -> None:
+def test_get_local_backend(tmp_path: Path) -> None:
     """Test getting local backend (when explicitly requested)."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        # Force local backend with override
-        backend = registry.get(temp_dir, backend="local")
-        assert backend.backend_type == "local"
+    backend = registry.get(str(tmp_path), backend="local")
+    assert backend.backend_type == "local"
 
-        # Force local backend for file:// URI
-        backend = registry.get(f"file://{temp_dir}", backend="local")
-        assert backend.backend_type == "local"
+    backend = registry.get(f"file://{tmp_path}", backend="local")
+    assert backend.backend_type == "local"
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
-def test_get_local_backend_prefers_obstore() -> None:
+def test_get_local_backend_prefers_obstore(tmp_path: Path) -> None:
     """Test that local paths prefer obstore when available."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        # Without backend override, should get obstore for file://
-        backend = registry.get(f"file://{temp_dir}")
-        assert backend.backend_type == "obstore"
+    backend = registry.get(f"file://{tmp_path}")
+    assert backend.backend_type == "obstore"
 
-        # Direct path should also prefer obstore
-        backend = registry.get(temp_dir)
-        assert backend.backend_type == "obstore"
+    backend = registry.get(str(tmp_path))
+    assert backend.backend_type == "obstore"
 
-        # Can still force local backend with override
-        backend = registry.get(f"file://{temp_dir}", backend="local")
-        assert backend.backend_type == "local"
+    backend = registry.get(f"file://{tmp_path}", backend="local")
+    assert backend.backend_type == "local"
 
 
-def test_get_local_backend_fallback_priority() -> None:
+def test_get_local_backend_fallback_priority(tmp_path: Path) -> None:
     """Test backend fallback priority for local paths."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        # Get whatever backend is available
-        backend = registry.get(f"file://{temp_dir}")
+    backend = registry.get(f"file://{tmp_path}")
 
-        # Should be one of: obstore > fsspec > local (in that priority order)
-        if OBSTORE_INSTALLED:
-            assert backend.backend_type == "obstore"
-        elif FSSPEC_INSTALLED:
-            assert backend.backend_type == "fsspec"
-        else:
-            assert backend.backend_type == "local"
-
-
-def test_get_alias() -> None:
-    """Test getting backend by alias."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
-        registry.register_alias("my_store", f"file://{temp_dir}")
-
-        backend = registry.get("my_store")
-        # Backend type depends on what's installed
-        assert backend.backend_type in ("obstore", "fsspec", "local")
-
-
-def test_get_with_backend_override() -> None:
-    """Test getting backend with override."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
-
-        # Force local backend
-        backend = registry.get(f"file://{temp_dir}", backend="local")
+    if OBSTORE_INSTALLED:
+        assert backend.backend_type == "obstore"
+    elif FSSPEC_INSTALLED:
+        assert backend.backend_type == "fsspec"
+    else:
         assert backend.backend_type == "local"
+
+
+def test_get_alias(tmp_path: Path) -> None:
+    """Test getting backend by alias."""
+    registry = StorageRegistry()
+    registry.register_alias("my_store", f"file://{tmp_path}")
+
+    backend = registry.get("my_store")
+    assert backend.backend_type in ("obstore", "fsspec", "local")
+
+
+def test_get_with_backend_override(tmp_path: Path) -> None:
+    """Test getting backend with override."""
+    registry = StorageRegistry()
+
+    backend = registry.get(f"file://{tmp_path}", backend="local")
+    assert backend.backend_type == "local"
 
 
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec not installed")
-def test_get_fsspec_backend() -> None:
+def test_get_fsspec_backend(tmp_path: Path) -> None:
     """Test getting fsspec backend."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        backend = registry.get(f"file://{temp_dir}", backend="fsspec")
-        assert backend.backend_type == "fsspec"
+    backend = registry.get(f"file://{tmp_path}", backend="fsspec")
+    assert backend.backend_type == "fsspec"
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore not installed")
-def test_get_obstore_backend() -> None:
+def test_get_obstore_backend(tmp_path: Path) -> None:
     """Test getting obstore backend."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        backend = registry.get(f"file://{temp_dir}", backend="obstore")
-        assert backend.backend_type == "obstore"
+    backend = registry.get(f"file://{tmp_path}", backend="obstore")
+    assert backend.backend_type == "obstore"
 
 
 def test_get_invalid_alias_raises_error() -> None:
@@ -161,53 +144,45 @@ def test_get_invalid_backend_raises_error() -> None:
         registry.get("file:///tmp", backend="invalid")
 
 
-def test_register_alias_with_base_path() -> None:
+def test_register_alias_with_base_path(tmp_path: Path) -> None:
     """Test alias registration with base_path."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        registry.register_alias("test_store", f"file://{temp_dir}/data")
-        backend = registry.get("test_store")
+    registry.register_alias("test_store", f"file://{tmp_path}/data")
+    backend = registry.get("test_store")
 
-        # Write and read to verify base_path works
-        backend.write_text("test.txt", "content")
-        assert backend.exists("test.txt")
+    backend.write_text("test.txt", "content")
+    assert backend.exists("test.txt")
 
 
-def test_register_alias_with_backend_override() -> None:
+def test_register_alias_with_backend_override(tmp_path: Path) -> None:
     """Test alias registration with backend override."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        registry.register_alias("test_store", f"file://{temp_dir}", backend="local")
-        backend = registry.get("test_store")
-        assert backend.backend_type == "local"
+    registry.register_alias("test_store", f"file://{tmp_path}", backend="local")
+    backend = registry.get("test_store")
+    assert backend.backend_type == "local"
 
 
-def test_cache_functionality() -> None:
+def test_cache_functionality(tmp_path: Path) -> None:
     """Test registry caching."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        # Get same backend twice
-        backend1 = registry.get(f"file://{temp_dir}")
-        backend2 = registry.get(f"file://{temp_dir}")
+    backend1 = registry.get(f"file://{tmp_path}")
+    backend2 = registry.get(f"file://{tmp_path}")
 
-        # Should be the same instance
-        assert backend1 is backend2
+    assert backend1 is backend2
 
 
-def test_clear_cache() -> None:
+def test_clear_cache(tmp_path: Path) -> None:
     """Test cache clearing."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        backend1 = registry.get(f"file://{temp_dir}")
-        registry.clear_cache(f"file://{temp_dir}")
-        backend2 = registry.get(f"file://{temp_dir}")
+    backend1 = registry.get(f"file://{tmp_path}")
+    registry.clear_cache(f"file://{tmp_path}")
+    backend2 = registry.get(f"file://{tmp_path}")
 
-        # Should be different instances after cache clear
-        assert backend1 is not backend2
+    assert backend1 is not backend2
 
 
 def test_clear_aliases() -> None:
@@ -222,47 +197,41 @@ def test_clear_aliases() -> None:
     assert len(registry.list_aliases()) == 0
 
 
-def test_clear_instances() -> None:
+def test_clear_instances(tmp_path: Path) -> None:
     """Test clearing instances."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        backend1 = registry.get(f"file://{temp_dir}")
-        registry.clear_instances()
-        backend2 = registry.get(f"file://{temp_dir}")
+    backend1 = registry.get(f"file://{tmp_path}")
+    registry.clear_instances()
+    backend2 = registry.get(f"file://{tmp_path}")
 
-        # Should be different instances after clear
-        assert backend1 is not backend2
+    assert backend1 is not backend2
 
 
-def test_clear_all() -> None:
+def test_clear_all(tmp_path: Path) -> None:
     """Test clearing everything."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
+    registry = StorageRegistry()
 
-        registry.register_alias("test_store", f"file://{temp_dir}")
-        backend1 = registry.get("test_store")
+    registry.register_alias("test_store", f"file://{tmp_path}")
+    backend1 = registry.get("test_store")
 
-        registry.clear()
+    registry.clear()
 
-        assert not registry.is_alias_registered("test_store")
-        assert len(registry.list_aliases()) == 0
+    assert not registry.is_alias_registered("test_store")
+    assert len(registry.list_aliases()) == 0
 
-        # Should create new instance
-        registry.register_alias("test_store", f"file://{temp_dir}")
-        backend2 = registry.get("test_store")
-        assert backend1 is not backend2
+    registry.register_alias("test_store", f"file://{tmp_path}")
+    backend2 = registry.get("test_store")
+    assert backend1 is not backend2
 
 
-def test_path_object_conversion() -> None:
+def test_path_object_conversion(tmp_path: Path) -> None:
     """Test Path object conversion to file:// URI."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        registry = StorageRegistry()
-        path_obj = Path(temp_dir)
+    registry = StorageRegistry()
+    path_obj = tmp_path
 
-        backend = registry.get(path_obj)
-        # Backend type depends on what's installed (obstore > fsspec > local)
-        assert backend.backend_type in ("obstore", "fsspec", "local")
+    backend = registry.get(path_obj)
+    assert backend.backend_type in ("obstore", "fsspec", "local")
 
 
 def test_cloud_storage_without_backends() -> None:

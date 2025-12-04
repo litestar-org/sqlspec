@@ -1,6 +1,5 @@
 """Integration tests for Asyncmy (MySQL) migration workflow."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -12,35 +11,34 @@ from sqlspec.migrations.commands import AsyncMigrationCommands
 pytestmark = pytest.mark.xdist_group("mysql")
 
 
-async def test_asyncmy_migration_full_workflow(mysql_service: MySQLService) -> None:
+async def test_asyncmy_migration_full_workflow(tmp_path: Path, mysql_service: MySQLService) -> None:
     """Test full Asyncmy migration workflow: init -> create -> upgrade -> downgrade."""
 
     test_id = "asyncmy_full_workflow"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = AsyncmyConfig(
-            pool_config={
-                "host": mysql_service.host,
-                "port": mysql_service.port,
-                "user": mysql_service.user,
-                "password": mysql_service.password,
-                "database": mysql_service.db,
-                "autocommit": True,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = AsyncmyConfig(
+        pool_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": True,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        await commands.init(str(migration_dir), package=True)
+    await commands.init(str(migration_dir), package=True)
 
-        assert migration_dir.exists()
-        assert (migration_dir / "__init__.py").exists()
+    assert migration_dir.exists()
+    assert (migration_dir / "__init__.py").exists()
 
-        migration_content = f'''"""Initial schema migration."""
+    migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -60,42 +58,42 @@ def down():
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
 
-        migration_file = migration_dir / "0001_create_users.py"
-        migration_file.write_text(migration_content)
+    migration_file = migration_dir / "0001_create_users.py"
+    migration_file.write_text(migration_content)
 
-        try:
-            await commands.upgrade()
+    try:
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{users_table}'",
-                    (mysql_service.db,),
-                )
-                assert len(result.data) == 1
+        async with config.provide_session() as driver:
+            result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{users_table}'",
+                (mysql_service.db,),
+            )
+            assert len(result.data) == 1
 
-                await driver.execute(
-                    f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)", ("John Doe", "john@example.com")
-                )
+            await driver.execute(
+                f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)", ("John Doe", "john@example.com")
+            )
 
-                users_result = await driver.execute(f"SELECT * FROM {users_table}")
-                assert len(users_result.data) == 1
-                assert users_result.data[0]["name"] == "John Doe"
-                assert users_result.data[0]["email"] == "john@example.com"
+            users_result = await driver.execute(f"SELECT * FROM {users_table}")
+            assert len(users_result.data) == 1
+            assert users_result.data[0]["name"] == "John Doe"
+            assert users_result.data[0]["email"] == "john@example.com"
 
-            await commands.downgrade("base")
+        await commands.downgrade("base")
 
-            async with config.provide_session() as driver:
-                result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{users_table}'",
-                    (mysql_service.db,),
-                )
-                assert len(result.data) == 0
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        async with config.provide_session() as driver:
+            result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{users_table}'",
+                (mysql_service.db,),
+            )
+            assert len(result.data) == 0
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-async def test_asyncmy_multiple_migrations_workflow(mysql_service: MySQLService) -> None:
+async def test_asyncmy_multiple_migrations_workflow(tmp_path: Path, mysql_service: MySQLService) -> None:
     """Test Asyncmy workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
     test_id = "asyncmy_multiple_workflow"
@@ -103,25 +101,24 @@ async def test_asyncmy_multiple_migrations_workflow(mysql_service: MySQLService)
     users_table = f"users_{test_id}"
     posts_table = f"posts_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = AsyncmyConfig(
-            pool_config={
-                "host": mysql_service.host,
-                "port": mysql_service.port,
-                "user": mysql_service.user,
-                "password": mysql_service.password,
-                "database": mysql_service.db,
-                "autocommit": True,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = AsyncmyConfig(
+        pool_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": True,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        await commands.init(str(migration_dir), package=True)
+    await commands.init(str(migration_dir), package=True)
 
-        migration1_content = f'''"""Create users table."""
+    migration1_content = f'''"""Create users table."""
 
 
 def up():
@@ -140,9 +137,9 @@ def down():
     """Drop users table."""
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
-        (migration_dir / "0001_create_users.py").write_text(migration1_content)
+    (migration_dir / "0001_create_users.py").write_text(migration1_content)
 
-        migration2_content = f'''"""Create posts table."""
+    migration2_content = f'''"""Create posts table."""
 
 
 def up():
@@ -163,88 +160,87 @@ def down():
     """Drop posts table."""
     return ["DROP TABLE IF EXISTS {posts_table}"]
 '''
-        (migration_dir / "0002_create_posts.py").write_text(migration2_content)
+    (migration_dir / "0002_create_posts.py").write_text(migration2_content)
 
-        try:
-            await commands.upgrade()
+    try:
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                users_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{users_table}'",
-                    (mysql_service.db,),
-                )
-                posts_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{posts_table}'",
-                    (mysql_service.db,),
-                )
-                assert len(users_result.data) == 1
-                assert len(posts_result.data) == 1
+        async with config.provide_session() as driver:
+            users_result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{users_table}'",
+                (mysql_service.db,),
+            )
+            posts_result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{posts_table}'",
+                (mysql_service.db,),
+            )
+            assert len(users_result.data) == 1
+            assert len(posts_result.data) == 1
 
-                await driver.execute(
-                    f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)", ("John Doe", "john@example.com")
-                )
-                await driver.execute(
-                    f"INSERT INTO {posts_table} (title, content, user_id) VALUES (%s, %s, %s)",
-                    ("Test Post", "This is a test post", 1),
-                )
+            await driver.execute(
+                f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)", ("John Doe", "john@example.com")
+            )
+            await driver.execute(
+                f"INSERT INTO {posts_table} (title, content, user_id) VALUES (%s, %s, %s)",
+                ("Test Post", "This is a test post", 1),
+            )
 
-            await commands.downgrade("0001")
+        await commands.downgrade("0001")
 
-            async with config.provide_session() as driver:
-                users_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{users_table}'",
-                    (mysql_service.db,),
-                )
-                posts_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{posts_table}'",
-                    (mysql_service.db,),
-                )
-                assert len(users_result.data) == 1
-                assert len(posts_result.data) == 0
+        async with config.provide_session() as driver:
+            users_result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{users_table}'",
+                (mysql_service.db,),
+            )
+            posts_result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = '{posts_table}'",
+                (mysql_service.db,),
+            )
+            assert len(users_result.data) == 1
+            assert len(posts_result.data) == 0
 
-            await commands.downgrade("base")
+        await commands.downgrade("base")
 
-            async with config.provide_session() as driver:
-                users_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name IN ('{users_table}', '{posts_table}')",
-                    (mysql_service.db,),
-                )
-                assert len(users_result.data) == 0
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        async with config.provide_session() as driver:
+            users_result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name IN ('{users_table}', '{posts_table}')",
+                (mysql_service.db,),
+            )
+            assert len(users_result.data) == 0
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-async def test_asyncmy_migration_current_command(mysql_service: MySQLService) -> None:
+async def test_asyncmy_migration_current_command(tmp_path: Path, mysql_service: MySQLService) -> None:
     """Test the current migration command shows correct version for Asyncmy."""
 
     test_id = "asyncmy_current_cmd"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = AsyncmyConfig(
-            pool_config={
-                "host": mysql_service.host,
-                "port": mysql_service.port,
-                "user": mysql_service.user,
-                "password": mysql_service.password,
-                "database": mysql_service.db,
-                "autocommit": True,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = AsyncmyConfig(
+        pool_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": True,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        try:
-            await commands.init(str(migration_dir), package=True)
+    try:
+        await commands.init(str(migration_dir), package=True)
 
-            current_version = await commands.current()
-            assert current_version is None or current_version == "base"
+        current_version = await commands.current()
+        assert current_version is None or current_version == "base"
 
-            migration_content = f'''"""Initial schema migration."""
+        migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -261,48 +257,47 @@ def down():
     """Drop users table."""
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
-            (migration_dir / "0001_create_users.py").write_text(migration_content)
+        (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            await commands.upgrade()
+        await commands.upgrade()
 
-            current_version = await commands.current()
-            assert current_version == "0001"
+        current_version = await commands.current()
+        assert current_version == "0001"
 
-            await commands.downgrade("base")
+        await commands.downgrade("base")
 
-            current_version = await commands.current()
-            assert current_version is None or current_version == "base"
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        current_version = await commands.current()
+        assert current_version is None or current_version == "base"
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-async def test_asyncmy_migration_error_handling(mysql_service: MySQLService) -> None:
+async def test_asyncmy_migration_error_handling(tmp_path: Path, mysql_service: MySQLService) -> None:
     """Test Asyncmy migration error handling."""
 
     test_id = "asyncmy_error_handling"
     migration_table = f"sqlspec_migrations_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = AsyncmyConfig(
-            pool_config={
-                "host": mysql_service.host,
-                "port": mysql_service.port,
-                "user": mysql_service.user,
-                "password": mysql_service.password,
-                "database": mysql_service.db,
-                "autocommit": True,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = AsyncmyConfig(
+        pool_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": True,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        try:
-            await commands.init(str(migration_dir), package=True)
+    try:
+        await commands.init(str(migration_dir), package=True)
 
-            migration_content = '''"""Migration with invalid SQL."""
+        migration_content = '''"""Migration with invalid SQL."""
 
 
 def up():
@@ -314,45 +309,44 @@ def down():
     """Drop table."""
     return ["DROP TABLE IF EXISTS invalid_table"]
 '''
-            (migration_dir / "0001_invalid.py").write_text(migration_content)
+        (migration_dir / "0001_invalid.py").write_text(migration_content)
 
-            await commands.upgrade()
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                count = await driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
-                assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        async with config.provide_session() as driver:
+            count = await driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
+            assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-async def test_asyncmy_migration_with_transactions(mysql_service: MySQLService) -> None:
+async def test_asyncmy_migration_with_transactions(tmp_path: Path, mysql_service: MySQLService) -> None:
     """Test Asyncmy migrations work properly with transactions."""
 
     test_id = "asyncmy_transactions"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = AsyncmyConfig(
-            pool_config={
-                "host": mysql_service.host,
-                "port": mysql_service.port,
-                "user": mysql_service.user,
-                "password": mysql_service.password,
-                "database": mysql_service.db,
-                "autocommit": False,
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = AsyncmyConfig(
+        pool_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "autocommit": False,
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        try:
-            await commands.init(str(migration_dir), package=True)
+    try:
+        await commands.init(str(migration_dir), package=True)
 
-            migration_content = f'''"""Initial schema migration."""
+        migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -370,42 +364,42 @@ def down():
     """Drop users table."""
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
-            (migration_dir / "0001_create_users.py").write_text(migration_content)
+        (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            await commands.upgrade()
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                await driver.begin()
-                try:
-                    await driver.execute(
-                        f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
-                        ("Transaction User", "trans@example.com"),
-                    )
-
-                    result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
-                    assert len(result.data) == 1
-                    await driver.commit()
-                except Exception:
-                    await driver.rollback()
-                    raise
+        async with config.provide_session() as driver:
+            await driver.begin()
+            try:
+                await driver.execute(
+                    f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
+                    ("Transaction User", "trans@example.com"),
+                )
 
                 result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
                 assert len(result.data) == 1
+                await driver.commit()
+            except Exception:
+                await driver.rollback()
+                raise
 
-            async with config.provide_session() as driver:
-                await driver.begin()
-                try:
-                    await driver.execute(
-                        f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
-                        ("Rollback User", "rollback@example.com"),
-                    )
+            result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
+            assert len(result.data) == 1
 
-                    raise Exception("Intentional rollback")
-                except Exception:
-                    await driver.rollback()
+        async with config.provide_session() as driver:
+            await driver.begin()
+            try:
+                await driver.execute(
+                    f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
+                    ("Rollback User", "rollback@example.com"),
+                )
 
-                result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
-                assert len(result.data) == 0
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+                raise Exception("Intentional rollback")
+            except Exception:
+                await driver.rollback()
+
+            result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
+            assert len(result.data) == 0
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
