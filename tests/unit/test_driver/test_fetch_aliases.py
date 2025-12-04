@@ -233,19 +233,12 @@ def test_sync_fetch_delegates_to_select() -> None:
 
     # Call the real fetch method implementation
     result = SyncDriverAdapterBase.fetch(
-        mock_driver,
-        "SELECT * FROM users",
-        {"id": 1},
-        schema_type=None,
-        statement_config=None,
+        mock_driver, "SELECT * FROM users", {"id": 1}, schema_type=None, statement_config=None
     )
 
     # Verify select was called with same arguments
     mock_driver.select.assert_called_once_with(
-        "SELECT * FROM users",
-        {"id": 1},
-        schema_type=None,
-        statement_config=None,
+        "SELECT * FROM users", {"id": 1}, schema_type=None, statement_config=None
     )
     assert result == [{"id": 1}]
 
@@ -256,18 +249,11 @@ def test_sync_fetch_one_delegates_to_select_one() -> None:
     mock_driver.select_one = Mock(return_value={"id": 1})
 
     result = SyncDriverAdapterBase.fetch_one(
-        mock_driver,
-        "SELECT * FROM users WHERE id = ?",
-        {"id": 1},
-        schema_type=None,
-        statement_config=None,
+        mock_driver, "SELECT * FROM users WHERE id = ?", {"id": 1}, schema_type=None, statement_config=None
     )
 
     mock_driver.select_one.assert_called_once_with(
-        "SELECT * FROM users WHERE id = ?",
-        {"id": 1},
-        schema_type=None,
-        statement_config=None,
+        "SELECT * FROM users WHERE id = ?", {"id": 1}, schema_type=None, statement_config=None
     )
     assert result == {"id": 1}
 
@@ -278,18 +264,11 @@ def test_sync_fetch_one_or_none_delegates_to_select_one_or_none() -> None:
     mock_driver.select_one_or_none = Mock(return_value=None)
 
     result = SyncDriverAdapterBase.fetch_one_or_none(
-        mock_driver,
-        "SELECT * FROM users WHERE id = ?",
-        {"id": 999},
-        schema_type=None,
-        statement_config=None,
+        mock_driver, "SELECT * FROM users WHERE id = ?", {"id": 999}, schema_type=None, statement_config=None
     )
 
     mock_driver.select_one_or_none.assert_called_once_with(
-        "SELECT * FROM users WHERE id = ?",
-        {"id": 999},
-        schema_type=None,
-        statement_config=None,
+        "SELECT * FROM users WHERE id = ?", {"id": 999}, schema_type=None, statement_config=None
     )
     assert result is None
 
@@ -299,16 +278,9 @@ def test_sync_fetch_value_delegates_to_select_value() -> None:
     mock_driver = Mock(spec=SyncDriverAdapterBase)
     mock_driver.select_value = Mock(return_value=42)
 
-    result = SyncDriverAdapterBase.fetch_value(
-        mock_driver,
-        "SELECT COUNT(*) FROM users",
-        statement_config=None,
-    )
+    result = SyncDriverAdapterBase.fetch_value(mock_driver, "SELECT COUNT(*) FROM users", statement_config=None)
 
-    mock_driver.select_value.assert_called_once_with(
-        "SELECT COUNT(*) FROM users",
-        statement_config=None,
-    )
+    mock_driver.select_value.assert_called_once_with("SELECT COUNT(*) FROM users", statement_config=None)
     assert result == 42
 
 
@@ -318,15 +290,10 @@ def test_sync_fetch_value_or_none_delegates_to_select_value_or_none() -> None:
     mock_driver.select_value_or_none = Mock(return_value=None)
 
     result = SyncDriverAdapterBase.fetch_value_or_none(
-        mock_driver,
-        "SELECT MAX(id) FROM empty_table",
-        statement_config=None,
+        mock_driver, "SELECT MAX(id) FROM empty_table", statement_config=None
     )
 
-    mock_driver.select_value_or_none.assert_called_once_with(
-        "SELECT MAX(id) FROM empty_table",
-        statement_config=None,
-    )
+    mock_driver.select_value_or_none.assert_called_once_with("SELECT MAX(id) FROM empty_table", statement_config=None)
     assert result is None
 
 
@@ -363,16 +330,11 @@ def test_sync_fetch_with_total_delegates_to_select_with_total() -> None:
     mock_driver.select_with_total = Mock(return_value=([{"id": 1}, {"id": 2}], 100))
 
     result = SyncDriverAdapterBase.fetch_with_total(
-        mock_driver,
-        "SELECT * FROM users LIMIT 2",
-        schema_type=None,
-        statement_config=None,
+        mock_driver, "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None
     )
 
     mock_driver.select_with_total.assert_called_once_with(
-        "SELECT * FROM users LIMIT 2",
-        schema_type=None,
-        statement_config=None,
+        "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None
     )
     assert result == ([{"id": 1}, {"id": 2}], 100)
 
@@ -384,18 +346,11 @@ async def test_async_fetch_delegates_to_select() -> None:
     mock_driver.select = AsyncMock(return_value=[{"id": 1}])
 
     result = await AsyncDriverAdapterBase.fetch(
-        mock_driver,
-        "SELECT * FROM users",
-        {"id": 1},
-        schema_type=None,
-        statement_config=None,
+        mock_driver, "SELECT * FROM users", {"id": 1}, schema_type=None, statement_config=None
     )
 
     mock_driver.select.assert_called_once_with(
-        "SELECT * FROM users",
-        {"id": 1},
-        schema_type=None,
-        statement_config=None,
+        "SELECT * FROM users", {"id": 1}, schema_type=None, statement_config=None
     )
     assert result == [{"id": 1}]
 
@@ -407,18 +362,11 @@ async def test_async_fetch_one_delegates_to_select_one() -> None:
     mock_driver.select_one = AsyncMock(return_value={"id": 1})
 
     result = await AsyncDriverAdapterBase.fetch_one(
-        mock_driver,
-        "SELECT * FROM users WHERE id = ?",
-        {"id": 1},
-        schema_type=None,
-        statement_config=None,
+        mock_driver, "SELECT * FROM users WHERE id = ?", {"id": 1}, schema_type=None, statement_config=None
     )
 
     mock_driver.select_one.assert_called_once_with(
-        "SELECT * FROM users WHERE id = ?",
-        {"id": 1},
-        schema_type=None,
-        statement_config=None,
+        "SELECT * FROM users WHERE id = ?", {"id": 1}, schema_type=None, statement_config=None
     )
     assert result == {"id": 1}
 
@@ -430,18 +378,11 @@ async def test_async_fetch_one_or_none_delegates_to_select_one_or_none() -> None
     mock_driver.select_one_or_none = AsyncMock(return_value=None)
 
     result = await AsyncDriverAdapterBase.fetch_one_or_none(
-        mock_driver,
-        "SELECT * FROM users WHERE id = ?",
-        {"id": 999},
-        schema_type=None,
-        statement_config=None,
+        mock_driver, "SELECT * FROM users WHERE id = ?", {"id": 999}, schema_type=None, statement_config=None
     )
 
     mock_driver.select_one_or_none.assert_called_once_with(
-        "SELECT * FROM users WHERE id = ?",
-        {"id": 999},
-        schema_type=None,
-        statement_config=None,
+        "SELECT * FROM users WHERE id = ?", {"id": 999}, schema_type=None, statement_config=None
     )
     assert result is None
 
@@ -452,16 +393,9 @@ async def test_async_fetch_value_delegates_to_select_value() -> None:
     mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
     mock_driver.select_value = AsyncMock(return_value=42)
 
-    result = await AsyncDriverAdapterBase.fetch_value(
-        mock_driver,
-        "SELECT COUNT(*) FROM users",
-        statement_config=None,
-    )
+    result = await AsyncDriverAdapterBase.fetch_value(mock_driver, "SELECT COUNT(*) FROM users", statement_config=None)
 
-    mock_driver.select_value.assert_called_once_with(
-        "SELECT COUNT(*) FROM users",
-        statement_config=None,
-    )
+    mock_driver.select_value.assert_called_once_with("SELECT COUNT(*) FROM users", statement_config=None)
     assert result == 42
 
 
@@ -472,15 +406,10 @@ async def test_async_fetch_value_or_none_delegates_to_select_value_or_none() -> 
     mock_driver.select_value_or_none = AsyncMock(return_value=None)
 
     result = await AsyncDriverAdapterBase.fetch_value_or_none(
-        mock_driver,
-        "SELECT MAX(id) FROM empty_table",
-        statement_config=None,
+        mock_driver, "SELECT MAX(id) FROM empty_table", statement_config=None
     )
 
-    mock_driver.select_value_or_none.assert_called_once_with(
-        "SELECT MAX(id) FROM empty_table",
-        statement_config=None,
-    )
+    mock_driver.select_value_or_none.assert_called_once_with("SELECT MAX(id) FROM empty_table", statement_config=None)
     assert result is None
 
 
@@ -519,16 +448,11 @@ async def test_async_fetch_with_total_delegates_to_select_with_total() -> None:
     mock_driver.select_with_total = AsyncMock(return_value=([{"id": 1}, {"id": 2}], 100))
 
     result = await AsyncDriverAdapterBase.fetch_with_total(
-        mock_driver,
-        "SELECT * FROM users LIMIT 2",
-        schema_type=None,
-        statement_config=None,
+        mock_driver, "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None
     )
 
     mock_driver.select_with_total.assert_called_once_with(
-        "SELECT * FROM users LIMIT 2",
-        schema_type=None,
-        statement_config=None,
+        "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None
     )
     assert result == ([{"id": 1}, {"id": 2}], 100)
 
@@ -551,17 +475,10 @@ def test_sync_fetch_with_schema_type_argument() -> None:
     mock_driver.select = Mock(return_value=expected_result)
 
     result = SyncDriverAdapterBase.fetch(
-        mock_driver,
-        "SELECT * FROM users",
-        schema_type=UserSchema,
-        statement_config=None,
+        mock_driver, "SELECT * FROM users", schema_type=UserSchema, statement_config=None
     )
 
-    mock_driver.select.assert_called_once_with(
-        "SELECT * FROM users",
-        schema_type=UserSchema,
-        statement_config=None,
-    )
+    mock_driver.select.assert_called_once_with("SELECT * FROM users", schema_type=UserSchema, statement_config=None)
     assert result == expected_result
 
 
@@ -581,15 +498,10 @@ async def test_async_fetch_one_with_schema_type_argument() -> None:
     mock_driver.select_one = AsyncMock(return_value=expected_result)
 
     result = await AsyncDriverAdapterBase.fetch_one(
-        mock_driver,
-        "SELECT * FROM users WHERE id = 1",
-        schema_type=UserSchema,
-        statement_config=None,
+        mock_driver, "SELECT * FROM users WHERE id = 1", schema_type=UserSchema, statement_config=None
     )
 
     mock_driver.select_one.assert_called_once_with(
-        "SELECT * FROM users WHERE id = 1",
-        schema_type=UserSchema,
-        statement_config=None,
+        "SELECT * FROM users WHERE id = 1", schema_type=UserSchema, statement_config=None
     )
     assert result == expected_result
