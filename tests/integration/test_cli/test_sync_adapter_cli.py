@@ -85,10 +85,7 @@ def get_config():
     config_path = f"{module_name}.get_config"
 
     # Step 1: Initialize migrations
-    init_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "init", "--no-prompt"],
-    )
+    init_result = runner.invoke(add_migration_commands(), ["--config", config_path, "init", "--no-prompt"])
     assert init_result.exit_code == 0, f"Init failed: {init_result.output}"
     assert "await_ cannot be called" not in init_result.output
     assert migrations_dir.exists(), "Migrations directory was not created"
@@ -106,26 +103,17 @@ def get_config():
     assert len(migration_files) == 1, f"Expected 1 migration file, found {len(migration_files)}"
 
     # Step 3: Show current revision (should be None/empty before upgrade)
-    show_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "show-current-revision"],
-    )
+    show_result = runner.invoke(add_migration_commands(), ["--config", config_path, "show-current-revision"])
     assert show_result.exit_code == 0, f"Show revision failed: {show_result.output}"
     assert "await_ cannot be called" not in show_result.output
 
     # Step 4: Upgrade to head
-    upgrade_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "upgrade", "--no-prompt"],
-    )
+    upgrade_result = runner.invoke(add_migration_commands(), ["--config", config_path, "upgrade", "--no-prompt"])
     assert upgrade_result.exit_code == 0, f"Upgrade failed: {upgrade_result.output}"
     assert "await_ cannot be called" not in upgrade_result.output
 
     # Step 5: Verify we're at the new revision
-    show_after_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "show-current-revision"],
-    )
+    show_after_result = runner.invoke(add_migration_commands(), ["--config", config_path, "show-current-revision"])
     assert show_after_result.exit_code == 0, f"Show revision after upgrade failed: {show_after_result.output}"
     assert "await_ cannot be called" not in show_after_result.output
 
@@ -156,10 +144,7 @@ def get_config():
     config_path = f"{module_name}.get_config"
 
     # Step 1: Initialize migrations
-    init_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "init", "--no-prompt"],
-    )
+    init_result = runner.invoke(add_migration_commands(), ["--config", config_path, "init", "--no-prompt"])
     assert init_result.exit_code == 0, f"Init failed: {init_result.output}"
     assert "await_ cannot be called" not in init_result.output
 
@@ -172,10 +157,7 @@ def get_config():
     assert "await_ cannot be called" not in create_result.output
 
     # Step 3: Upgrade
-    upgrade_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "upgrade", "--no-prompt"],
-    )
+    upgrade_result = runner.invoke(add_migration_commands(), ["--config", config_path, "upgrade", "--no-prompt"])
     assert upgrade_result.exit_code == 0, f"Upgrade failed: {upgrade_result.output}"
     assert "await_ cannot be called" not in upgrade_result.output
 
@@ -209,18 +191,12 @@ def get_config():
     )
 
     # Upgrade
-    upgrade_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "upgrade", "--no-prompt"],
-    )
+    upgrade_result = runner.invoke(add_migration_commands(), ["--config", config_path, "upgrade", "--no-prompt"])
     assert upgrade_result.exit_code == 0, f"Upgrade failed: {upgrade_result.output}"
     assert "await_ cannot be called" not in upgrade_result.output
 
     # Downgrade
-    downgrade_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "downgrade", "--no-prompt"],
-    )
+    downgrade_result = runner.invoke(add_migration_commands(), ["--config", config_path, "downgrade", "--no-prompt"])
     assert downgrade_result.exit_code == 0, f"Downgrade failed: {downgrade_result.output}"
     assert "await_ cannot be called" not in downgrade_result.output
 
@@ -264,10 +240,7 @@ def get_configs():
     config_path = f"{module_name}.get_configs"
 
     # Initialize both
-    init_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "init", "--no-prompt"],
-    )
+    init_result = runner.invoke(add_migration_commands(), ["--config", config_path, "init", "--no-prompt"])
     assert init_result.exit_code == 0, f"Init failed: {init_result.output}"
     assert "await_ cannot be called" not in init_result.output
     assert sqlite_migrations.exists(), "SQLite migrations directory not created"
@@ -282,10 +255,7 @@ def get_configs():
         assert create_result.exit_code == 0, f"Create migration for {bind_key} failed: {create_result.output}"
 
     # Upgrade all configs
-    upgrade_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "upgrade", "--no-prompt"],
-    )
+    upgrade_result = runner.invoke(add_migration_commands(), ["--config", config_path, "upgrade", "--no-prompt"])
     assert upgrade_result.exit_code == 0, f"Multi-config upgrade failed: {upgrade_result.output}"
     assert "await_ cannot be called" not in upgrade_result.output
 
@@ -324,9 +294,6 @@ def get_config():
     version = migration_files[0].name.split("_")[0]
 
     # Stamp the database with that version (without running the migration)
-    stamp_result = runner.invoke(
-        add_migration_commands(),
-        ["--config", config_path, "stamp", version],
-    )
+    stamp_result = runner.invoke(add_migration_commands(), ["--config", config_path, "stamp", version])
     assert stamp_result.exit_code == 0, f"Stamp failed: {stamp_result.output}"
     assert "await_ cannot be called" not in stamp_result.output
