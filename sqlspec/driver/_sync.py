@@ -397,6 +397,51 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
             handle_single_row_error(error)
 
     @overload
+    def fetch_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT": ...
+
+    @overload
+    def fetch_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+
+    def fetch_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT | dict[str, Any]":
+        """Execute a select statement and return exactly one row.
+
+        This is an alias for :meth:`select_one` provided for users familiar
+        with asyncpg's fetch_one() naming convention.
+
+        Raises an exception if no rows or more than one row is returned.
+
+        See Also:
+            select_one(): Primary method with identical behavior
+        """
+        return self.select_one(
+            statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+        )
+
+    @overload
     def select_one_or_none(
         self,
         statement: "Statement | QueryBuilder",
@@ -436,6 +481,52 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         return result.one_or_none(schema_type=schema_type)
 
     @overload
+    def fetch_one_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT | None": ...
+
+    @overload
+    def fetch_one_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any] | None": ...
+
+    def fetch_one_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT | dict[str, Any] | None":
+        """Execute a select statement and return at most one row.
+
+        This is an alias for :meth:`select_one_or_none` provided for users familiar
+        with asyncpg's fetch_one_or_none() naming convention.
+
+        Returns None if no rows are found.
+        Raises an exception if more than one row is returned.
+
+        See Also:
+            select_one_or_none(): Primary method with identical behavior
+        """
+        return self.select_one_or_none(
+            statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+        )
+
+    @overload
     def select(
         self,
         statement: "Statement | QueryBuilder",
@@ -469,6 +560,47 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         """Execute a select statement and return all rows."""
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         return result.get_data(schema_type=schema_type)
+
+    @overload
+    def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[SchemaT]": ...
+
+    @overload
+    def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[dict[str, Any]]": ...
+
+    def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[SchemaT] | list[dict[str, Any]]":
+        """Execute a select statement and return all rows.
+
+        This is an alias for :meth:`select` provided for users familiar
+        with asyncpg's fetch() naming convention.
+
+        See Also:
+            select(): Primary method with identical behavior
+        """
+        return self.select(statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs)
 
     def select_to_arrow(
         self,
@@ -549,6 +681,37 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
             metadata=result.metadata,
         )
 
+    def fetch_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        return_format: "ArrowReturnFormat" = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Execute query and return results as Apache Arrow format.
+
+        This is an alias for :meth:`select_to_arrow` provided for users familiar
+        with asyncpg's fetch() naming convention.
+
+        See Also:
+            select_to_arrow(): Primary method with identical behavior and full documentation
+        """
+        return self.select_to_arrow(
+            statement,
+            *parameters,
+            statement_config=statement_config,
+            return_format=return_format,
+            native_only=native_only,
+            batch_size=batch_size,
+            arrow_schema=arrow_schema,
+            **kwargs,
+        )
+
     def select_value(
         self,
         statement: "Statement | QueryBuilder",
@@ -568,6 +731,27 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         except ValueError as error:
             handle_single_row_error(error)
 
+    def fetch_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a select statement and return a single scalar value.
+
+        This is an alias for :meth:`select_value` provided for users familiar
+        with asyncpg's fetch_value() naming convention.
+
+        Expects exactly one row with one column.
+        Raises an exception if no rows or more than one row/column is returned.
+
+        See Also:
+            select_value(): Primary method with identical behavior
+        """
+        return self.select_value(statement, *parameters, statement_config=statement_config, **kwargs)
+
     def select_value_or_none(
         self,
         statement: "Statement | QueryBuilder",
@@ -584,6 +768,28 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         return result.scalar_or_none()
+
+    def fetch_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a select statement and return a single scalar value or None.
+
+        This is an alias for :meth:`select_value_or_none` provided for users familiar
+        with asyncpg's fetch_value_or_none() naming convention.
+
+        Returns None if no rows are found.
+        Expects at most one row with one column.
+        Raises an exception if more than one row is returned.
+
+        See Also:
+            select_value_or_none(): Primary method with identical behavior
+        """
+        return self.select_value_or_none(statement, *parameters, statement_config=statement_config, **kwargs)
 
     @overload
     def select_with_total(
@@ -640,6 +846,52 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, Sto
         select_result = self.execute(sql_statement)
 
         return (select_result.get_data(schema_type=schema_type), count_result.scalar())
+
+    @overload
+    def fetch_with_total(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "tuple[list[SchemaT], int]": ...
+
+    @overload
+    def fetch_with_total(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "tuple[list[dict[str, Any]], int]": ...
+
+    def fetch_with_total(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "tuple[list[SchemaT] | list[dict[str, Any]], int]":
+        """Execute a select statement and return both the data and total count.
+
+        This is an alias for :meth:`select_with_total` provided for users familiar
+        with asyncpg's fetch() naming convention.
+
+        This method is designed for pagination scenarios where you need both
+        the current page of data and the total number of rows that match the query.
+
+        See Also:
+            select_with_total(): Primary method with identical behavior and full documentation
+        """
+        return self.select_with_total(
+            statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+        )
 
     def _execute_stack_operation(self, operation: "StackOperation") -> "SQLResult | ArrowResult | None":
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
