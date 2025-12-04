@@ -388,6 +388,52 @@ Execute a SELECT query returning a single scalar value.
    :dedent: 4
    :caption: `select_value`
 
+asyncpg-Compatible Method Aliases (fetch*)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For users transitioning from asyncpg or preferring its naming convention, SQLSpec provides ``fetch*`` aliases for all ``select*`` methods. Both naming styles are fully supported and produce identical results.
+
+.. list-table:: Method Aliases
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Primary Method
+     - asyncpg-Compatible Alias
+   * - ``select()``
+     - ``fetch()``
+   * - ``select_one()``
+     - ``fetch_one()``
+   * - ``select_one_or_none()``
+     - ``fetch_one_or_none()``
+   * - ``select_value()``
+     - ``fetch_value()``
+   * - ``select_value_or_none()``
+     - ``fetch_value_or_none()``
+   * - ``select_to_arrow()``
+     - ``fetch_to_arrow()``
+   * - ``select_with_total()``
+     - ``fetch_with_total()``
+
+**Example using fetch() instead of select():**
+
+.. code-block:: python
+
+   # Both styles work identically
+   async with spec.provide_session(config) as session:
+       # Primary naming (recommended in docs)
+       users = await session.select("SELECT * FROM users WHERE age > ?", 18)
+
+       # asyncpg-compatible naming (identical behavior)
+       users = await session.fetch("SELECT * FROM users WHERE age > ?", 18)
+
+       # fetch_one() is equivalent to select_one()
+       user = await session.fetch_one("SELECT * FROM users WHERE id = ?", 1)
+
+       # fetch_value() is equivalent to select_value()
+       count = await session.fetch_value("SELECT COUNT(*) FROM users")
+
+**Note:** Both naming conventions are fully supported and will not be deprecated. Choose the style that feels most natural for your codebase. The SQLSpec documentation primarily uses ``select*`` methods, but ``fetch*`` aliases are equally valid.
+
 Working with Results
 --------------------
 
