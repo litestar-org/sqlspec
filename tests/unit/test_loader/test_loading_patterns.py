@@ -8,8 +8,6 @@ Tests various SQL file loading patterns including:
 - URI-based loading patterns
 """
 
-import tempfile
-from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -23,17 +21,16 @@ pytestmark = pytest.mark.xdist_group("loader")
 
 
 @pytest.fixture
-def temp_directory_structure() -> Generator[Path, None, None]:
+def temp_directory_structure(tmp_path: Path) -> Path:
     """Create a temporary directory structure for testing."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "queries").mkdir()
-        (base_path / "queries" / "users").mkdir()
-        (base_path / "queries" / "products").mkdir()
-        (base_path / "migrations").mkdir()
+    (base_path / "queries").mkdir()
+    (base_path / "queries" / "users").mkdir()
+    (base_path / "queries" / "products").mkdir()
+    (base_path / "migrations").mkdir()
 
-        (base_path / "root_queries.sql").write_text("""
+    (base_path / "root_queries.sql").write_text("""
 -- name: global_health_check
 SELECT 'OK' as status;
 
@@ -41,12 +38,12 @@ SELECT 'OK' as status;
 SELECT '1.0.0' as version;
 """)
 
-        (base_path / "queries" / "common.sql").write_text("""
+    (base_path / "queries" / "common.sql").write_text("""
 -- name: count_all_records
 SELECT COUNT(*) as total FROM information_schema.tables;
 """)
 
-        (base_path / "queries" / "users" / "user_queries.sql").write_text("""
+    (base_path / "queries" / "users" / "user_queries.sql").write_text("""
 -- name: get_user_by_id
 SELECT id, name, email FROM users WHERE id = :user_id;
 
@@ -54,7 +51,7 @@ SELECT id, name, email FROM users WHERE id = :user_id;
 SELECT id, name FROM users WHERE active = true;
 """)
 
-        (base_path / "queries" / "products" / "product_queries.sql").write_text("""
+    (base_path / "queries" / "products" / "product_queries.sql").write_text("""
 -- name: get_product_by_id
 SELECT id, name, price FROM products WHERE id = :product_id;
 
@@ -62,11 +59,11 @@ SELECT id, name, price FROM products WHERE id = :product_id;
 SELECT * FROM products WHERE category_id = :category_id;
 """)
 
-        (base_path / "README.md").write_text("# Test Documentation")
-        (base_path / "config.json").write_text('{"setting": "value"}')
-        (base_path / "queries" / ".gitkeep").write_text("")
+    (base_path / "README.md").write_text("# Test Documentation")
+    (base_path / "config.json").write_text('{"setting": "value"}')
+    (base_path / "queries" / ".gitkeep").write_text("")
 
-        yield base_path
+    return base_path
 
 
 def test_load_single_file(temp_directory_structure: Path) -> None:
@@ -129,34 +126,32 @@ def test_load_parent_directory_with_namespaces(temp_directory_structure: Path) -
     assert "products.list_products_by_category" in queries
 
 
-def test_empty_directory_handling() -> None:
+def test_empty_directory_handling(tmp_path: Path) -> None:
     """Test handling of empty directories."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        empty_dir = Path(temp_dir) / "empty"
-        empty_dir.mkdir()
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
 
-        loader = SQLFileLoader()
+    loader = SQLFileLoader()
 
-        loader.load_sql(empty_dir)
+    loader.load_sql(empty_dir)
 
-        assert loader.list_queries() == []
-        assert loader.list_files() == []
+    assert loader.list_queries() == []
+    assert loader.list_files() == []
 
 
-def test_directory_with_only_non_sql_files() -> None:
+def test_directory_with_only_non_sql_files(tmp_path: Path) -> None:
     """Test directory containing only non-SQL files."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "README.md").write_text("# Documentation")
-        (base_path / "config.json").write_text('{"key": "value"}')
-        (base_path / "script.py").write_text("print('hello')")
+    (base_path / "README.md").write_text("# Documentation")
+    (base_path / "config.json").write_text('{"key": "value"}')
+    (base_path / "script.py").write_text("print('hello')")
 
-        loader = SQLFileLoader()
-        loader.load_sql(base_path)
+    loader = SQLFileLoader()
+    loader.load_sql(base_path)
 
-        assert loader.list_queries() == []
-        assert loader.list_files() == []
+    assert loader.list_queries() == []
+    assert loader.list_files() == []
 
 
 def test_mixed_file_and_directory_loading(temp_directory_structure: Path) -> None:
@@ -176,205 +171,194 @@ def test_mixed_file_and_directory_loading(temp_directory_structure: Path) -> Non
     assert "list_active_users" in queries
 
 
-def test_simple_namespace_generation() -> None:
+def test_simple_namespace_generation(tmp_path: Path) -> None:
     """Test simple directory-to-namespace conversion."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "analytics").mkdir()
-        (base_path / "analytics" / "reports.sql").write_text("""
+    (base_path / "analytics").mkdir()
+    (base_path / "analytics" / "reports.sql").write_text("""
 -- name: user_report
 SELECT COUNT(*) FROM users;
 """)
 
-        loader = SQLFileLoader()
-        loader.load_sql(base_path)
+    loader = SQLFileLoader()
+    loader.load_sql(base_path)
 
-        queries = loader.list_queries()
-        assert "analytics.user_report" in queries
+    queries = loader.list_queries()
+    assert "analytics.user_report" in queries
 
 
-def test_deep_namespace_generation() -> None:
+def test_deep_namespace_generation(tmp_path: Path) -> None:
     """Test deep directory structure namespace generation."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        deep_path = base_path / "level1" / "level2" / "level3"
-        deep_path.mkdir(parents=True)
+    deep_path = base_path / "level1" / "level2" / "level3"
+    deep_path.mkdir(parents=True)
 
-        (deep_path / "deep_queries.sql").write_text("""
+    (deep_path / "deep_queries.sql").write_text("""
 -- name: deeply_nested_query
 SELECT 'deep' as level;
 """)
 
-        loader = SQLFileLoader()
-        loader.load_sql(base_path)
+    loader = SQLFileLoader()
+    loader.load_sql(base_path)
 
-        queries = loader.list_queries()
-        assert "level1.level2.level3.deeply_nested_query" in queries
+    queries = loader.list_queries()
+    assert "level1.level2.level3.deeply_nested_query" in queries
 
 
-def test_namespace_with_special_characters() -> None:
+def test_namespace_with_special_characters(tmp_path: Path) -> None:
     """Test namespace generation with special directory names."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "user-analytics").mkdir()
-        (base_path / "user-analytics" / "daily_reports.sql").write_text("""
+    (base_path / "user-analytics").mkdir()
+    (base_path / "user-analytics" / "daily_reports.sql").write_text("""
 -- name: daily_user_count
 SELECT COUNT(*) FROM users;
 """)
 
-        loader = SQLFileLoader()
-        loader.load_sql(base_path)
+    loader = SQLFileLoader()
+    loader.load_sql(base_path)
 
-        queries = loader.list_queries()
+    queries = loader.list_queries()
 
-        assert "user-analytics.daily_user_count" in queries
+    assert "user-analytics.daily_user_count" in queries
 
 
-def test_no_namespace_for_root_files() -> None:
+def test_no_namespace_for_root_files(tmp_path: Path) -> None:
     """Test that root-level files don't get namespaces."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "root_query.sql").write_text("""
+    (base_path / "root_query.sql").write_text("""
 -- name: root_level_query
 SELECT 'root' as level;
 """)
 
-        loader = SQLFileLoader()
-        loader.load_sql(base_path)
+    loader = SQLFileLoader()
+    loader.load_sql(base_path)
 
-        queries = loader.list_queries()
+    queries = loader.list_queries()
 
-        assert "root_level_query" in queries
-        assert "root_level_query" not in [q for q in queries if "." in q]
+    assert "root_level_query" in queries
+    assert "root_level_query" not in [q for q in queries if "." in q]
 
 
-def test_sql_extension_filtering() -> None:
+def test_sql_extension_filtering(tmp_path: Path) -> None:
     """Test that only .sql files are processed."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "valid.sql").write_text("""
+    (base_path / "valid.sql").write_text("""
 -- name: valid_query
 SELECT 1;
 """)
-        (base_path / "invalid.txt").write_text("""
+    (base_path / "invalid.txt").write_text("""
 -- name: invalid_query
 SELECT 2;
 """)
-        (base_path / "also_invalid.py").write_text("# Not a SQL file")
+    (base_path / "also_invalid.py").write_text("# Not a SQL file")
 
-        loader = SQLFileLoader()
-        loader.load_sql(base_path)
+    loader = SQLFileLoader()
+    loader.load_sql(base_path)
 
-        queries = loader.list_queries()
-        assert "valid_query" in queries
-        assert len(queries) == 1
+    queries = loader.list_queries()
+    assert "valid_query" in queries
+    assert len(queries) == 1
 
 
-def test_hidden_file_inclusion() -> None:
+def test_hidden_file_inclusion(tmp_path: Path) -> None:
     """Test that hidden files (starting with .) are currently included."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "visible.sql").write_text("""
+    (base_path / "visible.sql").write_text("""
 -- name: visible_query
 SELECT 1;
 """)
-        (base_path / ".hidden.sql").write_text("""
+    (base_path / ".hidden.sql").write_text("""
 -- name: hidden_query
 SELECT 2;
 """)
 
-        loader = SQLFileLoader()
-        loader.load_sql(base_path)
+    loader = SQLFileLoader()
+    loader.load_sql(base_path)
 
-        queries = loader.list_queries()
-        assert "visible_query" in queries
+    queries = loader.list_queries()
+    assert "visible_query" in queries
 
-        assert "hidden_query" in queries
-        assert len(queries) == 2
+    assert "hidden_query" in queries
+    assert len(queries) == 2
 
 
-def test_recursive_pattern_matching() -> None:
+def test_recursive_pattern_matching(tmp_path: Path) -> None:
     """Test recursive pattern matching across directory levels."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "level1").mkdir()
-        (base_path / "level1" / "level2").mkdir()
+    (base_path / "level1").mkdir()
+    (base_path / "level1" / "level2").mkdir()
 
-        (base_path / "level1" / "query1.sql").write_text("""
+    (base_path / "level1" / "query1.sql").write_text("""
 -- name: query_level1
 SELECT 1;
 """)
-        (base_path / "level1" / "level2" / "query2.sql").write_text("""
+    (base_path / "level1" / "level2" / "query2.sql").write_text("""
 -- name: query_level2
 SELECT 2;
 """)
-        (base_path / "level1" / "level2" / "not_sql.txt").write_text("Not SQL")
+    (base_path / "level1" / "level2" / "not_sql.txt").write_text("Not SQL")
 
-        loader = SQLFileLoader()
-        loader.load_sql(base_path)
+    loader = SQLFileLoader()
+    loader.load_sql(base_path)
 
-        queries = loader.list_queries()
-        assert "level1.query_level1" in queries
-        assert "level1.level2.query_level2" in queries
-        assert len(queries) == 2
+    queries = loader.list_queries()
+    assert "level1.query_level1" in queries
+    assert "level1.level2.query_level2" in queries
+    assert len(queries) == 2
 
 
-def test_file_uri_loading() -> None:
+def test_file_uri_loading(tmp_path: Path) -> None:
     """Test loading SQL files using file:// URIs."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
-        tf.write("""
+    sql_file = tmp_path / "uri_test.sql"
+    sql_file.write_text("""
 -- name: uri_query
 SELECT 'loaded from URI' as source;
 """)
-        tf.flush()
 
-        loader = SQLFileLoader()
-        file_uri = f"file://{tf.name}"
+    loader = SQLFileLoader()
+    file_uri = f"file://{sql_file}"
 
-        loader.load_sql(file_uri)
+    loader.load_sql(file_uri)
 
-        queries = loader.list_queries()
-        assert "uri_query" in queries
+    queries = loader.list_queries()
+    assert "uri_query" in queries
 
-        sql = loader.get_sql("uri_query")
-        assert "loaded from URI" in sql.sql
-
-        Path(tf.name).unlink()
+    sql = loader.get_sql("uri_query")
+    assert "loaded from URI" in sql.sql
 
 
-def test_mixed_local_and_uri_loading() -> None:
+def test_mixed_local_and_uri_loading(tmp_path: Path) -> None:
     """Test loading both local files and URIs together."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        local_file = base_path / "local.sql"
-        local_file.write_text("""
+    local_file = base_path / "local.sql"
+    local_file.write_text("""
 -- name: local_query
 SELECT 'local' as source;
 """)
 
-        uri_file = base_path / "uri_file.sql"
-        uri_file.write_text("""
+    uri_file = base_path / "uri_file.sql"
+    uri_file.write_text("""
 -- name: uri_query
 SELECT 'uri' as source;
 """)
 
-        loader = SQLFileLoader()
+    loader = SQLFileLoader()
 
-        file_uri = f"file://{uri_file}"
-        loader.load_sql(local_file, file_uri)
+    file_uri = f"file://{uri_file}"
+    loader.load_sql(local_file, file_uri)
 
-        queries = loader.list_queries()
-        assert "local_query" in queries
-        assert "uri_query" in queries
-        assert len(queries) == 2
+    queries = loader.list_queries()
+    assert "local_query" in queries
+    assert "uri_query" in queries
+    assert len(queries) == 2
 
 
 def test_invalid_uri_handling() -> None:
@@ -399,227 +383,210 @@ def test_nonexistent_directory_error() -> None:
     assert loader.list_files() == []
 
 
-def test_sql_file_without_named_statements_skipped() -> None:
+def test_sql_file_without_named_statements_skipped(tmp_path: Path) -> None:
     """Test that SQL files without named statements are gracefully skipped."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
-        tf.write("SELECT * FROM users; -- No name comment")
-        tf.flush()
+    sql_file = tmp_path / "no_names.sql"
+    sql_file.write_text("SELECT * FROM users; -- No name comment")
 
-        loader = SQLFileLoader()
-        loader.load_sql(tf.name)
+    loader = SQLFileLoader()
+    loader.load_sql(str(sql_file))
 
-        assert len(loader.list_queries()) == 0
-        assert str(tf.name) not in loader._files  # pyright: ignore
-
-        Path(tf.name).unlink()
+    assert len(loader.list_queries()) == 0
+    assert str(sql_file) not in loader._files  # pyright: ignore
 
 
-def test_duplicate_queries_across_files_error() -> None:
+def test_duplicate_queries_across_files_error(tmp_path: Path) -> None:
     """Test error handling for duplicate query names across files."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        file1 = base_path / "file1.sql"
-        file1.write_text("""
+    file1 = base_path / "file1.sql"
+    file1.write_text("""
 -- name: duplicate_query
 SELECT 'from file1' as source;
 """)
 
-        file2 = base_path / "file2.sql"
-        file2.write_text("""
+    file2 = base_path / "file2.sql"
+    file2.write_text("""
 -- name: duplicate_query
 SELECT 'from file2' as source;
 """)
 
-        loader = SQLFileLoader()
+    loader = SQLFileLoader()
 
-        loader.load_sql(file1)
+    loader.load_sql(file1)
 
-        with pytest.raises(SQLFileParseError) as exc_info:
-            loader.load_sql(file2)
+    with pytest.raises(SQLFileParseError) as exc_info:
+        loader.load_sql(file2)
 
-        assert "already exists" in str(exc_info.value)
+    assert "already exists" in str(exc_info.value)
 
 
-def test_encoding_error_handling() -> None:
+def test_encoding_error_handling(tmp_path: Path) -> None:
     """Test handling of encoding errors."""
-    with tempfile.NamedTemporaryFile(mode="wb", suffix=".sql", delete=False) as tf:
-        tf.write(b"\xff\xfe-- name: test\nSELECT 1;")
-        tf.flush()
+    sql_file = tmp_path / "bad_encoding.sql"
+    sql_file.write_bytes(b"\xff\xfe-- name: test\nSELECT 1;")
 
-        loader = SQLFileLoader(encoding="utf-8")
+    loader = SQLFileLoader(encoding="utf-8")
 
-        with pytest.raises(SQLFileParseError):
-            loader.load_sql(tf.name)
-
-        Path(tf.name).unlink()
+    with pytest.raises(SQLFileParseError):
+        loader.load_sql(str(sql_file))
 
 
-def test_large_file_handling() -> None:
+def test_large_file_handling(tmp_path: Path) -> None:
     """Test handling of large SQL files."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
-        content = [
-            f"""
+    sql_file = tmp_path / "large.sql"
+    content = [
+        f"""
 -- name: query_{i:03d}
 SELECT {i} as query_number, 'data_{i}' as data
 FROM large_table
 WHERE id > {i * 100}
 LIMIT 1000;
 """
-            for i in range(100)
-        ]
+        for i in range(100)
+    ]
 
-        tf.write("\n".join(content))
-        tf.flush()
+    sql_file.write_text("\n".join(content))
 
-        loader = SQLFileLoader()
+    loader = SQLFileLoader()
 
-        loader.load_sql(tf.name)
+    loader.load_sql(str(sql_file))
 
-        queries = loader.list_queries()
-        assert len(queries) == 100
+    queries = loader.list_queries()
+    assert len(queries) == 100
 
-        assert "query_000" in queries
-        assert "query_050" in queries
-        assert "query_099" in queries
-
-        Path(tf.name).unlink()
+    assert "query_000" in queries
+    assert "query_050" in queries
+    assert "query_099" in queries
 
 
-def test_deep_directory_structure_performance() -> None:
+def test_deep_directory_structure_performance(tmp_path: Path) -> None:
     """Test performance with deep directory structures."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        current_path = base_path
-        for i in range(10):
-            current_path = current_path / f"level_{i}"
-            current_path.mkdir()
+    current_path = base_path
+    for i in range(10):
+        current_path = current_path / f"level_{i}"
+        current_path.mkdir()
 
-            sql_file = current_path / f"queries_level_{i}.sql"
-            sql_file.write_text(
-                f"""
+        sql_file = current_path / f"queries_level_{i}.sql"
+        sql_file.write_text(
+            f"""
 -- name: query_at_level_{i}
 SELECT {i} as level_number;
 """
-            )
-
-        loader = SQLFileLoader()
-
-        loader.load_sql(base_path)
-
-        queries = loader.list_queries()
-        assert len(queries) == 10
-
-        deepest_query = (
-            "level_0.level_1.level_2.level_3.level_4.level_5.level_6.level_7.level_8.level_9.query_at_level_9"
         )
-        assert deepest_query in queries
+
+    loader = SQLFileLoader()
+
+    loader.load_sql(base_path)
+
+    queries = loader.list_queries()
+    assert len(queries) == 10
+
+    deepest_query = "level_0.level_1.level_2.level_3.level_4.level_5.level_6.level_7.level_8.level_9.query_at_level_9"
+    assert deepest_query in queries
 
 
-def test_concurrent_loading_safety() -> None:
+def test_concurrent_loading_safety(tmp_path: Path) -> None:
     """Test thread safety during concurrent loading operations."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        for i in range(5):
-            sql_file = base_path / f"concurrent_{i}.sql"
-            sql_file.write_text(
-                f"""
+    for i in range(5):
+        sql_file = base_path / f"concurrent_{i}.sql"
+        sql_file.write_text(
+            f"""
 -- name: concurrent_query_{i}
 SELECT {i} as concurrent_id;
 """
-            )
+        )
 
-        loader = SQLFileLoader()
+    loader = SQLFileLoader()
 
-        for i in range(5):
-            sql_file = base_path / f"concurrent_{i}.sql"
-            loader.load_sql(sql_file)
+    for i in range(5):
+        sql_file = base_path / f"concurrent_{i}.sql"
+        loader.load_sql(sql_file)
 
-        queries = loader.list_queries()
-        assert len(queries) == 5
+    queries = loader.list_queries()
+    assert len(queries) == 5
 
-        for i in range(5):
-            assert f"concurrent_query_{i}" in queries
+    for i in range(5):
+        assert f"concurrent_query_{i}" in queries
 
 
-def test_symlink_handling() -> None:
+def test_symlink_handling(tmp_path: Path) -> None:
     """Test handling of symbolic links."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        original_file = base_path / "original.sql"
-        original_file.write_text(
-            """
+    original_file = base_path / "original.sql"
+    original_file.write_text(
+        """
 -- name: symlinked_query
 SELECT 'original' as source;
 """
-        )
+    )
 
-        symlink_file = base_path / "symlinked.sql"
-        try:
-            symlink_file.symlink_to(original_file)
-        except OSError:
-            pytest.skip("Symbolic links not supported on this system")
+    symlink_file = base_path / "symlinked.sql"
+    try:
+        symlink_file.symlink_to(original_file)
+    except OSError:
+        pytest.skip("Symbolic links not supported on this system")
 
-        loader = SQLFileLoader()
-        loader.load_sql(symlink_file)
+    loader = SQLFileLoader()
+    loader.load_sql(symlink_file)
 
-        queries = loader.list_queries()
-        assert "symlinked_query" in queries
+    queries = loader.list_queries()
+    assert "symlinked_query" in queries
 
 
-def test_case_sensitivity_handling() -> None:
+def test_case_sensitivity_handling(tmp_path: Path) -> None:
     """Test handling of case-sensitive file systems."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        (base_path / "Queries.SQL").write_text(
-            """
+    (base_path / "Queries.SQL").write_text(
+        """
 -- name: uppercase_extension_query
 SELECT 'UPPERCASE' as extension_type;
 """
-        )
+    )
 
-        (base_path / "queries.sql").write_text(
-            """
+    (base_path / "queries.sql").write_text(
+        """
 -- name: lowercase_extension_query
 SELECT 'lowercase' as extension_type;
 """
-        )
+    )
 
-        loader = SQLFileLoader()
-        loader.load_sql(base_path)
+    loader = SQLFileLoader()
+    loader.load_sql(base_path)
 
-        queries = loader.list_queries()
+    queries = loader.list_queries()
 
-        assert len(queries) >= 1
-        assert "lowercase_extension_query" in queries or "uppercase_extension_query" in queries
+    assert len(queries) >= 1
+    assert "lowercase_extension_query" in queries or "uppercase_extension_query" in queries
 
 
-def test_unicode_filename_handling() -> None:
+def test_unicode_filename_handling(tmp_path: Path) -> None:
     """Test handling of Unicode filenames."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        base_path = Path(temp_dir)
+    base_path = tmp_path
 
-        unicode_file = base_path / "测试_файл_query.sql"
-        try:
-            unicode_file.write_text(
-                """
+    unicode_file = base_path / "测试_файл_query.sql"
+    try:
+        unicode_file.write_text(
+            """
 -- name: unicode_filename_query
 SELECT 'Unicode filename support' as message;
 """,
-                encoding="utf-8",
-            )
-        except OSError:
-            pytest.skip("Unicode filenames not supported on this system")
+            encoding="utf-8",
+        )
+    except OSError:
+        pytest.skip("Unicode filenames not supported on this system")
 
-        loader = SQLFileLoader()
-        loader.load_sql(base_path)
+    loader = SQLFileLoader()
+    loader.load_sql(base_path)
 
-        queries = loader.list_queries()
-        assert "unicode_filename_query" in queries
+    queries = loader.list_queries()
+    assert "unicode_filename_query" in queries
 
 
 @pytest.fixture

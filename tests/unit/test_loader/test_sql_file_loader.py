@@ -9,7 +9,6 @@ Tests for SQLFileLoader core functionality including:
 - Parameter style detection and preservation
 """
 
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -342,40 +341,34 @@ def test_generate_file_cache_key() -> None:
     assert len(key1.split(":")[1]) == 16
 
 
-def test_calculate_file_checksum() -> None:
+def test_calculate_file_checksum(tmp_path: Path) -> None:
     """Test file checksum calculation."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
-        tf.write("SELECT * FROM users;")
-        tf.flush()
+    sql_file = tmp_path / "test.sql"
+    sql_file.write_text("SELECT * FROM users;")
 
-        loader = SQLFileLoader()
-        checksum = loader._calculate_file_checksum(tf.name)
+    loader = SQLFileLoader()
+    checksum = loader._calculate_file_checksum(str(sql_file))
 
-        assert isinstance(checksum, str)
-        assert len(checksum) == 32
-
-        Path(tf.name).unlink()
+    assert isinstance(checksum, str)
+    assert len(checksum) == 32
 
 
-def test_is_file_unchanged() -> None:
+def test_is_file_unchanged(tmp_path: Path) -> None:
     """Test file change detection."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
-        original_content = "SELECT * FROM users;"
-        tf.write(original_content)
-        tf.flush()
+    sql_file = tmp_path / "test.sql"
+    original_content = "SELECT * FROM users;"
+    sql_file.write_text(original_content)
 
-        loader = SQLFileLoader()
+    loader = SQLFileLoader()
 
-        sql_file = SQLFile(original_content, tf.name)
-        cached_file = CachedSQLFile(sql_file, {})
+    sql_file_obj = SQLFile(original_content, str(sql_file))
+    cached_file = CachedSQLFile(sql_file_obj, {})
 
-        assert loader._is_file_unchanged(tf.name, cached_file)
+    assert loader._is_file_unchanged(str(sql_file), cached_file)
 
-        Path(tf.name).write_text("SELECT * FROM products;")
+    sql_file.write_text("SELECT * FROM products;")
 
-        assert not loader._is_file_unchanged(tf.name, cached_file)
-
-        Path(tf.name).unlink()
+    assert not loader._is_file_unchanged(str(sql_file), cached_file)
 
 
 def test_add_named_sql() -> None:

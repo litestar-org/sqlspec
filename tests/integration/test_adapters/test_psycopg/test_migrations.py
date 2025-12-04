@@ -1,6 +1,5 @@
 """Integration tests for Psycopg (PostgreSQL) migration workflow."""
 
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,30 +13,29 @@ from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCom
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-def test_psycopg_sync_migration_full_workflow(postgres_service: PostgresService) -> None:
+def test_psycopg_sync_migration_full_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
     """Test full Psycopg sync migration workflow: init -> create -> upgrade -> downgrade."""
 
     test_id = "psycopg_sync_full"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = PsycopgSyncConfig(
-            pool_config={
-                "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+    config = PsycopgSyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
-        commands.init(str(migration_dir), package=True)
+    commands.init(str(migration_dir), package=True)
 
-        assert migration_dir.exists()
-        assert (migration_dir / "__init__.py").exists()
+    assert migration_dir.exists()
+    assert (migration_dir / "__init__.py").exists()
 
-        migration_content = f'''"""Initial schema migration."""
+    migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -57,63 +55,60 @@ def down():
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
 
-        migration_file = migration_dir / "0001_create_users.py"
-        migration_file.write_text(migration_content)
+    migration_file = migration_dir / "0001_create_users.py"
+    migration_file.write_text(migration_content)
 
-        try:
-            commands.upgrade()
+    try:
+        commands.upgrade()
 
-            with config.provide_session() as driver:
-                result = driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
-                )
-                assert len(result.data) == 1
+        with config.provide_session() as driver:
+            result = driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+            )
+            assert len(result.data) == 1
 
-                driver.execute(
-                    f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)", ("John Doe", "john@example.com")
-                )
+            driver.execute(f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)", ("John Doe", "john@example.com"))
 
-                users_result = driver.execute(f"SELECT * FROM {users_table}")
-                assert len(users_result.data) == 1
-                assert users_result.data[0]["name"] == "John Doe"
-                assert users_result.data[0]["email"] == "john@example.com"
+            users_result = driver.execute(f"SELECT * FROM {users_table}")
+            assert len(users_result.data) == 1
+            assert users_result.data[0]["name"] == "John Doe"
+            assert users_result.data[0]["email"] == "john@example.com"
 
-            commands.downgrade("base")
+        commands.downgrade("base")
 
-            with config.provide_session() as driver:
-                result = driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
-                )
-                assert len(result.data) == 0
-        finally:
-            if config.pool_instance:
-                config.close_pool()
+        with config.provide_session() as driver:
+            result = driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+            )
+            assert len(result.data) == 0
+    finally:
+        if config.pool_instance:
+            config.close_pool()
 
 
-async def test_psycopg_async_migration_full_workflow(postgres_service: PostgresService) -> None:
+async def test_psycopg_async_migration_full_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
     """Test full Psycopg async migration workflow: init -> create -> upgrade -> downgrade."""
 
     test_id = "psycopg_async_full"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = PsycopgAsyncConfig(
-            pool_config={
-                "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = PsycopgAsyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        await commands.init(str(migration_dir), package=True)
+    await commands.init(str(migration_dir), package=True)
 
-        assert migration_dir.exists()
-        assert (migration_dir / "__init__.py").exists()
+    assert migration_dir.exists()
+    assert (migration_dir / "__init__.py").exists()
 
-        migration_content = f'''"""Initial schema migration."""
+    migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -133,40 +128,40 @@ def down():
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
 
-        migration_file = migration_dir / "0001_create_users.py"
-        migration_file.write_text(migration_content)
+    migration_file = migration_dir / "0001_create_users.py"
+    migration_file.write_text(migration_content)
 
-        try:
-            await commands.upgrade()
+    try:
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
-                )
-                assert len(result.data) == 1
+        async with config.provide_session() as driver:
+            result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+            )
+            assert len(result.data) == 1
 
-                await driver.execute(
-                    f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)", ("John Doe", "john@example.com")
-                )
+            await driver.execute(
+                f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)", ("John Doe", "john@example.com")
+            )
 
-                users_result = await driver.execute(f"SELECT * FROM {users_table}")
-                assert len(users_result.data) == 1
-                assert users_result.data[0]["name"] == "John Doe"
-                assert users_result.data[0]["email"] == "john@example.com"
+            users_result = await driver.execute(f"SELECT * FROM {users_table}")
+            assert len(users_result.data) == 1
+            assert users_result.data[0]["name"] == "John Doe"
+            assert users_result.data[0]["email"] == "john@example.com"
 
-            await commands.downgrade("base")
+        await commands.downgrade("base")
 
-            async with config.provide_session() as driver:
-                result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
-                )
-                assert len(result.data) == 0
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        async with config.provide_session() as driver:
+            result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+            )
+            assert len(result.data) == 0
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-def test_psycopg_sync_multiple_migrations_workflow(postgres_service: PostgresService) -> None:
+def test_psycopg_sync_multiple_migrations_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
     """Test Psycopg sync workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
     test_id = "psycopg_sync_multi"
@@ -174,20 +169,19 @@ def test_psycopg_sync_multiple_migrations_workflow(postgres_service: PostgresSer
     users_table = f"users_{test_id}"
     posts_table = f"posts_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = PsycopgSyncConfig(
-            pool_config={
-                "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+    config = PsycopgSyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
-        commands.init(str(migration_dir), package=True)
+    commands.init(str(migration_dir), package=True)
 
-        migration1_content = f'''"""Create users table."""
+    migration1_content = f'''"""Create users table."""
 
 
 def up():
@@ -206,9 +200,9 @@ def down():
     """Drop users table."""
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
-        (migration_dir / "0001_create_users.py").write_text(migration1_content)
+    (migration_dir / "0001_create_users.py").write_text(migration1_content)
 
-        migration2_content = f'''"""Create posts table."""
+    migration2_content = f'''"""Create posts table."""
 
 
 def up():
@@ -228,46 +222,46 @@ def down():
     """Drop posts table."""
     return ["DROP TABLE IF EXISTS {posts_table}"]
 '''
-        (migration_dir / "0002_create_posts.py").write_text(migration2_content)
+    (migration_dir / "0002_create_posts.py").write_text(migration2_content)
 
-        try:
-            commands.upgrade()
+    try:
+        commands.upgrade()
 
-            with config.provide_session() as driver:
-                users_result = driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
-                )
-                posts_result = driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{posts_table}'"
-                )
-                assert len(users_result.data) == 1
-                assert len(posts_result.data) == 1
+        with config.provide_session() as driver:
+            users_result = driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+            )
+            posts_result = driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{posts_table}'"
+            )
+            assert len(users_result.data) == 1
+            assert len(posts_result.data) == 1
 
-            commands.downgrade("0001")
+        commands.downgrade("0001")
 
-            with config.provide_session() as driver:
-                users_result = driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
-                )
-                posts_result = driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{posts_table}'"
-                )
-                assert len(users_result.data) == 1
-                assert len(posts_result.data) == 0
+        with config.provide_session() as driver:
+            users_result = driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+            )
+            posts_result = driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{posts_table}'"
+            )
+            assert len(users_result.data) == 1
+            assert len(posts_result.data) == 0
 
-            commands.downgrade("base")
+        commands.downgrade("base")
 
-            with config.provide_session() as driver:
-                users_result = driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('{users_table}', '{posts_table}')"
-                )
-                assert len(users_result.data) == 0
-        finally:
-            if config.pool_instance:
-                config.close_pool()
+        with config.provide_session() as driver:
+            users_result = driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('{users_table}', '{posts_table}')"
+            )
+            assert len(users_result.data) == 0
+    finally:
+        if config.pool_instance:
+            config.close_pool()
 
 
-async def test_psycopg_async_multiple_migrations_workflow(postgres_service: PostgresService) -> None:
+async def test_psycopg_async_multiple_migrations_workflow(tmp_path: Path, postgres_service: PostgresService) -> None:
     """Test Psycopg async workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
 
     test_id = "psycopg_async_multi"
@@ -275,25 +269,24 @@ async def test_psycopg_async_multiple_migrations_workflow(postgres_service: Post
     users_table = f"users_{test_id}"
     posts_table = f"posts_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        try:
-            from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
-        except ImportError:
-            pytest.skip("PsycopgAsyncConfig not available")
+    try:
+        from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
+    except ImportError:
+        pytest.skip("PsycopgAsyncConfig not available")
 
-        config = PsycopgAsyncConfig(
-            pool_config={
-                "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = PsycopgAsyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        await commands.init(str(migration_dir), package=True)
+    await commands.init(str(migration_dir), package=True)
 
-        migration1_content = f'''"""Create users table."""
+    migration1_content = f'''"""Create users table."""
 
 
 def up():
@@ -312,9 +305,9 @@ def down():
     """Drop users table."""
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
-        (migration_dir / "0001_create_users.py").write_text(migration1_content)
+    (migration_dir / "0001_create_users.py").write_text(migration1_content)
 
-        migration2_content = f'''"""Create posts table."""
+    migration2_content = f'''"""Create posts table."""
 
 
 def up():
@@ -334,70 +327,69 @@ def down():
     """Drop posts table."""
     return ["DROP TABLE IF EXISTS {posts_table}"]
 '''
-        (migration_dir / "0002_create_posts.py").write_text(migration2_content)
+    (migration_dir / "0002_create_posts.py").write_text(migration2_content)
 
-        try:
-            await commands.upgrade()
+    try:
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                users_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
-                )
-                posts_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{posts_table}'"
-                )
-                assert len(users_result.data) == 1
-                assert len(posts_result.data) == 1
+        async with config.provide_session() as driver:
+            users_result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+            )
+            posts_result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{posts_table}'"
+            )
+            assert len(users_result.data) == 1
+            assert len(posts_result.data) == 1
 
-            await commands.downgrade("0001")
+        await commands.downgrade("0001")
 
-            async with config.provide_session() as driver:
-                users_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
-                )
-                posts_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{posts_table}'"
-                )
-                assert len(users_result.data) == 1
-                assert len(posts_result.data) == 0
+        async with config.provide_session() as driver:
+            users_result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{users_table}'"
+            )
+            posts_result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{posts_table}'"
+            )
+            assert len(users_result.data) == 1
+            assert len(posts_result.data) == 0
 
-            await commands.downgrade("base")
+        await commands.downgrade("base")
 
-            async with config.provide_session() as driver:
-                users_result = await driver.execute(
-                    f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('{users_table}', '{posts_table}')"
-                )
-                assert len(users_result.data) == 0
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        async with config.provide_session() as driver:
+            users_result = await driver.execute(
+                f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('{users_table}', '{posts_table}')"
+            )
+            assert len(users_result.data) == 0
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-def test_psycopg_sync_migration_current_command(postgres_service: PostgresService) -> None:
+def test_psycopg_sync_migration_current_command(tmp_path: Path, postgres_service: PostgresService) -> None:
     """Test the current migration command shows correct version for Psycopg sync."""
 
     test_id = "psycopg_sync_current"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = PsycopgSyncConfig(
-            pool_config={
-                "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+    config = PsycopgSyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
-        try:
-            commands.init(str(migration_dir), package=True)
+    try:
+        commands.init(str(migration_dir), package=True)
 
-            current_version = commands.current()
-            assert current_version is None or current_version == "base"
+        current_version = commands.current()
+        assert current_version is None or current_version == "base"
 
-            migration_content = f'''"""Initial schema migration."""
+        migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -414,52 +406,51 @@ def down():
     """Drop users table."""
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
-            (migration_dir / "0001_create_users.py").write_text(migration_content)
+        (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            commands.upgrade()
+        commands.upgrade()
 
-            current_version = commands.current()
-            assert current_version == "0001"
+        current_version = commands.current()
+        assert current_version == "0001"
 
-            commands.downgrade("base")
+        commands.downgrade("base")
 
-            current_version = commands.current()
-            assert current_version is None or current_version == "base"
-        finally:
-            if config.pool_instance:
-                config.close_pool()
+        current_version = commands.current()
+        assert current_version is None or current_version == "base"
+    finally:
+        if config.pool_instance:
+            config.close_pool()
 
 
-async def test_psycopg_async_migration_current_command(postgres_service: PostgresService) -> None:
+async def test_psycopg_async_migration_current_command(tmp_path: Path, postgres_service: PostgresService) -> None:
     """Test the current migration command shows correct version for Psycopg async."""
 
     test_id = "psycopg_async_current"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        try:
-            from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
-        except ImportError:
-            pytest.skip("PsycopgAsyncConfig not available")
+    try:
+        from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
+    except ImportError:
+        pytest.skip("PsycopgAsyncConfig not available")
 
-        config = PsycopgAsyncConfig(
-            pool_config={
-                "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = PsycopgAsyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        try:
-            await commands.init(str(migration_dir), package=True)
+    try:
+        await commands.init(str(migration_dir), package=True)
 
-            current_version = await commands.current()
-            assert current_version is None or current_version == "base"
+        current_version = await commands.current()
+        assert current_version is None or current_version == "base"
 
-            migration_content = f'''"""Initial schema migration."""
+        migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -476,42 +467,41 @@ def down():
     """Drop users table."""
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
-            (migration_dir / "0001_create_users.py").write_text(migration_content)
+        (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            await commands.upgrade()
+        await commands.upgrade()
 
-            current_version = await commands.current()
-            assert current_version == "0001"
+        current_version = await commands.current()
+        assert current_version == "0001"
 
-            await commands.downgrade("base")
+        await commands.downgrade("base")
 
-            current_version = await commands.current()
-            assert current_version is None or current_version == "base"
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        current_version = await commands.current()
+        assert current_version is None or current_version == "base"
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-def test_psycopg_sync_migration_error_handling(postgres_service: PostgresService) -> None:
+def test_psycopg_sync_migration_error_handling(tmp_path: Path, postgres_service: PostgresService) -> None:
     """Test Psycopg sync migration error handling."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = PsycopgSyncConfig(
-            pool_config={
-                "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations_psycopg_sync_error",
-            },
-        )
-        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+    config = PsycopgSyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": "sqlspec_migrations_psycopg_sync_error",
+        },
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
-        try:
-            commands.init(str(migration_dir), package=True)
+    try:
+        commands.init(str(migration_dir), package=True)
 
-            migration_content = '''"""Migration with invalid SQL."""
+        migration_content = '''"""Migration with invalid SQL."""
 
 
 def up():
@@ -523,47 +513,46 @@ def down():
     """Drop table."""
     return ["DROP TABLE IF EXISTS invalid_table"]
 '''
-            (migration_dir / "0001_invalid.py").write_text(migration_content)
+        (migration_dir / "0001_invalid.py").write_text(migration_content)
 
-            commands.upgrade()
+        commands.upgrade()
 
-            with config.provide_session() as driver:
-                try:
-                    driver.execute("SELECT version FROM sqlspec_migrations_psycopg_sync_error ORDER BY version")
-                    msg = "Expected migration table to not exist, but it does"
-                    raise AssertionError(msg)
-                except Exception as e:
-                    assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
-        finally:
-            if config.pool_instance:
-                config.close_pool()
+        with config.provide_session() as driver:
+            try:
+                driver.execute("SELECT version FROM sqlspec_migrations_psycopg_sync_error ORDER BY version")
+                msg = "Expected migration table to not exist, but it does"
+                raise AssertionError(msg)
+            except Exception as e:
+                assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
+    finally:
+        if config.pool_instance:
+            config.close_pool()
 
 
-async def test_psycopg_async_migration_error_handling(postgres_service: PostgresService) -> None:
+async def test_psycopg_async_migration_error_handling(tmp_path: Path, postgres_service: PostgresService) -> None:
     """Test Psycopg async migration error handling."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        try:
-            from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
-        except ImportError:
-            pytest.skip("PsycopgAsyncConfig not available")
+    try:
+        from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
+    except ImportError:
+        pytest.skip("PsycopgAsyncConfig not available")
 
-        config = PsycopgAsyncConfig(
-            pool_config={
-                "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations_psycopg_async_error",
-            },
-        )
-        commands = AsyncMigrationCommands(config)
+    config = PsycopgAsyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": "sqlspec_migrations_psycopg_async_error",
+        },
+    )
+    commands = AsyncMigrationCommands(config)
 
-        try:
-            await commands.init(str(migration_dir), package=True)
+    try:
+        await commands.init(str(migration_dir), package=True)
 
-            migration_content = '''"""Migration with invalid SQL."""
+        migration_content = '''"""Migration with invalid SQL."""
 
 
 def up():
@@ -575,44 +564,43 @@ def down():
     """Drop table."""
     return ["DROP TABLE IF EXISTS invalid_table"]
 '''
-            (migration_dir / "0001_invalid.py").write_text(migration_content)
+        (migration_dir / "0001_invalid.py").write_text(migration_content)
 
-            await commands.upgrade()
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                try:
-                    await driver.execute("SELECT version FROM sqlspec_migrations_psycopg_async_error ORDER BY version")
-                    msg = "Expected migration table to not exist, but it does"
-                    raise AssertionError(msg)
-                except Exception as e:
-                    assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+        async with config.provide_session() as driver:
+            try:
+                await driver.execute("SELECT version FROM sqlspec_migrations_psycopg_async_error ORDER BY version")
+                msg = "Expected migration table to not exist, but it does"
+                raise AssertionError(msg)
+            except Exception as e:
+                assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
+    finally:
+        if config.pool_instance:
+            await config.close_pool()
 
 
-def test_psycopg_sync_migration_with_transactions(postgres_service: PostgresService) -> None:
+def test_psycopg_sync_migration_with_transactions(tmp_path: Path, postgres_service: PostgresService) -> None:
     """Test Psycopg sync migrations work properly with transactions."""
 
     test_id = "psycopg_sync_trans"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        config = PsycopgSyncConfig(
-            pool_config={
-                "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+    config = PsycopgSyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
 
-        try:
-            commands.init(str(migration_dir), package=True)
+    try:
+        commands.init(str(migration_dir), package=True)
 
-            migration_content = f'''"""Initial schema migration."""
+        migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -630,74 +618,73 @@ def down():
     """Drop users table."""
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
-            (migration_dir / "0001_create_users.py").write_text(migration_content)
+        (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            commands.upgrade()
+        commands.upgrade()
 
-            with config.provide_session() as driver:
-                driver.begin()
-                try:
-                    driver.execute(
-                        f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
-                        ("Transaction User", "trans@example.com"),
-                    )
-
-                    result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
-                    assert len(result.data) == 1
-                    driver.commit()
-                except Exception:
-                    driver.rollback()
-                    raise
+        with config.provide_session() as driver:
+            driver.begin()
+            try:
+                driver.execute(
+                    f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
+                    ("Transaction User", "trans@example.com"),
+                )
 
                 result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
                 assert len(result.data) == 1
+                driver.commit()
+            except Exception:
+                driver.rollback()
+                raise
 
-            with config.provide_session() as driver:
-                driver.begin()
-                try:
-                    driver.execute(
-                        f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
-                        ("Rollback User", "rollback@example.com"),
-                    )
+            result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
+            assert len(result.data) == 1
 
-                    raise Exception("Intentional rollback")
-                except Exception:
-                    driver.rollback()
+        with config.provide_session() as driver:
+            driver.begin()
+            try:
+                driver.execute(
+                    f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
+                    ("Rollback User", "rollback@example.com"),
+                )
 
-                result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
-                assert len(result.data) == 0
-        finally:
-            if config.pool_instance:
-                config.close_pool()
+                raise Exception("Intentional rollback")
+            except Exception:
+                driver.rollback()
+
+            result = driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
+            assert len(result.data) == 0
+    finally:
+        if config.pool_instance:
+            config.close_pool()
 
 
-async def test_psycopg_async_migration_with_transactions(postgres_service: PostgresService) -> None:
+async def test_psycopg_async_migration_with_transactions(tmp_path: Path, postgres_service: PostgresService) -> None:
     """Test Psycopg async migrations work properly with transactions."""
 
     test_id = "psycopg_async_trans"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        migration_dir = Path(temp_dir) / "migrations"
+    migration_dir = tmp_path / "migrations"
 
-        try:
-            from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
-        except ImportError:
-            pytest.skip("PsycopgAsyncConfig not available")
+    try:
+        from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
+    except ImportError:
+        pytest.skip("PsycopgAsyncConfig not available")
 
-        config = PsycopgAsyncConfig(
-            pool_config={
-                "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            },
-            migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
-        )
-        commands = AsyncMigrationCommands(config)
+    config = PsycopgAsyncConfig(
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        },
+        migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
+    )
+    commands = AsyncMigrationCommands(config)
 
-        try:
-            await commands.init(str(migration_dir), package=True)
+    try:
+        await commands.init(str(migration_dir), package=True)
 
-            migration_content = f'''"""Initial schema migration."""
+        migration_content = f'''"""Initial schema migration."""
 
 
 def up():
@@ -715,42 +702,42 @@ def down():
     """Drop users table."""
     return ["DROP TABLE IF EXISTS {users_table}"]
 '''
-            (migration_dir / "0001_create_users.py").write_text(migration_content)
+        (migration_dir / "0001_create_users.py").write_text(migration_content)
 
-            await commands.upgrade()
+        await commands.upgrade()
 
-            async with config.provide_session() as driver:
-                await driver.begin()
-                try:
-                    await driver.execute(
-                        f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
-                        ("Transaction User", "trans@example.com"),
-                    )
-
-                    result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
-                    assert len(result.data) == 1
-                    await driver.commit()
-                except Exception:
-                    await driver.rollback()
-                    raise
+        async with config.provide_session() as driver:
+            await driver.begin()
+            try:
+                await driver.execute(
+                    f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
+                    ("Transaction User", "trans@example.com"),
+                )
 
                 result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
                 assert len(result.data) == 1
+                await driver.commit()
+            except Exception:
+                await driver.rollback()
+                raise
 
-            async with config.provide_session() as driver:
-                await driver.begin()
-                try:
-                    await driver.execute(
-                        f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
-                        ("Rollback User", "rollback@example.com"),
-                    )
+            result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Transaction User'")
+            assert len(result.data) == 1
 
-                    raise Exception("Intentional rollback")
-                except Exception:
-                    await driver.rollback()
+        async with config.provide_session() as driver:
+            await driver.begin()
+            try:
+                await driver.execute(
+                    f"INSERT INTO {users_table} (name, email) VALUES (%s, %s)",
+                    ("Rollback User", "rollback@example.com"),
+                )
 
-                result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
-                assert len(result.data) == 0
-        finally:
-            if config.pool_instance:
-                await config.close_pool()
+                raise Exception("Intentional rollback")
+            except Exception:
+                await driver.rollback()
+
+            result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
+            assert len(result.data) == 0
+    finally:
+        if config.pool_instance:
+            await config.close_pool()

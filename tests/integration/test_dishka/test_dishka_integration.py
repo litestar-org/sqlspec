@@ -1,9 +1,6 @@
 """Integration tests for Dishka DI framework with SQLSpec CLI."""
 
-import os
-import tempfile
 from pathlib import Path
-from typing import Any
 
 import pytest
 from click.testing import CliRunner
@@ -15,16 +12,13 @@ dishka = pytest.importorskip("dishka")
 pytestmark = pytest.mark.xdist_group("dishka")
 
 
-def test_simple_sync_dishka_provider(simple_sqlite_provider: Any) -> None:
+def test_simple_sync_dishka_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test CLI with a simple synchronous Dishka provider."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_dir = os.getcwd()
-        os.chdir(temp_dir)
-        try:
-            # Create a module that uses Dishka container
-            config_module = '''
+    monkeypatch.chdir(tmp_path)
+
+    config_module = '''
 from dishka import make_container
 from tests.integration.test_dishka.conftest import simple_sqlite_provider
 
@@ -48,29 +42,24 @@ def get_config_from_dishka():
     with container() as request_container:
         return request_container.get(SqliteConfig)
 '''
-            Path("dishka_config.py").write_text(config_module)
+    Path("dishka_config.py").write_text(config_module)
 
-            result = runner.invoke(
-                add_migration_commands(), ["--config", "dishka_config.get_config_from_dishka", "show-config"]
-            )
+    result = runner.invoke(
+        add_migration_commands(), ["--config", "dishka_config.get_config_from_dishka", "show-config"]
+    )
 
-        finally:
-            os.chdir(original_dir)
-
-        assert result.exit_code == 0
-        assert "dishka_sqlite" in result.output
-        assert "Migration Enabled" in result.output or "migrations enabled" in result.output
+    assert result.exit_code == 0
+    assert "dishka_sqlite" in result.output
+    assert "Migration Enabled" in result.output or "migrations enabled" in result.output
 
 
-def test_async_dishka_provider() -> None:
+def test_async_dishka_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test CLI with an asynchronous Dishka provider."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_dir = os.getcwd()
-        os.chdir(temp_dir)
-        try:
-            config_module = '''
+    monkeypatch.chdir(tmp_path)
+
+    config_module = '''
 import asyncio
 from dishka import make_async_container, Provider, provide, Scope
 from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -92,30 +81,24 @@ async def get_async_config_from_dishka():
     async with container() as request_container:
         return await request_container.get(SqliteConfig)
 '''
-            Path("async_dishka_config.py").write_text(config_module)
+    Path("async_dishka_config.py").write_text(config_module)
 
-            result = runner.invoke(
-                add_migration_commands(),
-                ["--config", "async_dishka_config.get_async_config_from_dishka", "show-config"],
-            )
+    result = runner.invoke(
+        add_migration_commands(), ["--config", "async_dishka_config.get_async_config_from_dishka", "show-config"]
+    )
 
-        finally:
-            os.chdir(original_dir)
-
-        assert result.exit_code == 0
-        assert "async_dishka_sqlite" in result.output
-        assert "Migration Enabled" in result.output or "migrations enabled" in result.output
+    assert result.exit_code == 0
+    assert "async_dishka_sqlite" in result.output
+    assert "Migration Enabled" in result.output or "migrations enabled" in result.output
 
 
-def test_multi_config_dishka_provider() -> None:
+def test_multi_config_dishka_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test CLI with Dishka provider returning multiple configs."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_dir = os.getcwd()
-        os.chdir(temp_dir)
-        try:
-            config_module = '''
+    monkeypatch.chdir(tmp_path)
+
+    config_module = '''
 from dishka import make_container, Provider, provide, Scope
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.duckdb import DuckDBConfig
@@ -145,31 +128,25 @@ def get_multi_configs_from_dishka():
         duckdb_config = request_container.get(DuckDBConfig)
         return [sqlite_config, duckdb_config]
 '''
-            Path("multi_dishka_config.py").write_text(config_module)
+    Path("multi_dishka_config.py").write_text(config_module)
 
-            result = runner.invoke(
-                add_migration_commands(),
-                ["--config", "multi_dishka_config.get_multi_configs_from_dishka", "show-config"],
-            )
+    result = runner.invoke(
+        add_migration_commands(), ["--config", "multi_dishka_config.get_multi_configs_from_dishka", "show-config"]
+    )
 
-        finally:
-            os.chdir(original_dir)
-
-        assert result.exit_code == 0
-        assert "dishka_multi_sqlite" in result.output
-        assert "dishka_multi_duckdb" in result.output
-        assert "2 configuration(s)" in result.output
+    assert result.exit_code == 0
+    assert "dishka_multi_sqlite" in result.output
+    assert "dishka_multi_duckdb" in result.output
+    assert "2 configuration(s)" in result.output
 
 
-def test_async_multi_config_dishka_provider() -> None:
+def test_async_multi_config_dishka_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test CLI with async Dishka provider returning multiple configs."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_dir = os.getcwd()
-        os.chdir(temp_dir)
-        try:
-            config_module = '''
+    monkeypatch.chdir(tmp_path)
+
+    config_module = '''
 import asyncio
 from dishka import make_async_container, Provider, provide, Scope
 from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -213,32 +190,27 @@ async def get_async_multi_configs_from_dishka():
         duckdb_config = await request_container.get(DuckDBConfig)
         return [sqlite_config, aiosqlite_config, duckdb_config]
 '''
-            Path("async_multi_dishka_config.py").write_text(config_module)
+    Path("async_multi_dishka_config.py").write_text(config_module)
 
-            result = runner.invoke(
-                add_migration_commands(),
-                ["--config", "async_multi_dishka_config.get_async_multi_configs_from_dishka", "show-config"],
-            )
+    result = runner.invoke(
+        add_migration_commands(),
+        ["--config", "async_multi_dishka_config.get_async_multi_configs_from_dishka", "show-config"],
+    )
 
-        finally:
-            os.chdir(original_dir)
-
-        assert result.exit_code == 0
-        assert "async_multi_sqlite" in result.output
-        assert "async_multi_aiosqlite" in result.output
-        assert "async_multi_duckdb" in result.output
-        assert "3 configuration(s)" in result.output
+    assert result.exit_code == 0
+    assert "async_multi_sqlite" in result.output
+    assert "async_multi_aiosqlite" in result.output
+    assert "async_multi_duckdb" in result.output
+    assert "3 configuration(s)" in result.output
 
 
-def test_dishka_provider_with_dependencies() -> None:
+def test_dishka_provider_with_dependencies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test Dishka provider that has complex dependencies."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_dir = os.getcwd()
-        os.chdir(temp_dir)
-        try:
-            config_module = '''
+    monkeypatch.chdir(tmp_path)
+
+    config_module = '''
 from dishka import make_container, Provider, provide, Scope
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
@@ -266,30 +238,24 @@ def get_complex_config_from_dishka():
     with container() as request_container:
         return request_container.get(SqliteConfig)
 '''
-            Path("complex_dishka_config.py").write_text(config_module)
+    Path("complex_dishka_config.py").write_text(config_module)
 
-            result = runner.invoke(
-                add_migration_commands(),
-                ["--config", "complex_dishka_config.get_complex_config_from_dishka", "show-config"],
-            )
+    result = runner.invoke(
+        add_migration_commands(), ["--config", "complex_dishka_config.get_complex_config_from_dishka", "show-config"]
+    )
 
-        finally:
-            os.chdir(original_dir)
-
-        assert result.exit_code == 0
-        assert "complex_dishka" in result.output
-        assert "complex_migrations" in result.output
+    assert result.exit_code == 0
+    assert "complex_dishka" in result.output
+    assert "complex_migrations" in result.output
 
 
-def test_dishka_error_handling() -> None:
+def test_dishka_error_handling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test proper error handling when Dishka container fails."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_dir = os.getcwd()
-        os.chdir(temp_dir)
-        try:
-            config_module = '''
+    monkeypatch.chdir(tmp_path)
+
+    config_module = '''
 from dishka import make_container, Provider
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
@@ -303,29 +269,24 @@ def get_failing_dishka_config():
         # This should raise an exception
         return request_container.get(SqliteConfig)
 '''
-            Path("failing_dishka_config.py").write_text(config_module)
+    Path("failing_dishka_config.py").write_text(config_module)
 
-            result = runner.invoke(
-                add_migration_commands(), ["--config", "failing_dishka_config.get_failing_dishka_config", "show-config"]
-            )
+    result = runner.invoke(
+        add_migration_commands(), ["--config", "failing_dishka_config.get_failing_dishka_config", "show-config"]
+    )
 
-        finally:
-            os.chdir(original_dir)
-
-        assert result.exit_code == 1
-        assert "Error loading config" in result.output
-        assert "Failed to execute callable config" in result.output
+    assert result.exit_code == 1
+    assert "Error loading config" in result.output
+    assert "Failed to execute callable config" in result.output
 
 
-def test_dishka_async_with_migration_commands() -> None:
+def test_dishka_async_with_migration_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that migration commands work with async Dishka configs."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_dir = os.getcwd()
-        os.chdir(temp_dir)
-        try:
-            config_module = '''
+    monkeypatch.chdir(tmp_path)
+
+    config_module = '''
 import asyncio
 from dishka import make_async_container, Provider, provide, Scope
 from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -349,31 +310,25 @@ async def get_migration_config_from_dishka():
     async with container() as request_container:
         return await request_container.get(SqliteConfig)
 '''
-            Path("migration_dishka_config.py").write_text(config_module)
+    Path("migration_dishka_config.py").write_text(config_module)
 
-            # Test that the config loads properly for migration commands
-            result = runner.invoke(
-                add_migration_commands(),
-                ["--config", "migration_dishka_config.get_migration_config_from_dishka", "show-config"],
-            )
+    result = runner.invoke(
+        add_migration_commands(),
+        ["--config", "migration_dishka_config.get_migration_config_from_dishka", "show-config"],
+    )
 
-        finally:
-            os.chdir(original_dir)
-
-        assert result.exit_code == 0
-        assert "migration_dishka" in result.output
-        assert "dishka_migrations" in result.output or "Migration Enabled" in result.output
+    assert result.exit_code == 0
+    assert "migration_dishka" in result.output
+    assert "dishka_migrations" in result.output or "Migration Enabled" in result.output
 
 
-def test_dishka_with_config_validation() -> None:
+def test_dishka_with_config_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test Dishka integration with config validation enabled."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_dir = os.getcwd()
-        os.chdir(temp_dir)
-        try:
-            config_module = '''
+    monkeypatch.chdir(tmp_path)
+
+    config_module = '''
 import asyncio
 from dishka import make_async_container, Provider, provide, Scope
 from sqlspec.adapters.duckdb.config import DuckDBConfig
@@ -394,40 +349,29 @@ async def get_validated_config_from_dishka():
     async with container() as request_container:
         return await request_container.get(DuckDBConfig)
 '''
-            Path("validated_dishka_config.py").write_text(config_module)
+    Path("validated_dishka_config.py").write_text(config_module)
 
-            result = runner.invoke(
-                add_migration_commands(),
-                [
-                    "--config",
-                    "validated_dishka_config.get_validated_config_from_dishka",
-                    "--validate-config",
-                    "show-config",
-                ],
-            )
+    result = runner.invoke(
+        add_migration_commands(),
+        ["--config", "validated_dishka_config.get_validated_config_from_dishka", "--validate-config", "show-config"],
+    )
 
-        finally:
-            os.chdir(original_dir)
-
-        assert result.exit_code == 0
-        assert "Successfully loaded 1 config(s)" in result.output
-        assert "validated_dishka" in result.output
+    assert result.exit_code == 0
+    assert "Successfully loaded 1 config(s)" in result.output
+    assert "validated_dishka" in result.output
 
 
-def test_real_world_dishka_scenario() -> None:
+def test_real_world_dishka_scenario(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test a real-world scenario mimicking the user's issue."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_dir = os.getcwd()
-        os.chdir(temp_dir)
-        try:
-            # Create a structure similar to user's litestar_dishka_modular.sqlspec_main.main
-            Path("litestar_dishka_modular").mkdir()
-            Path("litestar_dishka_modular/__init__.py").write_text("")
-            Path("litestar_dishka_modular/sqlspec_main.py").write_text("")
+    monkeypatch.chdir(tmp_path)
 
-            config_module = '''
+    Path("litestar_dishka_modular").mkdir()
+    Path("litestar_dishka_modular/__init__.py").write_text("")
+    Path("litestar_dishka_modular/sqlspec_main.py").write_text("")
+
+    config_module = '''
 """Simulates the user's actual Dishka configuration."""
 import asyncio
 from typing import List
@@ -472,31 +416,25 @@ async def main() -> List:
         analytics_config = await request_container.get(DuckDBConfig)
         return [primary_config, analytics_config]
 '''
-            Path("litestar_dishka_modular/sqlspec_main.py").write_text(config_module)
+    Path("litestar_dishka_modular/sqlspec_main.py").write_text(config_module)
 
-            # Test the exact command that was failing for the user
-            result = runner.invoke(
-                add_migration_commands(), ["--config", "litestar_dishka_modular.sqlspec_main.main", "show-config"]
-            )
+    result = runner.invoke(
+        add_migration_commands(), ["--config", "litestar_dishka_modular.sqlspec_main.main", "show-config"]
+    )
 
-        finally:
-            os.chdir(original_dir)
-
-        assert result.exit_code == 0
-        assert "primary_db" in result.output
-        assert "analytics_db" in result.output
-        assert "2 configuration(s)" in result.output
+    assert result.exit_code == 0
+    assert "primary_db" in result.output
+    assert "analytics_db" in result.output
+    assert "2 configuration(s)" in result.output
 
 
-def test_dishka_provider_cleanup() -> None:
+def test_dishka_provider_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that Dishka providers are properly cleaned up."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_dir = os.getcwd()
-        os.chdir(temp_dir)
-        try:
-            config_module = '''
+    monkeypatch.chdir(tmp_path)
+
+    config_module = '''
 import asyncio
 from dishka import make_async_container, Provider, provide, Scope
 from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -524,15 +462,11 @@ async def get_cleanup_config():
         config = await request_container.get(SqliteConfig)
         return config
 '''
-            Path("cleanup_dishka_config.py").write_text(config_module)
+    Path("cleanup_dishka_config.py").write_text(config_module)
 
-            result = runner.invoke(
-                add_migration_commands(), ["--config", "cleanup_dishka_config.get_cleanup_config", "show-config"]
-            )
+    result = runner.invoke(
+        add_migration_commands(), ["--config", "cleanup_dishka_config.get_cleanup_config", "show-config"]
+    )
 
-        finally:
-            os.chdir(original_dir)
-
-        assert result.exit_code == 0
-        assert "cleanup_test" in result.output
-        # The container should have been cleaned up without errors
+    assert result.exit_code == 0
+    assert "cleanup_test" in result.output

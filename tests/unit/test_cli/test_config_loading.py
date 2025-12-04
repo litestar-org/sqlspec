@@ -1,8 +1,6 @@
 """Tests for CLI configuration loading functionality."""
 
-import os
 import sys
-import tempfile
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -34,13 +32,14 @@ def _create_module(path: "Path", content: str) -> str:
     return module_name
 
 
-def test_direct_config_instance_loading(cleanup_test_modules: None) -> None:
+def test_direct_config_instance_loading(
+    tmp_path: Path, cleanup_test_modules: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Test loading a direct config instance through CLI."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Create a test module with a direct config instance
-        config_module = """
+    # Create a test module with a direct config instance
+    config_module = """
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 config = SqliteConfig(
@@ -50,30 +49,25 @@ config = SqliteConfig(
 )
 database_config = config
 """
-        module_name = _create_module(Path(temp_dir), config_module)
+    module_name = _create_module(tmp_path, config_module)
 
-        # Change to the temp directory
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(temp_dir)
-            result = runner.invoke(
-                add_migration_commands(), ["--config", f"{module_name}.database_config", "show-config"]
-            )
-        finally:
-            os.chdir(original_cwd)
+    # Change to the temp directory
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}.database_config", "show-config"])
 
-        assert result.exit_code == 0
-        assert "test" in result.output
-        assert "Migration Enabled" in result.output or "migrations enabled" in result.output
+    assert result.exit_code == 0
+    assert "test" in result.output
+    assert "Migration Enabled" in result.output or "migrations enabled" in result.output
 
 
-def test_sync_callable_config_loading(cleanup_test_modules: None) -> None:
+def test_sync_callable_config_loading(
+    tmp_path: Path, cleanup_test_modules: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Test loading config from synchronous callable through CLI."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Create a test module with sync callable
-        config_module = """
+    # Create a test module with sync callable
+    config_module = """
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_database_config():
@@ -84,30 +78,25 @@ def get_database_config():
     )
     return config
 """
-        module_name = _create_module(Path(temp_dir), config_module)
+    module_name = _create_module(tmp_path, config_module)
 
-        # Change to the temp directory
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(temp_dir)
-            result = runner.invoke(
-                add_migration_commands(), ["--config", f"{module_name}.get_database_config", "show-config"]
-            )
-        finally:
-            os.chdir(original_cwd)
+    # Change to the temp directory
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}.get_database_config", "show-config"])
 
-        assert result.exit_code == 0
-        assert "sync_test" in result.output
-        assert "Migration Enabled" in result.output or "migrations enabled" in result.output
+    assert result.exit_code == 0
+    assert "sync_test" in result.output
+    assert "Migration Enabled" in result.output or "migrations enabled" in result.output
 
 
-def test_async_callable_config_loading(cleanup_test_modules: None) -> None:
+def test_async_callable_config_loading(
+    tmp_path: Path, cleanup_test_modules: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Test loading config from asynchronous callable through CLI."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Create a test module with async callable
-        config_module = """
+    # Create a test module with async callable
+    config_module = """
 import asyncio
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
@@ -121,32 +110,27 @@ async def get_database_config():
     )
     return config
 """
-        module_name = _create_module(Path(temp_dir), config_module)
+    module_name = _create_module(tmp_path, config_module)
 
-        # Change to the temp directory
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(temp_dir)
-            result = runner.invoke(
-                add_migration_commands(), ["--config", f"{module_name}.get_database_config", "show-config"]
-            )
-        finally:
-            os.chdir(original_cwd)
+    # Change to the temp directory
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}.get_database_config", "show-config"])
 
-        if result.exception:
-            pass
-        assert result.exit_code == 0
-        assert "async_test" in result.output
-        assert "Migration Enabled" in result.output or "migrations enabled" in result.output
+    if result.exception:
+        pass
+    assert result.exit_code == 0
+    assert "async_test" in result.output
+    assert "Migration Enabled" in result.output or "migrations enabled" in result.output
 
 
-def test_show_config_with_path_object(cleanup_test_modules: None) -> None:
+def test_show_config_with_path_object(
+    tmp_path: Path, cleanup_test_modules: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Test show-config handles Path objects in script_location without crashing."""
     runner = CliRunner()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Create a test module with Path object in script_location
-        config_module = """
+    # Create a test module with Path object in script_location
+    config_module = """
 from pathlib import Path
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
@@ -157,19 +141,13 @@ config = SqliteConfig(
 )
 database_config = config
 """
-        module_name = _create_module(Path(temp_dir), config_module)
+    module_name = _create_module(tmp_path, config_module)
 
-        # Change to the temp directory
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(temp_dir)
-            result = runner.invoke(
-                add_migration_commands(), ["--config", f"{module_name}.database_config", "show-config"]
-            )
-        finally:
-            os.chdir(original_cwd)
+    # Change to the temp directory
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}.database_config", "show-config"])
 
-        assert result.exit_code == 0
-        assert "path_test" in result.output
-        assert "custom_migrations" in result.output
-        assert "Migration Enabled" in result.output or "migrations enabled" in result.output
+    assert result.exit_code == 0
+    assert "path_test" in result.output
+    assert "custom_migrations" in result.output
+    assert "Migration Enabled" in result.output or "migrations enabled" in result.output
