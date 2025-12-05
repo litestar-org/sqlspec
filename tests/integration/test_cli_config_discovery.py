@@ -88,7 +88,9 @@ config = "test_config.config.get_test_config"
     assert "Successfully loaded 1 config(s)" in result.output
 
 
-def test_cli_flag_overrides_env(tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch", mock_config_module: "Path") -> None:
+def test_cli_flag_overrides_env(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch", mock_config_module: "Path"
+) -> None:
     """Test --config flag overrides SQLSPEC_CONFIG."""
     monkeypatch.chdir(tmp_path)
 
@@ -145,9 +147,7 @@ config = "wrong.config.get_wrong"
     runner = CliRunner()
     cli = get_cli_with_commands()
 
-    result = runner.invoke(
-        cli, ["--config", "test_config.config.get_test_config", "--validate-config", "show-config"]
-    )
+    result = runner.invoke(cli, ["--config", "test_config.config.get_test_config", "--validate-config", "show-config"])
 
     assert result.exit_code == 0, f"Output: {result.output}"
     assert "Successfully loaded 1 config(s)" in result.output
@@ -338,9 +338,7 @@ def get_multiple_configs():
         cli = get_cli_with_commands()
 
         result = runner.invoke(
-            cli,
-            ["--validate-config", "show-config"],
-            env={"SQLSPEC_CONFIG": "multiconf2.config.get_multiple_configs"},
+            cli, ["--validate-config", "show-config"], env={"SQLSPEC_CONFIG": "multiconf2.config.get_multiple_configs"}
         )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -350,7 +348,9 @@ def get_multiple_configs():
             sys.path.remove(str(tmp_path))
 
 
-def test_cli_config_with_bind_key(tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch", mock_config_module: "Path") -> None:
+def test_cli_config_with_bind_key(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch", mock_config_module: "Path"
+) -> None:
     """Test config with bind_key is displayed correctly."""
     monkeypatch.chdir(tmp_path)
 

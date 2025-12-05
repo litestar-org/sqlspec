@@ -82,9 +82,7 @@ def get_sqlspec_group() -> "Group":
                 if isinstance(config_result, Sequence) and not isinstance(config_result, str):
                     all_configs.extend(config_result)
                 else:
-                    all_configs.append(
-                        cast("AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]", config_result)
-                    )
+                    all_configs.append(config_result)  # pyright: ignore
 
             # Deduplicate by bind_key (later configs override earlier ones)
             configs_by_key: dict[

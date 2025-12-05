@@ -453,7 +453,13 @@ def command(config: str | None):
 - Walk filesystem from cwd to find config files
 - Return `None` if not found to trigger helpful error message
 
-**Reference implementation:** `sqlspec/cli.py` (lines 26-65), `sqlspec/utils/config_discovery.py`
+**Multi-config support:**
+- Split comma-separated values from CLI flag, env var, or pyproject.toml
+- Resolve each config path independently
+- Flatten results if callables return lists
+- Deduplicate by `bind_key` (later configs override earlier ones with same key)
+
+**Reference implementation:** `sqlspec/cli.py` (lines 26-110), `sqlspec/utils/config_discovery.py`
 
 ### CLI Sync/Async Dispatch Pattern
 
