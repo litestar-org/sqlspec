@@ -25,6 +25,12 @@ def test_single_and_multiple_configs() -> None:
     def get_configs() -> list[AsyncpgConfig]:
         return [db_config]
 
+    # Usage with CLI:
+    # --config "myapp.config.db_config"                          # Single config
+    # --config "myapp.config.configs"                            # Config list
+    # --config "myapp.config.get_configs"                        # Callable
+    # --config "myapp.config.db_config,myapp.config.configs"     # Multiple paths (comma-separated)
+
     # end-example
     assert isinstance(db_config, AsyncpgConfig)
     assert isinstance(configs, list)

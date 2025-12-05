@@ -26,23 +26,43 @@ def get_sqlspec_group() -> "Group":
     @click.group(name="sqlspec")
     @click.option(
         "--config",
-        help="Dotted path to SQLSpec config(s) or callable function (e.g. 'myapp.config.get_configs')",
-        required=True,
+        help="Dotted path to SQLSpec config(s) or callable function (env: SQLSPEC_CONFIG)",
+        required=False,
+        default=None,
         type=str,
+        envvar="SQLSPEC_CONFIG",
     )
     @click.option(
         "--validate-config", is_flag=True, default=False, help="Validate configuration before executing migrations"
     )
     @click.pass_context
-    def sqlspec_group(ctx: "click.Context", config: str, validate_config: bool) -> None:
+    def sqlspec_group(ctx: "click.Context", config: str | None, validate_config: bool) -> None:
         """SQLSpec CLI commands."""
         from rich import get_console
 
         from sqlspec.exceptions import ConfigResolverError
+        from sqlspec.utils.config_discovery import discover_config_from_pyproject
         from sqlspec.utils.config_resolver import resolve_config_sync
 
         console = get_console()
         ctx.ensure_object(dict)
+
+        # Click already handled: CLI flag > SQLSPEC_CONFIG env var
+        # Now check pyproject.toml as final fallback
+        if config is None:
+            config = discover_config_from_pyproject()
+            if config:
+                console.print("[dim]Using config from pyproject.toml[/]")
+
+        # No config from any source - show helpful error
+        if config is None:
+            console.print("[red]Error: No SQLSpec config found.[/]")
+            console.print("\nSpecify config using one of:")
+            console.print("  1. CLI flag:        sqlspec --config myapp.config:get_configs <command>")
+            console.print("  2. Environment var: export SQLSPEC_CONFIG=myapp.config:get_configs")
+            console.print("  3. pyproject.toml:  [tool.sqlspec]")
+            console.print('                      config = "myapp.config:get_configs"')
+            ctx.exit(1)
 
         # Add current working directory to sys.path to allow loading local config modules
         cwd = str(Path.cwd())
@@ -52,11 +72,32 @@ def get_sqlspec_group() -> "Group":
             cwd_added = True
 
         try:
-            config_result = resolve_config_sync(config)
-            if isinstance(config_result, Sequence) and not isinstance(config_result, str):
-                ctx.obj["configs"] = list(config_result)
-            else:
-                ctx.obj["configs"] = [config_result]
+            # Split comma-separated config paths and resolve each
+            all_configs: list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] = []
+            for config_path in config.split(","):
+                config_path = config_path.strip()
+                if not config_path:
+                    continue
+                config_result = resolve_config_sync(config_path)
+                if isinstance(config_result, Sequence) and not isinstance(config_result, str):
+                    all_configs.extend(config_result)
+                else:
+                    all_configs.append(config_result)  # pyright: ignore
+
+            # Deduplicate by bind_key (later configs override earlier ones)
+            configs_by_key: dict[
+                str | None, AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]
+            ] = {}
+            for cfg in all_configs:
+                configs_by_key[cfg.bind_key] = cfg
+
+            ctx.obj["configs"] = list(configs_by_key.values())
+
+            # Check for empty configs after resolution
+            if not ctx.obj["configs"]:
+                console.print("[red]Error: No valid configs found after resolution.[/]")
+                console.print("\nEnsure your config path returns valid config instance(s).")
+                ctx.exit(1)
 
             ctx.obj["validate_config"] = validate_config
 

@@ -7,6 +7,7 @@ text processing, and type guards.
 """
 
 from sqlspec.utils import (
+    config_discovery,
     deprecation,
     fixtures,
     logging,
@@ -19,6 +20,7 @@ from sqlspec.utils import (
 )
 
 __all__ = (
+    "config_discovery",
     "deprecation",
     "fixtures",
     "logging",
