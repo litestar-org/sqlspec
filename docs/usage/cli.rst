@@ -204,17 +204,24 @@ that generate static completion files (system-wide bash, zsh completion director
 Available Commands
 ==================
 
-The SQLSpec CLI provides commands for managing database migrations. All commands
-require a ``--config`` option pointing to your SQLSpec configuration.
+The SQLSpec CLI provides commands for managing database migrations. Configure the CLI
+using ``--config`` flag, ``SQLSPEC_CONFIG`` environment variable, or ``[tool.sqlspec]``
+section in pyproject.toml.
 
 Configuration Loading
 ---------------------
 
-The ``--config`` option accepts a dotted path to either:
+SQLSpec CLI supports three ways to specify your database configuration, in order of precedence:
 
-1. **A single config object**: ``myapp.config.db_config``
-2. **A config list**: ``myapp.config.configs``
-3. **A callable function**: ``myapp.config.get_configs()``
+1. **CLI Flag** (``--config``) - Explicit override for one-off commands
+2. **Environment Variable** (``SQLSPEC_CONFIG``) - Convenient for development workflows
+3. **pyproject.toml** (``[tool.sqlspec]``) - Project-wide default configuration
+
+The ``--config`` option and ``SQLSPEC_CONFIG`` environment variable accept a dotted path to either:
+
+- **A single config object**: ``myapp.config.db_config``
+- **A config list**: ``myapp.config.configs``
+- **A callable function**: ``myapp.config.get_configs()``
 
 Example configuration file (``myapp/config.py``):
 
@@ -225,11 +232,66 @@ Example configuration file (``myapp/config.py``):
    :end-before: # end-example
    :caption: `configuration loading`
 
+Config Discovery Methods
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Method 1: CLI Flag (Highest Priority)**
+
+.. code-block:: bash
+
+   sqlspec --config myapp.config:get_configs upgrade head
+
+Use for one-off commands or to override other config sources.
+
+**Method 2: Environment Variable**
+
+.. code-block:: bash
+
+   export SQLSPEC_CONFIG=myapp.config:get_configs
+   sqlspec upgrade head  # Uses environment variable
+
+Convenient for development. Add to your shell profile:
+
+.. code-block:: bash
+
+   # ~/.bashrc or ~/.zshrc
+   export SQLSPEC_CONFIG=myapp.config:get_configs
+
+Multiple configs (comma-separated):
+
+.. code-block:: bash
+
+   export SQLSPEC_CONFIG="app.db:primary_config,app.db:analytics_config"
+
+**Method 3: pyproject.toml (Project Default)**
+
+.. code-block:: toml
+
+   [tool.sqlspec]
+   config = "myapp.config:get_configs"
+
+Best for team projects - config is version controlled.
+
+Multiple configs (array):
+
+.. code-block:: toml
+
+   [tool.sqlspec]
+   config = [
+       "myapp.config:primary_config",
+       "myapp.config:analytics_config"
+   ]
+
+**Precedence:** CLI flag > Environment variable > pyproject.toml
+
+If no config is found from any source, SQLSpec will show a helpful error message with examples.
+
 Global Options
 --------------
 
 ``--config PATH``
-   **Required**. Dotted path to SQLSpec config(s) or callable function.
+   Dotted path to SQLSpec config(s) or callable function. Optional when using
+   environment variable or pyproject.toml config discovery.
 
    Example: ``--config myapp.config.get_configs``
 

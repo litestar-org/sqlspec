@@ -6116,6 +6116,7 @@ bigquery = [
 ]
 cli = [
     { name = "rich-click" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 cloud-sql = [
     { name = "cloud-sql-python-connector" },
@@ -6384,6 +6385,7 @@ requires-dist = [
     { name = "rich-click", marker = "extra == 'cli'" },
     { name = "sqlglot", specifier = ">=19.9.0" },
     { name = "sqlglot", extras = ["rs"], marker = "extra == 'performance'" },
+    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'cli'", specifier = ">=2.0.0" },
     { name = "typing-extensions" },
     { name = "uuid-utils", marker = "extra == 'uuid'" },
 ]

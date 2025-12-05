@@ -415,6 +415,46 @@ Dialect.classes["custom"] = CustomDialect
 - Use `wrap_exceptions` context manager in adapter layer
 - Two-tier pattern: graceful skip (DEBUG) for expected conditions, hard errors for malformed input
 
+### Click Environment Variable Pattern
+
+When adding CLI options that should support environment variables:
+
+**Use Click's native `envvar` parameter instead of custom parsing:**
+
+```python
+# Good - Click handles env var automatically
+@click.option(
+    "--config",
+    help="Dotted path to SQLSpec config(s) (env: SQLSPEC_CONFIG)",
+    required=False,
+    type=str,
+    envvar="SQLSPEC_CONFIG",  # Click handles precedence: CLI flag > env var
+)
+def command(config: str | None):
+    pass
+
+# Bad - Custom env var parsing
+import os
+
+@click.option("--config", required=False, type=str)
+def command(config: str | None):
+    if config is None:
+        config = os.getenv("SQLSPEC_CONFIG")  # Don't do this!
+```
+
+**Benefits:**
+- Click automatically handles precedence (CLI flag always overrides env var)
+- Help text automatically shows env var name
+- Support for multiple fallback env vars via `envvar=["VAR1", "VAR2"]`
+- Less code, fewer bugs
+
+**For project file discovery (pyproject.toml, etc.):**
+- Use custom logic as fallback after Click env var handling
+- Walk filesystem from cwd to find config files
+- Return `None` if not found to trigger helpful error message
+
+**Reference implementation:** `sqlspec/cli.py` (lines 26-65), `sqlspec/utils/config_discovery.py`
+
 ### CLI Sync/Async Dispatch Pattern
 
 When implementing CLI commands that support both sync and async database adapters:
