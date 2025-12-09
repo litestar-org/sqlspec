@@ -107,7 +107,7 @@ lint = [
   "asyncpg-stubs",
   "pyarrow-stubs",
   "pandas-stubs",
-
+  "tomli>=2.0.0; python_version < '3.11'",
 ]
 test = [
   "aiohttp",
