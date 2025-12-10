@@ -15,8 +15,8 @@ def test_pool_lifecycle() -> None:
 
     db_manager = SQLSpec()
     dsn = os.getenv("SQLSPEC_USAGE_PG_DSN", "postgresql://localhost/db")
-    asyncpg_key = db_manager.add_config(AsyncpgConfig(pool_config={"dsn": dsn}))
+    asyncpg_config = db_manager.add_config(AsyncpgConfig(pool_config={"dsn": dsn}))
 
-    asyncpg_config = db_manager.get_config(asyncpg_key)
+    # The config instance is now the handle - add_config returns it directly
     # end-example
     assert asyncpg_config.pool_config["dsn"] == dsn

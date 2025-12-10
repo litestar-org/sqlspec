@@ -44,58 +44,83 @@ def test_add_config_returns_same_instance() -> None:
     assert result is config
 
 
-def test_provide_session_rejects_unregistered_config() -> None:
-    """Test that provide_session raises ValueError for unregistered configs."""
+def test_provide_session_auto_registers_config() -> None:
+    """Test that provide_session auto-registers configs."""
     manager = SQLSpec()
     config = DuckDBConfig(pool_config={"database": ":memory:"})
 
-    with pytest.raises(ValueError, match="Config not registered"):
-        manager.provide_session(config)
+    # Config should be auto-registered when used
+    with manager.provide_session(config) as session:
+        assert session is not None
+
+    # Verify config was registered
+    assert id(config) in manager.configs
 
 
-def test_provide_connection_rejects_unregistered_config() -> None:
-    """Test that provide_connection raises ValueError for unregistered configs."""
+def test_provide_connection_auto_registers_config() -> None:
+    """Test that provide_connection auto-registers configs."""
     manager = SQLSpec()
     config = DuckDBConfig(pool_config={"database": ":memory:"})
 
-    with pytest.raises(ValueError, match="Config not registered"):
-        manager.provide_connection(config)
+    # Config should be auto-registered when used
+    with manager.provide_connection(config) as conn:
+        assert conn is not None
+
+    # Verify config was registered
+    assert id(config) in manager.configs
 
 
-def test_get_connection_rejects_unregistered_config() -> None:
-    """Test that get_connection raises ValueError for unregistered configs."""
+def test_get_connection_auto_registers_config() -> None:
+    """Test that get_connection auto-registers configs."""
     manager = SQLSpec()
     config = DuckDBConfig(pool_config={"database": ":memory:"})
 
-    with pytest.raises(ValueError, match="Config not registered"):
-        manager.get_connection(config)
+    # Config should be auto-registered when used
+    conn = manager.get_connection(config)
+    assert conn is not None
+    conn.close()
+
+    # Verify config was registered
+    assert id(config) in manager.configs
 
 
-def test_get_session_rejects_unregistered_config() -> None:
-    """Test that get_session raises ValueError for unregistered configs."""
+def test_get_session_auto_registers_config() -> None:
+    """Test that get_session auto-registers configs."""
     manager = SQLSpec()
     config = DuckDBConfig(pool_config={"database": ":memory:"})
 
-    with pytest.raises(ValueError, match="Config not registered"):
-        manager.get_session(config)
+    # Config should be auto-registered when used
+    session = manager.get_session(config)
+    assert session is not None
+
+    # Verify config was registered
+    assert id(config) in manager.configs
 
 
-def test_get_pool_rejects_unregistered_config() -> None:
-    """Test that get_pool raises ValueError for unregistered configs."""
+def test_get_pool_auto_registers_config() -> None:
+    """Test that get_pool auto-registers configs."""
     manager = SQLSpec()
     config = DuckDBConfig(pool_config={"database": ":memory:"})
 
-    with pytest.raises(ValueError, match="Config not registered"):
-        manager.get_pool(config)
+    # Config should be auto-registered when used
+    pool = manager.get_pool(config)
+    assert pool is not None
+
+    # Verify config was registered
+    assert id(config) in manager.configs
 
 
-def test_close_pool_rejects_unregistered_config() -> None:
-    """Test that close_pool raises ValueError for unregistered configs."""
+def test_close_pool_auto_registers_config() -> None:
+    """Test that close_pool auto-registers configs."""
     manager = SQLSpec()
     config = DuckDBConfig(pool_config={"database": ":memory:"})
 
-    with pytest.raises(ValueError, match="Config not registered"):
-        manager.close_pool(config)
+    # Config should be auto-registered when used
+    # Note: close_pool doesn't fail on unregistered configs, it just does nothing
+    manager.close_pool(config)
+
+    # Verify config was registered
+    assert id(config) in manager.configs
 
 
 def test_registry_uses_id_as_key() -> None:
@@ -303,17 +328,20 @@ def test_registry_survives_config_modifications() -> None:
     assert id(config) in manager.configs
 
 
-def test_error_message_clarity_for_unregistered_config() -> None:
-    """Test that error message for unregistered config is clear and actionable."""
+def test_auto_registration_on_first_use() -> None:
+    """Test that configs are automatically registered on first use."""
     manager = SQLSpec()
     config = DuckDBConfig(pool_config={"database": ":memory:"})
 
-    with pytest.raises(ValueError) as exc_info:
-        manager.provide_session(config)
+    # Config should not be registered initially
+    assert id(config) not in manager.configs
 
-    error_message = str(exc_info.value)
-    assert "Config not registered" in error_message
-    assert "add_config" in error_message
+    # Using provide_session should auto-register it
+    with manager.provide_session(config):
+        pass
+
+    # Config should now be registered
+    assert id(config) in manager.configs
 
 
 def test_three_configs_same_type_all_stored() -> None:
@@ -411,20 +439,34 @@ def test_provide_session_with_correct_config_after_multiple_adds() -> None:
         assert hasattr(session, "execute")
 
 
-def test_unregistered_config_error_all_methods() -> None:
-    """Test that all methods reject unregistered configs with same error."""
-    manager = SQLSpec()
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
-
-    methods_to_test = [
-        lambda: manager.provide_session(config),
-        lambda: manager.provide_connection(config),
-        lambda: manager.get_connection(config),
-        lambda: manager.get_session(config),
-        lambda: manager.get_pool(config),
-        lambda: manager.close_pool(config),
+def test_all_methods_auto_register_configs() -> None:
+    """Test that all methods auto-register configs on first use."""
+    # Test each method independently to ensure auto-registration works
+    test_cases = [
+        ("provide_session", lambda m, c: m.provide_session(c)),
+        ("provide_connection", lambda m, c: m.provide_connection(c)),
+        ("get_connection", lambda m, c: m.get_connection(c)),
+        ("get_session", lambda m, c: m.get_session(c)),
+        ("get_pool", lambda m, c: m.get_pool(c)),
+        ("close_pool", lambda m, c: m.close_pool(c)),
     ]
 
-    for method in methods_to_test:
-        with pytest.raises(ValueError, match="Config not registered"):
-            method()  # type: ignore[no-untyped-call]
+    for method_name, method_fn in test_cases:
+        manager = SQLSpec()
+        config = DuckDBConfig(pool_config={"database": ":memory:"})
+
+        # Config should not be registered initially
+        assert id(config) not in manager.configs, f"Config should not be registered before calling {method_name}"
+
+        # Call the method (may need to handle context managers)
+        if method_name in ("provide_session", "provide_connection"):
+            with method_fn(manager, config):
+                pass
+        elif method_name == "get_connection":
+            conn = method_fn(manager, config)
+            conn.close()
+        else:
+            method_fn(manager, config)
+
+        # Config should now be registered
+        assert id(config) in manager.configs, f"Config should be auto-registered after calling {method_name}"

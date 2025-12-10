@@ -7,12 +7,11 @@ from litestar import Litestar, get
 
 from docs.examples.shared.configs import aiosqlite_registry
 from docs.examples.shared.data import ARTICLES, CREATE_ARTICLES
-from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.core import SQL
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
-registry = aiosqlite_registry()
-config = registry.get_config(AiosqliteConfig)
+registry, config = aiosqlite_registry()
 plugin = SQLSpecPlugin(sqlspec=registry)
 
 

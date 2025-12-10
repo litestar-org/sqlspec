@@ -202,13 +202,9 @@ class SQLSpec:
 
         Returns:
             A database connection or an awaitable yielding a connection.
-
-        Raises:
-            ValueError: If the configuration is not registered.
         """
         if id(config) not in self._configs:
-            msg = "Config not registered. Call manager.add_config(config) first."
-            raise ValueError(msg)
+            self.add_config(config)
 
         config_name = config.__class__.__name__
         logger.debug("Getting connection for config: %s", config_name, extra={"config_type": config_name})
@@ -235,13 +231,9 @@ class SQLSpec:
 
         Returns:
             A driver adapter instance or an awaitable yielding one.
-
-        Raises:
-            ValueError: If the configuration is not registered.
         """
         if id(config) not in self._configs:
-            msg = "Config not registered. Call manager.add_config(config) first."
-            raise ValueError(msg)
+            self.add_config(config)
 
         config_name = config.__class__.__name__
         logger.debug("Getting session for config: %s", config_name, extra={"config_type": config_name})
@@ -297,13 +289,9 @@ class SQLSpec:
 
         Returns:
             A sync or async context manager yielding a connection.
-
-        Raises:
-            ValueError: If the configuration is not registered.
         """
         if id(config) not in self._configs:
-            msg = "Config not registered. Call manager.add_config(config) first."
-            raise ValueError(msg)
+            self.add_config(config)
 
         config_name = config.__class__.__name__
         logger.debug("Providing connection context for config: %s", config_name, extra={"config_type": config_name})
@@ -374,13 +362,9 @@ class SQLSpec:
 
         Returns:
             A sync or async context manager yielding a driver adapter instance.
-
-        Raises:
-            ValueError: If the configuration is not registered.
         """
         if id(config) not in self._configs:
-            msg = "Config not registered. Call manager.add_config(config) first."
-            raise ValueError(msg)
+            self.add_config(config)
 
         config_name = config.__class__.__name__
         logger.debug("Providing session context for config: %s", config_name, extra={"config_type": config_name})
@@ -452,13 +436,9 @@ class SQLSpec:
 
         Returns:
             The connection pool, an awaitable yielding the pool, or None if not supported.
-
-        Raises:
-            ValueError: If the configuration is not registered.
         """
         if id(config) not in self._configs:
-            msg = "Config not registered. Call manager.add_config(config) first."
-            raise ValueError(msg)
+            self.add_config(config)
 
         config_name = config.__class__.__name__
 
@@ -490,13 +470,9 @@ class SQLSpec:
 
         Returns:
             None, or an awaitable if closing an async pool.
-
-        Raises:
-            ValueError: If the configuration is not registered.
         """
         if id(config) not in self._configs:
-            msg = "Config not registered. Call manager.add_config(config) first."
-            raise ValueError(msg)
+            self.add_config(config)
 
         config_name = config.__class__.__name__
 

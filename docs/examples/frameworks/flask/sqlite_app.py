@@ -4,14 +4,12 @@ from flask import Flask, Response, jsonify
 
 from docs.examples.shared.configs import sqlite_registry
 from docs.examples.shared.data import ARTICLES, CREATE_ARTICLES
-from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import SQL
 
 __all__ = ("list_articles", "main", "seed_database")
 
 
-registry = sqlite_registry()
-config = registry.get_config(SqliteConfig)
+registry, config = sqlite_registry()
 app = Flask(__name__)
 
 

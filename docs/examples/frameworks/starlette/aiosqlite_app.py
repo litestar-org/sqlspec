@@ -9,14 +9,12 @@ from starlette.routing import Route
 
 from docs.examples.shared.configs import aiosqlite_registry
 from docs.examples.shared.data import ARTICLES, CREATE_ARTICLES
-from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.core import SQL
 
 __all__ = ("list_articles", "main", "seed_database")
 
 
-registry = aiosqlite_registry()
-config = registry.get_config(AiosqliteConfig)
+registry, config = aiosqlite_registry()
 
 
 async def seed_database() -> None:

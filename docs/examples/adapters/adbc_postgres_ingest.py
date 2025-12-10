@@ -126,13 +126,12 @@ def main(
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     db_manager = SQLSpec()
-    adbc_config = AdbcConfig(connection_config={"uri": uri})
-    adbc_key = db_manager.add_config(adbc_config)
+    adbc_config = db_manager.add_config(AdbcConfig(connection_config={"uri": uri}))
 
-    _render_capabilities(console, db_manager.get_config(adbc_key))
+    _render_capabilities(console, adbc_config)
     telemetry_records: list[dict[str, Any]] = []
 
-    with db_manager.provide_session(adbc_key) as session:
+    with db_manager.provide_session(adbc_config) as session:
         export_job = session.select_to_storage(
             source_sql, str(destination), format_hint=file_format, partitioner=partitioner
         )
