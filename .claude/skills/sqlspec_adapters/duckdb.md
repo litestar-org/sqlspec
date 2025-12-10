@@ -32,7 +32,7 @@ from sqlspec.adapters.duckdb import (
 )
 
 config = DuckDBConfig(
-    pool_config={
+    connection_config={
         # Database path (defaults to ":memory:shared_db")
         "database": ":memory:shared_db",  # Shared in-memory DB
         # OR: "analytics.duckdb",  # Persistent file
@@ -201,7 +201,7 @@ session.execute("SELECT * FROM read_csv_auto('s3://bucket/data.csv')")
 
 ```python
 config = DuckDBConfig(
-    pool_config={
+    connection_config={
         "allow_community_extensions": True,
     },
     driver_features={
@@ -234,7 +234,7 @@ session.execute("""
 
 ```python
 config = DuckDBConfig(
-    pool_config={
+    connection_config={
         "allow_persistent_secrets": True,
         "enable_external_access": True,
     },
@@ -403,7 +403,7 @@ result = session.execute("""
 
 ```python
 config = DuckDBConfig(
-    pool_config={
+    connection_config={
         "threads": 8,  # Use 8 threads for query execution
     }
 )
@@ -420,7 +420,7 @@ result = session.execute("""
 
 ```python
 config = DuckDBConfig(
-    pool_config={
+    connection_config={
         "enable_object_cache": True,
         "parquet_metadata_cache": "enabled",
     }
@@ -441,7 +441,7 @@ for i in range(10):
 ```python
 # DuckDB uses thread-local connections
 config = DuckDBConfig(
-    pool_config={
+    connection_config={
         "database": ":memory:shared_db",  # Shared across threads
         "pool_min_size": 1,
         "pool_max_size": 4,
@@ -481,7 +481,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
 Install extension explicitly:
 ```python
 config = DuckDBConfig(
-    pool_config={
+    connection_config={
         "autoinstall_known_extensions": True,
     },
     driver_features={
@@ -495,7 +495,7 @@ config = DuckDBConfig(
 Or enable community extensions:
 ```python
 config = DuckDBConfig(
-    pool_config={
+    connection_config={
         "allow_community_extensions": True,
     }
 )
@@ -509,7 +509,7 @@ import os
 os.makedirs("data", exist_ok=True)
 
 config = DuckDBConfig(
-    pool_config={"database": "data/analytics.duckdb"}
+    connection_config={"database": "data/analytics.duckdb"}
 )
 ```
 
@@ -518,7 +518,7 @@ config = DuckDBConfig(
 Increase memory limit:
 ```python
 config = DuckDBConfig(
-    pool_config={
+    connection_config={
         "memory_limit": "4GB",
         "temp_directory": "/tmp/duckdb",
         "max_temp_directory_size": "20GB",

@@ -559,7 +559,7 @@ mcp__context7__get-library-docs(
 Edit(
     file_path="sqlspec/adapters/asyncpg/config.py",
     old_string="# TODO: Add pooling",
-    new_string="pool = await asyncpg.create_pool(**pool_config)"
+    new_string="pool = await asyncpg.create_pool(**connection_config)"
 )
 
 # 4. Test locally

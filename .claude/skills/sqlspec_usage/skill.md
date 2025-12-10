@@ -46,7 +46,7 @@ from sqlspec.adapters.{adapter} import {Adapter}Config
 spec = SQLSpec()
 db = spec.add_config(
     {Adapter}Config(
-        pool_config={...},           # Connection parameters
+        connection_config={...},           # Connection parameters
         statement_config={...},      # SQL processing (optional)
         extension_config={...},      # Framework integration (optional)
         driver_features={...},       # Adapter-specific features (optional)
@@ -57,7 +57,7 @@ db = spec.add_config(
 
 **Key Principles:**
 1. Always store the config key returned from `add_config()`
-2. Use `pool_config` dict for connection parameters (adapter-specific)
+2. Use `connection_config` dict for connection parameters (adapter-specific)
 3. Define `driver_features` using TypedDict for type safety
 4. Auto-detect optional features when dependencies are available
 5. Use unique `session_key` values for multi-database setups
@@ -131,7 +131,7 @@ from sqlspec.extensions.litestar import SQLSpecPlugin
 spec = SQLSpec()
 db = spec.add_config(
     AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/db"},
+        connection_config={"dsn": "postgresql://localhost/db"},
         extension_config={
             "litestar": {
                 "commit_mode": "autocommit",  # or "manual", "autocommit_include_redirect"
@@ -180,7 +180,7 @@ from sqlspec.extensions.flask import SQLSpecPlugin
 
 app = Flask(__name__)
 spec = SQLSpec()
-db = spec.add_config(SqliteConfig(pool_config={"database": "app.db"}))
+db = spec.add_config(SqliteConfig(connection_config={"database": "app.db"}))
 plugin = SQLSpecPlugin(spec)
 plugin.init_app(app)
 
@@ -278,7 +278,7 @@ def test_with_pooling():
     """Use temp files, NOT :memory: with pooling!"""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name}  # Isolated per test
+            connection_config={"database": tmp.name}  # Isolated per test
         )
         # Test logic here
 ```
@@ -290,7 +290,7 @@ def test_with_pooling():
 @pytest.fixture(scope="session")
 def asyncpg_config(postgres_service: PostgresService):
     return AsyncpgConfig(
-        pool_config={"dsn": postgres_service.connection_url()}
+        connection_config={"dsn": postgres_service.connection_url()}
     )
 
 @pytest.fixture(scope="session")
@@ -315,7 +315,7 @@ uv run pytest -n auto --dist=loadgroup
 **Connection Pooling:**
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "dsn": "postgresql://localhost/db",
         "min_size": 10,
         "max_size": 20,
@@ -368,14 +368,14 @@ spec.add_config(AsyncpgConfig(...))  # Lost reference!
 db = spec.add_config(AsyncpgConfig(...))
 ```
 
-❌ **Missing pool_config:**
+❌ **Missing connection_config:**
 ```python
 config = AsyncpgConfig(dsn="postgresql://...")  # Wrong!
 ```
 
-✅ **Use pool_config dict:**
+✅ **Use connection_config dict:**
 ```python
-config = AsyncpgConfig(pool_config={"dsn": "postgresql://..."})
+config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
 ```
 
 ### Session Management Anti-Patterns
@@ -457,14 +457,14 @@ spec.add_config(DuckDBConfig(
 
 ❌ **Using :memory: with pooling:**
 ```python
-config = AiosqliteConfig(pool_config={"database": ":memory:"})
+config = AiosqliteConfig(connection_config={"database": ":memory:"})
 # Shared state in parallel tests!
 ```
 
 ✅ **Use temp files:**
 ```python
 with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-    config = AiosqliteConfig(pool_config={"database": tmp.name})
+    config = AiosqliteConfig(connection_config={"database": tmp.name})
 ```
 
 ## Troubleshooting Guide

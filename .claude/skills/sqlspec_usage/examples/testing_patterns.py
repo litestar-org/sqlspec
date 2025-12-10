@@ -30,7 +30,7 @@ def asyncpg_config() -> AsyncpgConfig:
     # pytest-databases automatically provides postgres_service fixture
 
     # This is managed by pytest-databases
-    return AsyncpgConfig(pool_config={"dsn": "postgresql://postgres:password@localhost:5432/test"})
+    return AsyncpgConfig(connection_config={"dsn": "postgresql://postgres:password@localhost:5432/test"})
 
 
 @pytest.fixture(scope="session")
@@ -69,7 +69,7 @@ async def asyncpg_session(asyncpg_db: type[AsyncpgConfig]) -> AsyncGenerator[Asy
 def sqlite_config() -> Generator[type[SqliteConfig], None, None]:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         # IMPORTANT: Use temp file for isolation in parallel tests
-        config = SqliteConfig(pool_config={"database": tmp.name})
+        config = SqliteConfig(connection_config={"database": tmp.name})
 
         # Apply schema
         spec = SQLSpec()
@@ -174,7 +174,7 @@ def test_sqlite_isolation() -> None:
     """Test SQLite test isolation with temp files."""
     # Each test gets own temp file
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
-        config = AiosqliteConfig(pool_config={"database": tmp.name})
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
         spec = SQLSpec()
         db = spec.add_config(config)
 
@@ -194,7 +194,7 @@ def test_sqlite_isolation() -> None:
 @pytest.mark.parametrize(
     ("adapter_name", "config"),
     [
-        ("asyncpg", AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/test"}))
+        ("asyncpg", AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"}))
         # Add more adapters as needed
     ],
 )

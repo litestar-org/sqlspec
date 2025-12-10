@@ -54,7 +54,7 @@ The PRD agent:
 
 Cross-adapter implementation patterns that apply to all database adapters:
 
-- **Configuration Pattern**: pool_config TypedDict, driver_features, bind_key
+- **Configuration Pattern**: connection_config TypedDict, driver_features, bind_key
 - **Type Handler Pattern**: Input/output type handlers, graceful degradation
 - **Exception Handling Pattern**: wrap_exceptions, SQLSpec exception hierarchy
 - **Connection Lifecycle Pattern**: provide_connection, provide_session, pool management

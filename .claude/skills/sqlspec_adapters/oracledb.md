@@ -28,7 +28,7 @@ This adapter supports dual sync/async patterns, making it suitable for both trad
 from sqlspec.adapters.oracledb import OracleSyncConfig, OracleDriverFeatures
 
 config = OracleSyncConfig(
-    pool_config={
+    connection_config={
         # Basic connection:
         "dsn": "localhost:1521/XEPDB1",
         # OR individual parameters:
@@ -67,7 +67,7 @@ config = OracleSyncConfig(
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleDriverFeatures
 
 config = OracleAsyncConfig(
-    pool_config={
+    connection_config={
         "dsn": "localhost:1521/XEPDB1",
         "user": "myuser",
         "password": "mypass",
@@ -90,7 +90,7 @@ async with config.provide_session() as session:
 
 ```python
 config = OracleSyncConfig(
-    pool_config={
+    connection_config={
         "user": "ADMIN",
         "password": "MyCloudPassword123",
         "dsn": "mydb_high",  # TNS alias from tnsnames.ora
@@ -105,7 +105,7 @@ config = OracleSyncConfig(
 
 ```python
 config = OracleSyncConfig(
-    pool_config={
+    connection_config={
         "host": "localhost",
         "port": 1521,
         "sid": "XE",  # Use SID instead of service_name
@@ -150,7 +150,7 @@ import numpy as np
 
 # Auto-enabled if NumPy installed
 config = OracleSyncConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features={"enable_numpy_vectors": True}  # Auto-detected
 )
 
@@ -186,7 +186,7 @@ Automatic conversion between Python UUIDs and RAW(16) binary format:
 import uuid
 
 config = OracleSyncConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features={"enable_uuid_binary": True}  # Default: True
 )
 
@@ -231,7 +231,7 @@ Oracle defaults unquoted identifiers to uppercase. SQLSpec normalizes to lowerca
 
 ```python
 config = OracleSyncConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features={"enable_lowercase_column_names": True}  # Default: True
 )
 
@@ -299,7 +299,7 @@ Oracle's connection pool provides production-grade resource management:
 
 ```python
 config = OracleSyncConfig(
-    pool_config={
+    connection_config={
         "dsn": "localhost:1521/XEPDB1",
         "user": "myuser",
         "password": "mypass",
@@ -334,7 +334,7 @@ def init_session(connection, tag):
     cursor.close()
 
 config = OracleSyncConfig(
-    pool_config={
+    connection_config={
         "dsn": "localhost:1521/XEPDB1",
         "user": "myuser",
         "password": "mypass",
@@ -414,7 +414,7 @@ session.execute_many(
 ```python
 # Use full DSN string instead of TNS alias
 config = OracleSyncConfig(
-    pool_config={
+    connection_config={
         "dsn": "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=localhost)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=XEPDB1)))"
     }
 )
@@ -431,7 +431,7 @@ os.environ["TNS_ADMIN"] = "/path/to/tnsnames_dir"
 **Solution for Cloud Wallet**:
 ```python
 config = OracleSyncConfig(
-    pool_config={
+    connection_config={
         "user": "ADMIN",
         "password": "CloudPassword123",
         "dsn": "mydb_high",  # Must match tnsnames.ora alias
@@ -450,7 +450,7 @@ config = OracleSyncConfig(
 ```python
 # Increase pool size
 config = OracleSyncConfig(
-    pool_config={
+    connection_config={
         "max": 32,  # Increase from 16
         "wait_timeout": 5000,  # Wait longer (5 seconds)
     }

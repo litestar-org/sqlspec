@@ -22,7 +22,7 @@ Expert guidance for using SQLSpec's AsyncPG adapter for PostgreSQL. AsyncPG is t
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriverFeatures
 
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "dsn": "postgresql://user:pass@localhost:5432/dbname",
         # OR individual parameters:
         "host": "localhost",
@@ -78,7 +78,7 @@ result = await session.execute(
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "my-service-account@project.iam",
         "database": "mydb",
     },
@@ -95,7 +95,7 @@ config = AsyncpgConfig(
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "user": "my-service-account@project.iam",
         "database": "mydb",
     },
@@ -116,7 +116,7 @@ from pgvector.asyncpg import register_vector
 
 # Auto-registered if pgvector installed
 config = AsyncpgConfig(
-    pool_config={...},
+    connection_config={...},
     driver_features={"enable_pgvector": True}  # Auto-detected
 )
 
@@ -161,7 +161,7 @@ results = await session.execute_stack(stack)
 
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "dsn": "postgresql://localhost/db",
         "min_size": 10,  # Keep 10 connections ready
         "max_size": 20,  # Allow up to 20 total
@@ -252,7 +252,7 @@ pg_isready -h localhost -p 5432
 Increase pool size or reduce connection lifetime:
 ```python
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "max_size": 40,  # Increase
         "timeout": 120.0,  # Longer timeout
     }

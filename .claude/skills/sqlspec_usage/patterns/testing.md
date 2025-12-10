@@ -7,7 +7,7 @@ Best practices for testing with SQLSpec.
 **❌ WRONG - :memory: with pooling causes test failures:**
 ```python
 def test_something():
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
     # Shared state across parallel tests!
 ```
 
@@ -17,7 +17,7 @@ import tempfile
 
 def test_something():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
-        config = AiosqliteConfig(pool_config={"database": tmp.name})
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
         # Each test gets isolated database
 ```
 
@@ -32,7 +32,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 @pytest.fixture(scope="session")
 def asyncpg_config(postgres_service: PostgresService):
     return AsyncpgConfig(
-        pool_config={"dsn": postgres_service.connection_url()}
+        connection_config={"dsn": postgres_service.connection_url()}
     )
 
 @pytest.fixture(scope="session")
@@ -96,7 +96,7 @@ def test_starlette_autocommit():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
-            pool_config={"database": tmp.name},
+            connection_config={"database": tmp.name},
             extension_config={"starlette": {"commit_mode": "autocommit"}}
         )
         sql.add_config(config)

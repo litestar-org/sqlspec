@@ -37,7 +37,7 @@ Detailed reference guides for specific SQLSpec usage patterns:
 
 | Guide | Purpose | Key Topics |
 |-------|---------|-----------|
-| [configuration.md](sqlspec-usage/patterns/configuration.md) | Configuration across all adapters | pool_config, driver_features, extension_config, multi-database |
+| [configuration.md](sqlspec-usage/patterns/configuration.md) | Configuration across all adapters | connection_config, driver_features, extension_config, multi-database |
 | [queries.md](sqlspec-usage/patterns/queries.md) | Query execution patterns | Parameter binding, result handling, transactions, type mapping |
 | [frameworks.md](sqlspec-usage/patterns/frameworks.md) | Framework integration | Litestar, FastAPI, Starlette, Flask patterns |
 | [migrations.md](sqlspec-usage/patterns/migrations.md) | Database migrations | CLI commands, hybrid versioning, programmatic control |
@@ -127,7 +127,7 @@ The `.claude/bootstrap.md` includes automatic skill creation for SQLSpec project
 
 All skills include sections on anti-patterns to avoid:
 
-- Configuration mistakes (missing pool_config, duplicate session keys)
+- Configuration mistakes (missing connection_config, duplicate session keys)
 - Session management errors (no context managers, mixing sync/async)
 - Query execution issues (SQL injection, wrong parameter style)
 - Framework integration problems (duplicate keys, missing middleware)

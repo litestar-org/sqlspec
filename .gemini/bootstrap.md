@@ -1516,7 +1516,7 @@ class {Adapter}Config(AsyncDatabaseConfig):
 ```python
 async def _create_pool(self) -> Pool:
     \"\"\"Create connection pool.\"\"\"
-    config = dict(self.pool_config)
+    config = dict(self.connection_config)
     # Pattern: session callback for initialization
     if self.driver_features.get("enable_feature", False):
         config["session_callback"] = self._init_connection
@@ -1669,7 +1669,7 @@ make fix  # Auto-fix formatting issues
 **Solution**:
 ```python
 async def _create_pool(self):
-    config = dict(self.pool_config)
+    config = dict(self.connection_config)
     if self.driver_features.get("enable_feature", False):
         config["session_callback"] = self._init_connection
     return await create_pool(**config)
@@ -2256,7 +2256,7 @@ async def test_{feature}_basic_usage(asyncpg_dsn):
     # Similar to: test_similar1.py:30-55
 
     sql = SQLSpec()
-    config = AsyncpgConfig(pool_config={"dsn": asyncpg_dsn})
+    config = AsyncpgConfig(connection_config={"dsn": asyncpg_dsn})
     sql.add_config(config)
 
     async with sql.provide_session(config) as session:
@@ -2273,7 +2273,7 @@ async def test_{feature}_edge_case(asyncpg_dsn):
     # Similar to: test_similar1.py:70-90
 
     sql = SQLSpec()
-    config = AsyncpgConfig(pool_config={"dsn": asyncpg_dsn})
+    config = AsyncpgConfig(connection_config={"dsn": asyncpg_dsn})
     sql.add_config(config)
 
     async with sql.provide_session(config) as session:
@@ -2797,7 +2797,7 @@ Review implementation for these pattern types:
 
 ### Configuration Patterns
 - [ ] driver_features additions
-- [ ] pool_config patterns
+- [ ] connection_config patterns
 - [ ] extension_config patterns
 
 ### Testing Patterns
@@ -2887,7 +2887,7 @@ Example:
 from sqlspec.adapters.{adapter} import {Adapter}Config
 
 config = {Adapter}Config(
-    pool_config={"dsn": "..."},
+    connection_config={"dsn": "..."},
     driver_features={
         "enable_{feature}": True,  # Auto-enabled when {condition}
     }

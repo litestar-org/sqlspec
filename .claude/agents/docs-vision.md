@@ -83,7 +83,7 @@ from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 
 config = AsyncpgConfig(
     dsn="postgresql://user:pass@localhost/db",
-    pool_config={
+    connection_config={
         "min_size": 10,
         "max_size": 20,
         "max_inactive_connection_lifetime": 300
@@ -393,7 +393,7 @@ When implementing optional type handlers (NumPy, pgvector, etc.):
 ```python
 class AdapterConfig(AsyncDatabaseConfig):
     async def _create_pool(self):
-        config = dict(self.pool_config)
+        config = dict(self.connection_config)
 
         if self.driver_features.get("enable_feature", False):
             config["session_callback"] = self._init_connection

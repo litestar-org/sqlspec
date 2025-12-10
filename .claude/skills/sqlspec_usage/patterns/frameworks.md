@@ -13,7 +13,7 @@ from sqlspec.extensions.litestar import SQLSpecPlugin
 spec = SQLSpec()
 db = spec.add_config(
     AsyncpgConfig(
-        pool_config={"dsn": "postgresql://localhost/db"},
+        connection_config={"dsn": "postgresql://localhost/db"},
         extension_config={
             "litestar": {
                 "commit_mode": "autocommit",
@@ -46,7 +46,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.extensions.fastapi import SQLSpecPlugin
 
 spec = SQLSpec()
-db = spec.add_config(AsyncpgConfig(pool_config={...}))
+db = spec.add_config(AsyncpgConfig(connection_config={...}))
 plugin = SQLSpecPlugin(spec)
 
 app = FastAPI()
@@ -68,7 +68,7 @@ from starlette.routing import Route
 from sqlspec.extensions.starlette import SQLSpecPlugin
 
 spec = SQLSpec()
-db = spec.add_config(AsyncpgConfig(pool_config={...}))
+db = spec.add_config(AsyncpgConfig(connection_config={...}))
 plugin = SQLSpecPlugin(spec)
 
 async def homepage(request):
@@ -90,7 +90,7 @@ from sqlspec.extensions.flask import SQLSpecPlugin
 
 app = Flask(__name__)
 spec = SQLSpec()
-db = spec.add_config(SqliteConfig(pool_config={"database": "app.db"}))
+db = spec.add_config(SqliteConfig(connection_config={"database": "app.db"}))
 plugin = SQLSpecPlugin(spec)
 plugin.init_app(app)
 
@@ -111,12 +111,12 @@ def get_user(user_id):
 ```python
 # Configure multiple databases
 primary = spec.add_config(AsyncpgConfig(
-    pool_config={"dsn": "postgresql://localhost/main"},
+    connection_config={"dsn": "postgresql://localhost/main"},
     extension_config={"litestar": {"session_key": "primary_db"}}
 ))
 
 cache = spec.add_config(SqliteConfig(
-    pool_config={"database": "cache.db"},
+    connection_config={"database": "cache.db"},
     extension_config={"litestar": {"session_key": "cache_db"}}
 ))
 
@@ -133,7 +133,7 @@ For custom DI solutions (Dishka, dependency-injector):
 
 ```python
 config = AsyncpgConfig(
-    pool_config={...},
+    connection_config={...},
     extension_config={
         "litestar": {"disable_di": True}
     }

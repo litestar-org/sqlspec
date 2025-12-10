@@ -41,7 +41,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 ### "TypeError: __init__() got an unexpected keyword argument 'dsn'"
 
-**Cause:** Passing connection parameters directly instead of in `pool_config`
+**Cause:** Passing connection parameters directly instead of in `connection_config`
 
 **Solution:**
 ```python
@@ -49,7 +49,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 config = AsyncpgConfig(dsn="postgresql://localhost/db")
 
 # ✅ CORRECT
-config = AsyncpgConfig(pool_config={"dsn": "postgresql://localhost/db"})
+config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db"})
 ```
 
 ### "ImproperConfigurationError: Duplicate state keys found"
@@ -116,7 +116,7 @@ await config.create_pool()
 ```python
 # Increase pool size
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "dsn": "...",
         "max_size": 40,  # Increase from default 20
         "timeout": 120.0,  # Increase timeout
@@ -267,13 +267,13 @@ await session.commit()  # Must commit!
 **Solution:**
 ```python
 # ❌ WRONG - Shared state across tests
-config = AiosqliteConfig(pool_config={"database": ":memory:"})
+config = AiosqliteConfig(connection_config={"database": ":memory:"})
 
 # ✅ CORRECT - Isolated temp files
 import tempfile
 
 with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
-    config = AiosqliteConfig(pool_config={"database": tmp.name})
+    config = AiosqliteConfig(connection_config={"database": tmp.name})
 ```
 
 ### "Fixture not found: postgres_service"
@@ -391,7 +391,7 @@ async def get_users(db_session: AsyncpgDriver):  # Must match session_key
 ```python
 # 1. Check if pooling enabled
 config = AsyncpgConfig(
-    pool_config={
+    connection_config={
         "min_size": 10,  # Should be > 0 for pooling
         "max_size": 20,
     }
@@ -518,7 +518,7 @@ result = await session.execute("SELECT * FROM users WHERE id = ?", user_id)
 
 ```python
 # Get pool statistics
-pool = config.pool_instance
+pool = config.connection_instance
 
 print(f"Pool size: {pool.get_size()}")
 print(f"Free connections: {pool.get_idle_size()}")
